@@ -54,63 +54,167 @@
 - Support duplicate detection
 - Version all data schemas
 
+## Current Implementation Status
+
+### ✅ Completed (v0.2.0)
+- **Core Crawler Infrastructure**
+  - Crawler interface design
+  - HTTP client with connection pooling
+  - Token bucket rate limiter
+  - Retry logic with exponential backoff
+  - Comprehensive error handling
+  - Structured logging with zerolog
+  - Context-aware logging
+  - 92.1% test coverage
+  - Standard Go project layout
+  - Makefile build automation
+  - Command-line entry points
+
+### 🚧 In Progress
+- Source-specific crawler implementations (CNN, Naver, etc.)
+- Kafka integration for job distribution
+- Processing pipeline setup
+
+### 📋 Planned
+- Embedding generation (OpenAI, multilingual-e5)
+- Clustering algorithms (HDBSCAN)
+- API endpoints (REST/GraphQL)
+- Web dashboard (monitoring, analytics)
+- Database integration (PostgreSQL, Redis)
+- Deployment configurations (Docker, K8s)
+
 ## Directory Structure
+
+Following [Standard Go Project Layout](https://github.com/golang-standards/project-layout):
 
 ```
 ecoscrapper/
-├── cmd/
-│   ├── crawler/          # Main crawler entry point
-│   ├── processor/        # Processing pipeline
-│   └── scheduler/        # Job scheduling
-├── pkg/
+├── cmd/                        # Application entry points
+│   ├── crawler/               # Crawler executable
+│   │   └── main.go
+│   ├── processor/             # Processor executable (planned)
+│   └── api/                   # API server executable (planned)
+│
+├── internal/                   # Private application code
 │   ├── crawler/
-│   │   ├── core/        # Core crawler interfaces
-│   │   ├── news/        # News source crawlers
-│   │   ├── community/   # Community crawlers
-│   │   └── social/      # Social media crawlers
-│   ├── processor/
-│   │   ├── normalize/   # Data normalization
-│   │   ├── enrich/      # Data enrichment
-│   │   └── validate/    # Validation logic
-│   ├── embedding/
-│   │   ├── model/       # Embedding models
-│   │   ├── cluster/     # Clustering logic
-│   │   └── index/       # Vector indexing
-│   ├── storage/
-│   │   ├── repository/  # Data access layer
-│   │   └── models/      # Domain models
-│   └── config/          # Configuration
-├── common/
-│   ├── http/            # HTTP utilities
-│   ├── queue/           # Queue abstractions
-│   └── logger/          # Logging utilities
-├── configs/             # Configuration files
-├── migrations/          # Database migrations
-└── scripts/             # Utility scripts
+│   │   ├── core/              # ✅ Core crawler implementation
+│   │   │   ├── crawler.go     # Crawler interfaces
+│   │   │   ├── errors.go      # Error types
+│   │   │   ├── http_client.go # HTTP client
+│   │   │   ├── models.go      # Data models
+│   │   │   ├── rate_limiter.go# Rate limiter
+│   │   │   └── retry.go       # Retry logic
+│   │   ├── news/              # News source crawlers (planned)
+│   │   │   ├── us/            # US sources
+│   │   │   │   ├── cnn/
+│   │   │   │   └── nytimes/
+│   │   │   └── kr/            # Korean sources
+│   │   │       ├── naver/
+│   │   │       └── daum/
+│   │   └── community/         # Community crawlers (planned)
+│   ├── processor/             # Processing pipeline (planned)
+│   │   ├── normalize/         # Data normalization
+│   │   ├── enrich/            # Data enrichment
+│   │   └── validate/          # Validation logic
+│   ├── embedding/             # Embedding & ML (planned)
+│   │   ├── model/             # Embedding models
+│   │   ├── cluster/           # Clustering logic
+│   │   └── index/             # Vector indexing
+│   └── storage/               # Storage layer (planned)
+│       ├── repository/        # Data access layer
+│       └── models/            # Domain models
+│
+├── pkg/                        # Public library code
+│   ├── logger/                # ✅ Reusable logger package
+│   │   └── logger.go
+│   ├── http/                  # HTTP utilities (planned)
+│   ├── queue/                 # Queue abstractions (planned)
+│   └── config/                # Configuration (planned)
+│
+├── test/                       # Test files
+│   ├── internal_crawler_core/ # ✅ Internal crawler tests
+│   └── pkg_logger/            # ✅ Logger package tests
+│
+├── examples/                   # Usage examples
+│   └── basic_usage.go         # ✅ Basic usage example
+│
+├── configs/                    # Configuration files (planned)
+├── scripts/                    # Build and deployment scripts (planned)
+├── deployments/                # Deployment configurations (planned)
+│   └── docker/
+│
+├── docs/                       # Documentation (planned)
+│   ├── en/                    # English docs
+│   └── ko/                    # Korean docs
+│
+├── .claude/                    # Claude AI development rules
+│   └── rules/
+│
+├── .cursor/                    # Cursor IDE rules
+│   └── rules/
+│
+├── Makefile                    # ✅ Build automation
+├── go.mod                      # ✅ Go module definition
+├── go.sum                      # ✅ Dependency checksums
+└── README.md                   # ✅ Project documentation
 ```
 
-## Technology Stack Requirements
+### Directory Purposes
 
-### Core
-- **Language**: Go 1.21+
-- **Concurrency**: goroutines with worker pools
-- **HTTP Client**: Custom client with retry, rate limiting, timeout
+**`cmd/`**: Application entry points (main packages)
+- Each subdirectory is an executable
+- Minimal logic, imports from `internal/` and `pkg/`
 
-### Storage
-- **Primary DB**: PostgreSQL (structured data)
-- **Vector DB**: PostgreSQL (embeddings)
-- **Cache**: Redis (rate limiting, deduplication)
+**`internal/`**: Private application code
+- Cannot be imported by external projects
+- Core business logic
+- Source-specific implementations
+
+**`pkg/`**: Public library code
+- Can be imported by external projects
+- Reusable, generic utilities
+- Well-documented, production-ready
+
+**`test/`**: Test files
+- Separated from source code
+- Organized by package structure
+- Uses `*_test` package pattern
+
+**Current Status**: ✅ = Implemented, (planned) = To be implemented
+
+## Technology Stack
+
+### Core (✅ Implemented)
+- **Language**: Go 1.22.2
+- **HTTP Client**: ✅ Custom client with connection pooling (max 100 idle)
+- **Rate Limiting**: ✅ Token bucket algorithm
+- **Retry Logic**: ✅ Exponential backoff with configurable policies
+- **Logging**: ✅ Structured logging with `zerolog`
+- **Testing**: ✅ `testify/assert` for assertions, table-driven tests
+
+### Storage (Planned)
+- **Primary DB**: PostgreSQL 15+ (structured data)
+- **Vector DB**: Qdrant or pgvector (embeddings)
+- **Cache**: Redis 7+ (rate limiting, deduplication)
 - **Object Storage**: S3-compatible (raw HTML, media)
 
-### Message Queue
-- **Queue**: Apache Kafka
+### Message Queue (Planned)
+- **Queue**: Apache Kafka 3.5+
 - **Use Cases**: Async processing, job distribution
+- **Topics**: `ecoscrapper.raw.{country}`, `ecoscrapper.normalized`, etc.
 
-### Observability
+### Observability (Planned)
 - **Metrics**: Prometheus
-- **Logging**: Structured logging (zerolog or zap)
 - **Tracing**: OpenTelemetry
 - **Monitoring**: Grafana dashboards
+
+### Dependencies (Current)
+```go
+require (
+  github.com/rs/zerolog v1.34.0      // Structured logging
+  github.com/stretchr/testify v1.11.1 // Testing assertions
+)
+```
 
 ## Data Flow
 
