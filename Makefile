@@ -148,6 +148,7 @@ clean: ## 빌드 파일 정리
 	@echo "Cleaning..."
 	rm -rf $(BINARY_DIR)
 	rm -f coverage.out coverage.html
+	rm -f crawler basic_usage crawler_comparison kafka_pipeline
 	@echo "Clean complete"
 
 deps: ## 의존성 다운로드
