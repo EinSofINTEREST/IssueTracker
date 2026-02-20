@@ -1,6 +1,7 @@
 .PHONY: help build test clean run-crawler run-example lint coverage \
         chrome-start chrome-stop chrome-status run-example-docker \
-        run-kafka-pipeline
+        run-kafka-pipeline \
+        kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics
 
 # 기본 변수
 BINARY_DIR=bin
@@ -12,6 +13,11 @@ GOFLAGS=-v
 CHROME_IMAGE=chromedp/headless-shell
 CHROME_PORT=9222
 CHROME_CONTAINER=ecoscrapper-chrome
+
+# Kafka Docker Compose 변수
+COMPOSE_FILE=deployments/docker/docker-compose.yml
+COMPOSE=docker compose
+KAFKA_DATA_DIR=/data/ELArchive/ecoscrapper/kafka
 
 help: ## 도움말 표시
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -73,6 +79,41 @@ run-example-docker: ## Docker Chrome으로 basic example 실행 (컨테이너 �
 	sleep 2; \
 	$(GO) run ./examples/basic_usage.go; \
 	docker stop $(CHROME_CONTAINER) 2>/dev/null || true
+
+## ─── Kafka ───────────────────────────────────────────────────
+
+kafka-start: ## Kafka 브로커 + UI 시작, 토픽 초기화 (localhost:9092 / UI:8080)
+	@echo "Starting Kafka..."
+	@mkdir -p $(KAFKA_DATA_DIR)
+	@chmod 777 $(KAFKA_DATA_DIR)
+	$(COMPOSE) -f $(COMPOSE_FILE) up -d kafka kafka-ui
+	@echo "Waiting for Kafka to be healthy..."
+	@$(COMPOSE) -f $(COMPOSE_FILE) run --rm kafka-init
+	@echo ""
+	@echo "  Kafka  → localhost:9092"
+	@echo "  UI     → http://localhost:8080"
+
+kafka-stop: ## Kafka 중지 (볼륨 유지)
+	@echo "Stopping Kafka..."
+	$(COMPOSE) -f $(COMPOSE_FILE) down
+	@echo "Kafka stopped (data preserved)"
+
+kafka-clean: ## Kafka 중지 + 볼륨 삭제 (데이터 초기화)
+	@echo "Stopping Kafka and removing volumes..."
+	$(COMPOSE) -f $(COMPOSE_FILE) down -v
+	@echo "Kafka stopped and data removed"
+
+kafka-status: ## Kafka 컨테이너 상태 확인
+	@$(COMPOSE) -f $(COMPOSE_FILE) ps
+
+kafka-logs: ## Kafka 브로커 로그 스트리밍
+	@$(COMPOSE) -f $(COMPOSE_FILE) logs -f kafka
+
+kafka-topics: ## 생성된 Kafka 토픽 목록 출력
+	@$(COMPOSE) -f $(COMPOSE_FILE) exec kafka \
+	  /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
+
+## ─────────────────────────────────────────────────────────────
 
 test: ## 모든 테스트 실행
 	@echo "Running tests..."

@@ -1,0 +1,117 @@
+# ─────────────────────────────────────────────────────────────
+# EcoScrapper 개발용 Kafka 스택
+#
+# 구성:
+#   kafka      – KRaft 모드 단일 브로커 (Zookeeper 불필요)
+#   kafka-init – 애플리케이션 토픽 사전 생성 (1회성)
+#   kafka-ui   – 브라우저 기반 토픽/메시지 뷰어 (http://localhost:8080)
+#
+# 리스너:
+#   PLAINTEXT  → localhost:9092  (호스트 → 컨테이너, Go 앱 연결용)
+#   INTERNAL   → kafka:29092     (컨테이너 내부 통신용)
+#   CONTROLLER → kafka:9093      (KRaft 컨트롤러 전용)
+# ─────────────────────────────────────────────────────────────
+
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: ecoscrapper-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft 모드 (Zookeeper 불필요)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      # 리스너 설정
+      KAFKA_LISTENERS: PLAINTEXT://:9092,INTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # 개발용 단일 브로커 최소 설정
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # 데이터 저장 경로 (볼륨 마운트 대상)
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+      # 개발용 설정
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 24
+
+    volumes:
+      - /data/ELArchive/ecoscrapper/kafka:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────
+  # 토픽 초기화 (Kafka 기동 완료 후 1회 실행 후 종료)
+  # ─────────────────────────────────────────────────────────────
+  kafka-init:
+    image: apache/kafka:latest
+    container_name: ecoscrapper-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    # 아키텍처 문서(01-architecture.md) 기준 토픽 목록
+    # 개발용 단일 브로커이므로 replication-factor=1, partitions 축소
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        KAFKA=kafka:29092
+        T=/opt/kafka/bin/kafka-topics.sh
+
+        echo '=== EcoScrapper Kafka Topic Initialization ==='
+
+        echo '[crawl topics]'
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.crawl.high   --partitions 4 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.crawl.normal --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.crawl.low    --partitions 4 --replication-factor 1
+
+        echo '[raw topics]'
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.raw.us       --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.raw.kr       --partitions 8 --replication-factor 1
+
+        echo '[pipeline topics]'
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.normalized   --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.validated    --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.enriched     --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.embedded     --partitions 4 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.clusters     --partitions 4 --replication-factor 1
+
+        echo '[system topics]'
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.dlq          --partitions 4 --replication-factor 1
+
+        echo ''
+        echo '=== Topics Created ==='
+        $$T --bootstrap-server $$KAFKA --list
+    restart: on-failure
+
+  # ─────────────────────────────────────────────────────────────
+  # Kafka UI – 브라우저에서 토픽/메시지 확인
+  # http://localhost:8080
+  # ─────────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: ecoscrapper-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=ecoscrapper-local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
