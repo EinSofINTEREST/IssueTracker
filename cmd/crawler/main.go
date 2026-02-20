@@ -7,7 +7,7 @@ import (
   "syscall"
   "time"
 
-  "ecoscrapper/internal/crawler/core"
+  "ecoscrapper/internal/crawler/handler"
   "ecoscrapper/internal/crawler/worker"
   "ecoscrapper/pkg/logger"
   "ecoscrapper/pkg/queue"
@@ -41,12 +41,16 @@ func main() {
   consumer := queue.NewConsumer(kafkaCfg, queue.TopicCrawlNormal)
   defer consumer.Close()
 
+  // 크롤러 핸들러 레지스트리 초기화
+  // TODO: 소스별 크롤러 구현 후 registry.Register("cnn", cnn.NewHandler(...)) 방식으로 추가
+  registry := handler.NewRegistry(log)
+
   const workerCount = 5
 
   pool := worker.NewKafkaConsumerPool(
     consumer,
     producer,
-    &noopJobHandler{log: log},
+    registry,
     workerCount,
     queue.TopicRawUS, // TODO: 국가별 동적 라우팅으로 교체
   )
@@ -75,20 +79,4 @@ func main() {
   }
 
   log.Info("crawler shutdown completed")
-}
-
-// noopJobHandler는 실제 소스별 크롤러 구현 전 임시로 사용되는 핸들러입니다.
-// TODO: 소스별 크롤러(CNN, Naver 등) 구현 후 registry 패턴으로 교체
-type noopJobHandler struct {
-  log *logger.Logger
-}
-
-func (h *noopJobHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
-  h.log.WithFields(map[string]interface{}{
-    "job_id":  job.ID,
-    "crawler": job.CrawlerName,
-    "url":     job.Target.URL,
-  }).Info("job received (no crawler registered yet)")
-
-  return nil, nil
 }
