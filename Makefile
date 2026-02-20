@@ -1,5 +1,6 @@
 .PHONY: help build test clean run-crawler run-example lint coverage \
-        chrome-start chrome-stop chrome-status run-example-docker
+        chrome-start chrome-stop chrome-status run-example-docker \
+        run-kafka-pipeline
 
 # 기본 변수
 BINARY_DIR=bin
@@ -38,6 +39,10 @@ run-example: ## Basic example 실행 (로컬 Chrome 또는 Docker Chrome 필요)
 run-comparison: ## Crawler 구현체 비교 예제 실행
 	@echo "Running crawler comparison..."
 	$(GO) run ./examples/crawler_comparison.go
+
+run-kafka-pipeline: ## Kafka 파이프라인 예제 실행 (mock, Kafka 불필요)
+	@echo "Running Kafka pipeline example..."
+	$(GO) run ./examples/kafka_pipeline/
 
 chrome-start: ## Docker Chrome 컨테이너 시작 (포트 9222)
 	@echo "Starting Chrome container ($(CHROME_IMAGE))..."
