@@ -3,8 +3,10 @@
 #
 # Build output
 bin/
-basic_usage
-
+/crawler
+/basic_usage
+/crawler_comparison
+/kafka_pipeline
 # Binaries for programs and plugins
 *.exe
 *.exe~
