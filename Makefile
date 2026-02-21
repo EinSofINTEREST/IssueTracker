@@ -18,6 +18,9 @@ CHROME_CONTAINER=ecoscrapper-chrome
 COMPOSE_FILE=deployments/docker/docker-compose.yml
 COMPOSE=docker compose
 KAFKA_DATA_DIR=/data/ELArchive/ecoscrapper/kafka
+KAFKA_ENV_FILE=deployments/docker/.env
+# .env가 없으면 .env.example 기본값 사용
+KAFKA_ENV_ARGS=$(shell [ -f $(KAFKA_ENV_FILE) ] && echo "--env-file $(KAFKA_ENV_FILE)")
 
 help: ## 도움말 표시
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -86,32 +89,45 @@ kafka-start: ## Kafka 브로커 + UI 시작, 토픽 초기화 (localhost:9092 / 
 	@echo "Starting Kafka..."
 	@mkdir -p $(KAFKA_DATA_DIR)
 	@chmod 777 $(KAFKA_DATA_DIR)
-	$(COMPOSE) -f $(COMPOSE_FILE) up -d kafka kafka-ui
+	$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) up -d kafka kafka-ui
 	@echo "Waiting for Kafka to be healthy..."
-	@$(COMPOSE) -f $(COMPOSE_FILE) run --rm kafka-init
+	@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) run --rm kafka-init
 	@echo ""
 	@echo "  Kafka  → localhost:9092"
 	@echo "  UI     → http://localhost:8080"
 
 kafka-stop: ## Kafka 중지 (볼륨 유지)
 	@echo "Stopping Kafka..."
-	$(COMPOSE) -f $(COMPOSE_FILE) down
+	$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) down
 	@echo "Kafka stopped (data preserved)"
 
 kafka-clean: ## Kafka 중지 + 볼륨 삭제 (데이터 초기화)
 	@echo "Stopping Kafka and removing volumes..."
-	$(COMPOSE) -f $(COMPOSE_FILE) down -v
+	$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) down -v
 	@echo "Kafka stopped and data removed"
 
 kafka-status: ## Kafka 컨테이너 상태 확인
-	@$(COMPOSE) -f $(COMPOSE_FILE) ps
+	@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) ps
 
 kafka-logs: ## Kafka 브로커 로그 스트리밍
-	@$(COMPOSE) -f $(COMPOSE_FILE) logs -f kafka
+	@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) logs -f kafka
 
 kafka-topics: ## 생성된 Kafka 토픽 목록 출력
-	@$(COMPOSE) -f $(COMPOSE_FILE) exec kafka \
+	@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) exec kafka \
 	  /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
+
+kafka-describe: ## 토픽별 파티션 수·리더 상세 출력
+	@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) exec kafka \
+	  /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --describe
+
+# 파티션 증설: make kafka-scale-partitions TOPIC=ecoscrapper.crawl.normal PARTITIONS=16
+kafka-scale-partitions: ## 토픽 파티션 증설 (TOPIC, PARTITIONS 필수 / 감소 불가)
+	@if [ -z "$(TOPIC)" ] || [ -z "$(PARTITIONS)" ]; then \
+	  echo "Usage: make kafka-scale-partitions TOPIC=<topic> PARTITIONS=<count>"; exit 1; fi
+	@$(COMPOSE) -f $(COMPOSE_FILE) exec kafka \
+	  /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+	  --alter --topic $(TOPIC) --partitions $(PARTITIONS)
+	@echo "Scaled $(TOPIC) to $(PARTITIONS) partitions"
 
 ## ─────────────────────────────────────────────────────────────
 
