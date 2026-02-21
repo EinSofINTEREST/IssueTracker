@@ -73,13 +73,40 @@ make build
 go build -o bin/crawler ./cmd/crawler
 ```
 
+### Kafka Setup
+
+```bash
+# Start Kafka broker + UI (localhost:9092, UI: http://localhost:8080)
+make kafka-start
+
+# Stop (data preserved)
+make kafka-stop
+
+# Stop + delete all data
+make kafka-clean
+```
+
+**Partition configuration** — copy `.env.example` and adjust before starting:
+
+```bash
+cp deployments/docker/.env.example deployments/docker/.env
+# Edit: KAFKA_PARTITIONS_HIGH, KAFKA_PARTITIONS_NORMAL, KAFKA_PARTITIONS_LOW
+make kafka-start
+```
+
 ### Running
 
 ```bash
-# Run crawler
+# Start Kafka first
+make kafka-start
+
+# Run crawler (connects to localhost:9092, subscribes to crawl.normal)
 make run-crawler
 
-# Or run example
+# Run Kafka pipeline example (in-memory mock, no Kafka required)
+make run-kafka-pipeline
+
+# Run basic example
 make run-example
 
 # Run binary directly
@@ -126,19 +153,28 @@ make deps
 - [x] Token bucket rate limiter
 - [x] Retry logic with exponential backoff
 - [x] Comprehensive error handling
-- [x] **Structured logging with zerolog**
+- [x] Structured logging with zerolog
 - [x] Context-aware logging
-- [x] **92.1% test coverage** ⬆️
-- [x] **Standard Go project layout** 🆕
-- [x] **Makefile for build automation** 🆕
-- [x] **cmd/ entry points** 🆕
+- [x] 92.1% test coverage
+- [x] Standard Go project layout
+- [x] Makefile for build automation
+- [x] cmd/ entry points
+
+✅ **Kafka Integration** (v0.3.0)
+- [x] Producer / Consumer interface abstraction (`pkg/queue`)
+- [x] KafkaConsumerPool — priority-based multi-worker goroutine pool
+- [x] Handler Registry — crawler name → handler dispatch
+- [x] DLQ (Dead Letter Queue) with retry-count-based routing
+- [x] Docker Compose Kafka stack (KRaft mode, no Zookeeper)
+- [x] Kafka topic initialization with configurable partitions via `.env`
+- [x] Kafka UI at `http://localhost:8080`
 
 🚧 **In Progress**
 - [ ] Source-specific crawler implementations (CNN, Naver, etc.)
-- [ ] Kafka integration
-- [ ] Processing pipeline
+- [ ] Priority-based multi-pool manager
 
 📋 **Planned**
+- [ ] Processing pipeline (normalize → validate → enrich)
 - [ ] Embedding generation
 - [ ] Clustering algorithms
 - [ ] API endpoints
@@ -150,55 +186,46 @@ Following the [Standard Go Project Layout](https://github.com/golang-standards/p
 
 ```
 ecoscrapper/
-├── cmd/                        # Application entry points
-│   ├── crawler/               # Crawler executable
-│   │   └── main.go
-│   ├── processor/             # Processor executable
-│   └── api/                   # API server executable
+├── cmd/
+│   └── crawler/               # Crawler entry point
+│       └── main.go
 │
-├── internal/                   # Private application code
+├── internal/
 │   └── crawler/
-│       ├── core/              # ✅ Core crawler interfaces
-│       │   ├── crawler.go     # Crawler interface
-│       │   ├── errors.go      # Error types
-│       │   ├── models.go      # Data models
-│       │   └── retry.go       # Retry policy
-│       └── implementation/    # ✅ Crawler implementations
-│           ├── goquery/       # Goquery (정적 크롤링)
-│           │   ├── types.go
-│           │   ├── crawler.go
-│           │   ├── fetch.go
-│           │   └── parse.go
-│           └── chromedp/      # Chromedp (동적 크롤링)
-│               ├── types.go
-│               ├── crawler.go
-│               ├── fetch.go
-│               └── parse.go
+│       ├── core/              # Crawler interfaces, models, errors, retry
+│       ├── handler/           # Handler interface + Registry (crawler name dispatch)
+│       │   ├── handler.go     # Handler interface, Registry
+│       │   └── noop.go        # Fallback noop handler
+│       ├── worker/            # Kafka consumer pool
+│       │   └── pool.go        # KafkaConsumerPool (goroutine worker pool + DLQ)
+│       └── news/              # Source-specific crawlers (planned)
+│           ├── us/            # US sources (CNN, NYT, ...)
+│           └── kr/            # Korean sources (Naver, Daum, ...)
 │
-├── pkg/                        # Public library code
-│   └── logger/                # ✅ Reusable logger package
-│       └── logger.go
+├── pkg/
+│   ├── logger/                # Structured logger (zerolog)
+│   └── queue/                 # Kafka producer/consumer abstraction
+│       ├── queue.go           # Producer, Consumer interfaces
+│       ├── config.go          # Topic/group constants, Config
+│       ├── producer.go        # KafkaProducer (kafka-go)
+│       └── consumer.go        # KafkaConsumer (kafka-go, manual commit)
 │
-├── configs/                    # Configuration files
-├── scripts/                    # Build and deployment scripts
-├── deployments/                # Deployment configurations
+├── deployments/
 │   └── docker/
+│       ├── docker-compose.yml # Kafka broker (KRaft) + kafka-ui
+│       └── .env.example       # Partition configuration template
 │
-├── test/                       # Additional test files
-│   ├── internal_crawler_core/ # Internal crawler tests
-│   └── pkg_logger/            # Logger package tests
+├── examples/
+│   ├── basic_usage.go
+│   └── kafka_pipeline/        # In-memory mock pipeline example
 │
-├── examples/                   # Usage examples
-│   └── basic_usage.go
-│
-├── docs/                       # Documentation
-│   ├── en/                    # English docs
-│   └── ko/                    # Korean docs
-│
-├── Makefile                    # Build automation
-├── go.mod                      # Go module definition
-├── go.sum                      # Dependency checksums
-└── README.md
+├── test/                      # Package-level tests
+├── docs/
+│   ├── en/
+│   └── ko/
+├── Makefile
+├── go.mod
+└── go.sum
 ```
 
 ### Design Rationale
@@ -377,18 +404,29 @@ err := core.WithRetry(requestCtx, core.DefaultRetryPolicy, func() error {
 ## Makefile Commands
 
 ```bash
-make help          # Show all available commands
-make build         # Build crawler binary
-make test          # Run all tests
-make coverage      # Run tests with coverage
-make coverage-html # Generate HTML coverage report
-make lint          # Run linters
-make fmt           # Format code
-make clean         # Clean build artifacts
-make deps          # Update dependencies
-make run-crawler   # Run crawler
-make run-example   # Run basic example
-make run-comparison # Run crawler implementation comparison
+# Build & Run
+make build              # Build crawler binary → bin/crawler
+make run-crawler        # Build and run crawler
+make run-example        # Run basic usage example
+make run-kafka-pipeline # Run in-memory Kafka pipeline example
+
+# Test & Quality
+make test               # Run all tests
+make coverage           # Run tests with coverage report
+make lint               # Run linters
+make fmt                # Format code
+make clean              # Remove build artifacts
+
+# Kafka
+make kafka-start        # Start Kafka broker + UI (creates topics)
+make kafka-stop         # Stop (data preserved at KAFKA_DATA_DIR)
+make kafka-clean        # Stop + delete all data
+make kafka-status       # Show container status
+make kafka-topics       # List all topics
+make kafka-describe     # Show partition/leader details per topic
+make kafka-scale-partitions TOPIC=<topic> PARTITIONS=<n>  # Increase partitions
+
+make help               # Show all commands with descriptions
 ```
 
 ## Contributing
