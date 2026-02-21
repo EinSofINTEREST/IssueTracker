@@ -305,7 +305,7 @@ func main() {
     producer,
     handler,
     workerCount,
-    queue.TopicRawUS,
+    worker.DefaultRawTopicFunc, // 국가 코드 기반 raw 토픽 결정
   )
 
   start := time.Now()

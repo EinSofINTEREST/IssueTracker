@@ -27,13 +27,13 @@ type JobHandler interface {
 //
 // KafkaConsumerPool reads CrawlJob messages from a Kafka topic, distributes
 // them to worker goroutines via an internal channel, and publishes the resulting
-// RawContent to the configured raw topic. Failed jobs are retried or sent to DLQ.
+// RawContent to the raw topic determined by rawTopicFn. Failed jobs are retried or sent to DLQ.
 type KafkaConsumerPool struct {
   consumer    queue.Consumer
   producer    queue.Producer
   handler     JobHandler
   workerCount int
-  rawTopic    string // 크롤링 결과를 publish할 토픽 (예: ecoscrapper.raw.us)
+  rawTopicFn  RawTopicFunc // 국가 코드 → raw 토픽 이름 결정 함수
   jobs        chan jobItem
   wg          sync.WaitGroup
 }
@@ -46,21 +46,25 @@ type jobItem struct {
 // NewKafkaConsumerPool은 새로운 KafkaConsumerPool을 생성합니다.
 //
 // NewKafkaConsumerPool creates a pool that reads from consumer, processes jobs
-// via handler, and publishes raw content to rawTopic.
+// via handler, and publishes raw content to the topic returned by rawTopicFn.
 // workerCount controls the number of concurrent processing goroutines.
+// rawTopicFn이 nil이면 DefaultRawTopicFunc를 사용합니다.
 func NewKafkaConsumerPool(
   consumer queue.Consumer,
   producer queue.Producer,
   handler JobHandler,
   workerCount int,
-  rawTopic string,
+  rawTopicFn RawTopicFunc,
 ) *KafkaConsumerPool {
+  if rawTopicFn == nil {
+    rawTopicFn = DefaultRawTopicFunc
+  }
   return &KafkaConsumerPool{
     consumer:    consumer,
     producer:    producer,
     handler:     handler,
     workerCount: workerCount,
-    rawTopic:    rawTopic,
+    rawTopicFn:  rawTopicFn,
     // 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
     jobs: make(chan jobItem, workerCount*2),
   }
@@ -185,8 +189,8 @@ func (p *KafkaConsumerPool) publishRaw(ctx context.Context, raw *core.RawContent
   }
 
   msg := queue.Message{
-    Topic: p.rawTopic,
-    Key:   []byte(raw.URL), // URL을 파티션 키로 사용하여 동일 URL의 순서 보장
+    Topic: p.rawTopicFn(raw.SourceInfo.Country), // 국가 코드 기반으로 raw 토픽 결정
+    Key:   []byte(raw.URL),                      // URL을 파티션 키로 사용하여 동일 URL의 순서 보장
     Value: data,
     Headers: map[string]string{
       "source":  raw.SourceInfo.Name,
