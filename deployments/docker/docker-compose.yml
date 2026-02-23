@@ -1,18 +1,44 @@
 # ─────────────────────────────────────────────────────────────
-# EcoScrapper 개발용 Kafka 스택
+# EcoScrapper 개발용 인프라 스택
 #
 # 구성:
+#   postgres   – PostgreSQL 15 (데이터 영속화)
 #   kafka      – KRaft 모드 단일 브로커 (Zookeeper 불필요)
 #   kafka-init – 애플리케이션 토픽 사전 생성 (1회성)
 #   kafka-ui   – 브라우저 기반 토픽/메시지 뷰어 (http://localhost:8080)
 #
-# 리스너:
+# 리스너 (Kafka):
 #   PLAINTEXT  → localhost:9092  (호스트 → 컨테이너, Go 앱 연결용)
 #   INTERNAL   → kafka:29092     (컨테이너 내부 통신용)
 #   CONTROLLER → kafka:9093      (KRaft 컨트롤러 전용)
 # ─────────────────────────────────────────────────────────────
 
 services:
+  # ─────────────────────────────────────────────────────────────
+  # PostgreSQL 15 – 메인 데이터베이스
+  # localhost:5432 / DB: ecoscrapper
+  # DEV 환경에서는 local postgres 사용
+  # ─────────────────────────────────────────────────────────────
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: ecoscrapper-postgres
+  #   ports:
+  #     - "5432:5432"
+  #   environment:
+  #     POSTGRES_USER: ${DB_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+  #     POSTGRES_DB: ${DB_NAME:-ecoscrapper}
+  #   volumes:
+  #     - /data/ELArchive/ecoscrapper/postgres:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-ecoscrapper}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 20s
+  #   restart: unless-stopped
+
+
   kafka:
     image: apache/kafka:latest
     container_name: ecoscrapper-kafka
