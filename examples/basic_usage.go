@@ -129,11 +129,11 @@ func runGoqueryCrawler(
   printStep(6, "FetchAndParse(ctx, target, selectors)  →  HTTP GET → Document → Article")
   fmt.Printf("    selectors: title=%q  body=%q\n", selectors["title"], selectors["body"])
   pStart := time.Now()
-  article, err := crawler.FetchAndParse(ctx, target, selectors)
+  content, err := crawler.FetchAndParse(ctx, target, selectors)
   if err != nil {
     fmt.Printf("    ERROR: %v\n", err)
   } else {
-    printArticle(article, time.Since(pStart))
+    printContent(content, time.Since(pStart))
   }
 
   // ── Step 7: Stop ──────────────────────────────────────────────
@@ -213,11 +213,11 @@ func runChromedpCrawler(
   fmt.Println("    내부 순서: Fetch(렌더링 HTML) → goquery.Document → CSS 셀렉터 추출 → Article")
   fmt.Printf("    selectors: title=%q  body=%q\n", selectors["title"], selectors["body"])
   pStart := time.Now()
-  article, err := crawler.FetchAndParse(ctx, target, selectors)
+  content, err := crawler.FetchAndParse(ctx, target, selectors)
   if err != nil {
     fmt.Printf("    ERROR: %v\n", err)
   } else {
-    printArticle(article, time.Since(pStart))
+    printContent(content, time.Since(pStart))
   }
 
   // ── Step 7: EvaluateJS ────────────────────────────────────────
@@ -258,17 +258,17 @@ func printRawContent(raw *core.RawContent, elapsed time.Duration) {
   fmt.Printf("    preview:  %s\n", strings.TrimSpace(preview))
 }
 
-// printArticle: Article 주요 필드 출력
-func printArticle(article *core.Article, elapsed time.Duration) {
-  bodyPreview := strings.ReplaceAll(article.Body, "\n", " ")
+// printContent: Content 주요 필드 출력
+func printContent(article *core.Content, elapsed time.Duration) {
+  bodyPreview := strings.ReplaceAll(content.Body, "\n", " ")
   if len(bodyPreview) > 120 {
     bodyPreview = bodyPreview[:120] + "..."
   }
   fmt.Printf("    duration:  %v\n", elapsed.Round(time.Millisecond))
-  fmt.Printf("    title:     %s\n", article.Title)
-  fmt.Printf("    author:    %s\n", orEmpty(article.Author))
-  fmt.Printf("    words:     %d\n", article.WordCount)
-  fmt.Printf("    images:    %d\n", len(article.ImageURLs))
+  fmt.Printf("    title:     %s\n", content.Title)
+  fmt.Printf("    author:    %s\n", orEmpty(content.Author))
+  fmt.Printf("    words:     %d\n", content.WordCount)
+  fmt.Printf("    images:    %d\n", len(content.ImageURLs))
   fmt.Printf("    body:      %s\n", strings.TrimSpace(bodyPreview))
 }
 

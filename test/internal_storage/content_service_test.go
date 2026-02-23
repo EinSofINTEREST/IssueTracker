@@ -22,18 +22,21 @@ func newTestLogger() *logger.Logger {
   return logger.New(cfg)
 }
 
-// newTestArticle은 테스트용 기본 Article을 반환합니다.
-func newTestArticle() *core.Article {
-  return &core.Article{
-    ID:          "article-001",
+// newTestContent는 테스트용 기본 Content를 반환합니다.
+func newTestContent() *core.Content {
+  return &core.Content{
+    ID:          "content-001",
     SourceID:    "source-001",
+    SourceType:  core.SourceTypeNews,
     Country:     "US",
     Language:    "en",
-    Title:       "Test Article",
+    Title:       "Test Content",
     Body:        "Test body content with enough words for validation.",
-    URL:         "https://example.com/article/001",
+    URL:         "https://example.com/content/001",
     ContentHash: "abc123hash",
     WordCount:   8,
+    Reliability: 0.8,
+    Extra:       map[string]interface{}{},
     PublishedAt: time.Now(),
     CreatedAt:   time.Now(),
   }
@@ -43,35 +46,35 @@ func newTestArticle() *core.Article {
 // Store 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestArticleService_Store_NewArticle_SavesAndReturnsID(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
-  article := newTestArticle()
+func TestContentService_Store_NewContent_SavesAndReturnsID(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
+  content := newTestContent()
 
-  // GetByContentHash → ErrNotFound (새 기사)
-  repo.On("GetByContentHash", mock.Anything, article.ContentHash).
+  // GetByContentHash → ErrNotFound (새 컨텐츠)
+  repo.On("GetByContentHash", mock.Anything, content.ContentHash).
     Return(nil, storage.ErrNotFound)
   // Save 성공
-  repo.On("Save", mock.Anything, article).Return(nil)
+  repo.On("Save", mock.Anything, content).Return(nil)
 
-  id, isDuplicate, err := svc.Store(context.Background(), article)
+  id, isDuplicate, err := svc.Store(context.Background(), content)
 
   assert.NoError(t, err)
-  assert.Equal(t, article.ID, id)
+  assert.Equal(t, content.ID, id)
   assert.False(t, isDuplicate)
   repo.AssertExpectations(t)
 }
 
-func TestArticleService_Store_DuplicateByContentHash_ReturnsDuplicate(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
-  article := newTestArticle()
+func TestContentService_Store_DuplicateByContentHash_ReturnsDuplicate(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
+  content := newTestContent()
 
-  existing := &core.Article{ID: "existing-001", ContentHash: article.ContentHash}
-  repo.On("GetByContentHash", mock.Anything, article.ContentHash).
+  existing := &core.Content{ID: "existing-001", ContentHash: content.ContentHash}
+  repo.On("GetByContentHash", mock.Anything, content.ContentHash).
     Return(existing, nil)
 
-  id, isDuplicate, err := svc.Store(context.Background(), article)
+  id, isDuplicate, err := svc.Store(context.Background(), content)
 
   assert.NoError(t, err)
   assert.Equal(t, existing.ID, id)
@@ -81,34 +84,34 @@ func TestArticleService_Store_DuplicateByContentHash_ReturnsDuplicate(t *testing
   repo.AssertExpectations(t)
 }
 
-func TestArticleService_Store_EmptyContentHash_SkipsDedup(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
-  article := newTestArticle()
-  article.ContentHash = "" // ContentHash 없음
+func TestContentService_Store_EmptyContentHash_SkipsDedup(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
+  content := newTestContent()
+  content.ContentHash = "" // ContentHash 없음
 
-  repo.On("Save", mock.Anything, article).Return(nil)
+  repo.On("Save", mock.Anything, content).Return(nil)
 
-  id, isDuplicate, err := svc.Store(context.Background(), article)
+  id, isDuplicate, err := svc.Store(context.Background(), content)
 
   assert.NoError(t, err)
-  assert.Equal(t, article.ID, id)
+  assert.Equal(t, content.ID, id)
   assert.False(t, isDuplicate)
   // GetByContentHash는 호출되지 않아야 함
   repo.AssertNotCalled(t, "GetByContentHash", mock.Anything, mock.Anything)
   repo.AssertExpectations(t)
 }
 
-func TestArticleService_Store_GetByContentHashError_ReturnsError(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
-  article := newTestArticle()
+func TestContentService_Store_GetByContentHashError_ReturnsError(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
+  content := newTestContent()
 
   dbErr := errors.New("connection refused")
-  repo.On("GetByContentHash", mock.Anything, article.ContentHash).
+  repo.On("GetByContentHash", mock.Anything, content.ContentHash).
     Return(nil, dbErr)
 
-  id, isDuplicate, err := svc.Store(context.Background(), article)
+  id, isDuplicate, err := svc.Store(context.Background(), content)
 
   assert.Error(t, err)
   assert.ErrorIs(t, err, dbErr)
@@ -117,17 +120,17 @@ func TestArticleService_Store_GetByContentHashError_ReturnsError(t *testing.T) {
   repo.AssertExpectations(t)
 }
 
-func TestArticleService_Store_SaveError_ReturnsError(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
-  article := newTestArticle()
+func TestContentService_Store_SaveError_ReturnsError(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
+  content := newTestContent()
 
   saveErr := errors.New("db write failed")
-  repo.On("GetByContentHash", mock.Anything, article.ContentHash).
+  repo.On("GetByContentHash", mock.Anything, content.ContentHash).
     Return(nil, storage.ErrNotFound)
-  repo.On("Save", mock.Anything, article).Return(saveErr)
+  repo.On("Save", mock.Anything, content).Return(saveErr)
 
-  id, isDuplicate, err := svc.Store(context.Background(), article)
+  id, isDuplicate, err := svc.Store(context.Background(), content)
 
   assert.Error(t, err)
   assert.ErrorIs(t, err, saveErr)
@@ -140,50 +143,50 @@ func TestArticleService_Store_SaveError_ReturnsError(t *testing.T) {
 // StoreBatch 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestArticleService_StoreBatch_MixedResults_ReturnsPerItemResults(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
+func TestContentService_StoreBatch_MixedResults_ReturnsPerItemResults(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
 
-  newArticle := newTestArticle()
-  newArticle.ID = "new-001"
-  newArticle.ContentHash = "hash-new"
+  newContent := newTestContent()
+  newContent.ID = "new-001"
+  newContent.ContentHash = "hash-new"
 
-  dupArticle := newTestArticle()
-  dupArticle.ID = "dup-002"
-  dupArticle.ContentHash = "hash-dup"
+  dupContent := newTestContent()
+  dupContent.ID = "dup-002"
+  dupContent.ContentHash = "hash-dup"
 
-  existing := &core.Article{ID: "existing-dup", ContentHash: "hash-dup"}
+  existing := &core.Content{ID: "existing-dup", ContentHash: "hash-dup"}
 
-  // newArticle → 새 기사
-  repo.On("GetByContentHash", mock.Anything, newArticle.ContentHash).
+  // newContent → 새 컨텐츠
+  repo.On("GetByContentHash", mock.Anything, newContent.ContentHash).
     Return(nil, storage.ErrNotFound)
-  repo.On("Save", mock.Anything, newArticle).Return(nil)
+  repo.On("Save", mock.Anything, newContent).Return(nil)
 
-  // dupArticle → 중복
-  repo.On("GetByContentHash", mock.Anything, dupArticle.ContentHash).
+  // dupContent → 중복
+  repo.On("GetByContentHash", mock.Anything, dupContent.ContentHash).
     Return(existing, nil)
 
-  results, err := svc.StoreBatch(context.Background(), []*core.Article{newArticle, dupArticle})
+  results, err := svc.StoreBatch(context.Background(), []*core.Content{newContent, dupContent})
 
   assert.NoError(t, err)
   assert.Len(t, results, 2)
 
-  assert.Equal(t, newArticle.ID, results[0].ArticleID)
+  assert.Equal(t, newContent.ID, results[0].ContentID)
   assert.False(t, results[0].IsDuplicate)
   assert.NoError(t, results[0].Err)
 
-  assert.Equal(t, existing.ID, results[1].ArticleID)
+  assert.Equal(t, existing.ID, results[1].ContentID)
   assert.True(t, results[1].IsDuplicate)
   assert.NoError(t, results[1].Err)
 
   repo.AssertExpectations(t)
 }
 
-func TestArticleService_StoreBatch_Empty_ReturnsEmptyResults(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
+func TestContentService_StoreBatch_Empty_ReturnsEmptyResults(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
 
-  results, err := svc.StoreBatch(context.Background(), []*core.Article{})
+  results, err := svc.StoreBatch(context.Background(), []*core.Content{})
 
   assert.NoError(t, err)
   assert.Empty(t, results)
@@ -194,23 +197,23 @@ func TestArticleService_StoreBatch_Empty_ReturnsEmptyResults(t *testing.T) {
 // GetByID 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestArticleService_GetByID_Exists_ReturnsArticle(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
-  article := newTestArticle()
+func TestContentService_GetByID_Exists_ReturnsContent(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
+  content := newTestContent()
 
-  repo.On("GetByID", mock.Anything, article.ID).Return(article, nil)
+  repo.On("GetByID", mock.Anything, content.ID).Return(content, nil)
 
-  result, err := svc.GetByID(context.Background(), article.ID)
+  result, err := svc.GetByID(context.Background(), content.ID)
 
   assert.NoError(t, err)
-  assert.Equal(t, article.ID, result.ID)
+  assert.Equal(t, content.ID, result.ID)
   repo.AssertExpectations(t)
 }
 
-func TestArticleService_GetByID_NotFound_ReturnsError(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
+func TestContentService_GetByID_NotFound_ReturnsError(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
 
   repo.On("GetByID", mock.Anything, "missing-id").
     Return(nil, storage.ErrNotFound)
@@ -227,16 +230,16 @@ func TestArticleService_GetByID_NotFound_ReturnsError(t *testing.T) {
 // ListByCountry 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestArticleService_ListByCountry_ReturnsArticles(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
+func TestContentService_ListByCountry_ReturnsContents(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
 
-  articles := []*core.Article{newTestArticle()}
-  filter := storage.ArticleFilter{Pagination: storage.Pagination{Limit: 10}}
+  contents := []*core.Content{newTestContent()}
+  filter := storage.ContentFilter{Pagination: storage.Pagination{Limit: 10}}
 
   expectedFilter := filter
   expectedFilter.Country = "US"
-  repo.On("List", mock.Anything, expectedFilter).Return(articles, nil)
+  repo.On("List", mock.Anything, expectedFilter).Return(contents, nil)
 
   result, err := svc.ListByCountry(context.Background(), "US", filter)
 
@@ -249,17 +252,17 @@ func TestArticleService_ListByCountry_ReturnsArticles(t *testing.T) {
 // CountByCountry 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestArticleService_CountByCountry_ReturnsCountMap(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
+func TestContentService_CountByCountry_ReturnsCountMap(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
 
   // US 카운트
-  repo.On("Count", mock.Anything, mock.MatchedBy(func(f storage.ArticleFilter) bool {
+  repo.On("Count", mock.Anything, mock.MatchedBy(func(f storage.ContentFilter) bool {
     return f.Country == "US" && f.PublishedAfter != nil
   })).Return(int64(42), nil)
 
   // KR 카운트
-  repo.On("Count", mock.Anything, mock.MatchedBy(func(f storage.ArticleFilter) bool {
+  repo.On("Count", mock.Anything, mock.MatchedBy(func(f storage.ContentFilter) bool {
     return f.Country == "KR" && f.PublishedAfter != nil
   })).Return(int64(17), nil)
 
@@ -271,9 +274,9 @@ func TestArticleService_CountByCountry_ReturnsCountMap(t *testing.T) {
   repo.AssertExpectations(t)
 }
 
-func TestArticleService_CountByCountry_RepoError_ReturnsError(t *testing.T) {
-  repo := new(MockArticleRepository)
-  svc := service.NewArticleService(repo, newTestLogger())
+func TestContentService_CountByCountry_RepoError_ReturnsError(t *testing.T) {
+  repo := new(MockContentRepository)
+  svc := service.NewContentService(repo, newTestLogger())
 
   dbErr := errors.New("query failed")
   repo.On("Count", mock.Anything, mock.Anything).Return(int64(0), dbErr)

@@ -21,9 +21,9 @@ type Crawler interface {
   HealthCheck(ctx context.Context) error
 }
 
-// Parser는 원본 컨텐츠를 Article로 파싱하는 인터페이스입니다.
+// Parser는 원본 컨텐츠를 Content로 파싱하는 인터페이스입니다.
 type Parser interface {
-  Parse(raw *RawContent) (*Article, error)
+  Parse(raw *RawContent) (*Content, error)
 }
 
 // HTTPClient는 HTTP 요청을 수행하는 인터페이스입니다.

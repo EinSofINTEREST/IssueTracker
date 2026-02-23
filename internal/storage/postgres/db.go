@@ -4,9 +4,12 @@ package postgres
 
 import (
   "context"
+  "encoding/json"
+  "errors"
   "fmt"
   "time"
 
+  "github.com/jackc/pgx/v5/pgconn"
   "github.com/jackc/pgx/v5/pgxpool"
 
   "ecoscrapper/pkg/config"
@@ -50,4 +53,24 @@ func NewPool(ctx context.Context, cfg config.DBConfig, log *logger.Logger) (*pgx
   }).Info("postgresql pool connected")
 
   return pool, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 패키지 공통 헬퍼 함수
+// ─────────────────────────────────────────────────────────────────────────────
+
+// isPgUniqueViolation은 pgconn.PgError가 유일성 제약 위반(23505)인지 확인합니다.
+func isPgUniqueViolation(err error) bool {
+  var pgErr *pgconn.PgError
+  return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// mustMarshalJSON은 값을 JSON 바이트로 변환합니다.
+// 변환 실패는 개발 오류이므로 빈 객체({})를 반환합니다.
+func mustMarshalJSON(v any) []byte {
+  b, err := json.Marshal(v)
+  if err != nil {
+    return []byte("{}")
+  }
+  return b
 }
