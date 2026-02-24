@@ -164,6 +164,11 @@ pg-migrate: ## DB 마이그레이션 실행 (schema_migrations 기준 멱등)
 	$(GO) run ./cmd/migrate/...
 	@echo "Migrations complete"
 
+pg-migrate-down: ## DB 마이그레이션 롤백 실행 (배포 환경용, dev에서는 사용 지양)
+	@echo "Rolling back database migrations..."
+	$(GO) run ./cmd/migrate-down/...
+	@echo "Rollback complete"
+
 pg-status: ## PostgreSQL 컨테이너 상태 확인
 	@$(COMPOSE) -f $(COMPOSE_FILE) $(PG_ENV_ARGS) ps postgres
 
