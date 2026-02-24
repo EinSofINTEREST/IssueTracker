@@ -142,7 +142,7 @@ pg-start: ## PostgreSQL 컨테이너 시작 (localhost:5432)
 	$(COMPOSE) -f $(COMPOSE_FILE) $(PG_ENV_ARGS) up -d postgres
 	@echo "Waiting for PostgreSQL to be healthy..."
 	@until $(COMPOSE) -f $(COMPOSE_FILE) exec -T postgres \
-	  pg_isready -U $${DB_USER:-postgres} -d $${DB_NAME:-ecoscrapper} > /dev/null 2>&1; do \
+	  pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-ecoscrapper} > /dev/null 2>&1; do \
 	  sleep 1; \
 	done
 	@echo ""
@@ -169,7 +169,7 @@ pg-status: ## PostgreSQL 컨테이너 상태 확인
 
 pg-psql: ## PostgreSQL psql 접속 (docker exec)
 	@$(COMPOSE) -f $(COMPOSE_FILE) $(PG_ENV_ARGS) exec postgres \
-	  psql -U $${DB_USER:-postgres} -d $${DB_NAME:-ecoscrapper}
+	  psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-ecoscrapper}
 
 ## ─────────────────────────────────────────────────────────────
 

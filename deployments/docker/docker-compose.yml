@@ -25,13 +25,13 @@ services:
   #   ports:
   #     - "5432:5432"
   #   environment:
-  #     POSTGRES_USER: ${DB_USER:-postgres}
-  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-  #     POSTGRES_DB: ${DB_NAME:-ecoscrapper}
+  #     POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+  #     POSTGRES_DB: ${POSTGRES_DB:-ecoscrapper}
   #   volumes:
   #     - /data/ELArchive/ecoscrapper/postgres:/var/lib/postgresql/data
   #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-ecoscrapper}"]
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ecoscrapper}"]
   #     interval: 10s
   #     timeout: 5s
   #     retries: 10
