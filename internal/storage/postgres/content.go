@@ -381,8 +381,13 @@ func buildContentListQuery(filter storage.ContentFilter) (string, []any) {
     limit = 50
   }
 
+  offset := filter.Pagination.Offset
+  if offset < 0 {
+    offset = 0
+  }
+
   query := listSelectQuery + where +
-    fmt.Sprintf(" ORDER BY c.published_at DESC LIMIT %d OFFSET %d", limit, filter.Pagination.Offset)
+    fmt.Sprintf(" ORDER BY c.published_at DESC LIMIT %d OFFSET %d", limit, offset)
 
   return query, args
 }
