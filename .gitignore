@@ -7,6 +7,8 @@ bin/
 /basic_usage
 /crawler_comparison
 /kafka_pipeline
+/migrate
+/migrate-down
 # Binaries for programs and plugins
 *.exe
 *.exe~
