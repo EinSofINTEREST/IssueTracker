@@ -58,8 +58,8 @@ func (r *pgContentRepository) SaveBatch(ctx context.Context, contents []*core.Co
   }
 
   br := tx.SendBatch(ctx, batch)
-  // 각 쿼리 결과를 소비해야 BatchResults가 닫힙니다
-  totalQueries := len(contents) * 3 // contents + content_bodies + content_meta
+  // 각 content당 CTE 쿼리 1개로 통합됨
+  totalQueries := len(contents)
   for i := 0; i < totalQueries; i++ {
     if _, err := br.Exec(); err != nil {
       _ = br.Close()
@@ -191,10 +191,12 @@ const fullSelectQuery = `
   LEFT JOIN content_meta m ON m.content_id = c.id
 `
 
-// saveContentTx는 트랜잭션 내에서 3개 테이블에 content를 upsert합니다.
-func saveContentTx(ctx context.Context, tx pgx.Tx, c *core.Content) error {
-  // 1. contents upsert (URL 기준, content_hash 변경 시에만 업데이트)
-  _, err := tx.Exec(ctx, `
+// upsertContentCTE는 contents/content_bodies/content_meta를 단일 CTE로 upsert합니다.
+// ON CONFLICT (url) 충돌 시 content_hash가 동일하면 UPDATE가 발생하지 않아 RETURNING이
+// 빈 결과를 반환하므로, COALESCE로 기존 row의 id를 SELECT하여 하위 테이블에 사용합니다.
+// Parameters: $1-$16 contents, $17 body, $18 summary, $19 word_count, $20 image_urls, $21 extra
+const upsertContentCTE = `
+  WITH upserted_id AS (
     INSERT INTO contents (
       id, source_id, source_type, country, language,
       title, author, published_at, updated_at, category, tags,
@@ -205,107 +207,76 @@ func saveContentTx(ctx context.Context, tx pgx.Tx, c *core.Content) error {
       $12, $13, $14, $15, $16
     )
     ON CONFLICT (url) DO UPDATE SET
-      source_type  = EXCLUDED.source_type,
-      title        = EXCLUDED.title,
-      author       = EXCLUDED.author,
-      updated_at   = EXCLUDED.updated_at,
-      category     = EXCLUDED.category,
-      tags         = EXCLUDED.tags,
+      source_type   = EXCLUDED.source_type,
+      title         = EXCLUDED.title,
+      author        = EXCLUDED.author,
+      updated_at    = EXCLUDED.updated_at,
+      category      = EXCLUDED.category,
+      tags          = EXCLUDED.tags,
       canonical_url = EXCLUDED.canonical_url,
-      content_hash = EXCLUDED.content_hash,
-      reliability  = EXCLUDED.reliability
+      content_hash  = EXCLUDED.content_hash,
+      reliability   = EXCLUDED.reliability
     WHERE contents.content_hash != EXCLUDED.content_hash
-  `,
-    c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
-    c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, c.Tags,
-    c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
-  )
-  if err != nil {
-    return fmt.Errorf("upsert contents %s: %w", c.ID, err)
-  }
-
-  // 2. content_bodies upsert
-  _, err = tx.Exec(ctx, `
+    RETURNING id
+  ),
+  actual_id AS (
+    SELECT COALESCE(
+      (SELECT id FROM upserted_id),
+      (SELECT id FROM contents WHERE url = $12)
+    ) AS id
+  ),
+  body_upsert AS (
     INSERT INTO content_bodies (content_id, body, summary, word_count)
-    VALUES ($1, $2, $3, $4)
+    SELECT actual_id.id, $17, $18, $19 FROM actual_id
     ON CONFLICT (content_id) DO UPDATE SET
       body       = EXCLUDED.body,
       summary    = EXCLUDED.summary,
       word_count = EXCLUDED.word_count
-  `, c.ID, c.Body, c.Summary, c.WordCount)
-  if err != nil {
-    return fmt.Errorf("upsert content_bodies %s: %w", c.ID, err)
-  }
+  )
+  INSERT INTO content_meta (content_id, image_urls, extra)
+  SELECT actual_id.id, $20, $21 FROM actual_id
+  ON CONFLICT (content_id) DO UPDATE SET
+    image_urls = EXCLUDED.image_urls,
+    extra      = EXCLUDED.extra
+`
 
-  // 3. content_meta upsert
+// saveContentTx는 트랜잭션 내에서 3개 테이블에 content를 upsert합니다.
+// CTE로 단일 쿼리 실행하여 URL 충돌 시 실제 id를 하위 테이블에 전달합니다.
+func saveContentTx(ctx context.Context, tx pgx.Tx, c *core.Content) error {
   extraJSON := mustMarshalJSON(c.Extra)
   imageURLs := c.ImageURLs
   if imageURLs == nil {
     imageURLs = []string{}
   }
-  _, err = tx.Exec(ctx, `
-    INSERT INTO content_meta (content_id, image_urls, extra)
-    VALUES ($1, $2, $3)
-    ON CONFLICT (content_id) DO UPDATE SET
-      image_urls = EXCLUDED.image_urls,
-      extra      = EXCLUDED.extra
-  `, c.ID, imageURLs, extraJSON)
+
+  _, err := tx.Exec(ctx, upsertContentCTE,
+    c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
+    c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, c.Tags,
+    c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
+    c.Body, c.Summary, c.WordCount,
+    imageURLs, extraJSON,
+  )
   if err != nil {
-    return fmt.Errorf("upsert content_meta %s: %w", c.ID, err)
+    return fmt.Errorf("upsert content %s: %w", c.ID, err)
   }
 
   return nil
 }
 
-// queueContentBatch는 pgx.Batch에 content 관련 3개 쿼리를 추가합니다.
+// queueContentBatch는 pgx.Batch에 content 관련 CTE 쿼리를 추가합니다.
+// upsertContentCTE를 사용하여 단일 쿼리로 3개 테이블을 처리합니다.
 func queueContentBatch(batch *pgx.Batch, c *core.Content) {
-  batch.Queue(`
-    INSERT INTO contents (
-      id, source_id, source_type, country, language,
-      title, author, published_at, updated_at, category, tags,
-      url, canonical_url, content_hash, reliability, created_at
-    ) VALUES (
-      $1, $2, $3, $4, $5,
-      $6, $7, $8, $9, $10, $11,
-      $12, $13, $14, $15, $16
-    )
-    ON CONFLICT (url) DO UPDATE SET
-      source_type  = EXCLUDED.source_type,
-      title        = EXCLUDED.title,
-      author       = EXCLUDED.author,
-      updated_at   = EXCLUDED.updated_at,
-      category     = EXCLUDED.category,
-      tags         = EXCLUDED.tags,
-      canonical_url = EXCLUDED.canonical_url,
-      content_hash = EXCLUDED.content_hash,
-      reliability  = EXCLUDED.reliability
-    WHERE contents.content_hash != EXCLUDED.content_hash
-  `,
-    c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
-    c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, c.Tags,
-    c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
-  )
-
-  batch.Queue(`
-    INSERT INTO content_bodies (content_id, body, summary, word_count)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (content_id) DO UPDATE SET
-      body       = EXCLUDED.body,
-      summary    = EXCLUDED.summary,
-      word_count = EXCLUDED.word_count
-  `, c.ID, c.Body, c.Summary, c.WordCount)
-
   imageURLs := c.ImageURLs
   if imageURLs == nil {
     imageURLs = []string{}
   }
-  batch.Queue(`
-    INSERT INTO content_meta (content_id, image_urls, extra)
-    VALUES ($1, $2, $3)
-    ON CONFLICT (content_id) DO UPDATE SET
-      image_urls = EXCLUDED.image_urls,
-      extra      = EXCLUDED.extra
-  `, c.ID, imageURLs, mustMarshalJSON(c.Extra))
+  batch.Queue(upsertContentCTE,
+    c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
+    c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, c.Tags,
+    c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
+    c.Body, c.Summary, c.WordCount,
+    imageURLs, mustMarshalJSON(c.Extra),
+  )
 }
 
 // scanContent는 pgx Row를 core.Content로 스캔합니다 (3테이블 JOIN 결과).
