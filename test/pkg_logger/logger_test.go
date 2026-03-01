@@ -10,7 +10,7 @@ import (
   "github.com/stretchr/testify/assert"
   "github.com/stretchr/testify/require"
 
-  logger "ecoscrapper/pkg/logger"
+  logger "issuetracker/pkg/logger"
 )
 
 func TestNew(t *testing.T) {

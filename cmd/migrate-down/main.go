@@ -37,10 +37,10 @@ func main() {
   }
   defer pool.Close()
 
-  if err := migrations.Run(ctx, pool, log); err != nil {
-    log.WithError(err).Fatal("migration failed")
+  if err := migrations.Rollback(ctx, pool, log); err != nil {
+    log.WithError(err).Fatal("rollback failed")
     os.Exit(1)
   }
 
-  log.Info("migrations completed successfully")
+  log.Info("rollback completed successfully")
 }

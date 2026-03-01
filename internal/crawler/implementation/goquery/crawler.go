@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"ecoscrapper/internal/crawler/core"
-	"ecoscrapper/pkg/logger"
+	"issuetracker/internal/crawler/core"
+	"issuetracker/pkg/logger"
 )
 
 // NewGoqueryCrawler: 새로운 GoqueryCrawler 인스턴스 생성

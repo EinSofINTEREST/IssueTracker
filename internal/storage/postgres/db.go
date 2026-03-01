@@ -12,8 +12,8 @@ import (
   "github.com/jackc/pgx/v5/pgconn"
   "github.com/jackc/pgx/v5/pgxpool"
 
-  "ecoscrapper/pkg/config"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/pkg/config"
+  "issuetracker/pkg/logger"
 )
 
 // NewPool은 DBConfig를 기반으로 pgxpool.Pool을 생성하고 연결을 확인합니다.

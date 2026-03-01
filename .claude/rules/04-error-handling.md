@@ -344,7 +344,7 @@ var (
     // Crawler metrics
     articlesScraped = promauto.NewCounterVec(
         prometheus.CounterOpts{
-            Name: "ecoscrapper_articles_scraped_total",
+            Name: "issuetracker_articles_scraped_total",
             Help: "Total number of articles scraped",
         },
         []string{"country", "source", "status"},
@@ -352,7 +352,7 @@ var (
 
     scrapeDuration = promauto.NewHistogramVec(
         prometheus.HistogramOpts{
-            Name:    "ecoscrapper_scrape_duration_seconds",
+            Name:    "issuetracker_scrape_duration_seconds",
             Help:    "Duration of scrape operations",
             Buckets: prometheus.DefBuckets,
         },
@@ -361,7 +361,7 @@ var (
 
     activeWorkers = promauto.NewGaugeVec(
         prometheus.GaugeOpts{
-            Name: "ecoscrapper_active_workers",
+            Name: "issuetracker_active_workers",
             Help: "Number of active crawler workers",
         },
         []string{"worker_type"},
@@ -369,7 +369,7 @@ var (
 
     queueDepth = promauto.NewGaugeVec(
         prometheus.GaugeOpts{
-            Name: "ecoscrapper_queue_depth",
+            Name: "issuetracker_queue_depth",
             Help: "Number of items in processing queue",
         },
         []string{"queue_name"},
@@ -378,7 +378,7 @@ var (
     // Processing metrics
     processingDuration = promauto.NewHistogramVec(
         prometheus.HistogramOpts{
-            Name:    "ecoscrapper_processing_duration_seconds",
+            Name:    "issuetracker_processing_duration_seconds",
             Help:    "Duration of processing stages",
             Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
         },
@@ -388,7 +388,7 @@ var (
     // Embedding metrics
     embeddingRequests = promauto.NewCounterVec(
         prometheus.CounterOpts{
-            Name: "ecoscrapper_embedding_requests_total",
+            Name: "issuetracker_embedding_requests_total",
             Help: "Total embedding API requests",
         },
         []string{"status"},
@@ -397,14 +397,14 @@ var (
     // Clustering metrics
     clustersCreated = promauto.NewCounter(
         prometheus.CounterOpts{
-            Name: "ecoscrapper_clusters_created_total",
+            Name: "issuetracker_clusters_created_total",
             Help: "Total number of issue clusters created",
         },
     )
 
     clusterSize = promauto.NewHistogram(
         prometheus.HistogramOpts{
-            Name:    "ecoscrapper_cluster_size",
+            Name:    "issuetracker_cluster_size",
             Help:    "Distribution of cluster sizes",
             Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500},
         },
@@ -478,14 +478,14 @@ Define alerting conditions:
 ```yaml
 # Prometheus alerting rules
 groups:
-  - name: ecoscrapper
+  - name: issuetracker
     interval: 30s
     rules:
       # High error rate
       - alert: HighCrawlErrorRate
         expr: |
-          rate(ecoscrapper_articles_scraped_total{status="error"}[5m]) /
-          rate(ecoscrapper_articles_scraped_total[5m]) > 0.1
+          rate(issuetracker_articles_scraped_total{status="error"}[5m]) /
+          rate(issuetracker_articles_scraped_total[5m]) > 0.1
         for: 5m
         labels:
           severity: warning
@@ -495,7 +495,7 @@ groups:
 
       # Queue backup
       - alert: QueueBacklog
-        expr: ecoscrapper_queue_depth > 10000
+        expr: issuetracker_queue_depth > 10000
         for: 10m
         labels:
           severity: warning
@@ -507,7 +507,7 @@ groups:
       - alert: CrawlerSourceDown
         expr: |
           absent_over_time(
-            ecoscrapper_articles_scraped_total{status="success"}[1h]
+            issuetracker_articles_scraped_total{status="success"}[1h]
           )
         labels:
           severity: critical
@@ -518,7 +518,7 @@ groups:
       # Embedding API issues
       - alert: EmbeddingAPIErrors
         expr: |
-          rate(ecoscrapper_embedding_requests_total{status="error"}[5m]) > 10
+          rate(issuetracker_embedding_requests_total{status="error"}[5m]) > 10
         for: 5m
         labels:
           severity: warning
@@ -528,7 +528,7 @@ groups:
       # Low throughput
       - alert: LowThroughput
         expr: |
-          rate(ecoscrapper_articles_scraped_total{status="success"}[1h]) < 100
+          rate(issuetracker_articles_scraped_total{status="success"}[1h]) < 100
         for: 30m
         labels:
           severity: info

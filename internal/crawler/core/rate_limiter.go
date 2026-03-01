@@ -6,7 +6,7 @@ import (
   "sync"
   "time"
 
-  "ecoscrapper/pkg/logger"
+  "issuetracker/pkg/logger"
 )
 
 // TokenBucketRateLimiter는 token bucket 알고리즘을 사용한 rate limiter입니다.

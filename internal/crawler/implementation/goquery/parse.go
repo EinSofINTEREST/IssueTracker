@@ -9,8 +9,8 @@ import (
 
   "github.com/PuerkitoBio/goquery"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
 )
 
 // FetchAndParse: URL에서 컨텐츠를 가져와서 바로 파싱

@@ -51,7 +51,7 @@ type SourceInfo struct {
 
 4. **User Agent**
    - MUST use identifiable User-Agent with contact info
-   - Format: `EcoScrapper/1.0 (+https://example.com/bot) Go-http-client`
+   - Format: `IssueTracker/1.0 (+https://example.com/bot) Go-http-client`
    - Allow configuration per source if needed
 
 ## HTTP Client Standards
@@ -311,10 +311,10 @@ type Target struct {
 
 1. **Topic Naming Convention**
    ```
-   ecoscrapper.crawl.{priority}      # crawl-high, crawl-normal, crawl-low
-   ecoscrapper.raw.{country}         # raw-us, raw-kr
-   ecoscrapper.processing.stage      # processing stages
-   ecoscrapper.dlq                   # Dead letter queue
+   issuetracker.crawl.{priority}      # crawl-high, crawl-normal, crawl-low
+   issuetracker.raw.{country}         # raw-us, raw-kr
+   issuetracker.processing.stage      # processing stages
+   issuetracker.dlq                   # Dead letter queue
    ```
 
 2. **Partitioning Strategy**
@@ -357,7 +357,7 @@ type Target struct {
    // Consumer group configuration
    config := &kafka.ConfigMap{
        "bootstrap.servers": "localhost:9092",
-       "group.id":          "ecoscrapper-crawler-workers",
+       "group.id":          "issuetracker-crawler-workers",
        "auto.offset.reset": "earliest",
        "enable.auto.commit": false,  // Manual commit after processing
    }

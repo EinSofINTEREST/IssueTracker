@@ -1,4 +1,4 @@
-# EcoScrapper
+# IssueTracker
 
 **[한국어](docs/ko/README.md)** | English
 
@@ -10,7 +10,7 @@
 
 ## Overview
 
-EcoScrapper is a scalable, extensible system designed to crawl news, social media, and community sources worldwide, process and normalize multilingual content, and identify major issues through embedding and clustering.
+IssueTracker is a scalable, extensible system designed to crawl news, social media, and community sources worldwide, process and normalize multilingual content, and identify major issues through embedding and clustering.
 
 **Initial Target Markets**: United States and South Korea
 
@@ -58,8 +58,8 @@ EcoScrapper is a scalable, extensible system designed to crawl news, social medi
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/ecoscrapper
-cd ecoscrapper
+git clone https://github.com/yourusername/issuetracker
+cd issuetracker
 go mod tidy
 ```
 
@@ -185,7 +185,7 @@ make deps
 Following the [Standard Go Project Layout](https://github.com/golang-standards/project-layout):
 
 ```
-ecoscrapper/
+issuetracker/
 ├── cmd/
 │   └── crawler/               # Crawler entry point
 │       └── main.go
@@ -290,7 +290,7 @@ type Crawler interface {
 
 ## Crawler Implementations
 
-EcoScrapper provides two crawlers for static and dynamic pages:
+IssueTracker provides two crawlers for static and dynamic pages:
 
 ### Goquery - Static Crawling (`implementation/goquery`)
 
@@ -368,8 +368,8 @@ See [examples/basic_usage.go](examples/basic_usage.go) for a complete example:
 
 ```go
 import (
-  "ecoscrapper/pkg/logger"
-  "ecoscrapper/internal/crawler/core"
+  "issuetracker/pkg/logger"
+  "issuetracker/internal/crawler/core"
 )
 
 // Setup logger (development mode with pretty printing)

@@ -1,4 +1,4 @@
-// config 패키지는 .env 파일과 환경변수를 통해 EcoScrapper 컴포넌트 설정을
+// config 패키지는 .env 파일과 환경변수를 통해 IssueTracker 컴포넌트 설정을
 // 중앙에서 관리합니다. godotenv.Load() 후 OS 환경변수가 우선 적용됩니다.
 package config
 
@@ -42,7 +42,7 @@ func DefaultDBConfig() DBConfig {
 		Port:        5432,
 		User:        "postgres",
 		Password:    "postgres",
-		Database:    "ecoscrapper",
+		Database:    "issuetracker",
 		SSLMode:     "disable",
 		MaxConns:    25,
 		MinConns:    5,

@@ -14,7 +14,7 @@ import (
 
   "github.com/jackc/pgx/v5/pgxpool"
 
-  "ecoscrapper/pkg/logger"
+  "issuetracker/pkg/logger"
 )
 
 //go:embed *.sql
@@ -98,4 +98,49 @@ func markApplied(ctx context.Context, pool *pgxpool.Pool, filename string) error
     `INSERT INTO schema_migrations(filename) VALUES($1) ON CONFLICT DO NOTHING`, filename,
   )
   return err
+}
+
+// Rollback은 모든 *.down.sql 파일을 파일명 역순으로 실행합니다.
+// 배포 환경의 롤백 용도로 제공되며, dev 환경에서는 사용하지 않습니다.
+func Rollback(ctx context.Context, pool *pgxpool.Pool, log *logger.Logger) error {
+  entries, err := sqlFiles.ReadDir(".")
+  if err != nil {
+    return fmt.Errorf("read migrations dir: %w", err)
+  }
+
+  // *.down.sql 파일만 수집
+  downFiles := make([]string, 0, len(entries))
+  for _, e := range entries {
+    if !e.IsDir() && strings.HasSuffix(e.Name(), ".down.sql") {
+      downFiles = append(downFiles, e.Name())
+    }
+  }
+
+  // 역순 실행 (최신 마이그레이션부터 롤백)
+  sort.Sort(sort.Reverse(sort.StringSlice(downFiles)))
+
+  for _, filename := range downFiles {
+    sql, err := sqlFiles.ReadFile(filename)
+    if err != nil {
+      return fmt.Errorf("read rollback %s: %w", filename, err)
+    }
+
+    log.WithField("migration", filename).Info("rolling back migration")
+
+    if _, err := pool.Exec(ctx, string(sql)); err != nil {
+      return fmt.Errorf("execute rollback %s: %w", filename, err)
+    }
+
+    // 대응하는 up 마이그레이션 추적 레코드 제거
+    upFilename := strings.TrimSuffix(filename, ".down.sql") + ".up.sql"
+    if _, err := pool.Exec(ctx,
+      `DELETE FROM schema_migrations WHERE filename = $1`, upFilename,
+    ); err != nil {
+      return fmt.Errorf("unmark migration %s: %w", upFilename, err)
+    }
+
+    log.WithField("migration", filename).Info("rollback applied successfully")
+  }
+
+  return nil
 }

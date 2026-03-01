@@ -1,4 +1,4 @@
-module ecoscrapper
+module issuetracker
 
 go 1.24.0
 

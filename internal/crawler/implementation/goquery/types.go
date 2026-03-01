@@ -3,7 +3,7 @@ package goquery
 import (
   "net/http"
 
-  "ecoscrapper/internal/crawler/core"
+  "issuetracker/internal/crawler/core"
 )
 
 // GoqueryCrawler: goquery 라이브러리 기반 크롤러

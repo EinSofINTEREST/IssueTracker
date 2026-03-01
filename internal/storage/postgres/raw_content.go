@@ -11,9 +11,9 @@ import (
   "github.com/jackc/pgx/v5"
   "github.com/jackc/pgx/v5/pgxpool"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/storage"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/storage"
+  "issuetracker/pkg/logger"
 )
 
 // pgRawContentRepository는 pgx/v5 기반 RawContentRepository 구현체입니다.

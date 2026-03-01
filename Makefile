@@ -6,7 +6,7 @@
 
 # 기본 변수
 BINARY_DIR=bin
-PG_DATA_DIR=/data/ELArchive/ecoscrapper/postgres
+PG_DATA_DIR=/data/ELArchive/issuetracker/postgres
 PG_ENV_FILE=.env
 # .env가 없으면 기본값(localhost:5432, postgres/postgres) 사용
 PG_ENV_ARGS=$(shell [ -f $(PG_ENV_FILE) ] && echo "--env-file $(PG_ENV_FILE)")
@@ -17,12 +17,12 @@ GOFLAGS=-v
 # Docker Chrome 변수
 CHROME_IMAGE=chromedp/headless-shell
 CHROME_PORT=9222
-CHROME_CONTAINER=ecoscrapper-chrome
+CHROME_CONTAINER=issuetracker-chrome
 
 # Kafka Docker Compose 변수
 COMPOSE_FILE=deployments/docker/docker-compose.yml
 COMPOSE=docker compose
-KAFKA_DATA_DIR=/data/ELArchive/ecoscrapper/kafka
+KAFKA_DATA_DIR=/data/ELArchive/issuetracker/kafka
 KAFKA_ENV_FILE=deployments/docker/.env
 # .env가 없으면 .env.example 기본값 사용
 KAFKA_ENV_ARGS=$(shell [ -f $(KAFKA_ENV_FILE) ] && echo "--env-file $(KAFKA_ENV_FILE)")
@@ -125,7 +125,7 @@ kafka-describe: ## 토픽별 파티션 수·리더 상세 출력
 	@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) exec kafka \
 	  /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --describe
 
-# 파티션 증설: make kafka-scale-partitions TOPIC=ecoscrapper.crawl.normal PARTITIONS=16
+# 파티션 증설: make kafka-scale-partitions TOPIC=issuetracker.crawl.normal PARTITIONS=16
 kafka-scale-partitions: ## 토픽 파티션 증설 (TOPIC, PARTITIONS 필수 / 감소 불가)
 	@if [ -z "$(TOPIC)" ] || [ -z "$(PARTITIONS)" ]; then \
 	  echo "Usage: make kafka-scale-partitions TOPIC=<topic> PARTITIONS=<count>"; exit 1; fi
@@ -142,7 +142,7 @@ pg-start: ## PostgreSQL 컨테이너 시작 (localhost:5432)
 	$(COMPOSE) -f $(COMPOSE_FILE) $(PG_ENV_ARGS) up -d postgres
 	@echo "Waiting for PostgreSQL to be healthy..."
 	@until $(COMPOSE) -f $(COMPOSE_FILE) exec -T postgres \
-	  pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-ecoscrapper} > /dev/null 2>&1; do \
+	  pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-issuetracker} > /dev/null 2>&1; do \
 	  sleep 1; \
 	done
 	@echo ""
@@ -164,12 +164,17 @@ pg-migrate: ## DB 마이그레이션 실행 (schema_migrations 기준 멱등)
 	$(GO) run ./cmd/migrate/...
 	@echo "Migrations complete"
 
+pg-migrate-down: ## DB 마이그레이션 롤백 실행 (배포 환경용, dev에서는 사용 지양)
+	@echo "Rolling back database migrations..."
+	$(GO) run ./cmd/migrate-down/...
+	@echo "Rollback complete"
+
 pg-status: ## PostgreSQL 컨테이너 상태 확인
 	@$(COMPOSE) -f $(COMPOSE_FILE) $(PG_ENV_ARGS) ps postgres
 
 pg-psql: ## PostgreSQL psql 접속 (docker exec)
 	@$(COMPOSE) -f $(COMPOSE_FILE) $(PG_ENV_ARGS) exec postgres \
-	  psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-ecoscrapper}
+	  psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-issuetracker}
 
 ## ─────────────────────────────────────────────────────────────
 

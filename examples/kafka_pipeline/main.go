@@ -12,10 +12,10 @@ import (
   "sync"
   "time"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/crawler/worker"
-  "ecoscrapper/pkg/logger"
-  "ecoscrapper/pkg/queue"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/crawler/worker"
+  "issuetracker/pkg/logger"
+  "issuetracker/pkg/queue"
 )
 
 // =========================================================
@@ -238,7 +238,7 @@ func printPipelineResults(log *logger.Logger, published []queue.Message) {
 
     default:
       // crawl.* 재큐잉 메시지
-      if strings.HasPrefix(msg.Topic, "ecoscrapper.crawl.") {
+      if strings.HasPrefix(msg.Topic, "issuetracker.crawl.") {
         requeueCount++
       }
     }

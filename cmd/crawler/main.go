@@ -7,11 +7,11 @@ import (
   "syscall"
   "time"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/crawler/handler"
-  "ecoscrapper/internal/crawler/worker"
-  "ecoscrapper/pkg/logger"
-  "ecoscrapper/pkg/queue"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/crawler/handler"
+  "issuetracker/internal/crawler/worker"
+  "issuetracker/pkg/logger"
+  "issuetracker/pkg/queue"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
   logConfig.Pretty = false
   log := logger.New(logConfig)
 
-  log.Info("starting EcoScrapper crawler")
+  log.Info("starting IssueTracker crawler")
 
   ctx, cancel := context.WithCancel(context.Background())
   defer cancel()
