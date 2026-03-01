@@ -796,6 +796,47 @@ log.Error().Err(err).Msg("error")
 - README.md에 Quick Start 섹션 추가
 ```
 
+### Branch Naming Convention
+
+```
+{카테고리}/#{이슈번호}/{핵심-변경-대상-요약}
+```
+
+#### 브랜치 대분류
+
+- **feature/**: 새로운 기능 구현 및 추가 (FEAT 커밋 대응)
+- **fix/**: 버그 수정 (FIX 커밋 대응)
+- **refactor/**: 구조 변경 및 리팩토링 (REFAC 커밋 대응)
+- **docs/**: 문서 작업 (DOCS 커밋 대응)
+
+#### 브랜치명 작성 규칙
+
+1. **형식**: `{카테고리}/#{이슈번호}/{핵심-변경-대상-요약}`
+2. **이슈번호**: GitHub 이슈 번호를 `#` 접두사와 함께 표기 (예: `#15`)
+3. **핵심 변경 대상 요약**: 영문 소문자, 단어 구분은 하이픈(-), 30자 이내
+4. **내용**: 변경 대상 파일 또는 모듈명 중심으로 간결하게 표현
+
+#### Branch Name Examples
+
+```bash
+feature/#15/cnn-naver-crawler
+feature/#16/normalize-validate-enrich-pipeline
+feature/#17/embedding-pipeline
+feature/#18/hdbscan-clustering
+feature/#19/redis-rate-limiter
+feature/#20/qdrant-vector-db
+feature/#21/rest-api-server
+
+fix/#7/rate-limiter-deadlock
+fix/#9/duplicate-article-detection
+
+refactor/#4/validation-logic
+refactor/#8/extract-parser-interface
+
+docs/#2/api-documentation
+docs/#9/git-conventions
+```
+
 ## File Organization
 
 ### File Naming

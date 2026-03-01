@@ -98,76 +98,76 @@
 ## Branch Naming Convention
 
 ```
-{카테고리}/{간단한-설명}
+{카테고리}/#{이슈번호}/{핵심-변경-대상-요약}
 ```
 
 ### 브랜치 카테고리
 
-- **feat/**: 새로운 기능 구현 및 추가
+- **feature/**: 새로운 기능 구현 및 추가
 - **fix/**: 버그 수정
-- **refac/**: 구조 변경 및 리팩토링
+- **refactor/**: 구조 변경 및 리팩토링
 - **docs/**: 문서 작업
 
 ### 브랜치명 작성 규칙
 
-1. **형식**: 영문 소문자, 단어 구분은 하이픈(-)
-2. **길이**: 간결하게, 50자 이내
-3. **내용**: 작업 내용을 명확히 표현
+1. **형식**: `{카테고리}/#{이슈번호}/{핵심-변경-대상-요약}`
+2. **이슈번호**: GitHub 이슈 번호를 `#` 접두사와 함께 표기 (예: `#15`)
+3. **핵심 변경 대상 요약**: 영문 소문자, 단어 구분은 하이픈(-), 30자 이내
+4. **내용**: 변경 대상 파일 또는 모듈명 중심으로 간결하게 표현
 
 ### Branch Name Examples
 
-#### 기능 구현 (feat/)
+#### 기능 구현 (feature/)
 ```bash
-feat/kafka-consumer-pool
-feat/reddit-crawler
-feat/cnn-crawler-implementation
-feat/naver-news-crawler
-feat/embedding-generation
-feat/clustering-algorithm
+feature/#15/cnn-naver-crawler
+feature/#16/normalize-validate-enrich-pipeline
+feature/#17/embedding-pipeline
+feature/#18/hdbscan-clustering
+feature/#19/redis-rate-limiter
+feature/#20/qdrant-vector-db
+feature/#21/rest-api-server
 ```
 
 #### 버그 수정 (fix/)
 ```bash
-fix/http-timeout-handling
-fix/rate-limiter-deadlock
-fix/duplicate-article-detection
-fix/parsing-encoding-error
-fix/memory-leak-worker-pool
+fix/#3/http-timeout-handling
+fix/#7/rate-limiter-deadlock
+fix/#9/duplicate-article-detection
+fix/#11/parsing-encoding-error
+fix/#13/memory-leak-worker-pool
 ```
 
-#### 리팩토링 (refac/)
+#### 리팩토링 (refactor/)
 ```bash
-refac/validation-logic
-refac/simplify-error-handling
-refac/extract-parser-interface
-refac/improve-test-coverage
-refac/migrate-standard-layout
+refactor/#4/validation-logic
+refactor/#8/simplify-error-handling
+refactor/#10/extract-parser-interface
+refactor/#12/improve-test-coverage
 ```
 
 #### 문서 작업 (docs/)
 ```bash
-docs/api-documentation
-docs/update-readme
-docs/add-crawler-guide
-docs/git-conventions
-docs/architecture-diagram
+docs/#2/api-documentation
+docs/#5/update-readme
+docs/#6/add-crawler-guide
+docs/#9/git-conventions
 ```
 
 ## Workflow
 
 ### 1. Branch 생성
 ```bash
-# feature 개발
-git checkout -b feat/feature-name
+# feature 개발 (이슈 #15 기준)
+git checkout -b feature/#15/cnn-naver-crawler
 
-# bug 수정
-git checkout -b fix/bug-name
+# bug 수정 (이슈 #7 기준)
+git checkout -b fix/#7/rate-limiter-deadlock
 
-# refactoring
-git checkout -b refac/refactor-name
+# refactoring (이슈 #4 기준)
+git checkout -b refactor/#4/validation-logic
 
-# documentation
-git checkout -b docs/doc-name
+# documentation (이슈 #9 기준)
+git checkout -b docs/#9/git-conventions
 ```
 
 ### 2. 작업 및 Commit
