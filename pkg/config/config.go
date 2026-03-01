@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -51,12 +52,15 @@ func DefaultDBConfig() DBConfig {
 
 // Load는 .env 파일을 로드한 후 OS 환경변수로 DBConfig를 구성합니다.
 // .env 파일이 없으면 무시되고, OS 환경변수가 항상 .env 값보다 우선합니다.
+// 환경변수 값이 설정되어 있지만 파싱에 실패하면 에러를 반환합니다.
 func Load(envFiles ...string) (DBConfig, error) {
 	// .env 파일 로드 (없으면 무시 — 프로덕션에서는 OS env를 직접 사용)
 	if len(envFiles) == 0 {
 		envFiles = []string{".env"}
 	}
-	_ = godotenv.Load(envFiles...)
+	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return DBConfig{}, fmt.Errorf("env 파일 로드 실패: %w", err)
+	}
 
 	cfg := DefaultDBConfig()
 
@@ -64,9 +68,11 @@ func Load(envFiles ...string) (DBConfig, error) {
 		cfg.Host = v
 	}
 	if v := os.Getenv("POSTGRES_PORT"); v != "" {
-		if p, err := strconv.Atoi(v); err == nil {
-			cfg.Port = p
+		p, err := strconv.Atoi(v)
+		if err != nil {
+			return DBConfig{}, fmt.Errorf("POSTGRES_PORT 파싱 실패 %q: %w", v, err)
 		}
+		cfg.Port = p
 	}
 	if v := os.Getenv("POSTGRES_USER"); v != "" {
 		cfg.User = v
@@ -81,19 +87,25 @@ func Load(envFiles ...string) (DBConfig, error) {
 		cfg.SSLMode = v
 	}
 	if v := os.Getenv("POSTGRES_MAX_CONNS"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 32); err == nil {
-			cfg.MaxConns = int32(n)
+		n, err := strconv.ParseInt(v, 10, 32)
+		if err != nil {
+			return DBConfig{}, fmt.Errorf("POSTGRES_MAX_CONNS 파싱 실패 %q: %w", v, err)
 		}
+		cfg.MaxConns = int32(n)
 	}
 	if v := os.Getenv("POSTGRES_MIN_CONNS"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 32); err == nil {
-			cfg.MinConns = int32(n)
+		n, err := strconv.ParseInt(v, 10, 32)
+		if err != nil {
+			return DBConfig{}, fmt.Errorf("POSTGRES_MIN_CONNS 파싱 실패 %q: %w", v, err)
 		}
+		cfg.MinConns = int32(n)
 	}
 	if v := os.Getenv("POSTGRES_CONN_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.ConnTimeout = d
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return DBConfig{}, fmt.Errorf("POSTGRES_CONN_TIMEOUT 파싱 실패 %q: %w", v, err)
 		}
+		cfg.ConnTimeout = d
 	}
 
 	return cfg, nil
