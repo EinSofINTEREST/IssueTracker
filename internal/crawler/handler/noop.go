@@ -3,8 +3,8 @@ package handler
 import (
   "context"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
 )
 
 // noopHandler는 실제 크롤러 구현 전 사용되는 fallback 핸들러입니다.

@@ -3,7 +3,7 @@ package chromedp
 import (
   "context"
 
-  "ecoscrapper/internal/crawler/core"
+  "issuetracker/internal/crawler/core"
 )
 
 // ChromedpCrawler: 헤드리스 브라우저 기반 동적 크롤러

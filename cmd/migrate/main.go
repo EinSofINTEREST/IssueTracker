@@ -4,10 +4,10 @@ import (
   "context"
   "os"
 
-  "ecoscrapper/migrations"
-  "ecoscrapper/pkg/config"
-  pgStorage "ecoscrapper/internal/storage/postgres"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/migrations"
+  "issuetracker/pkg/config"
+  pgStorage "issuetracker/internal/storage/postgres"
+  "issuetracker/pkg/logger"
 )
 
 func main() {

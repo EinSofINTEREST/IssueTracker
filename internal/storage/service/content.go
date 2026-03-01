@@ -8,9 +8,9 @@ import (
   "fmt"
   "time"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/storage"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/storage"
+  "issuetracker/pkg/logger"
 )
 
 // StoreResult는 StoreBatch에서 각 Content의 저장 결과를 나타냅니다.

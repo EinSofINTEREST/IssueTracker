@@ -10,9 +10,9 @@ import (
   "github.com/jackc/pgx/v5"
   "github.com/jackc/pgx/v5/pgxpool"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/storage"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/storage"
+  "issuetracker/pkg/logger"
 )
 
 // pgContentRepository는 pgx/v5 기반 ContentRepository 구현체입니다.

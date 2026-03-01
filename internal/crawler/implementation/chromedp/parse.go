@@ -9,8 +9,8 @@ import (
   "github.com/PuerkitoBio/goquery"
   "github.com/chromedp/chromedp"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
 )
 
 // FetchAndParse: 페이지를 렌더링하고 바로 파싱

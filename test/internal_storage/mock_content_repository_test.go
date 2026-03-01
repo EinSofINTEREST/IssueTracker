@@ -5,8 +5,8 @@ import (
 
   "github.com/stretchr/testify/mock"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/storage"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/storage"
 )
 
 // MockContentRepository는 ContentRepository 인터페이스의 mock 구현체입니다.

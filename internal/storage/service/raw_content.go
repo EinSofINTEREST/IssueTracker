@@ -7,9 +7,9 @@ import (
   "fmt"
   "time"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/storage"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/storage"
+  "issuetracker/pkg/logger"
 )
 
 // RawContentService는 RawContent에 대한 비즈니스 로직 인터페이스입니다.

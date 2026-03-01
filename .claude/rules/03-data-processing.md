@@ -434,47 +434,47 @@ type ValidationError struct {
 
 1. **Kafka Topic-Based Pipeline**
    ```
-   Crawler → [ecoscrapper.raw.{country}] → Normalizer →
-   [ecoscrapper.normalized] → Validator →
-   [ecoscrapper.validated] → Enricher →
-   [ecoscrapper.enriched] → Embedder →
-   [ecoscrapper.embedded] → Clusterer → [Done]
+   Crawler → [issuetracker.raw.{country}] → Normalizer →
+   [issuetracker.normalized] → Validator →
+   [issuetracker.validated] → Enricher →
+   [issuetracker.enriched] → Embedder →
+   [issuetracker.embedded] → Clusterer → [Done]
    ```
 
 2. **Topic Configuration**
    ```go
    var Topics = map[string]TopicConfig{
-       "ecoscrapper.raw.us": {
+       "issuetracker.raw.us": {
            Partitions:     16,  // Parallel processing
            ReplicationFactor: 3,
            RetentionMs:    86400000,  // 24 hours
        },
-       "ecoscrapper.raw.kr": {
+       "issuetracker.raw.kr": {
            Partitions:     16,
            ReplicationFactor: 3,
            RetentionMs:    86400000,
        },
-       "ecoscrapper.normalized": {
+       "issuetracker.normalized": {
            Partitions:     32,
            ReplicationFactor: 3,
            RetentionMs:    172800000,  // 48 hours
        },
-       "ecoscrapper.validated": {
+       "issuetracker.validated": {
            Partitions:     32,
            ReplicationFactor: 3,
            RetentionMs:    172800000,
        },
-       "ecoscrapper.enriched": {
+       "issuetracker.enriched": {
            Partitions:     32,
            ReplicationFactor: 3,
            RetentionMs:    259200000,  // 72 hours
        },
-       "ecoscrapper.embedded": {
+       "issuetracker.embedded": {
            Partitions:     16,
            ReplicationFactor: 3,
            RetentionMs:    259200000,
        },
-       "ecoscrapper.dlq": {
+       "issuetracker.dlq": {
            Partitions:     8,
            ReplicationFactor: 3,
            RetentionMs:    604800000,  // 7 days
@@ -486,11 +486,11 @@ type ValidationError struct {
    ```go
    // Each processing stage is a consumer group
    var ConsumerGroups = []string{
-       "ecoscrapper-normalizers",
-       "ecoscrapper-validators",
-       "ecoscrapper-enrichers",
-       "ecoscrapper-embedders",
-       "ecoscrapper-clusterers",
+       "issuetracker-normalizers",
+       "issuetracker-validators",
+       "issuetracker-enrichers",
+       "issuetracker-embedders",
+       "issuetracker-clusterers",
    }
    ```
 
@@ -541,7 +541,7 @@ type ValidationError struct {
 
 6. **Failure Handling with Kafka**
    - **Retry Logic**: Re-publish to same topic with incremented retry count
-   - **Dead Letter Queue**: After 3 retries, send to `ecoscrapper.dlq`
+   - **Dead Letter Queue**: After 3 retries, send to `issuetracker.dlq`
    - **Error Headers**: Include error info in Kafka headers
 
    ```go
@@ -577,7 +577,7 @@ type ValidationError struct {
    func (w *ProcessingWorker) sendToDLQ(msg *kafka.Message, err error) error {
        dlqMsg := &kafka.Message{
            TopicPartition: kafka.TopicPartition{
-               Topic:     "ecoscrapper.dlq",
+               Topic:     "issuetracker.dlq",
                Partition: kafka.PartitionAny,
            },
            Key:   msg.Key,
@@ -662,7 +662,7 @@ type ValidationError struct {
 
    func (s *StreamProcessor) BuildPipeline() {
        // Source: embedded articles
-       embedded := s.streams.Stream("ecoscrapper.embedded")
+       embedded := s.streams.Stream("issuetracker.embedded")
 
        // Transform and aggregate
        embedded.
@@ -675,7 +675,7 @@ type ValidationError struct {
                },
            ).
            ToStream().
-           To("ecoscrapper.clusters")
+           To("issuetracker.clusters")
    }
    ```
 

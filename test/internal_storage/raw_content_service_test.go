@@ -9,9 +9,9 @@ import (
   "github.com/stretchr/testify/assert"
   "github.com/stretchr/testify/mock"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/storage"
-  "ecoscrapper/internal/storage/service"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/storage"
+  "issuetracker/internal/storage/service"
 )
 
 // newTestRawContent는 테스트용 기본 RawContent를 반환합니다.

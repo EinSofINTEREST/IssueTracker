@@ -117,7 +117,7 @@ func DefaultConfig() Config {
     Timeout:         30 * time.Second,
     MaxIdleConns:    100,
     MaxConnsPerHost: 10,
-    UserAgent:       "EcoScrapper/1.0 (+https://example.com/bot) Go-http-client",
+    UserAgent:       "IssueTracker/1.0 (+https://example.com/bot) Go-http-client",
     RequestsPerHour: 100,
     BurstSize:       10,
     MaxRetries:      3,

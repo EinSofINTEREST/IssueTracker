@@ -1,7 +1,7 @@
 package core_test
 
 import (
-  core "ecoscrapper/internal/crawler/core"
+  core "issuetracker/internal/crawler/core"
 
   "testing"
   "time"
@@ -15,7 +15,7 @@ func TestDefaultConfig(t *testing.T) {
   assert.Equal(t, 30*time.Second, config.Timeout)
   assert.Equal(t, 100, config.MaxIdleConns)
   assert.Equal(t, 10, config.MaxConnsPerHost)
-  assert.Contains(t, config.UserAgent, "EcoScrapper")
+  assert.Contains(t, config.UserAgent, "IssueTracker")
   assert.Equal(t, 100, config.RequestsPerHour)
   assert.Equal(t, 10, config.BurstSize)
   assert.Equal(t, 3, config.MaxRetries)

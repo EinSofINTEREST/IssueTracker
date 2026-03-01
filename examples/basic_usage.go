@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"ecoscrapper/internal/crawler/core"
-	cdp "ecoscrapper/internal/crawler/implementation/chromedp"
-	"ecoscrapper/internal/crawler/implementation/goquery"
-	"ecoscrapper/pkg/logger"
+	"issuetracker/internal/crawler/core"
+	cdp "issuetracker/internal/crawler/implementation/chromedp"
+	"issuetracker/internal/crawler/implementation/goquery"
+	"issuetracker/pkg/logger"
 )
 
 const (
@@ -32,7 +32,7 @@ func main() {
 	ctx := log.ToContext(context.Background())
 
 	config := core.Config{
-		UserAgent:       "EcoScrapper/1.0 (+https://example.com/bot) Go-http-client",
+		UserAgent:       "IssueTracker/1.0 (+https://example.com/bot) Go-http-client",
 		Timeout:         30 * time.Second,
 		MaxRetries:      3,
 		RequestsPerHour: 100,
@@ -55,7 +55,7 @@ func main() {
 	}
 
 	fmt.Println(divider)
-	fmt.Println("  EcoScrapper - 크롤러 사용 예제 (Basic Usage)")
+	fmt.Println("  IssueTracker - 크롤러 사용 예제 (Basic Usage)")
 	fmt.Println(divider)
 	fmt.Printf("  Target: %s\n", testURL)
 	fmt.Println()
@@ -159,7 +159,7 @@ func runChromedpCrawler(
 	// ── Step 1: 인스턴스 생성 ──────────────────────────────────────
 	printStep(1, "NewChromedpCrawlerWithOptions(name, source, config, opts)")
 	// DefaultRemoteOptions: Docker Chrome(chromedp/headless-shell)에 연결
-	// docker run -d -p 9222:9222 --name ecoscrapper-chrome chromedp/headless-shell
+	// docker run -d -p 9222:9222 --name issuetracker-chrome chromedp/headless-shell
 	opts := cdp.DefaultRemoteOptions()
 	opts.WaitStable = false // 예제 빠른 실행을 위해 2초 대기 비활성화
 	crawler := cdp.NewChromedpCrawlerWithOptions("chromedp-example", source, config, opts)

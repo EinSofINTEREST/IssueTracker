@@ -43,8 +43,8 @@ import (
   "github.com/rs/zerolog/log"
 
   // Internal packages
-  "ecoscrapper/internal/crawler"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler"
+  "issuetracker/pkg/logger"
 )
 ```
 

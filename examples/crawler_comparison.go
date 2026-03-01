@@ -5,10 +5,10 @@ import (
   "fmt"
   "time"
 
-  "ecoscrapper/internal/crawler/core"
-  cdp "ecoscrapper/internal/crawler/implementation/chromedp"
-  "ecoscrapper/internal/crawler/implementation/goquery"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  cdp "issuetracker/internal/crawler/implementation/chromedp"
+  "issuetracker/internal/crawler/implementation/goquery"
+  "issuetracker/pkg/logger"
 )
 
 func main() {
@@ -19,7 +19,7 @@ func main() {
   ctx := log.ToContext(context.Background())
 
   config := core.Config{
-    UserAgent:       "EcoScrapper/1.0 (+https://example.com/bot)",
+    UserAgent:       "IssueTracker/1.0 (+https://example.com/bot)",
     Timeout:         30 * time.Second,
     MaxRetries:      3,
     RequestsPerHour: 100,

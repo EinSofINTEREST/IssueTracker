@@ -7,8 +7,8 @@ import (
 
   "github.com/chromedp/chromedp"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
 )
 
 // Fetch: 헤드리스 브라우저로 페이지를 렌더링하고 HTML 가져오기

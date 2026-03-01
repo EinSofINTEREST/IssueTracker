@@ -7,7 +7,7 @@ import (
   "math/rand"
   "time"
 
-  "ecoscrapper/pkg/logger"
+  "issuetracker/pkg/logger"
 )
 
 // RetryPolicy는 재시도 정책을 정의합니다.

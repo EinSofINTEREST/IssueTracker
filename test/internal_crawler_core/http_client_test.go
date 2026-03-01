@@ -1,7 +1,7 @@
 package core_test
 
 import (
-  core "ecoscrapper/internal/crawler/core"
+  core "issuetracker/internal/crawler/core"
 
   "context"
   "net/http"
@@ -186,7 +186,7 @@ func TestHTTPClient_Headers(t *testing.T) {
   server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
     // User-Agent 확인
     assert.NotEmpty(t, r.Header.Get("User-Agent"))
-    assert.Contains(t, r.Header.Get("User-Agent"), "EcoScrapper")
+    assert.Contains(t, r.Header.Get("User-Agent"), "IssueTracker")
 
     // Accept-Encoding 확인
     assert.NotEmpty(t, r.Header.Get("Accept-Encoding"))

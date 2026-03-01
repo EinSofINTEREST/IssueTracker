@@ -1,7 +1,7 @@
 package core_test
 
 import (
-  core "ecoscrapper/internal/crawler/core"
+  core "issuetracker/internal/crawler/core"
 
   "context"
   "errors"

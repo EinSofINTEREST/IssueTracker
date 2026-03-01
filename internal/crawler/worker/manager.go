@@ -5,9 +5,9 @@ import (
   "fmt"
   "sync"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
-  "ecoscrapper/pkg/queue"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
+  "issuetracker/pkg/queue"
 )
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -4,8 +4,8 @@ package worker
 import (
   "strings"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/queue"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/queue"
 )
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -260,8 +260,8 @@ type RawTopicFunc func(country string) string
 //
 // DefaultRawTopicFunc maps country codes to raw topics:
 //
-//	KR → ecoscrapper.raw.kr
-//	* (그 외) → ecoscrapper.raw.us
+//	KR → issuetracker.raw.kr
+//	* (그 외) → issuetracker.raw.us
 func DefaultRawTopicFunc(country string) string {
   switch strings.ToUpper(country) {
   case "KR":

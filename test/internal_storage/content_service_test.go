@@ -9,10 +9,10 @@ import (
   "github.com/stretchr/testify/assert"
   "github.com/stretchr/testify/mock"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/internal/storage"
-  "ecoscrapper/internal/storage/service"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/storage"
+  "issuetracker/internal/storage/service"
+  "issuetracker/pkg/logger"
 )
 
 // newTestLogger는 테스트용 no-op logger를 반환합니다.

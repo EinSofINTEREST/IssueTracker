@@ -20,7 +20,7 @@ const (
 // CrawlJob은 크롤러 워커가 처리할 크롤링 작업을 나타냅니다.
 //
 // CrawlJob represents a crawling task consumed by worker goroutines from Kafka.
-// It is serialized as JSON and published to crawl topics (ecoscrapper.crawl.*).
+// It is serialized as JSON and published to crawl topics (issuetracker.crawl.*).
 type CrawlJob struct {
   ID          string        `json:"id"`
   CrawlerName string        `json:"crawler_name"`

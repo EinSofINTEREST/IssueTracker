@@ -8,7 +8,7 @@ import (
   "net/http"
   "time"
 
-  "ecoscrapper/pkg/logger"
+  "issuetracker/pkg/logger"
 )
 
 const (
