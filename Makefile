@@ -2,7 +2,8 @@
         chrome-start chrome-stop chrome-status run-example-docker \
         run-kafka-pipeline \
         kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics \
-        pg-start pg-stop pg-clean pg-migrate pg-status pg-psql
+        pg-start pg-stop pg-clean pg-migrate pg-status pg-psql \
+        proto
 
 # 기본 변수
 BINARY_DIR=bin
@@ -219,5 +220,25 @@ deps: ## 의존성 다운로드
 	$(GO) mod download
 	$(GO) mod tidy
 	@echo "Dependencies updated"
+
+## ─── Proto ───────────────────────────────────────────────────
+
+PROTO_DIR=proto
+PROTO_OUT=internal/classifier/grpc/pb
+
+proto: ## Classifier proto 파일로 Go 코드 생성
+	@echo "Generating Go code from proto files..."
+	@which protoc > /dev/null || (echo "protoc not installed. See: https://grpc.io/docs/protoc-installation/" && exit 1)
+	@which protoc-gen-go > /dev/null || (echo "Installing protoc-gen-go..." && go install google.golang.org/protobuf/cmd/protoc-gen-go@latest)
+	@which protoc-gen-go-grpc > /dev/null || (echo "Installing protoc-gen-go-grpc..." && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest)
+	@mkdir -p $(PROTO_OUT)
+	protoc \
+	  --proto_path=$(PROTO_DIR) \
+	  --go_out=. \
+	  --go_opt=module=issuetracker \
+	  --go-grpc_out=. \
+	  --go-grpc_opt=module=issuetracker \
+	  $(PROTO_DIR)/classifier/classifier.proto
+	@echo "Proto generation complete → $(PROTO_OUT)/"
 
 .DEFAULT_GOAL := help
