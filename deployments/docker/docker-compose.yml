@@ -1,21 +1,47 @@
 # ─────────────────────────────────────────────────────────────
-# EcoScrapper 개발용 Kafka 스택
+# IssueTracker 개발용 인프라 스택
 #
 # 구성:
+#   postgres   – PostgreSQL 15 (데이터 영속화)
 #   kafka      – KRaft 모드 단일 브로커 (Zookeeper 불필요)
 #   kafka-init – 애플리케이션 토픽 사전 생성 (1회성)
 #   kafka-ui   – 브라우저 기반 토픽/메시지 뷰어 (http://localhost:8080)
 #
-# 리스너:
+# 리스너 (Kafka):
 #   PLAINTEXT  → localhost:9092  (호스트 → 컨테이너, Go 앱 연결용)
 #   INTERNAL   → kafka:29092     (컨테이너 내부 통신용)
 #   CONTROLLER → kafka:9093      (KRaft 컨트롤러 전용)
 # ─────────────────────────────────────────────────────────────
 
 services:
+  # ─────────────────────────────────────────────────────────────
+  # PostgreSQL 15 – 메인 데이터베이스
+  # localhost:5432 / DB: issuetracker
+  # DEV 환경에서는 local postgres 사용
+  # ─────────────────────────────────────────────────────────────
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: issuetracker-postgres
+  #   ports:
+  #     - "5432:5432"
+  #   environment:
+  #     POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+  #     POSTGRES_DB: ${POSTGRES_DB:-issuetracker}
+  #   volumes:
+  #     - /data/ELArchive/issuetracker/postgres:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-issuetracker}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 20s
+  #   restart: unless-stopped
+
+
   kafka:
     image: apache/kafka:latest
-    container_name: ecoscrapper-kafka
+    container_name: issuetracker-kafka
     ports:
       - "9092:9092"
     environment:
@@ -44,7 +70,7 @@ services:
       KAFKA_LOG_RETENTION_HOURS: 24
 
     volumes:
-      - /data/ELArchive/ecoscrapper/kafka:/var/lib/kafka/data
+      - /data/ELArchive/issuetracker/kafka:/var/lib/kafka/data
     healthcheck:
       test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 10s
@@ -58,7 +84,7 @@ services:
   # ─────────────────────────────────────────────────────────────
   kafka-init:
     image: apache/kafka:latest
-    container_name: ecoscrapper-kafka-init
+    container_name: issuetracker-kafka-init
     depends_on:
       kafka:
         condition: service_healthy
@@ -72,26 +98,26 @@ services:
         KAFKA=kafka:29092
         T=/opt/kafka/bin/kafka-topics.sh
 
-        echo '=== EcoScrapper Kafka Topic Initialization ==='
+        echo '=== IssueTracker Kafka Topic Initialization ==='
 
         echo '[crawl topics]'
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.crawl.high   --partitions ${KAFKA_PARTITIONS_HIGH:-6} --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.crawl.normal --partitions ${KAFKA_PARTITIONS_NORMAL:-8} --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.crawl.low    --partitions ${KAFKA_PARTITIONS_LOW:-4} --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.high   --partitions ${KAFKA_PARTITIONS_HIGH:-6} --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.normal --partitions ${KAFKA_PARTITIONS_NORMAL:-8} --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.low    --partitions ${KAFKA_PARTITIONS_LOW:-4} --replication-factor 1
 
         echo '[raw topics]'
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.raw.us       --partitions 8 --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.raw.kr       --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.raw.us       --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.raw.kr       --partitions 8 --replication-factor 1
 
         echo '[pipeline topics]'
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.normalized   --partitions 8 --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.validated    --partitions 8 --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.enriched     --partitions 8 --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.embedded     --partitions 4 --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.clusters     --partitions 4 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.normalized   --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.validated    --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.enriched     --partitions 8 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.embedded     --partitions 4 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.clusters     --partitions 4 --replication-factor 1
 
         echo '[system topics]'
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic ecoscrapper.dlq          --partitions 4 --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.dlq          --partitions 4 --replication-factor 1
 
         echo ''
         echo '=== Topics Created ==='
@@ -104,11 +130,11 @@ services:
   # ─────────────────────────────────────────────────────────────
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    container_name: ecoscrapper-kafka-ui
+    container_name: issuetracker-kafka-ui
     ports:
       - "8080:8080"
     environment:
-      - KAFKA_CLUSTERS_0_NAME=ecoscrapper-local
+      - KAFKA_CLUSTERS_0_NAME=issuetracker-local
       - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
     depends_on:
       kafka:

@@ -6,7 +6,7 @@ import (
 
   "github.com/stretchr/testify/assert"
 
-  core "ecoscrapper/internal/crawler/core"
+  core "issuetracker/internal/crawler/core"
 )
 
 func TestCrawlerError_Error(t *testing.T) {

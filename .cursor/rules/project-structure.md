@@ -2,10 +2,10 @@
 
 ## Directory Layout
 
-EcoScrapper follows the [Standard Go Project Layout](https://github.com/golang-standards/project-layout).
+IssueTracker follows the [Standard Go Project Layout](https://github.com/golang-standards/project-layout).
 
 ```
-ecoscrapper/
+issuetracker/
 ├── cmd/                        # Application entry points
 │   ├── crawler/               # Crawler executable
 │   │   └── main.go
@@ -79,8 +79,8 @@ ecoscrapper/
 package main
 
 import (
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
 )
 
 func main() {
@@ -113,7 +113,7 @@ func main() {
 - Code here should be production-ready
 - Document all exported functions
 - Maintain backward compatibility
-- Examples: `ecoscrapper/pkg/logger`
+- Examples: `issuetracker/pkg/logger`
 
 ### `/test`
 **Test files**
@@ -187,7 +187,7 @@ func main() {
 
 ### Internal Packages
 ```go
-import "ecoscrapper/internal/crawler/core"
+import "issuetracker/internal/crawler/core"
 ```
 
 - Use for private application code
@@ -195,7 +195,7 @@ import "ecoscrapper/internal/crawler/core"
 
 ### Public Packages
 ```go
-import "ecoscrapper/pkg/logger"
+import "issuetracker/pkg/logger"
 ```
 
 - Use for reusable libraries

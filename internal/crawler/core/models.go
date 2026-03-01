@@ -49,17 +49,23 @@ type RawContent struct {
   Metadata   map[string]interface{}
 }
 
-// Article은 파싱된 기사 데이터를 나타냅니다.
-type Article struct {
+// Content는 파싱된 컨텐츠 데이터를 나타냅니다.
+// 뉴스 기사, 커뮤니티 게시글, 소셜 미디어 포스트 등을 포함합니다.
+// DB 저장 시 3개 테이블로 분리됩니다:
+//   - contents: 핵심 메타데이터 (핫 경로)
+//   - content_bodies: 본문 텍스트 (상세 조회 전용)
+//   - content_meta: 확장 메타데이터 (파이프라인 업데이트)
+type Content struct {
   // Identity
-  ID       string
-  SourceID string
-  Country  string
-  Language string
+  ID         string
+  SourceID   string
+  SourceType SourceType // "news" | "community" | "social"
+  Country    string
+  Language   string
 
-  // Content
+  // Content (content_bodies 테이블)
   Title   string
-  Body    string
+  Body    string    // 상세 조회 시에만 채워짐
   Summary string
 
   // Metadata
@@ -72,11 +78,15 @@ type Article struct {
   // Technical
   URL          string
   CanonicalURL string
-  ImageURLs    []string
+  ImageURLs    []string // content_meta 테이블
 
   // Quality
   ContentHash string
-  WordCount   int
+  WordCount   int     // content_bodies 테이블
+  Reliability float32 // 신뢰도 0.0~1.0 (0.0: 미검증)
+
+  // Extension (content_meta 테이블)
+  Extra map[string]interface{} // 유형별 메타데이터 (JSONB)
 
   CreatedAt time.Time
 }
@@ -107,7 +117,7 @@ func DefaultConfig() Config {
     Timeout:         30 * time.Second,
     MaxIdleConns:    100,
     MaxConnsPerHost: 10,
-    UserAgent:       "EcoScrapper/1.0 (+https://example.com/bot) Go-http-client",
+    UserAgent:       "IssueTracker/1.0 (+https://example.com/bot) Go-http-client",
     RequestsPerHour: 100,
     BurstSize:       10,
     MaxRetries:      3,

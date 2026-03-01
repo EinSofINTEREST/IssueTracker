@@ -8,8 +8,8 @@ import (
 
   "github.com/PuerkitoBio/goquery"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
 )
 
 // Fetch: URL에서 컨텐츠 가져오기

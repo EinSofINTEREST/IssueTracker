@@ -11,8 +11,8 @@
 ### Initial Setup
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/ecoscrapper
-cd ecoscrapper
+git clone https://github.com/yourusername/issuetracker
+cd issuetracker
 
 # Install dependencies
 go mod tidy
@@ -315,7 +315,7 @@ make coverage-html
 
 ### Using Logs
 ```go
-import "ecoscrapper/pkg/logger"
+import "issuetracker/pkg/logger"
 
 log := logger.New(logger.DefaultConfig())
 log.Debug().Str("url", url).Msg("fetching article")
@@ -339,7 +339,7 @@ dlv exec ./bin/crawler
 #### Import Errors
 ```bash
 # Verify module path
-cat go.mod  # Should show: module ecoscrapper
+cat go.mod  # Should show: module issuetracker
 
 # Update dependencies
 go mod tidy

@@ -5,8 +5,8 @@ import (
 
   "github.com/chromedp/chromedp"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
 )
 
 // NewChromedpCrawler: 새로운 ChromedpCrawler 인스턴스 생성

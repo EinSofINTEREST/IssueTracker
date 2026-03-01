@@ -1,8 +1,8 @@
-# EcoScrapper Cursor Rules
+# IssueTracker Cursor Rules
 
 ## Overview
 
-EcoScrapper is a global issue collection and analysis system written in Go, following the standard Go project layout (golang-standards/project-layout).
+IssueTracker is a global issue collection and analysis system written in Go, following the standard Go project layout (golang-standards/project-layout).
 
 **Initial Target Markets**: United States and South Korea
 

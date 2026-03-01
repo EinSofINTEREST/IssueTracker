@@ -1,10 +1,10 @@
-# EcoScrapper Development Rules
+# IssueTracker Development Rules
 
-This directory contains the comprehensive ruleset for developing the EcoScrapper global issue aggregation system. These rules guide the implementation of a scalable, extensible crawler and data processing pipeline.
+This directory contains the comprehensive ruleset for developing the IssueTracker global issue aggregation system. These rules guide the implementation of a scalable, extensible crawler and data processing pipeline.
 
 ## Overview
 
-**EcoScrapper** is a system designed to:
+**IssueTracker** is a system designed to:
 - Crawl news, social media, and community sources worldwide
 - Process and normalize multilingual content
 - Generate embeddings and cluster similar issues

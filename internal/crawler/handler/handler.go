@@ -11,8 +11,8 @@ package handler
 import (
   "context"
 
-  "ecoscrapper/internal/crawler/core"
-  "ecoscrapper/pkg/logger"
+  "issuetracker/internal/crawler/core"
+  "issuetracker/pkg/logger"
 )
 
 // Handler는 단일 CrawlJob을 처리하는 인터페이스입니다.

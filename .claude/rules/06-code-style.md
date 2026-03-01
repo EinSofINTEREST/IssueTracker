@@ -57,8 +57,8 @@
      "github.com/rs/zerolog/log"
 
      // Internal packages
-     "ecoscrapper/internal/crawler"
-     "ecoscrapper/internal/storage"
+     "issuetracker/internal/crawler"
+     "issuetracker/internal/storage"
    )
    ```
 
@@ -926,7 +926,7 @@ func process() {
 - Link to Korean version: `docs/ko/README.md`
 - Include language selector at the top:
   ```markdown
-  # EcoScrapper
+  # IssueTracker
 
   **[한국어](docs/ko/README.md)** | English
   ```
@@ -1017,7 +1017,7 @@ func ExampleCrawler_Fetch() {
 
 **README.md** (Root - English):
 ```markdown
-# EcoScrapper
+# IssueTracker
 
 **[한국어](docs/ko/README.md)** | English
 
@@ -1025,7 +1025,7 @@ func ExampleCrawler_Fetch() {
 
 ## Overview
 
-EcoScrapper is a system that collects issues from news, communities,
+IssueTracker is a system that collects issues from news, communities,
 and social media worldwide, and identifies major issues through
 embedding and clustering.
 
@@ -1048,8 +1048,8 @@ embedding and clustering.
 ### Installation
 
 \`\`\`bash
-git clone https://github.com/example/ecoscrapper
-cd ecoscrapper
+git clone https://github.com/example/issuetracker
+cd issuetracker
 make install
 \`\`\`
 
@@ -1072,7 +1072,7 @@ MIT
 
 **docs/ko/README.md** (Korean Translation):
 ```markdown
-# EcoScrapper
+# IssueTracker
 
 한국어 | **[English](../../README.md)**
 
@@ -1080,7 +1080,7 @@ MIT
 
 ## 개요
 
-EcoScrapper는 전 세계의 뉴스, 커뮤니티, 소셜 미디어에서 이슈를 수집하고
+IssueTracker는 전 세계의 뉴스, 커뮤니티, 소셜 미디어에서 이슈를 수집하고
 임베딩 및 클러스터링을 통해 주요 이슈를 식별하는 시스템입니다.
 
 ## 주요 기능
@@ -1102,8 +1102,8 @@ EcoScrapper는 전 세계의 뉴스, 커뮤니티, 소셜 미디어에서 이슈
 ### 설치
 
 \`\`\`bash
-git clone https://github.com/example/ecoscrapper
-cd ecoscrapper
+git clone https://github.com/example/issuetracker
+cd issuetracker
 make install
 \`\`\`
 

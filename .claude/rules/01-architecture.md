@@ -88,7 +88,7 @@
 Following [Standard Go Project Layout](https://github.com/golang-standards/project-layout):
 
 ```
-ecoscrapper/
+issuetracker/
 ├── cmd/                        # Application entry points
 │   ├── crawler/               # Crawler executable
 │   │   └── main.go
@@ -201,7 +201,7 @@ ecoscrapper/
 ### Message Queue (Planned)
 - **Queue**: Apache Kafka 3.5+
 - **Use Cases**: Async processing, job distribution
-- **Topics**: `ecoscrapper.raw.{country}`, `ecoscrapper.normalized`, etc.
+- **Topics**: `issuetracker.raw.{country}`, `issuetracker.normalized`, etc.
 
 ### Observability (Planned)
 - **Metrics**: Prometheus
@@ -229,17 +229,17 @@ Source → Fetch → [Kafka: raw] → Normalize → [Kafka: normalized] → Vali
 ### Stage Definitions
 
 1. **Fetch**: Retrieve content from source
-2. **Kafka (raw)**: Publish raw content to country-specific topic (`ecoscrapper.raw.{country}`)
+2. **Kafka (raw)**: Publish raw content to country-specific topic (`issuetracker.raw.{country}`)
 3. **Normalize**: Convert to common schema, clean text
-4. **Kafka (normalized)**: Publish normalized articles (`ecoscrapper.normalized`)
+4. **Kafka (normalized)**: Publish normalized articles (`issuetracker.normalized`)
 5. **Validate**: Check data integrity and quality
-6. **Kafka (validated)**: Publish validated articles (`ecoscrapper.validated`)
+6. **Kafka (validated)**: Publish validated articles (`issuetracker.validated`)
 7. **Enrich**: Extract entities, sentiment, topics
-8. **Kafka (enriched)**: Publish enriched articles (`ecoscrapper.enriched`)
+8. **Kafka (enriched)**: Publish enriched articles (`issuetracker.enriched`)
 9. **Embed**: Generate vector representations
-10. **Kafka (embedded)**: Publish embedded articles (`ecoscrapper.embedded`)
+10. **Kafka (embedded)**: Publish embedded articles (`issuetracker.embedded`)
 11. **Cluster**: Group similar issues using streaming/batch processing
-12. **Kafka (clusters)**: Publish identified issue clusters (`ecoscrapper.clusters`)
+12. **Kafka (clusters)**: Publish identified issue clusters (`issuetracker.clusters`)
 13. **Store Processed**: Persist analysis results to databases
 
 ### Kafka-Based Processing Benefits
@@ -267,14 +267,14 @@ sources:
         rate_limit: 100/hour
         selectors: "..."
         kafka:
-          topic: "ecoscrapper.raw.us"
+          topic: "issuetracker.raw.us"
           partition_key: "domain"
     communities:
       - name: "reddit"
         enabled: true
         subreddits: ["news", "worldnews"]
         kafka:
-          topic: "ecoscrapper.raw.us"
+          topic: "issuetracker.raw.us"
           partition_key: "subreddit"
   kr:
     news:
@@ -282,7 +282,7 @@ sources:
         enabled: true
         rate_limit: 200/hour
         kafka:
-          topic: "ecoscrapper.raw.kr"
+          topic: "issuetracker.raw.kr"
           partition_key: "domain"
 
 kafka:
@@ -293,29 +293,29 @@ kafka:
 
   topics:
     # Crawl job topics (by priority)
-    crawl_high: "ecoscrapper.crawl.high"
-    crawl_normal: "ecoscrapper.crawl.normal"
-    crawl_low: "ecoscrapper.crawl.low"
+    crawl_high: "issuetracker.crawl.high"
+    crawl_normal: "issuetracker.crawl.normal"
+    crawl_low: "issuetracker.crawl.low"
 
     # Processing pipeline topics
-    raw_us: "ecoscrapper.raw.us"
-    raw_kr: "ecoscrapper.raw.kr"
-    normalized: "ecoscrapper.normalized"
-    validated: "ecoscrapper.validated"
-    enriched: "ecoscrapper.enriched"
-    embedded: "ecoscrapper.embedded"
-    clusters: "ecoscrapper.clusters"
+    raw_us: "issuetracker.raw.us"
+    raw_kr: "issuetracker.raw.kr"
+    normalized: "issuetracker.normalized"
+    validated: "issuetracker.validated"
+    enriched: "issuetracker.enriched"
+    embedded: "issuetracker.embedded"
+    clusters: "issuetracker.clusters"
 
     # System topics
-    dlq: "ecoscrapper.dlq"
+    dlq: "issuetracker.dlq"
 
   consumer_groups:
-    crawler_workers: "ecoscrapper-crawler-workers"
-    normalizers: "ecoscrapper-normalizers"
-    validators: "ecoscrapper-validators"
-    enrichers: "ecoscrapper-enrichers"
-    embedders: "ecoscrapper-embedders"
-    clusterers: "ecoscrapper-clusterers"
+    crawler_workers: "issuetracker-crawler-workers"
+    normalizers: "issuetracker-normalizers"
+    validators: "issuetracker-validators"
+    enrichers: "issuetracker-enrichers"
+    embedders: "issuetracker-embedders"
+    clusterers: "issuetracker-clusterers"
 
   # Topic configurations
   topic_configs:
@@ -338,7 +338,7 @@ kafka:
    - Each stage scales independently
    - Monitor consumer lag per topic
    - Auto-scale based on lag threshold
-   - Example: Add more embedders if `ecoscrapper.enriched` lag increases
+   - Example: Add more embedders if `issuetracker.enriched` lag increases
 
 3. **Kafka Cluster**
    - 3+ broker cluster for production
@@ -391,7 +391,7 @@ kafka:
 
 ### Kafka Partition Strategy
 
-- **Raw topics** (`ecoscrapper.raw.*`): 16 partitions per country
+- **Raw topics** (`issuetracker.raw.*`): 16 partitions per country
 - **Processing topics**: 32 partitions for high throughput
 - **DLQ topic**: 8 partitions (low volume expected)
 - **Partition key**: Use domain/source for ordering within same source

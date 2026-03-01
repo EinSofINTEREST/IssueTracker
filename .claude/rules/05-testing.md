@@ -340,9 +340,9 @@ func TestProcessingPipeline_EndToEnd(t *testing.T) {
 
     // Create topics
     topics := []string{
-        "ecoscrapper.raw.us",
-        "ecoscrapper.normalized",
-        "ecoscrapper.validated",
+        "issuetracker.raw.us",
+        "issuetracker.normalized",
+        "issuetracker.validated",
     }
     createTopics(t, kafka.Broker(), topics)
 
@@ -360,17 +360,17 @@ func TestProcessingPipeline_EndToEnd(t *testing.T) {
         HTML: loadTestData("testdata/html/sample_article.html"),
     }
 
-    publishToKafka(t, kafka.Broker(), "ecoscrapper.raw.us", rawArticle)
+    publishToKafka(t, kafka.Broker(), "issuetracker.raw.us", rawArticle)
 
     // Wait for processing and verify
     time.Sleep(5 * time.Second)
 
     // Check normalized article
-    normalized := consumeFromKafka(t, kafka.Broker(), "ecoscrapper.normalized", 5*time.Second)
+    normalized := consumeFromKafka(t, kafka.Broker(), "issuetracker.normalized", 5*time.Second)
     assert.NotNil(t, normalized)
 
     // Check validated article
-    validated := consumeFromKafka(t, kafka.Broker(), "ecoscrapper.validated", 5*time.Second)
+    validated := consumeFromKafka(t, kafka.Broker(), "issuetracker.validated", 5*time.Second)
     assert.NotNil(t, validated)
 
     // Verify in database
@@ -786,7 +786,7 @@ func TestSmoke_CrawlerEndpoint(t *testing.T) {
         t.Skip("Smoke tests only run in production")
     }
 
-    resp, err := http.Get("https://api.ecoscrapper.com/health")
+    resp, err := http.Get("https://api.issuetracker.com/health")
     assert.NoError(t, err)
     assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -820,7 +820,7 @@ class CrawlerUser(HttpUser):
 Run load tests before major releases:
 
 ```bash
-locust -f locustfile.py --host=https://api.ecoscrapper.com
+locust -f locustfile.py --host=https://api.issuetracker.com
 ```
 
 ## Test Documentation

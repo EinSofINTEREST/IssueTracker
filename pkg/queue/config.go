@@ -5,33 +5,33 @@ import "time"
 // Kafka 토픽 상수 (아키텍처 문서 01-architecture.md 기준)
 const (
   // 크롤 job 토픽 (우선순위별)
-  TopicCrawlHigh   = "ecoscrapper.crawl.high"
-  TopicCrawlNormal = "ecoscrapper.crawl.normal"
-  TopicCrawlLow    = "ecoscrapper.crawl.low"
+  TopicCrawlHigh   = "issuetracker.crawl.high"
+  TopicCrawlNormal = "issuetracker.crawl.normal"
+  TopicCrawlLow    = "issuetracker.crawl.low"
 
   // 원본 데이터 토픽 (국가별)
-  TopicRawUS = "ecoscrapper.raw.us"
-  TopicRawKR = "ecoscrapper.raw.kr"
+  TopicRawUS = "issuetracker.raw.us"
+  TopicRawKR = "issuetracker.raw.kr"
 
   // 처리 파이프라인 토픽
-  TopicNormalized = "ecoscrapper.normalized"
-  TopicValidated  = "ecoscrapper.validated"
-  TopicEnriched   = "ecoscrapper.enriched"
-  TopicEmbedded   = "ecoscrapper.embedded"
-  TopicClusters   = "ecoscrapper.clusters"
+  TopicNormalized = "issuetracker.normalized"
+  TopicValidated  = "issuetracker.validated"
+  TopicEnriched   = "issuetracker.enriched"
+  TopicEmbedded   = "issuetracker.embedded"
+  TopicClusters   = "issuetracker.clusters"
 
   // 시스템 토픽
-  TopicDLQ = "ecoscrapper.dlq"
+  TopicDLQ = "issuetracker.dlq"
 )
 
 // Consumer group 상수
 const (
-  GroupCrawlerWorkers = "ecoscrapper-crawler-workers"
-  GroupNormalizers    = "ecoscrapper-normalizers"
-  GroupValidators     = "ecoscrapper-validators"
-  GroupEnrichers      = "ecoscrapper-enrichers"
-  GroupEmbedders      = "ecoscrapper-embedders"
-  GroupClusterers     = "ecoscrapper-clusterers"
+  GroupCrawlerWorkers = "issuetracker-crawler-workers"
+  GroupNormalizers    = "issuetracker-normalizers"
+  GroupValidators     = "issuetracker-validators"
+  GroupEnrichers      = "issuetracker-enrichers"
+  GroupEmbedders      = "issuetracker-embedders"
+  GroupClusterers     = "issuetracker-clusterers"
 )
 
 // Config는 Kafka 연결 설정을 나타냅니다.

@@ -1,7 +1,7 @@
 package core_test
 
 import (
-  core "ecoscrapper/internal/crawler/core"
+  core "issuetracker/internal/crawler/core"
 
   "testing"
   "time"
@@ -15,7 +15,7 @@ func TestDefaultConfig(t *testing.T) {
   assert.Equal(t, 30*time.Second, config.Timeout)
   assert.Equal(t, 100, config.MaxIdleConns)
   assert.Equal(t, 10, config.MaxConnsPerHost)
-  assert.Contains(t, config.UserAgent, "EcoScrapper")
+  assert.Contains(t, config.UserAgent, "IssueTracker")
   assert.Equal(t, 100, config.RequestsPerHour)
   assert.Equal(t, 10, config.BurstSize)
   assert.Equal(t, 3, config.MaxRetries)
@@ -100,16 +100,16 @@ func TestRawContent_Creation(t *testing.T) {
   assert.False(t, raw.Metadata["redirect"].(bool))
 }
 
-func TestArticle_Creation(t *testing.T) {
+func TestContent_Creation(t *testing.T) {
   now := time.Now()
   updatedAt := now.Add(1 * time.Hour)
 
-  article := core.Article{
+  content := core.Content{
     ID:       "article-123",
     SourceID: "source-456",
     Country:  "US",
     Language: "en",
-    Title:    "Test core.Article",
+    Title:    "Test core.Content",
     Body:     "This is a test article body.",
     Summary:  "Test summary",
     Author:   "John Doe",
@@ -125,24 +125,24 @@ func TestArticle_Creation(t *testing.T) {
     CreatedAt:    now,
   }
 
-  assert.Equal(t, "article-123", article.ID)
-  assert.Equal(t, "source-456", article.SourceID)
-  assert.Equal(t, "US", article.Country)
-  assert.Equal(t, "en", article.Language)
-  assert.Equal(t, "Test core.Article", article.Title)
-  assert.Contains(t, article.Body, "test article")
-  assert.Equal(t, "Test summary", article.Summary)
-  assert.Equal(t, "John Doe", article.Author)
-  assert.Equal(t, now, article.PublishedAt)
-  assert.NotNil(t, article.UpdatedAt)
-  assert.Equal(t, updatedAt, *article.UpdatedAt)
-  assert.Equal(t, "Technology", article.Category)
-  assert.Len(t, article.Tags, 2)
-  assert.Contains(t, article.Tags, "tech")
-  assert.Equal(t, "https://example.com/article", article.URL)
-  assert.Equal(t, "https://example.com/canonical", article.CanonicalURL)
-  assert.Len(t, article.ImageURLs, 1)
-  assert.Equal(t, "abc123", article.ContentHash)
-  assert.Equal(t, 6, article.WordCount)
-  assert.Equal(t, now, article.CreatedAt)
+  assert.Equal(t, "article-123", content.ID)
+  assert.Equal(t, "source-456", content.SourceID)
+  assert.Equal(t, "US", content.Country)
+  assert.Equal(t, "en", content.Language)
+  assert.Equal(t, "Test core.Content", content.Title)
+  assert.Contains(t, content.Body, "test article")
+  assert.Equal(t, "Test summary", content.Summary)
+  assert.Equal(t, "John Doe", content.Author)
+  assert.Equal(t, now, content.PublishedAt)
+  assert.NotNil(t, content.UpdatedAt)
+  assert.Equal(t, updatedAt, *content.UpdatedAt)
+  assert.Equal(t, "Technology", content.Category)
+  assert.Len(t, content.Tags, 2)
+  assert.Contains(t, content.Tags, "tech")
+  assert.Equal(t, "https://example.com/article", content.URL)
+  assert.Equal(t, "https://example.com/canonical", content.CanonicalURL)
+  assert.Len(t, content.ImageURLs, 1)
+  assert.Equal(t, "abc123", content.ContentHash)
+  assert.Equal(t, 6, content.WordCount)
+  assert.Equal(t, now, content.CreatedAt)
 }
