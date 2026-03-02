@@ -674,14 +674,46 @@ go test -cover ./... | grep "coverage:" | awk '{if ($2 < 70.0) exit 1}'
 
 ### Directory Structure
 
+모든 테스트 파일은 `test/` 디렉토리 아래에 위치하며, **서비스 아키텍처와 동일한 경로 구조**를 따른다.
+
+**규칙:**
+- `internal/<pkg-path>/` 의 테스트 → `test/internal/<pkg-path>/`
+- `pkg/<pkg-path>/` 의 테스트 → `test/pkg/<pkg-path>/`
+- 소스 파일과 같은 디렉토리에 테스트 파일을 두지 않는다.
+
 ```
-internal/crawler/news/cnn/
-├── crawler.go
-├── crawler_test.go      # Unit tests
-├── integration_test.go  # Integration tests
-└── testdata/
-    ├── article_valid.html
-    └── article_invalid.html
+test/                               # 모든 테스트 파일의 루트
+├── internal/                       # internal/ 패키지 테스트
+│   ├── classifier/                 # ← internal/classifier/
+│   │   ├── handler_test.go
+│   │   └── http/                  # ← internal/classifier/http/
+│   │       └── client_test.go
+│   ├── crawler_core/               # ← internal/crawler/core/
+│   │   ├── errors_test.go
+│   │   ├── http_client_test.go
+│   │   ├── models_test.go
+│   │   ├── rate_limiter_test.go
+│   │   └── retry_test.go
+│   └── storage/                    # ← internal/storage/
+│       ├── content_service_test.go
+│       └── raw_content_service_test.go
+└── pkg/                            # pkg/ 패키지 테스트
+    ├── config/                     # ← pkg/config/
+    │   └── config_test.go
+    └── logger/                     # ← pkg/logger/
+        └── logger_test.go
+```
+
+**새 패키지에 테스트 추가 시:**
+- 소스 경로 `internal/foo/bar/` → 테스트 경로 `test/internal/foo/bar/`
+- 소스 경로 `pkg/foo/` → 테스트 경로 `test/pkg/foo/`
+- 패키지 선언은 `package <name>_test` 형식 사용 (외부 테스트 패키지)
+
+```go
+// test/internal/classifier/handler_test.go
+package classifier_test
+
+import "issuetracker/internal/classifier"
 ```
 
 ### Test Suites
