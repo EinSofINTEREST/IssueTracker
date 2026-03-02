@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"ecoscrapper/pkg/config"
+	"issuetracker/pkg/config"
 )
 
 func TestLoad_DefaultValues(t *testing.T) {
