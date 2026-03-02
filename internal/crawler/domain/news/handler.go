@@ -3,6 +3,7 @@ package news
 import (
   "context"
   "fmt"
+  "strings"
   "time"
 
   "issuetracker/internal/crawler/core"
@@ -135,18 +136,23 @@ func buildRSSRawContent(job *core.CrawlJob, articles []*NewsArticle) *core.RawCo
 // On failure, delegates to the next handler (typically BrowserFetchHandler).
 type GoQueryFetchHandler struct {
   baseNewsHandler
-  fetcher NewsFetcher
+  fetcher      NewsFetcher
+  lazyKeywords []string // HTML에 이 키워드가 있으면 lazy loading으로 판단, browser로 위임
 }
 
 // NewGoQueryFetchHandler는 새로운 GoQueryFetchHandler를 생성합니다.
-func NewGoQueryFetchHandler(fetcher NewsFetcher, log *logger.Logger) *GoQueryFetchHandler {
+// lazyKeywords가 지정되면, 응답 HTML에 해당 키워드가 포함될 때 browser로 위임합니다.
+func NewGoQueryFetchHandler(fetcher NewsFetcher, log *logger.Logger, lazyKeywords ...string) *GoQueryFetchHandler {
   return &GoQueryFetchHandler{
     baseNewsHandler: baseNewsHandler{log: log},
     fetcher:         fetcher,
+    lazyKeywords:    lazyKeywords,
   }
 }
 
 // Handle은 goquery로 HTML 페이지를 가져옵니다.
+// lazyKeywords가 설정된 경우, 응답 HTML에 해당 키워드가 포함되면 lazy loading 페이지로 판단하여
+// browser 핸들러로 위임합니다.
 func (h *GoQueryFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
   raw, err := h.fetcher.Fetch(ctx, job.Target)
   if err != nil {
@@ -158,8 +164,30 @@ func (h *GoQueryFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
     return h.delegateToNext(ctx, job, err)
   }
 
+  if h.hasLazyContent(raw.HTML) {
+    h.log.WithFields(map[string]interface{}{
+      "handler": "goquery",
+      "url":     job.Target.URL,
+    }).Warn("lazy loading 감지, browser로 위임")
+    return h.delegateToNext(ctx, job, fmt.Errorf("lazy loading content detected"))
+  }
+
   h.log.WithField("handler", "goquery").Info("goquery fetch 성공")
   return raw, nil
+}
+
+// hasLazyContent는 HTML에 lazy loading 관련 키워드가 포함되어 있는지 확인합니다.
+func (h *GoQueryFetchHandler) hasLazyContent(html string) bool {
+  if len(h.lazyKeywords) == 0 {
+    return false
+  }
+  lower := strings.ToLower(html)
+  for _, kw := range h.lazyKeywords {
+    if strings.Contains(lower, strings.ToLower(kw)) {
+      return true
+    }
+  }
+  return false
 }
 
 // BrowserFetchHandler는 헤드리스 브라우저(chromedp)로 크롤링합니다.
@@ -199,6 +227,7 @@ func (h *BrowserFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 // BuildChain은 RSS → GoQuery → Browser 순서의 체인을 조립합니다.
 // nil fetcher는 체인에서 제외되므로 소스별로 지원하는 전략만 포함할 수 있습니다.
 // 최소 하나의 fetcher가 non-nil이어야 합니다.
+// lazyKeywords가 지정되면, GoQuery 응답 HTML에 해당 키워드가 포함될 때 browser로 위임합니다.
 //
 // BuildChain assembles the chain: RSS → GoQuery → Browser.
 // Nil fetchers are skipped, allowing per-source strategy configuration.
@@ -208,6 +237,7 @@ func BuildChain(
   goqueryFetcher NewsFetcher,
   browserFetcher NewsFetcher,
   log            *logger.Logger,
+  lazyKeywords   ...string,
 ) NewsHandler {
   var handlers []NewsHandler
 
@@ -215,7 +245,7 @@ func BuildChain(
     handlers = append(handlers, NewRSSFetchHandler(rssFetcher, log))
   }
   if goqueryFetcher != nil {
-    handlers = append(handlers, NewGoQueryFetchHandler(goqueryFetcher, log))
+    handlers = append(handlers, NewGoQueryFetchHandler(goqueryFetcher, log, lazyKeywords...))
   }
   if browserFetcher != nil {
     handlers = append(handlers, NewBrowserFetchHandler(browserFetcher, log))
