@@ -26,9 +26,14 @@ issuetracker/
 │   └── logger/                # ✅ Reusable logger package
 │       └── logger.go
 │
-├── test/                       # Test files
-│   ├── internal_crawler_core/ # Internal crawler tests
-│   └── pkg_logger/            # Logger package tests
+├── test/                       # Test files (mirrors service architecture)
+│   ├── internal/              # internal/ 패키지 테스트
+│   │   ├── classifier/        # ← internal/classifier/
+│   │   ├── crawler_core/      # ← internal/crawler/core/
+│   │   └── storage/           # ← internal/storage/
+│   └── pkg/                   # pkg/ 패키지 테스트
+│       ├── config/            # ← pkg/config/
+│       └── logger/            # ← pkg/logger/
 │
 ├── examples/                   # Usage examples
 │   └── basic_usage.go
@@ -118,15 +123,24 @@ func main() {
 ### `/test`
 **Test files**
 
-- All test files separated from source
-- Organized by package structure
-- Use `*_test` package pattern
-- Examples: `internal_crawler_core/`, `pkg_logger/`
+- **모든** 테스트 파일은 소스 코드와 분리하여 `test/` 아래에만 위치한다
+- **서비스 아키텍처와 동일한 디렉토리 구조**를 유지한다
+  - `internal/<pkg-path>/` → `test/internal/<pkg-path>/`
+  - `pkg/<pkg-path>/` → `test/pkg/<pkg-path>/`
+- 패키지 선언은 `package <name>_test` (외부 테스트 패키지) 형식 사용
+- `go test` 실행 시 `./test/...` 로 전체 테스트 탐색
+
+**디렉토리 매핑 예시:**
+```
+internal/classifier/handler.go     → test/internal/classifier/handler_test.go
+internal/crawler/core/retry.go     → test/internal/crawler_core/retry_test.go
+pkg/logger/logger.go               → test/pkg/logger/logger_test.go
+```
 
 **Benefits:**
-- Clean separation of concerns
-- Easy to exclude from builds
-- Clear test organization
+- 소스 코드와 테스트 코드의 명확한 분리
+- 서비스 구조 변경 시 테스트 위치를 직관적으로 파악 가능
+- 빌드 산출물에서 테스트 제외 용이
 
 ### `/examples`
 **Usage examples**

@@ -131,9 +131,14 @@ issuetracker/
 │   ├── queue/                 # Queue abstractions (planned)
 │   └── config/                # Configuration (planned)
 │
-├── test/                       # Test files
-│   ├── internal_crawler_core/ # ✅ Internal crawler tests
-│   └── pkg_logger/            # ✅ Logger package tests
+├── test/                       # Test files (mirrors service architecture)
+│   ├── internal/              # ✅ internal/ 패키지 테스트
+│   │   ├── classifier/        # ← internal/classifier/
+│   │   ├── crawler_core/      # ← internal/crawler/core/
+│   │   └── storage/           # ← internal/storage/
+│   └── pkg/                   # ✅ pkg/ 패키지 테스트
+│       ├── config/            # ← pkg/config/
+│       └── logger/            # ← pkg/logger/
 │
 ├── examples/                   # Usage examples
 │   └── basic_usage.go         # ✅ Basic usage example
@@ -176,9 +181,11 @@ issuetracker/
 - Well-documented, production-ready
 
 **`test/`**: Test files
-- Separated from source code
-- Organized by package structure
-- Uses `*_test` package pattern
+- 모든 테스트 파일은 소스 코드와 분리하여 `test/` 아래에만 위치
+- **서비스 아키텍처와 동일한 디렉토리 구조**를 따름
+  - `internal/<pkg>/` → `test/internal/<pkg>/`
+  - `pkg/<pkg>/` → `test/pkg/<pkg>/`
+- 패키지 선언은 `package <name>_test` (외부 테스트 패키지)
 
 **Current Status**: ✅ = Implemented, (planned) = To be implemented
 
