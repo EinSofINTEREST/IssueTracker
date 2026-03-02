@@ -169,8 +169,16 @@ make deps
 - [x] Kafka topic initialization with configurable partitions via `.env`
 - [x] Kafka UI at `http://localhost:8080`
 
+✅ **KR 뉴스 도메인 크롤러** (v0.4.0)
+- [x] 뉴스 도메인 DIP 인터페이스 (`internal/crawler/domain/news/news.go`)
+- [x] Chain of Responsibility 핸들러 (`handler.go`) — RSS → GoQuery → Browser 폴백 체인
+- [x] RSS/GoQuery/Browser 어댑터 (`fetcher/`)
+- [x] Naver 크롤러 (GoQuery → Browser 폴백)
+- [x] Yonhap 크롤러 (RSS → GoQuery 폴백)
+- [x] KR 레지스트리 조립 진입점 (`kr/registry.go`)
+- [x] 테스트 — parser/crawler 각 23개 케이스
+
 🚧 **In Progress**
-- [ ] Source-specific crawler implementations (CNN, Naver, etc.)
 - [ ] Priority-based multi-pool manager
 
 📋 **Planned**
@@ -198,9 +206,15 @@ issuetracker/
 │       │   └── noop.go        # Fallback noop handler
 │       ├── worker/            # Kafka consumer pool
 │       │   └── pool.go        # KafkaConsumerPool (goroutine worker pool + DLQ)
-│       └── news/              # Source-specific crawlers (planned)
-│           ├── us/            # US sources (CNN, NYT, ...)
-│           └── kr/            # Korean sources (Naver, Daum, ...)
+│       └── domain/
+│           └── news/          # 뉴스 도메인 크롤러 (DIP + Chain of Responsibility)
+│               ├── news.go    # 도메인 인터페이스 (NewsFetcher, NewsRSSFetcher, ...)
+│               ├── handler.go # Chain: RSS → GoQuery → Browser
+│               ├── fetcher/   # 어댑터 (rss, goquery, browser)
+│               └── kr/        # KR 소스
+│                   ├── naver/ # 네이버 (config, crawler, parser)
+│                   ├── yonhap/ # 연합뉴스 (config, crawler, parser)
+│                   └── registry.go # 조립 & 등록 진입점
 │
 ├── pkg/
 │   ├── logger/                # Structured logger (zerolog)
