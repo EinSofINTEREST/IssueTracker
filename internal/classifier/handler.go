@@ -63,6 +63,15 @@ func NewHandler(grpcClient, httpClient Classifier, cfg HandlerConfig, log *logge
 func (h *Handler) Classify(ctx context.Context, text string, categories []CategoryInput) (*ClassifyResponse, error) {
   primary, secondary := h.clients()
 
+  // primary/secondary 선택 후 primary가 nil일 수 있으므로 방어 로직 추가
+  if primary == nil {
+    if secondary != nil {
+      // 사용 가능한 secondary를 primary로 승격
+      primary, secondary = secondary, nil
+    } else {
+      return nil, fmt.Errorf("classify: no available classifier client")
+    }
+  }
   resp, err := primary.Classify(ctx, text, categories)
   if err == nil {
     return resp, nil
