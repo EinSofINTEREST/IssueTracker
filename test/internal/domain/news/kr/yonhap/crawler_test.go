@@ -8,6 +8,7 @@ import (
   "time"
 
   "github.com/stretchr/testify/assert"
+  "github.com/stretchr/testify/require"
 
   "issuetracker/internal/crawler/core"
   "issuetracker/internal/crawler/domain/news"
@@ -117,7 +118,7 @@ func TestYonhapCrawler_FetchArticle_성공(t *testing.T) {
     <div id="newsWriterCarousel01" class="writer-zone01">
       <div><div><div><div><strong>박연합 기자</strong></div></div></div></div>
     </div>
-    <span class="update-time">` + time.Now().Format("2006-01-02 15:04") + `</span>
+    <div class="update-time" data-published-time="2024-01-15 14:30"></div>
   </body></html>`
 
   htmlFetcher := &mockFetcher{
@@ -132,10 +133,13 @@ func TestYonhapCrawler_FetchArticle_성공(t *testing.T) {
 
   article, err := crawler.FetchArticle(context.Background(), "https://www.yna.co.kr/view/AKR20240115000000001")
 
-  assert.NoError(t, err)
-  assert.NotNil(t, article)
+  require.NoError(t, err)
+  require.NotNil(t, article)
   assert.Equal(t, "연합뉴스 기사 제목", article.Title)
   assert.Contains(t, article.Body, "기사 본문입니다")
+  // KST 2024-01-15 14:30을 UTC 2024-01-15 05:30으로 변환 (KST는 UTC+9)
+  expectedUTC := time.Date(2024, 1, 15, 5, 30, 0, 0, time.UTC)
+  assert.Equal(t, expectedUTC, article.PublishedAt)
 }
 
 func TestYonhapCrawler_FetchArticle_fetch실패_오류반환(t *testing.T) {
