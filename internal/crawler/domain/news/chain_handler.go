@@ -56,16 +56,27 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.Ra
     "has_repo":    h.Repo != nil,
   }).Debug("DB 저장 조건 확인")
 
-  if job.Target.Type == core.TargetTypeArticle && raw.HTML != "" &&
-    h.Parser != nil && h.Repo != nil {
+  isArticle := job.Target.Type == core.TargetTypeArticle
+  canSave := raw.HTML != "" && h.Parser != nil && h.Repo != nil
+
+  if isArticle && canSave {
     h.saveArticle(ctx, raw)
-  } else {
+  } else if isArticle {
+    // 기사(target_type=article)인데 저장 조건을 충족하지 못한 경우만 warn으로 로깅
     h.Log.WithFields(map[string]interface{}{
-      "is_article": job.Target.Type == core.TargetTypeArticle,
+      "is_article": isArticle,
       "has_html":   raw.HTML != "",
       "has_parser": h.Parser != nil,
       "has_repo":   h.Repo != nil,
     }).Warn("조건 불충족: saveArticle 건너뜀")
+  } else {
+    // 정상적인 non-article 요청에서의 saveArticle 미실행은 debug 수준으로만 로깅
+    h.Log.WithFields(map[string]interface{}{
+      "is_article": isArticle,
+      "has_html":   raw.HTML != "",
+      "has_parser": h.Parser != nil,
+      "has_repo":   h.Repo != nil,
+    }).Debug("조건 불충족(정상 흐름): non-article이므로 saveArticle 건너뜀")
   }
 
   return raw, nil
