@@ -32,7 +32,8 @@ func NewBrowserFetcher(crawler *cdp.ChromedpCrawler, config core.Config) *Browse
 // Fetch는 헤드리스 브라우저로 페이지를 가져옵니다.
 // 첫 호출 시 ChromedpCrawler.Initialize를 실행하여 브라우저를 준비합니다.
 func (f *BrowserFetcher) Fetch(ctx context.Context, target core.Target) (*core.RawContent, error) {
-  // 첫 Fetch 호출 시만 Initialize 실행 (브라우저 비용 지연)
+  // 첫 Fetch 호출 시만 Initialize 실행 (브라우저 비용 지연).
+  // once.Do 완료 후 happens-before 관계가 성립하므로 f.initErr 읽기는 잠금 없이 안전합니다.
   f.once.Do(func() {
     f.initErr = f.crawler.Initialize(ctx, f.config)
   })
