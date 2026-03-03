@@ -3,6 +3,7 @@ package naver_test
 import (
   "context"
   "errors"
+  "io"
   "testing"
 
   "github.com/stretchr/testify/assert"
@@ -11,7 +12,6 @@ import (
   "issuetracker/internal/crawler/domain/news"
   "issuetracker/internal/crawler/domain/news/kr/naver"
   "issuetracker/pkg/logger"
-  "io"
 )
 
 // mockFetcher는 news.NewsFetcher의 테스트용 구현입니다.
