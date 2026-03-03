@@ -113,6 +113,32 @@ make run-example
 ./bin/crawler
 ```
 
+### Database Setup
+
+The project uses PostgreSQL with pgx/v5 driver for data persistence.
+
+```bash
+# Start PostgreSQL container
+make pg-start
+
+# Check PostgreSQL status
+make pg-status
+
+# Run migrations (idempotent, safe to run multiple times)
+make pg-migrate
+
+# Rollback migrations (use with caution in production)
+make pg-migrate-down
+
+# Connect to PostgreSQL shell
+make pg-psql
+```
+
+**Migrations**:
+- `001_create_raw_contents.up.sql` — Store RawContent (original HTML)
+- `002_create_contents.up.sql` — Store normalized Content
+- `003_create_news_articles.up.sql` — Store NewsArticle (title, body, author, category, tags, image_urls, published_at)
+
 ### Testing
 
 ```bash
@@ -169,14 +195,21 @@ make deps
 - [x] Kafka topic initialization with configurable partitions via `.env`
 - [x] Kafka UI at `http://localhost:8080`
 
-✅ **KR 뉴스 도메인 크롤러** (v0.4.0)
-- [x] 뉴스 도메인 DIP 인터페이스 (`internal/crawler/domain/news/news.go`)
-- [x] Chain of Responsibility 핸들러 (`handler.go`) — RSS → GoQuery → Browser 폴백 체인
-- [x] RSS/GoQuery/Browser 어댑터 (`fetcher/`)
-- [x] Naver 크롤러 (GoQuery → Browser 폴백)
-- [x] Yonhap 크롤러 (RSS → GoQuery 폴백)
-- [x] KR 레지스트리 조립 진입점 (`kr/registry.go`)
-- [x] 테스트 — parser/crawler 각 23개 케이스
+✅ **News Domain Crawlers** (v0.4.0)
+- [x] News domain DIP interfaces (`internal/crawler/domain/news/news.go`)
+- [x] Chain of Responsibility handler (`handler.go`) — RSS → GoQuery → Browser fallback chain
+- [x] RSS/GoQuery/Browser adapters (`fetcher/`)
+- [x] **Korean Sources**:
+  - [x] Naver crawler (GoQuery → Browser fallback) + Parser
+  - [x] Yonhap crawler (RSS → GoQuery fallback) + Parser
+  - [x] Daum crawler (GoQuery) + Parser
+  - [x] KR registry assembly entry point (`kr/registry.go`)
+- [x] **US Sources**:
+  - [x] CNN crawler (GoQuery) + Parser
+  - [x] US registry assembly entry point (`us/registry.go`)
+- [x] PostgreSQL storage layer (`internal/storage/news_article.go`, `postgres/news_article.go`)
+- [x] Migration — `news_articles` table creation (`003_create_news_articles.up.sql`)
+- [x] Tests — 780+ cases for KR parser/crawler, 519+ cases for US parser/crawler
 
 🚧 **In Progress**
 - [ ] Priority-based multi-pool manager
@@ -199,22 +232,30 @@ issuetracker/
 │       └── main.go
 │
 ├── internal/
-│   └── crawler/
-│       ├── core/              # Crawler interfaces, models, errors, retry
-│       ├── handler/           # Handler interface + Registry (crawler name dispatch)
-│       │   ├── handler.go     # Handler interface, Registry
-│       │   └── noop.go        # Fallback noop handler
-│       ├── worker/            # Kafka consumer pool
-│       │   └── pool.go        # KafkaConsumerPool (goroutine worker pool + DLQ)
+│   ├── crawler/
+│   │   ├── core/              # Crawler interfaces, models, errors, retry
+│   │   ├── handler/           # Handler interface + Registry (crawler name dispatch)
+│   │   │   ├── handler.go     # Handler interface, Registry
+│   │   │   └── noop.go        # Fallback noop handler
+│   │   ├── worker/            # Kafka consumer pool
+│   │   │   └── pool.go        # KafkaConsumerPool (goroutine worker pool + DLQ)
+│   └── storage/               # Data access layer
+│       ├── news_article.go    # NewsArticle repository interface
+│       └── postgres/          # PostgreSQL implementation
+│           └── news_article.go # pgx/v5 based NewsArticle CRUD
 │       └── domain/
-│           └── news/          # 뉴스 도메인 크롤러 (DIP + Chain of Responsibility)
-│               ├── news.go    # 도메인 인터페이스 (NewsFetcher, NewsRSSFetcher, ...)
+│           └── news/          # News domain crawlers (DIP + Chain of Responsibility)
+│               ├── news.go    # Domain interfaces (NewsFetcher, NewsRSSFetcher, ...)
 │               ├── handler.go # Chain: RSS → GoQuery → Browser
-│               ├── fetcher/   # 어댑터 (rss, goquery, browser)
-│               └── kr/        # KR 소스
-│                   ├── naver/ # 네이버 (config, crawler, parser)
-│                   ├── yonhap/ # 연합뉴스 (config, crawler, parser)
-│                   └── registry.go # 조립 & 등록 진입점
+│               ├── fetcher/   # Adapters (rss, goquery, browser)
+│               ├── kr/        # Korean sources
+│               │   ├── naver/ # Naver (config, crawler, parser)
+│               │   ├── yonhap/ # Yonhap (config, crawler, parser)
+│               │   ├── daum/  # Daum (config, crawler, parser)
+│               │   └── registry.go # Assembly & registration entry point
+│               └── us/        # US sources
+│                   ├── cnn/   # CNN (config, crawler, parser)
+│                   └── registry.go # Assembly & registration entry point
 │
 ├── pkg/
 │   ├── logger/                # Structured logger (zerolog)
@@ -232,6 +273,12 @@ issuetracker/
 ├── examples/
 │   ├── basic_usage.go
 │   └── kafka_pipeline/        # In-memory mock pipeline example
+│
+├── migrations/                # Database migrations (PostgreSQL)
+│   ├── 001_create_raw_contents.up.sql     # raw_contents table
+│   ├── 002_create_contents.up.sql         # contents table
+│   ├── 003_create_news_articles.up.sql    # news_articles table + indexes
+│   └── *.down.sql             # Rollback migrations
 │
 ├── test/                      # Package-level tests
 ├── docs/
@@ -308,7 +355,7 @@ IssueTracker provides two crawlers for static and dynamic pages:
 
 ### Goquery - Static Crawling (`implementation/goquery`)
 
-정적 HTML 페이지를 위한 경량 크롤러입니다.
+Lightweight crawler for static HTML pages.
 
 ```go
 crawler := goquery.NewGoqueryCrawler("my-crawler", sourceInfo, config)
@@ -318,33 +365,65 @@ article, err := crawler.FetchAndParse(ctx, target, selectors)
 
 ### Chromedp - Dynamic Crawling (`implementation/chromedp`)
 
-JavaScript 렌더링이 필요한 동적 페이지를 위한 헤드리스 브라우저 크롤러입니다.
+Headless browser crawler for dynamic pages requiring JavaScript rendering.
 
 ```go
 crawler := chromedp.NewChromedpCrawler("my-crawler", sourceInfo, config)
 crawler.Initialize(ctx, config)
 defer crawler.Stop(ctx)
 
-raw, err := crawler.Fetch(ctx, target)                       // 렌더링된 HTML
-article, err := crawler.FetchAndParse(ctx, target, selectors) // 렌더링 + 파싱
-result, err := crawler.EvaluateJS(ctx, url, "document.title") // JS 실행
+raw, err := crawler.Fetch(ctx, target)                       // Rendered HTML
+article, err := crawler.FetchAndParse(ctx, target, selectors) // Render + Parse
+result, err := crawler.EvaluateJS(ctx, url, "document.title") // Execute JS
 ```
 
 ### Comparison
 
 | | Goquery | Chromedp |
 |---|---|---|
-| **용도** | 정적 HTML | JavaScript SPA |
-| **속도** | 빠름 (~1s) | 느림 (~3-5s) |
-| **메모리** | 낮음 (~10MB) | 높음 (~100MB) |
-| **JS 지원** | X | O |
-| **사용 사례** | 뉴스, RSS | 커뮤니티, SPA |
+| **Purpose** | Static HTML | JavaScript SPA |
+| **Speed** | Fast (~1s) | Slow (~3-5s) |
+| **Memory** | Low (~10MB) | High (~100MB) |
+| **JS Support** | ✗ | ✓ |
+| **Use Cases** | News, RSS | Community, SPA |
 
 ### Run Example
 
 ```bash
 make run-comparison
 ```
+
+## News Domain Crawlers
+
+### Korean Sources
+
+#### Naver
+- **Fetcher**: GoQuery → Browser fallback
+- **Features**: Category extraction, image URL collection, KST → UTC conversion
+- **Date Format**: `"2026-03-02 14:54:16"` (KST)
+
+#### Yonhap
+- **Fetcher**: RSS → GoQuery fallback
+- **Features**: Multiple author extraction, tags/keywords collection, photo gallery support
+- **Date Format**: `"2024-01-15 14:30"` (KST)
+
+#### Daum
+- **Fetcher**: GoQuery
+- **Features**: Category, images, metadata extraction
+- **Date Format**: ISO 8601
+
+### US Sources
+
+#### CNN
+- **Fetcher**: GoQuery
+- **Features**: Section/subsection extraction, byline parsing, metadata support
+- **Date Format**: ISO 8601
+
+**All parsers**:
+- Extract: Title, Body, Author, Category, Tags, ImageURLs, PublishedAt
+- Handle missing fields gracefully (fallback to defaults)
+- Convert all timestamps to UTC
+- 780+ test cases (KR), 519+ test cases (US)
 
 ## Development
 
@@ -439,6 +518,15 @@ make kafka-status       # Show container status
 make kafka-topics       # List all topics
 make kafka-describe     # Show partition/leader details per topic
 make kafka-scale-partitions TOPIC=<topic> PARTITIONS=<n>  # Increase partitions
+
+# PostgreSQL
+make pg-start           # Start PostgreSQL container
+make pg-stop            # Stop PostgreSQL (data preserved)
+make pg-clean           # Stop + delete all data
+make pg-status          # Show PostgreSQL container status
+make pg-migrate         # Run database migrations (idempotent)
+make pg-migrate-down    # Rollback migrations (use with caution)
+make pg-psql            # Connect to PostgreSQL shell
 
 make help               # Show all commands with descriptions
 ```
