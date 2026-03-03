@@ -46,14 +46,14 @@ func DefaultCNNConfig() CNNConfig {
   return CNNConfig{
     BaseURL: "https://www.cnn.com",
     FeedURLs: map[string]string{
-      "top":           "http://rss.cnn.com/rss/cnn_topstories.rss",
-      "us":            "http://rss.cnn.com/rss/cnn_us.rss",
-      "world":         "http://rss.cnn.com/rss/cnn_world.rss",
-      "politics":      "http://rss.cnn.com/rss/cnn_allpolitics.rss",
-      "business":      "http://rss.cnn.com/rss/money_latest.rss",
-      "tech":          "http://rss.cnn.com/rss/cnn_tech.rss",
-      "health":        "http://rss.cnn.com/rss/cnn_health.rss",
-      "entertainment": "http://rss.cnn.com/rss/showbiz_video.rss",
+      "top":           "https://rss.cnn.com/rss/cnn_topstories.rss",
+      "us":            "https://rss.cnn.com/rss/cnn_us.rss",
+      "world":         "https://rss.cnn.com/rss/cnn_world.rss",
+      "politics":      "https://rss.cnn.com/rss/cnn_allpolitics.rss",
+      "business":      "https://rss.cnn.com/rss/money_latest.rss",
+      "tech":          "https://rss.cnn.com/rss/cnn_tech.rss",
+      "health":        "https://rss.cnn.com/rss/cnn_health.rss",
+      "entertainment": "https://rss.cnn.com/rss/showbiz_video.rss",
     },
     CategoryURLs: map[string]string{
       "us":            "https://edition.cnn.com/us",
