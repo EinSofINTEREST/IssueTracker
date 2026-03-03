@@ -8,8 +8,12 @@ import (
   "time"
 
   "issuetracker/internal/crawler/core"
+  "issuetracker/internal/crawler/domain/news/kr"
+  "issuetracker/internal/crawler/domain/news/us"
   "issuetracker/internal/crawler/handler"
   "issuetracker/internal/crawler/worker"
+  pgstore "issuetracker/internal/storage/postgres"
+  "issuetracker/pkg/config"
   "issuetracker/pkg/logger"
   "issuetracker/pkg/queue"
 )
@@ -72,8 +76,27 @@ func main() {
   defer lowConsumer.Close()
 
   // ── 4. 실행 (Worker → 크롤링 → raw.us / raw.kr) ───────────────────────────
-  // TODO: 소스별 크롤러 구현 후 registry.Register("cnn", cnn.NewHandler(...)) 방식으로 추가
   registry := handler.NewRegistry(log)
+
+  // DB 연결 및 뉴스 기사 저장소 생성
+  dbCfg, err := config.Load()
+  if err != nil {
+    log.WithError(err).Fatal("DB 설정 로드 실패")
+  }
+
+  pool, err := pgstore.NewPool(ctx, dbCfg, log)
+  if err != nil {
+    log.WithError(err).Fatal("DB 연결 실패")
+  }
+  defer pool.Close()
+
+  newsRepo := pgstore.NewNewsArticleRepository(pool, log)
+
+  // KR 뉴스 크롤러 등록 (naver, yonhap, daum)
+  kr.Register(registry, core.DefaultConfig(), newsRepo, log)
+
+  // US 뉴스 크롤러 등록 (cnn)
+  us.Register(registry, core.DefaultConfig(), newsRepo, log)
 
   // ── 5. 조율 (Pool 생성 및 시작) ───────────────────────────────────────────
   // 워커 수는 각 토픽의 파티션 수를 초과하지 않도록 설정
