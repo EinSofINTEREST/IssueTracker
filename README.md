@@ -201,7 +201,7 @@ make deps
 - [x] RSS/GoQuery/Browser adapters (`fetcher/`)
 - [x] **Korean Sources**:
   - [x] Naver crawler (GoQuery → Browser fallback) + Parser
-  - [x] Yonhap crawler (RSS → GoQuery fallback) + Parser
+  - [x] Yonhap crawler (GoQuery) + Parser
   - [x] Daum crawler (GoQuery) + Parser
   - [x] KR registry assembly entry point (`kr/registry.go`)
 - [x] **US Sources**:
@@ -403,7 +403,7 @@ make run-comparison
 - **Date Format**: `"2026-03-02 14:54:16"` (KST)
 
 #### Yonhap
-- **Fetcher**: RSS → GoQuery fallback
+- **Fetcher**: GoQuery
 - **Features**: Multiple author extraction, tags/keywords collection, photo gallery support
 - **Date Format**: `"2024-01-15 14:30"` (KST)
 
