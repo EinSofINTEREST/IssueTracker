@@ -9,6 +9,7 @@ import (
 
   "issuetracker/internal/crawler/core"
   "issuetracker/internal/crawler/domain/news/kr"
+  "issuetracker/internal/crawler/domain/news/us"
   "issuetracker/internal/crawler/handler"
   "issuetracker/internal/crawler/worker"
   pgstore "issuetracker/internal/storage/postgres"
@@ -91,8 +92,11 @@ func main() {
 
   newsRepo := pgstore.NewNewsArticleRepository(pool, log)
 
-  // KR 뉴스 크롤러 등록 (naver, yonhap)
+  // KR 뉴스 크롤러 등록 (naver, yonhap, daum)
   kr.Register(registry, core.DefaultConfig(), newsRepo, log)
+
+  // US 뉴스 크롤러 등록 (cnn)
+  us.Register(registry, core.DefaultConfig(), newsRepo, log)
 
   // ── 5. 조율 (Pool 생성 및 시작) ───────────────────────────────────────────
   // 워커 수는 각 토픽의 파티션 수를 초과하지 않도록 설정
