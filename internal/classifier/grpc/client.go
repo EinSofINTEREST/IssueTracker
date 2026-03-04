@@ -10,7 +10,6 @@ package grpc
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"google.golang.org/grpc"
@@ -38,15 +37,11 @@ type Config struct {
 	Timeout time.Duration // 요청별 타임아웃
 }
 
-// DefaultConfig는 환경변수(CLASSIFIER_GRPC_ADDR)를 읽어 설정을 반환합니다.
-// 환경변수가 없으면 로컬 개발 기본값(localhost:50051)을 사용합니다.
+// DefaultConfig는 로컬 개발 환경 기본 설정을 반환합니다.
+// 환경변수 기반 설정은 pkg/config.LoadClassifier()를 사용하세요.
 func DefaultConfig() Config {
-	target := os.Getenv("CLASSIFIER_GRPC_ADDR")
-	if target == "" {
-		target = defaultTarget
-	}
 	return Config{
-		Target:  target,
+		Target:  defaultTarget,
 		Timeout: defaultTimeout,
 	}
 }

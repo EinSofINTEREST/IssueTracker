@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"issuetracker/internal/classifier"
@@ -40,15 +39,11 @@ type Config struct {
 	Timeout time.Duration
 }
 
-// DefaultConfig는 환경변수(CLASSIFIER_HTTP_ADDR)를 읽어 설정을 반환합니다.
-// 환경변수가 없으면 로컬 개발 기본값(http://localhost:8000)을 사용합니다.
+// DefaultConfig는 로컬 개발 환경 기본 설정을 반환합니다.
+// 환경변수 기반 설정은 pkg/config.LoadClassifier()를 사용하세요.
 func DefaultConfig() Config {
-	baseURL := os.Getenv("CLASSIFIER_HTTP_ADDR")
-	if baseURL == "" {
-		baseURL = defaultBaseURL
-	}
 	return Config{
-		BaseURL: baseURL,
+		BaseURL: defaultBaseURL,
 		Timeout: defaultTimeout,
 	}
 }
