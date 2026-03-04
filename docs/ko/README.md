@@ -194,6 +194,7 @@ make deps
 - [x] Docker Compose Kafka 스택 (KRaft 모드, Zookeeper 불필요)
 - [x] `.env`를 통한 설정 가능한 파티션으로 Kafka 토픽 초기화
 - [x] Kafka UI (`http://localhost:8080`)
+- [x] 우선순위 기반 다중 풀 매니저 (`PoolManager`)
 
 ✅ **뉴스 도메인 크롤러** (v0.4.0)
 - [x] 뉴스 도메인 DIP 인터페이스 (`internal/crawler/domain/news/news.go`)
@@ -211,8 +212,13 @@ make deps
 - [x] 마이그레이션 — `news_articles` 테이블 생성 (`003_create_news_articles.up.sql`)
 - [x] 테스트 — KR 파서/크롤러 780+ 케이스, US 파서/크롤러 519+ 케이스
 
-🚧 **진행 중**
-- [ ] 우선순위 기반 다중 풀 매니저
+✅ **Kafka Blob 오프로딩** (v0.5.0)
+- [x] `RawContentRef` — 경량 Kafka 메시지 구조체 (ID + 메타데이터, HTML 본문 제외)
+- [x] `RawContentService`를 `KafkaConsumerPool`에 주입하여 Postgres 우선 저장
+- [x] 워커가 전체 `RawContent`(HTML 포함)를 Postgres에 저장 후 `RawContentRef`만 Kafka에 발행
+- [x] 중복 URL 처리 — 에러 없이 기존 레코드 ID 반환
+- [x] `PoolManager` (`manager.go`) — 우선순위 기반 다중 풀 오케스트레이션 (High / Normal / Low)
+- [x] 풀 처리 로직 단위 테스트 (`test/internal/worker/`)
 
 📋 **계획됨**
 - [ ] 처리 파이프라인 (normalize → validate → enrich)
@@ -238,7 +244,8 @@ issuetracker/
 │   │   │   ├── handler.go     # Handler 인터페이스, Registry
 │   │   │   └── noop.go        # 폴백 noop 핸들러
 │   │   ├── worker/            # Kafka consumer 풀
-│   │   │   └── pool.go        # KafkaConsumerPool (고루틴 워커 풀 + DLQ)
+│   │   │   ├── pool.go        # KafkaConsumerPool (고루틴 워커 풀 + DLQ + Postgres 오프로딩)
+│   │   │   └── manager.go     # PoolManager (High/Normal/Low 우선순위 풀 오케스트레이션)
 │   └── storage/               # 데이터 액세스 레이어
 │       ├── news_article.go    # NewsArticle 리포지토리 인터페이스
 │       └── postgres/          # PostgreSQL 구현

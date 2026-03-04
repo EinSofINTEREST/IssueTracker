@@ -194,6 +194,7 @@ make deps
 - [x] Docker Compose Kafka stack (KRaft mode, no Zookeeper)
 - [x] Kafka topic initialization with configurable partitions via `.env`
 - [x] Kafka UI at `http://localhost:8080`
+- [x] Priority-based multi-pool manager (`PoolManager`)
 
 ✅ **News Domain Crawlers** (v0.4.0)
 - [x] News domain DIP interfaces (`internal/crawler/domain/news/news.go`)
@@ -211,8 +212,13 @@ make deps
 - [x] Migration — `news_articles` table creation (`003_create_news_articles.up.sql`)
 - [x] Tests — 780+ cases for KR parser/crawler, 519+ cases for US parser/crawler
 
-🚧 **In Progress**
-- [ ] Priority-based multi-pool manager
+✅ **Kafka Blob Offloading** (v0.5.0)
+- [x] `RawContentRef` — lightweight Kafka message struct (ID + metadata, no HTML body)
+- [x] `RawContentService` injected into `KafkaConsumerPool` for Postgres-first storage
+- [x] Worker saves full `RawContent` (including HTML) to Postgres, then publishes only `RawContentRef` to Kafka
+- [x] Duplicate URL handling — returns existing record ID without error
+- [x] `PoolManager` (`manager.go`) — priority-based multi-pool orchestration (High / Normal / Low)
+- [x] Unit tests for pool processing logic (`test/internal/worker/`)
 
 📋 **Planned**
 - [ ] Processing pipeline (normalize → validate → enrich)
@@ -238,7 +244,8 @@ issuetracker/
 │   │   │   ├── handler.go     # Handler interface, Registry
 │   │   │   └── noop.go        # Fallback noop handler
 │   │   ├── worker/            # Kafka consumer pool
-│   │   │   └── pool.go        # KafkaConsumerPool (goroutine worker pool + DLQ)
+│   │   │   ├── pool.go        # KafkaConsumerPool (goroutine worker pool + DLQ + Postgres offload)
+│   │   │   └── manager.go     # PoolManager (High/Normal/Low priority pool orchestration)
 │   └── storage/               # Data access layer
 │       ├── news_article.go    # NewsArticle repository interface
 │       └── postgres/          # PostgreSQL implementation
