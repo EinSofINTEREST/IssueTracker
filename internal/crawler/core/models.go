@@ -49,6 +49,16 @@ type RawContent struct {
   Metadata   map[string]interface{}
 }
 
+// RawContentRef는 Kafka raw 토픽에 발행되는 경량 참조 메시지입니다.
+// HTML 본문을 제외하고 다운스트림 소비자가 Postgres에서 전체 데이터를 조회할 수 있는
+// 최소한의 필드만 포함합니다.
+type RawContentRef struct {
+  ID         string     `json:"id"`
+  URL        string     `json:"url"`
+  FetchedAt  time.Time  `json:"fetched_at"`
+  SourceInfo SourceInfo `json:"source_info"`
+}
+
 // Content는 파싱된 컨텐츠 데이터를 나타냅니다.
 // 뉴스 기사, 커뮤니티 게시글, 소셜 미디어 포스트 등을 포함합니다.
 // DB 저장 시 3개 테이블로 분리됩니다:

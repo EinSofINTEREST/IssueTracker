@@ -6,6 +6,7 @@ import (
   "sync"
 
   "issuetracker/internal/crawler/core"
+  "issuetracker/internal/storage/service"
   "issuetracker/pkg/logger"
   "issuetracker/pkg/queue"
 )
@@ -34,6 +35,11 @@ type ManagerConfig struct {
   // RawTopicFn은 크롤링 결과를 publish할 raw 토픽을 국가 코드 기반으로 결정합니다.
   // nil이면 DefaultRawTopicFunc(US→raw.us, KR→raw.kr)를 사용합니다.
   RawTopicFn RawTopicFunc
+
+  // RawContentSvc는 크롤링 결과를 Postgres에 저장하는 서비스입니다.
+  // Kafka 메시지 크기 제한(1MB)을 초과하는 대용량 HTML을 오프로딩하며,
+  // raw 토픽에는 ID만 포함된 RawContentRef를 발행합니다.
+  RawContentSvc service.RawContentService
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -47,10 +53,10 @@ type ManagerConfig struct {
 // using the configured PriorityResolver.
 //
 // 사용 흐름:
-//   1. NewPoolManager로 생성
-//   2. Start(ctx)로 모든 Pool 구동
-//   3. Publish(ctx, job)으로 Job을 적절한 우선순위 큐에 삽입
-//   4. 종료 시 Stop(ctx) 호출
+//  1. NewPoolManager로 생성
+//  2. Start(ctx)로 모든 Pool 구동
+//  3. Publish(ctx, job)으로 Job을 적절한 우선순위 큐에 삽입
+//  4. 종료 시 Stop(ctx) 호출
 type PoolManager struct {
   pools    map[core.Priority]*KafkaConsumerPool
   producer queue.Producer
@@ -76,9 +82,9 @@ func NewPoolManager(
 
   return &PoolManager{
     pools: map[core.Priority]*KafkaConsumerPool{
-      core.PriorityHigh:   NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, cfg.High.WorkerCount, rawTopicFn),
-      core.PriorityNormal: NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, cfg.Normal.WorkerCount, rawTopicFn),
-      core.PriorityLow:    NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, cfg.Low.WorkerCount, rawTopicFn),
+      core.PriorityHigh:   NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, cfg.RawContentSvc, cfg.High.WorkerCount, rawTopicFn),
+      core.PriorityNormal: NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, cfg.RawContentSvc, cfg.Normal.WorkerCount, rawTopicFn),
+      core.PriorityLow:    NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, cfg.RawContentSvc, cfg.Low.WorkerCount, rawTopicFn),
     },
     producer: producer,
     resolver: resolver,
