@@ -75,6 +75,13 @@ func NewPoolManager(
   resolver PriorityResolver,
   log *logger.Logger,
 ) *PoolManager {
+  // RawContentSvc는 필수 의존성입니다.
+  // nil이면 processJob()에서 Store() 호출 시 런타임 패닉이 발생하므로
+  // 초기화 단계에서 명확히 실패합니다.
+  if cfg.RawContentSvc == nil {
+    panic("NewPoolManager: cfg.RawContentSvc는 nil일 수 없습니다")
+  }
+
   rawTopicFn := cfg.RawTopicFn
   if rawTopicFn == nil {
     rawTopicFn = DefaultRawTopicFunc
