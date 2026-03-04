@@ -38,6 +38,7 @@ type Config struct {
 }
 
 // DefaultConfig는 로컬 개발 환경 기본 설정을 반환합니다.
+// 환경변수 기반 설정은 pkg/config.LoadClassifier()를 사용하세요.
 func DefaultConfig() Config {
 	return Config{
 		Target:  defaultTarget,
