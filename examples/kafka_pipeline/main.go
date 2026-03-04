@@ -14,6 +14,7 @@ import (
 
   "issuetracker/internal/crawler/core"
   "issuetracker/internal/crawler/worker"
+  "issuetracker/internal/storage"
   "issuetracker/pkg/logger"
   "issuetracker/pkg/queue"
 )
@@ -102,6 +103,25 @@ func (c *mockConsumer) Close() error { return nil }
 // =========================================================
 // 테스트용 크롤러 핸들러
 // =========================================================
+
+// mockRawContentService는 Postgres 저장 없이 ID를 그대로 반환하는 테스트용 RawContentService입니다.
+type mockRawContentService struct{}
+
+func (s *mockRawContentService) Store(_ context.Context, raw *core.RawContent) (string, bool, error) {
+  return raw.ID, false, nil
+}
+
+func (s *mockRawContentService) GetByID(_ context.Context, id string) (*core.RawContent, error) {
+  return nil, nil
+}
+
+func (s *mockRawContentService) List(_ context.Context, _ storage.RawContentFilter) ([]*core.RawContent, error) {
+  return nil, nil
+}
+
+func (s *mockRawContentService) PurgeOlderThan(_ context.Context, _ time.Time) (int64, error) {
+  return 0, nil
+}
 
 // testCrawlerHandler는 실제 HTTP 요청 없이 더미 RawContent를 생성합니다.
 type testCrawlerHandler struct {
@@ -214,18 +234,20 @@ func printPipelineResults(log *logger.Logger, published []queue.Message) {
     case queue.TopicRawUS:
       rawCount++
 
-      var raw core.RawContent
-      if err := json.Unmarshal(msg.Value, &raw); err != nil {
+      // Kafka에는 HTML 없는 RawContentRef만 발행됩니다 (Postgres 오프로딩)
+      var ref core.RawContentRef
+      if err := json.Unmarshal(msg.Value, &ref); err != nil {
         continue
       }
 
       log.WithFields(map[string]interface{}{
         "topic":   msg.Topic,
-        "url":     raw.URL,
-        "source":  raw.SourceInfo.Name,
-        "country": raw.SourceInfo.Country,
+        "id":      ref.ID,
+        "url":     ref.URL,
+        "source":  ref.SourceInfo.Name,
+        "country": ref.SourceInfo.Country,
         "size":    fmt.Sprintf("%d bytes", len(msg.Value)),
-      }).Info("raw content")
+      }).Info("raw content ref (offloaded to postgres)")
 
     case queue.TopicDLQ:
       dlqCount++
@@ -300,13 +322,17 @@ func main() {
   consumer := newMockConsumer(msgs)
   handler := &testCrawlerHandler{log: log}
 
-  pool := worker.NewKafkaConsumerPool(
+  pool, err := worker.NewKafkaConsumerPool(
     consumer,
     producer,
     handler,
+    &mockRawContentService{},   // Postgres 오프로딩 서비스 (예제용 in-memory mock)
     workerCount,
     worker.DefaultRawTopicFunc, // 국가 코드 기반 raw 토픽 결정
   )
+  if err != nil {
+    log.WithError(err).Fatal("KafkaConsumerPool 생성 실패")
+  }
 
   start := time.Now()
   pool.Start(ctx)
