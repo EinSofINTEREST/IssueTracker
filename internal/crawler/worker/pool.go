@@ -50,6 +50,10 @@ type jobItem struct {
 // rawTopicFn이 반환하는 토픽에 RawContentRef를 발행합니다.
 // workerCount는 동시에 실행되는 처리 goroutine 수를 결정합니다.
 // rawTopicFn이 nil이면 DefaultRawTopicFunc를 사용합니다.
+// rawContentSvc가 nil이면 에러를 반환합니다.
+//
+// TODO: 향후 Postgres 부하 절감을 위해 rawContentSvc 앞단에 in-memory 캐시(예: LRU)를
+// 추가하여 동일 URL의 중복 저장 요청을 줄이는 캐싱 레이어를 구현할 것.
 func NewKafkaConsumerPool(
   consumer queue.Consumer,
   producer queue.Producer,
@@ -57,7 +61,13 @@ func NewKafkaConsumerPool(
   rawContentSvc service.RawContentService,
   workerCount int,
   rawTopicFn RawTopicFunc,
-) *KafkaConsumerPool {
+) (*KafkaConsumerPool, error) {
+  // rawContentSvc는 필수 의존성입니다.
+  // nil이면 processJob()에서 Store() 호출 시 런타임 패닉이 발생하므로
+  // 초기화 단계에서 명확히 실패합니다.
+  if rawContentSvc == nil {
+    return nil, fmt.Errorf("NewKafkaConsumerPool: rawContentSvc가 nil이면 안 됩니다")
+  }
   if rawTopicFn == nil {
     rawTopicFn = DefaultRawTopicFunc
   }
@@ -70,7 +80,7 @@ func NewKafkaConsumerPool(
     rawTopicFn:    rawTopicFn,
     // 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
     jobs: make(chan jobItem, workerCount*2),
-  }
+  }, nil
 }
 
 // Start는 worker goroutine들과 message polling goroutine을 시작합니다.

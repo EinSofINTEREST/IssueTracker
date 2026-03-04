@@ -109,7 +109,10 @@ func main() {
     Low:    worker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
   }
 
-  manager := worker.NewPoolManager(managerCfg, producer, registry, resolver, log)
+  manager, err := worker.NewPoolManager(managerCfg, producer, registry, resolver, log)
+  if err != nil {
+    log.WithError(err).Fatal("pool manager 생성 실패")
+  }
   manager.Start(ctx)
 
   log.WithFields(map[string]interface{}{
