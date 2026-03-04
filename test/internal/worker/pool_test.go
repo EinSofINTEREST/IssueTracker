@@ -137,7 +137,12 @@ func marshaledJobMsg(t *testing.T, job *core.CrawlJob) *queue.Message {
 
 // runPool은 pool을 구동하고 단일 메시지를 처리한 뒤 종료합니다.
 // 두 번째 FetchMessage 호출 시 ctx를 cancel하여 pollMessages가 깨끗이 종료되도록 합니다.
-func runPool(t *testing.T, consumer *mockConsumer, pool *worker.KafkaConsumerPool, msg *queue.Message) {
+func runPool(
+  t *testing.T,
+  consumer *mockConsumer,
+  pool *worker.KafkaConsumerPool,
+  msg *queue.Message,
+) {
   t.Helper()
 
   ctx, cancel := context.WithCancel(context.Background())
