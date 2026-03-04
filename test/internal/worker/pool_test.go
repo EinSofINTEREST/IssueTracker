@@ -164,7 +164,7 @@ func runPool(
 
   stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
   defer stopCancel()
-  _ = pool.Stop(stopCtx)
+  assert.NoError(t, pool.Stop(stopCtx))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
