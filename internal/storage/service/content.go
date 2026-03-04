@@ -3,56 +3,56 @@
 package service
 
 import (
-  "context"
-  "errors"
-  "fmt"
-  "time"
+	"context"
+	"errors"
+	"fmt"
+	"time"
 
-  "issuetracker/internal/crawler/core"
-  "issuetracker/internal/storage"
-  "issuetracker/pkg/logger"
+	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/storage"
+	"issuetracker/pkg/logger"
 )
 
 // StoreResult는 StoreBatch에서 각 Content의 저장 결과를 나타냅니다.
 type StoreResult struct {
-  ContentID   string
-  IsDuplicate bool
-  Err         error
+	ContentID   string
+	IsDuplicate bool
+	Err         error
 }
 
 // ContentService는 Content에 대한 비즈니스 로직 인터페이스입니다.
 // 모든 구현체는 goroutine-safe해야 합니다.
 type ContentService interface {
-  // Store는 중복 감지를 포함하여 content를 저장합니다.
-  // ContentHash가 동일한 컨텐츠가 이미 존재하면 저장하지 않고 기존 ID를 반환합니다.
-  // 반환값: (id, isDuplicate, error)
-  Store(ctx context.Context, content *core.Content) (id string, isDuplicate bool, err error)
+	// Store는 중복 감지를 포함하여 content를 저장합니다.
+	// ContentHash가 동일한 컨텐츠가 이미 존재하면 저장하지 않고 기존 ID를 반환합니다.
+	// 반환값: (id, isDuplicate, error)
+	Store(ctx context.Context, content *core.Content) (id string, isDuplicate bool, err error)
 
-  // StoreBatch는 여러 content를 항목별로 중복 감지하며 저장합니다.
-  StoreBatch(ctx context.Context, contents []*core.Content) ([]StoreResult, error)
+	// StoreBatch는 여러 content를 항목별로 중복 감지하며 저장합니다.
+	StoreBatch(ctx context.Context, contents []*core.Content) ([]StoreResult, error)
 
-  // GetByID는 ID로 content를 조회합니다 (본문 포함 전체 데이터).
-  GetByID(ctx context.Context, id string) (*core.Content, error)
+	// GetByID는 ID로 content를 조회합니다 (본문 포함 전체 데이터).
+	GetByID(ctx context.Context, id string) (*core.Content, error)
 
-  // ListByCountry는 특정 국가의 content를 최신순으로 반환합니다.
-  ListByCountry(ctx context.Context, country string, filter storage.ContentFilter) ([]*core.Content, error)
+	// ListByCountry는 특정 국가의 content를 최신순으로 반환합니다.
+	ListByCountry(ctx context.Context, country string, filter storage.ContentFilter) ([]*core.Content, error)
 
-  // Search는 다양한 조건으로 content를 검색합니다.
-  Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error)
+	// Search는 다양한 조건으로 content를 검색합니다.
+	Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error)
 
-  // CountByCountry는 최근 N일간 국가별 content 수를 반환합니다.
-  CountByCountry(ctx context.Context, days int) (map[string]int64, error)
+	// CountByCountry는 최근 N일간 국가별 content 수를 반환합니다.
+	CountByCountry(ctx context.Context, days int) (map[string]int64, error)
 }
 
 // contentService는 ContentService의 구현체입니다.
 type contentService struct {
-  repo storage.ContentRepository
-  log  *logger.Logger
+	repo storage.ContentRepository
+	log  *logger.Logger
 }
 
 // NewContentService는 주어진 repository를 사용하는 ContentService를 생성합니다.
 func NewContentService(repo storage.ContentRepository, log *logger.Logger) ContentService {
-  return &contentService{repo: repo, log: log}
+	return &contentService{repo: repo, log: log}
 }
 
 // Store는 중복 감지 후 content를 저장합니다.
@@ -62,101 +62,101 @@ func NewContentService(repo storage.ContentRepository, log *logger.Logger) Conte
 //  2. 기존 레코드 있으면 (existingID, true, nil) 반환
 //  3. ErrNotFound면 repo.Save 후 (content.ID, false, nil) 반환
 func (s *contentService) Store(ctx context.Context, content *core.Content) (string, bool, error) {
-  // ContentHash 기반 중복 감지 (비어있으면 생략)
-  if content.ContentHash != "" {
-    existing, err := s.repo.GetByContentHash(ctx, content.ContentHash)
-    if err == nil {
-      // 동일 content_hash 존재 → 중복
-      s.log.WithFields(map[string]interface{}{
-        "existing_id":  existing.ID,
-        "content_hash": content.ContentHash,
-      }).Debug("duplicate content detected by content hash")
-      return existing.ID, true, nil
-    }
+	// ContentHash 기반 중복 감지 (비어있으면 생략)
+	if content.ContentHash != "" {
+		existing, err := s.repo.GetByContentHash(ctx, content.ContentHash)
+		if err == nil {
+			// 동일 content_hash 존재 → 중복
+			s.log.WithFields(map[string]interface{}{
+				"existing_id":  existing.ID,
+				"content_hash": content.ContentHash,
+			}).Debug("duplicate content detected by content hash")
+			return existing.ID, true, nil
+		}
 
-    if !errors.Is(err, storage.ErrNotFound) {
-      return "", false, fmt.Errorf("check duplicate: %w", err)
-    }
-  }
+		if !errors.Is(err, storage.ErrNotFound) {
+			return "", false, fmt.Errorf("check duplicate: %w", err)
+		}
+	}
 
-  if err := s.repo.Save(ctx, content); err != nil {
-    return "", false, fmt.Errorf("save content: %w", err)
-  }
+	if err := s.repo.Save(ctx, content); err != nil {
+		return "", false, fmt.Errorf("save content: %w", err)
+	}
 
-  return content.ID, false, nil
+	return content.ID, false, nil
 }
 
 // StoreBatch는 각 content에 대해 독립적으로 중복 감지 후 저장합니다.
 func (s *contentService) StoreBatch(ctx context.Context, contents []*core.Content) ([]StoreResult, error) {
-  results := make([]StoreResult, 0, len(contents))
+	results := make([]StoreResult, 0, len(contents))
 
-  for _, content := range contents {
-    id, isDuplicate, err := s.Store(ctx, content)
-    results = append(results, StoreResult{
-      ContentID:   id,
-      IsDuplicate: isDuplicate,
-      Err:         err,
-    })
-  }
+	for _, content := range contents {
+		id, isDuplicate, err := s.Store(ctx, content)
+		results = append(results, StoreResult{
+			ContentID:   id,
+			IsDuplicate: isDuplicate,
+			Err:         err,
+		})
+	}
 
-  return results, nil
+	return results, nil
 }
 
 // GetByID는 ID로 content를 조회합니다.
 func (s *contentService) GetByID(ctx context.Context, id string) (*core.Content, error) {
-  content, err := s.repo.GetByID(ctx, id)
-  if err != nil {
-    return nil, fmt.Errorf("get content by id: %w", err)
-  }
+	content, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get content by id: %w", err)
+	}
 
-  return content, nil
+	return content, nil
 }
 
 // ListByCountry는 특정 국가의 content를 필터와 함께 조회합니다.
 func (s *contentService) ListByCountry(
-  ctx context.Context,
-  country string,
-  filter storage.ContentFilter,
+	ctx context.Context,
+	country string,
+	filter storage.ContentFilter,
 ) ([]*core.Content, error) {
-  filter.Country = country
+	filter.Country = country
 
-  contents, err := s.repo.List(ctx, filter)
-  if err != nil {
-    return nil, fmt.Errorf("list contents by country %s: %w", country, err)
-  }
+	contents, err := s.repo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("list contents by country %s: %w", country, err)
+	}
 
-  return contents, nil
+	return contents, nil
 }
 
 // Search는 ContentFilter 조건으로 content를 검색합니다.
 func (s *contentService) Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
-  contents, err := s.repo.List(ctx, filter)
-  if err != nil {
-    return nil, fmt.Errorf("search contents: %w", err)
-  }
+	contents, err := s.repo.List(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("search contents: %w", err)
+	}
 
-  return contents, nil
+	return contents, nil
 }
 
 // CountByCountry는 최근 N일간 국가별 content 수를 반환합니다.
 // 각 알려진 국가에 대해 Count를 호출하여 집계합니다.
 func (s *contentService) CountByCountry(ctx context.Context, days int) (map[string]int64, error) {
-  after := time.Now().AddDate(0, 0, -days)
-  countries := []string{"US", "KR"}
+	after := time.Now().AddDate(0, 0, -days)
+	countries := []string{"US", "KR"}
 
-  result := make(map[string]int64, len(countries))
+	result := make(map[string]int64, len(countries))
 
-  for _, country := range countries {
-    count, err := s.repo.Count(ctx, storage.ContentFilter{
-      Country:        country,
-      PublishedAfter: &after,
-    })
-    if err != nil {
-      return nil, fmt.Errorf("count contents for country %s: %w", country, err)
-    }
+	for _, country := range countries {
+		count, err := s.repo.Count(ctx, storage.ContentFilter{
+			Country:        country,
+			PublishedAfter: &after,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("count contents for country %s: %w", country, err)
+		}
 
-    result[country] = count
-  }
+		result[country] = count
+	}
 
-  return result, nil
+	return result, nil
 }

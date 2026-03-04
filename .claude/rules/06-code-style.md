@@ -24,20 +24,20 @@
 
 ### Formatting
 
-1. **Indentation**: 2 spaces (NOT tabs)
+1. **Indentation**: tabs (gofmt default, NOT spaces)
    ```go
    // Good
    func process() {
-     if condition {
-       doSomething()
-     }
+   	if condition {
+   		doSomething()
+   	}
    }
 
    // Bad
    func process() {
-       if condition {
-           doSomething()
-       }
+     if condition {
+       doSomething()
+     }
    }
    ```
 
@@ -48,34 +48,34 @@
 3. **Imports**: Group and order
    ```go
    import (
-     // Standard library
-     "context"
-     "fmt"
-     "time"
-
-     // External packages
-     "github.com/rs/zerolog/log"
-
-     // Internal packages
-     "issuetracker/internal/crawler"
-     "issuetracker/internal/storage"
+   	// Standard library
+   	"context"
+   	"fmt"
+   	"time"
+   
+   	// External packages
+   	"github.com/rs/zerolog/log"
+   
+   	// Internal packages
+   	"issuetracker/internal/crawler"
+   	"issuetracker/internal/storage"
    )
    ```
 
 4. **Blank Lines**: Strategic spacing
    ```go
    func Fetch(ctx context.Context, url string) (*Content, error) {
-     if err := validate(url); err != nil {
-       return nil, err
-     }
-
-     resp, err := http.Get(url)
-     if err != nil {
-       return nil, err
-     }
-     defer resp.Body.Close()
-
-     return parse(resp)
+   	if err := validate(url); err != nil {
+   		return nil, err
+   	}
+   
+   	resp, err := http.Get(url)
+   	if err != nil {
+   		return nil, err
+   	}
+   	defer resp.Body.Close()
+   
+   	return parse(resp)
    }
    ```
 
@@ -87,7 +87,7 @@
    articleCount := 10
    maxRetries := 3
    httpClient := &http.Client{}
-
+   
    // Bad
    ac := 10
    max_retries := 3
@@ -98,14 +98,14 @@
    ```go
    // Good
    const (
-     DefaultTimeout = 30 * time.Second
-     MaxWorkers = 100
+   	DefaultTimeout = 30 * time.Second
+   	MaxWorkers = 100
    )
-
+   
    // Bad
    const (
-     DEFAULT_TIMEOUT = 30 * time.Second
-     MAX_WORKERS = 100
+   	DEFAULT_TIMEOUT = 30 * time.Second
+   	MAX_WORKERS = 100
    )
    ```
 
@@ -116,7 +116,7 @@
    // Exported
    func FetchArticle(url string) {}
    func ParseHTML(html string) {}
-
+   
    // Unexported
    func validateURL(url string) {}
    func extractContent(doc *goquery.Document) {}
@@ -126,14 +126,14 @@
    ```go
    // Good
    type Crawler interface {
-     Fetch(ctx context.Context, url string) error
+   	Fetch(ctx context.Context, url string) error
    }
-
+   
    type Repository interface {
-     Save(ctx context.Context, article *Article) error
-     Find(ctx context.Context, id string) (*Article, error)
+   	Save(ctx context.Context, article *Article) error
+   	Find(ctx context.Context, id string) (*Article, error)
    }
-
+   
    // Bad - don't add "Interface" suffix
    type CrawlerInterface interface {}
    ```
@@ -143,7 +143,7 @@
    // Good
    type Article struct {}
    type Parser struct {}
-
+   
    // Bad
    type Articles struct {}
    type HTMLParser struct {} // redundant if in html package
@@ -155,7 +155,7 @@
    ```go
    // Good
    return fmt.Errorf("failed to fetch article: %w", err)
-
+   
    // Bad
    return fmt.Errorf("Failed to fetch article.", err)
    ```
@@ -164,24 +164,24 @@
    ```go
    // Good
    func process() error {
-     if err := validate(); err != nil {
-       return err
-     }
-
-     if err := fetch(); err != nil {
-       return err
-     }
-
-     return nil
+   	if err := validate(); err != nil {
+   		return err
+   	}
+   
+   	if err := fetch(); err != nil {
+   		return err
+   	}
+   
+   	return nil
    }
-
+   
    // Bad
    func process() error {
-     err := validate()
-     if err == nil {
-       err = fetch()
-     }
-     return err
+   	err := validate()
+   	if err == nil {
+   		err = fetch()
+   	}
+   	return err
    }
    ```
 
@@ -189,22 +189,22 @@
    ```go
    // Good - clear intent
    func split(s string) (head, tail string) {
-     parts := strings.Split(s, ":")
-     return parts[0], parts[1]
+   	parts := strings.Split(s, ":")
+   	return parts[0], parts[1]
    }
-
+   
    // Bad - naked returns are confusing
    func split(s string) (head, tail string) {
-     parts := strings.Split(s, ":")
-     head = parts[0]
-     tail = parts[1]
-     return
+   	parts := strings.Split(s, ":")
+   	head = parts[0]
+   	tail = parts[1]
+   	return
    }
-
+   
    // Best - explicit returns
    func split(s string) (string, string) {
-     parts := strings.Split(s, ":")
-     return parts[0], parts[1]
+   	parts := strings.Split(s, ":")
+   	return parts[0], parts[1]
    }
    ```
 
@@ -218,23 +218,23 @@
    ```go
    // Good
    type FetchOptions struct {
-     Timeout time.Duration
-     Retries int
-     Headers map[string]string
+   	Timeout time.Duration
+   	Retries int
+   	Headers map[string]string
    }
-
+   
    func Fetch(ctx context.Context, url string, opts FetchOptions) {}
-
+   
    // Bad
    func Fetch(ctx context.Context, url string, timeout time.Duration,
-     retries int, headers map[string]string, proxy string) {}
+   	retries int, headers map[string]string, proxy string) {}
    ```
 
 3. **Context First**: Always first parameter
    ```go
    // Good
    func Fetch(ctx context.Context, url string) {}
-
+   
    // Bad
    func Fetch(url string, ctx context.Context) {}
    ```
@@ -257,18 +257,18 @@
    // FetchArticle: 주어진 URL에서 article을 retrieves and parses 합니다.
    // 기사가 존재하지 않으면 ErrNotFound를 반환합니다.
    func FetchArticle(ctx context.Context, url string) (*Article, error) {
-     // ...
+   	// ...
    }
-
+   
    // NewCrawler: 주어진 options에 맞춰 새로운 crawler instance를 생성합니다.
    // timeout이 0이면 기본값(30초)을 사용합니다.
    func NewCrawler(opts Options) *Crawler {
-     // ...
+   	// ...
    }
-
+   
    // unexported 함수는 복잡한 경우에만 주석 작성
    func validateURL(url string) error {
-     // ...
+   	// ...
    }
    ```
 
@@ -276,22 +276,22 @@
    ```go
    // Good - 이유를 설명
    func retry() {
-     // 서버 과부하 방지를 위해 재시도 전 대기
-     time.Sleep(backoff)
+   	// 서버 과부하 방지를 위해 재시도 전 대기
+   	time.Sleep(backoff)
    }
-
+   
    // Good - 영어와 한글 혼용
    func processArticle() {
-     // DLQ로 전송 (3회 재시도 후에도 실패한 경우)
-     if retries >= MaxRetries {
-       sendToDLQ()
-     }
+   	// DLQ로 전송 (3회 재시도 후에도 실패한 경우)
+   	if retries >= MaxRetries {
+   		sendToDLQ()
+   	}
    }
-
+   
    // Bad - 당연한 내용을 설명
    func retry() {
-     // backoff 시간만큼 sleep
-     time.Sleep(backoff)
+   	// backoff 시간만큼 sleep
+   	time.Sleep(backoff)
    }
    ```
 
@@ -300,10 +300,10 @@
    // Good
    // TODO(username): rate limiter를 Redis 기반으로 변경 필요 (distributed 환경 대응)
    func applyRateLimit() {}
-
+   
    // TODO: Kafka consumer lag이 1000 초과시 auto-scale 구현
    func monitorLag() {}
-
+   
    // Bad - 맥락 없음
    // TODO: fix this
    func broken() {}
@@ -327,29 +327,29 @@
 1. **Field Ordering**: Group related fields
    ```go
    type Article struct {
-     // Identity
-     ID  string
-     URL string
-
-     // Content
-     Title string
-     Body  string
-
-     // Metadata
-     Author      string
-     PublishedAt time.Time
-
-     // Internal
-     createdAt time.Time
+   	// Identity
+   	ID  string
+   	URL string
+   
+   	// Content
+   	Title string
+   	Body  string
+   
+   	// Metadata
+   	Author      string
+   	PublishedAt time.Time
+   
+   	// Internal
+   	createdAt time.Time
    }
    ```
 
 2. **Struct Tags**: Aligned for readability
    ```go
    type Article struct {
-     ID          string    `json:"id" db:"id"`
-     Title       string    `json:"title" db:"title"`
-     PublishedAt time.Time `json:"published_at" db:"published_at"`
+   	ID          string    `json:"id" db:"id"`
+   	Title       string    `json:"title" db:"title"`
+   	PublishedAt time.Time `json:"published_at" db:"published_at"`
    }
    ```
 
@@ -357,14 +357,14 @@
    ```go
    // Good - clear composition
    type Crawler struct {
-     client *http.Client
-     config Config
+   	client *http.Client
+   	config Config
    }
-
+   
    // Avoid - unclear what's inherited
    type Crawler struct {
-     http.Client
-     Config
+   	http.Client
+   	Config
    }
    ```
 
@@ -375,7 +375,7 @@
    // Good
    package crawler
    package storage
-
+   
    // Bad
    package crawlers
    package article_storage
@@ -400,40 +400,40 @@
 1. **Channel Direction**: Specify when possible
    ```go
    func producer(out chan<- string) {
-     out <- "data"
+   	out <- "data"
    }
-
+   
    func consumer(in <-chan string) {
-     data := <-in
+   	data := <-in
    }
    ```
 
 2. **Context Handling**: Always check
    ```go
    func process(ctx context.Context) {
-     for {
-       select {
-       case <-ctx.Done():
-         return
-       default:
-         work()
-       }
-     }
+   	for {
+   		select {
+   		case <-ctx.Done():
+   			return
+   		default:
+   			work()
+   		}
+   	}
    }
    ```
 
 3. **WaitGroups**: Clear pattern
    ```go
    var wg sync.WaitGroup
-
+   
    for i := 0; i < workers; i++ {
-     wg.Add(1)
-     go func() {
-       defer wg.Done()
-       work()
-     }()
+   	wg.Add(1)
+   	go func() {
+   		defer wg.Done()
+   		work()
+   	}()
    }
-
+   
    wg.Wait()
    ```
 
@@ -535,21 +535,21 @@ func TestFetchArticle_Timeout_ReturnsTimeoutError(t *testing.T) {}
 
 ```go
 func TestFetch_Success(t *testing.T) {
-  // Arrange
-  server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    w.WriteHeader(http.StatusOK)
-    w.Write([]byte("<html></html>"))
-  }))
-  defer server.Close()
+	// Arrange
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("<html></html>"))
+	}))
+	defer server.Close()
 
-  crawler := NewCrawler()
+	crawler := NewCrawler()
 
-  // Act
-  content, err := crawler.Fetch(context.Background(), server.URL)
+	// Act
+	content, err := crawler.Fetch(context.Background(), server.URL)
 
-  // Assert
-  assert.NoError(t, err)
-  assert.NotNil(t, content)
+	// Assert
+	assert.NoError(t, err)
+	assert.NotNil(t, content)
 }
 ```
 
@@ -557,37 +557,37 @@ func TestFetch_Success(t *testing.T) {
 
 ```go
 func TestNormalizeURL(t *testing.T) {
-  tests := []struct {
-    name  string
-    input string
-    want  string
-    err   bool
-  }{
-    {
-      name:  "removes www",
-      input: "https://www.example.com",
-      want:  "https://example.com",
-    },
-    {
-      name:  "invalid url",
-      input: "not-a-url",
-      err:   true,
-    },
-  }
+	tests := []struct {
+		name  string
+		input string
+		want  string
+		err   bool
+	}{
+		{
+			name:  "removes www",
+			input: "https://www.example.com",
+			want:  "https://example.com",
+		},
+		{
+			name:  "invalid url",
+			input: "not-a-url",
+			err:   true,
+		},
+	}
 
-  for _, tt := range tests {
-    t.Run(tt.name, func(t *testing.T) {
-      got, err := NormalizeURL(tt.input)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NormalizeURL(tt.input)
 
-      if tt.err {
-        assert.Error(t, err)
-        return
-      }
+			if tt.err {
+				assert.Error(t, err)
+				return
+			}
 
-      assert.NoError(t, err)
-      assert.Equal(t, tt.want, got)
-    })
-  }
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 ```
 
@@ -597,14 +597,14 @@ func TestNormalizeURL(t *testing.T) {
 ```go
 // Bad
 if retries > 3 {
-  return err
+	return err
 }
 
 // Good
 const MaxRetries = 3
 
 if retries > MaxRetries {
-  return err
+	return err
 }
 ```
 
@@ -612,27 +612,27 @@ if retries > MaxRetries {
 ```go
 // Bad
 if a {
-  if b {
-    if c {
-      if d {
-        doSomething()
-      }
-    }
-  }
+	if b {
+		if c {
+			if d {
+				doSomething()
+			}
+		}
+	}
 }
 
 // Good
 if !a {
-  return
+	return
 }
 if !b {
-  return
+	return
 }
 if !c {
-  return
+	return
 }
 if !d {
-  return
+	return
 }
 
 doSomething()
@@ -642,14 +642,14 @@ doSomething()
 ```go
 // Bad
 if err != nil {
-  return err
+	return err
 } else {
-  process()
+	process()
 }
 
 // Good
 if err != nil {
-  return err
+	return err
 }
 
 process()
@@ -659,13 +659,13 @@ process()
 ```go
 // Bad
 func isValid(s string) bool {
-  result := len(s) > 0
-  return result
+	result := len(s) > 0
+	return result
 }
 
 // Good
 func isValid(s string) bool {
-  return len(s) > 0
+	return len(s) > 0
 }
 ```
 
@@ -673,14 +673,14 @@ func isValid(s string) bool {
 ```go
 // Avoid - implicit initialization
 func init() {
-  db = connectDB()
+	db = connectDB()
 }
 
 // Prefer - explicit initialization
 func New() *Service {
-  return &Service{
-    db: connectDB(),
-  }
+	return &Service{
+		db: connectDB(),
+	}
 }
 ```
 
@@ -705,11 +705,11 @@ log.Error().Err(err).Str("url", url).Msg("failed to fetch article")
 ```go
 // Good - structured fields
 log.Info().
-  Str("crawler", "cnn").
-  Str("url", url).
-  Int("status", resp.StatusCode).
-  Dur("duration", elapsed).
-  Msg("article fetched")
+	Str("crawler", "cnn").
+	Str("url", url).
+	Int("status", resp.StatusCode).
+	Dur("duration", elapsed).
+	Msg("article fetched")
 
 // Bad - string interpolation
 log.Info().Msgf("Fetched %s from %s with status %d in %v", url, "cnn", resp.StatusCode, elapsed)
@@ -719,11 +719,11 @@ log.Info().Msgf("Fetched %s from %s with status %d in %v", url, "cnn", resp.Stat
 ```go
 // Include relevant context
 log.Error().
-  Err(err).
-  Str("article_id", article.ID).
-  Str("source", article.Source).
-  Str("error_code", "PARSE_001").
-  Msg("parse failed")
+	Err(err).
+	Str("article_id", article.ID).
+	Str("source", article.Source).
+	Str("error_code", "PARSE_001").
+	Msg("parse failed")
 
 // Not just the error
 log.Error().Err(err).Msg("error")
@@ -851,40 +851,40 @@ package crawler
 
 // 2. Imports
 import (
-  "context"
-  "fmt"
+	"context"
+	"fmt"
 )
 
 // 3. Constants
 const (
-  DefaultTimeout = 30 * time.Second
+	DefaultTimeout = 30 * time.Second
 )
 
 // 4. Types
 type Crawler struct {
-  client *http.Client
+	client *http.Client
 }
 
 // 5. Constructor
 func New(opts Options) *Crawler {
-  return &Crawler{
-    client: &http.Client{},
-  }
+	return &Crawler{
+		client: &http.Client{},
+	}
 }
 
 // 6. Public methods
 func (c *Crawler) Fetch(ctx context.Context, url string) error {
-  return c.fetch(ctx, url)
+	return c.fetch(ctx, url)
 }
 
 // 7. Private methods
 func (c *Crawler) fetch(ctx context.Context, url string) error {
-  return nil
+	return nil
 }
 
 // 8. Helper functions
 func validateURL(url string) error {
-  return nil
+	return nil
 }
 ```
 
@@ -895,14 +895,14 @@ func validateURL(url string) error {
 // Good
 var sb strings.Builder
 for _, s := range items {
-  sb.WriteString(s)
+	sb.WriteString(s)
 }
 result := sb.String()
 
 // Bad
 var result string
 for _, s := range items {
-  result += s
+	result += s
 }
 ```
 
@@ -918,17 +918,17 @@ var items []string
 ### 3. Use sync.Pool for Frequent Allocations
 ```go
 var bufferPool = sync.Pool{
-  New: func() interface{} {
-    return new(bytes.Buffer)
-  },
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
 }
 
 func process() {
-  buf := bufferPool.Get().(*bytes.Buffer)
-  defer bufferPool.Put(buf)
-  buf.Reset()
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(buf)
+	buf.Reset()
 
-  // Use buffer
+	// Use buffer
 }
 ```
 
@@ -999,18 +999,18 @@ package crawler
 // Article은 모든 소스의 뉴스 기사를 나타냅니다.
 // UpdatedAt을 제외한 모든 필드는 필수입니다.
 type Article struct {
-  ID    string
-  Title string
-  Body  string
+	ID    string
+	Title string
+	Body  string
 }
 
 // CrawlJob represents a crawling task to be processed by workers.
 //
 // CrawlJob은 worker가 처리할 크롤링 작업을 나타냅니다.
 type CrawlJob struct {
-  ID     string
-  URL    string
-  Source string
+	ID     string
+	URL    string
+	Source string
 }
 ```
 
@@ -1029,7 +1029,7 @@ type CrawlJob struct {
 //     // Handle not found
 //   }
 func FetchArticle(ctx context.Context, url string) (*Article, error) {
-  // ...
+	// ...
 }
 ```
 
@@ -1040,17 +1040,17 @@ func FetchArticle(ctx context.Context, url string) (*Article, error) {
 //
 // Crawler 사용 예시.
 func ExampleCrawler_Fetch() {
-  crawler := NewCrawler(Options{
-    Timeout: 30 * time.Second,
-  })
+	crawler := NewCrawler(Options{
+		Timeout: 30 * time.Second,
+	})
 
-  article, err := crawler.Fetch(context.Background(), "https://example.com")
-  if err != nil {
-    log.Fatal(err)
-  }
+	article, err := crawler.Fetch(context.Background(), "https://example.com")
+	if err != nil {
+		log.Fatal(err)
+	}
 
-  fmt.Println(article.Title)
-  // Output: Example Article Title
+	fmt.Println(article.Title)
+	// Output: Example Article Title
 }
 ```
 

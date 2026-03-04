@@ -8,8 +8,8 @@
 package queue
 
 import (
-  "context"
-  "time"
+	"context"
+	"time"
 )
 
 // Producer는 Kafka에 메시지를 publish하는 인터페이스입니다.
@@ -17,9 +17,9 @@ import (
 // Producer publishes messages to Kafka topics.
 // It is safe for concurrent use by multiple goroutines.
 type Producer interface {
-  Publish(ctx context.Context, msg Message) error
-  PublishBatch(ctx context.Context, msgs []Message) error
-  Close() error
+	Publish(ctx context.Context, msg Message) error
+	PublishBatch(ctx context.Context, msgs []Message) error
+	Close() error
 }
 
 // Consumer는 Kafka에서 메시지를 consume하는 인터페이스입니다.
@@ -27,20 +27,20 @@ type Producer interface {
 // Consumer reads messages from Kafka topics.
 // FetchMessage does NOT auto-commit; call CommitMessages after successful processing.
 type Consumer interface {
-  FetchMessage(ctx context.Context) (*Message, error)
-  CommitMessages(ctx context.Context, msgs ...*Message) error
-  Close() error
+	FetchMessage(ctx context.Context) (*Message, error)
+	CommitMessages(ctx context.Context, msgs ...*Message) error
+	Close() error
 }
 
 // Message는 Kafka 메시지를 나타냅니다.
 //
 // Message represents a single Kafka message with routing and payload information.
 type Message struct {
-  Topic     string
-  Partition int
-  Offset    int64
-  Key       []byte
-  Value     []byte
-  Headers   map[string]string
-  Time      time.Time
+	Topic     string
+	Partition int
+	Offset    int64
+	Key       []byte
+	Value     []byte
+	Headers   map[string]string
+	Time      time.Time
 }

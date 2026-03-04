@@ -211,10 +211,10 @@ func TestYonhapParser_ParseArticle_날짜UTC변환_성공(t *testing.T) {
 	article, err := parser.ParseArticle(raw)
 
 	assert.NoError(t, err)
-	
+
 	// 타임존이 UTC인지 확인
 	assert.Equal(t, "UTC", article.PublishedAt.Location().String())
-	
+
 	// KST 2024-01-15 14:30 = UTC 2024-01-15 05:30
 	expectedUTC := time.Date(2024, 1, 15, 5, 30, 0, 0, time.UTC)
 	assert.Equal(t, expectedUTC, article.PublishedAt)

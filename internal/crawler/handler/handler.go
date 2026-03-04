@@ -9,10 +9,10 @@
 package handler
 
 import (
-  "context"
+	"context"
 
-  "issuetracker/internal/crawler/core"
-  "issuetracker/pkg/logger"
+	"issuetracker/internal/crawler/core"
+	"issuetracker/pkg/logger"
 )
 
 // Handler는 단일 CrawlJob을 처리하는 인터페이스입니다.
@@ -20,7 +20,7 @@ import (
 // Handler processes a single CrawlJob and returns fetched raw content.
 // Implementations must be safe for concurrent use by multiple goroutines.
 type Handler interface {
-  Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error)
+	Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error)
 }
 
 // Registry는 crawler name → Handler 매핑을 관리합니다.
@@ -29,9 +29,9 @@ type Handler interface {
 // Registry maps crawler names to Handler implementations.
 // Unregistered crawler names fall back to a noop handler.
 type Registry struct {
-  handlers map[string]Handler
-  fallback Handler
-  log      *logger.Logger
+	handlers map[string]Handler
+	fallback Handler
+	log      *logger.Logger
 }
 
 // NewRegistry는 새로운 Registry를 생성합니다.
@@ -39,18 +39,18 @@ type Registry struct {
 //
 // NewRegistry creates a Registry with a noop fallback for unregistered crawlers.
 func NewRegistry(log *logger.Logger) *Registry {
-  return &Registry{
-    handlers: make(map[string]Handler),
-    fallback: &noopHandler{log: log},
-    log:      log,
-  }
+	return &Registry{
+		handlers: make(map[string]Handler),
+		fallback: &noopHandler{log: log},
+		log:      log,
+	}
 }
 
 // Register는 crawler name에 Handler를 등록합니다.
 //
 // Register associates a Handler with the given crawler name.
 func (r *Registry) Register(name string, h Handler) {
-  r.handlers[name] = h
+	r.handlers[name] = h
 }
 
 // Handle은 job.CrawlerName에 등록된 Handler를 찾아 실행합니다.
@@ -59,11 +59,11 @@ func (r *Registry) Register(name string, h Handler) {
 // Handle dispatches the job to the registered handler for job.CrawlerName.
 // Falls back to noop if no handler is registered.
 func (r *Registry) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
-  h, ok := r.handlers[job.CrawlerName]
-  if !ok {
-    r.log.WithField("crawler", job.CrawlerName).Warn("no handler registered, using noop")
-    return r.fallback.Handle(ctx, job)
-  }
+	h, ok := r.handlers[job.CrawlerName]
+	if !ok {
+		r.log.WithField("crawler", job.CrawlerName).Warn("no handler registered, using noop")
+		return r.fallback.Handle(ctx, job)
+	}
 
-  return h.Handle(ctx, job)
+	return h.Handle(ctx, job)
 }
