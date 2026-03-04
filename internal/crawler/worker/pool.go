@@ -213,7 +213,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 func (p *KafkaConsumerPool) publishRawRef(ctx context.Context, ref *core.RawContentRef, job *core.CrawlJob) error {
   data, err := json.Marshal(ref)
   if err != nil {
-    return fmt.Errorf("RawContentRef 직렬화 실패: %w", err)
+    return fmt.Errorf("marshal raw content ref: %w", err)
   }
 
   msg := queue.Message{
