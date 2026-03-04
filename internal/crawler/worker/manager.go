@@ -68,35 +68,42 @@ type PoolManager struct {
 //
 // NewPoolManager creates one KafkaConsumerPool per priority level (high/normal/low).
 // cfg.RawTopicFn이 nil이면 DefaultRawTopicFunc를 사용합니다.
+// cfg.RawContentSvc가 nil이면 에러를 반환합니다.
 func NewPoolManager(
   cfg ManagerConfig,
   producer queue.Producer,
   handler JobHandler,
   resolver PriorityResolver,
   log *logger.Logger,
-) *PoolManager {
-  // RawContentSvc는 필수 의존성입니다.
-  // nil이면 processJob()에서 Store() 호출 시 런타임 패닉이 발생하므로
-  // 초기화 단계에서 명확히 실패합니다.
-  if cfg.RawContentSvc == nil {
-    panic("NewPoolManager: cfg.RawContentSvc는 nil일 수 없습니다")
-  }
-
+) (*PoolManager, error) {
   rawTopicFn := cfg.RawTopicFn
   if rawTopicFn == nil {
     rawTopicFn = DefaultRawTopicFunc
   }
 
+  highPool, err := NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, cfg.RawContentSvc, cfg.High.WorkerCount, rawTopicFn)
+  if err != nil {
+    return nil, fmt.Errorf("NewPoolManager: high pool을 생성할 수 없습니다: %w", err)
+  }
+  normalPool, err := NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, cfg.RawContentSvc, cfg.Normal.WorkerCount, rawTopicFn)
+  if err != nil {
+    return nil, fmt.Errorf("NewPoolManager: normal pool을 생성할 수 없습니다: %w", err)
+  }
+  lowPool, err := NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, cfg.RawContentSvc, cfg.Low.WorkerCount, rawTopicFn)
+  if err != nil {
+    return nil, fmt.Errorf("NewPoolManager: low pool을 생성할 수 없습니다: %w", err)
+  }
+
   return &PoolManager{
     pools: map[core.Priority]*KafkaConsumerPool{
-      core.PriorityHigh:   NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, cfg.RawContentSvc, cfg.High.WorkerCount, rawTopicFn),
-      core.PriorityNormal: NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, cfg.RawContentSvc, cfg.Normal.WorkerCount, rawTopicFn),
-      core.PriorityLow:    NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, cfg.RawContentSvc, cfg.Low.WorkerCount, rawTopicFn),
+      core.PriorityHigh:   highPool,
+      core.PriorityNormal: normalPool,
+      core.PriorityLow:    lowPool,
     },
     producer: producer,
     resolver: resolver,
     log:      log,
-  }
+  }, nil
 }
 
 // Publish는 CrawlJob을 PriorityResolver로 우선순위를 결정한 후 해당 Kafka crawl 토픽에 발행합니다.

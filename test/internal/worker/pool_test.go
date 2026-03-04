@@ -166,6 +166,19 @@ func runPool(t *testing.T, consumer *mockConsumer, pool *worker.KafkaConsumerPoo
 // 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TestKafkaConsumerPool_NilRawContentSvc_ReturnsError는
+// rawContentSvc가 nil일 때 NewKafkaConsumerPool이 에러를 반환하는지 검증합니다.
+func TestKafkaConsumerPool_NilRawContentSvc_ReturnsError(t *testing.T) {
+  consumer := new(mockConsumer)
+  producer := new(mockProducer)
+  handler := new(mockJobHandler)
+
+  pool, err := worker.NewKafkaConsumerPool(consumer, producer, handler, nil, 1, nil)
+
+  assert.Nil(t, pool)
+  assert.Error(t, err)
+}
+
 // TestKafkaConsumerPool_ProcessJob_StoresInPostgresAndPublishesRef는
 // 정상 흐름에서 RawContent를 Postgres에 저장하고 ID만 담긴 RawContentRef를 Kafka에 발행하는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_StoresInPostgresAndPublishesRef(t *testing.T) {
@@ -174,7 +187,8 @@ func TestKafkaConsumerPool_ProcessJob_StoresInPostgresAndPublishesRef(t *testing
   handler := new(mockJobHandler)
   rawSvc := new(mockRawContentService)
 
-  pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  pool, err := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  assert.NoError(t, err)
 
   job := newTestJob()
   raw := newTestRawContent()
@@ -212,7 +226,8 @@ func TestKafkaConsumerPool_ProcessJob_DuplicateURL_PublishesExistingID(t *testin
   handler := new(mockJobHandler)
   rawSvc := new(mockRawContentService)
 
-  pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  pool, err := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  assert.NoError(t, err)
 
   job := newTestJob()
   raw := newTestRawContent()
@@ -247,7 +262,8 @@ func TestKafkaConsumerPool_ProcessJob_StoreError_DoesNotPublish(t *testing.T) {
   handler := new(mockJobHandler)
   rawSvc := new(mockRawContentService)
 
-  pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  pool, err := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  assert.NoError(t, err)
 
   job := newTestJob()
   raw := newTestRawContent()
@@ -272,7 +288,8 @@ func TestKafkaConsumerPool_ProcessJob_NilRaw_CommitsWithoutStore(t *testing.T) {
   handler := new(mockJobHandler)
   rawSvc := new(mockRawContentService)
 
-  pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  pool, err := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  assert.NoError(t, err)
 
   job := newTestJob()
   msg := marshaledJobMsg(t, job)
@@ -296,7 +313,8 @@ func TestKafkaConsumerPool_ProcessJob_PublishedRefHasNoHTML(t *testing.T) {
   handler := new(mockJobHandler)
   rawSvc := new(mockRawContentService)
 
-  pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  pool, err := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  assert.NoError(t, err)
 
   job := newTestJob()
   raw := newTestRawContent()
@@ -337,7 +355,8 @@ func TestKafkaConsumerPool_ProcessJob_KRSource_PublishesToKRTopic(t *testing.T) 
   handler := new(mockJobHandler)
   rawSvc := new(mockRawContentService)
 
-  pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  pool, err := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+  assert.NoError(t, err)
 
   job := newTestJob()
   raw := newTestRawContent()

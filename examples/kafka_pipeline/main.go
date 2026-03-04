@@ -322,7 +322,7 @@ func main() {
   consumer := newMockConsumer(msgs)
   handler := &testCrawlerHandler{log: log}
 
-  pool := worker.NewKafkaConsumerPool(
+  pool, err := worker.NewKafkaConsumerPool(
     consumer,
     producer,
     handler,
@@ -330,6 +330,9 @@ func main() {
     workerCount,
     worker.DefaultRawTopicFunc, // 국가 코드 기반 raw 토픽 결정
   )
+  if err != nil {
+    log.WithError(err).Fatal("KafkaConsumerPool 생성 실패")
+  }
 
   start := time.Now()
   pool.Start(ctx)
