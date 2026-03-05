@@ -34,7 +34,7 @@ func LoadClassifier(envFiles ...string) (ClassifierConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ClassifierConfig{}, fmt.Errorf("load env file: %w", err)
+		return ClassifierConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
 	}
 
 	cfg := DefaultClassifierConfig()
