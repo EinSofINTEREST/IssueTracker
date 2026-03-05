@@ -220,8 +220,20 @@ make deps
 - [x] `PoolManager` (`manager.go`) — priority-based multi-pool orchestration (High / Normal / Low)
 - [x] Unit tests for pool processing logic (`test/internal/worker/`)
 
+✅ **Content Validation Pipeline** (v0.6.0)
+- [x] `ContentProcessor` interface — common pipeline stage interface (`internal/processor/processor.go`)
+- [x] `Validator` interface + `ValidationResult` / `ValidationError` types — shared validation contract
+- [x] `NewValidator` factory — `SourceType` 기반 디스패치 (news / community)
+- [x] News validator (`validate/news/`) — Title 10~500자, Body 100~50,000자, PublishedAt 필수, 품질 점수 산출, 스팸(대문자·구두점 과용) 탐지
+- [x] Community validator (`validate/community/`) — Body 50자 이상, PublishedAt 선택, 반복 문자·도배 패턴 탐지
+- [x] `NewContentProcessor` adapter — Validator → ContentProcessor 어댑팅, Reliability 필드 업데이트
+- [x] Validate `Worker` — Kafka Consumer/Producer 기반 워커 (수동 커밋, retry count 기반 DLQ 라우팅)
+- [x] Unit tests — 89.1% coverage (`test/internal/processor/validate/`)
+- [x] `Content` struct에 JSON 직렬화 태그 추가 (Kafka `ProcessingMessage.Data` 호환)
+
 📋 **Planned**
-- [ ] Processing pipeline (normalize → validate → enrich)
+- [ ] Normalize processing stage
+- [ ] Enrich processing stage (entity extraction, sentiment analysis)
 - [ ] Embedding generation
 - [ ] Clustering algorithms
 - [ ] API endpoints
@@ -246,23 +258,32 @@ issuetracker/
 │   │   ├── worker/            # Kafka consumer pool
 │   │   │   ├── pool.go        # KafkaConsumerPool (goroutine worker pool + DLQ + Postgres offload)
 │   │   │   └── manager.go     # PoolManager (High/Normal/Low priority pool orchestration)
+│   │   └── domain/
+│   │       └── news/          # News domain crawlers (DIP + Chain of Responsibility)
+│   │           ├── news.go    # Domain interfaces (NewsFetcher, NewsRSSFetcher, ...)
+│   │           ├── handler.go # Chain: RSS → GoQuery → Browser
+│   │           ├── fetcher/   # Adapters (rss, goquery, browser)
+│   │           ├── kr/        # Korean sources
+│   │           │   ├── naver/ # Naver (config, crawler, parser)
+│   │           │   ├── yonhap/ # Yonhap (config, crawler, parser)
+│   │           │   ├── daum/  # Daum (config, crawler, parser)
+│   │           │   └── registry.go # Assembly & registration entry point
+│   │           └── us/        # US sources
+│   │               ├── cnn/   # CNN (config, crawler, parser)
+│   │               └── registry.go # Assembly & registration entry point
+│   ├── processor/
+│   │   ├── processor.go       # ContentProcessor, Validator, ValidationResult interfaces
+│   │   └── validate/          # Content validation stage
+│   │       ├── validator.go   # NewValidator factory + NewContentProcessor adapter
+│   │       ├── worker.go      # Kafka Worker (normalized → validated, DLQ routing)
+│   │       ├── news/          # News-specific validator
+│   │       │   └── validator.go # Title/Body length, PublishedAt, spam detection
+│   │       └── community/     # Community-specific validator
+│   │           └── validator.go # Min body, flood pattern detection
 │   └── storage/               # Data access layer
 │       ├── news_article.go    # NewsArticle repository interface
 │       └── postgres/          # PostgreSQL implementation
 │           └── news_article.go # pgx/v5 based NewsArticle CRUD
-│       └── domain/
-│           └── news/          # News domain crawlers (DIP + Chain of Responsibility)
-│               ├── news.go    # Domain interfaces (NewsFetcher, NewsRSSFetcher, ...)
-│               ├── handler.go # Chain: RSS → GoQuery → Browser
-│               ├── fetcher/   # Adapters (rss, goquery, browser)
-│               ├── kr/        # Korean sources
-│               │   ├── naver/ # Naver (config, crawler, parser)
-│               │   ├── yonhap/ # Yonhap (config, crawler, parser)
-│               │   ├── daum/  # Daum (config, crawler, parser)
-│               │   └── registry.go # Assembly & registration entry point
-│               └── us/        # US sources
-│                   ├── cnn/   # CNN (config, crawler, parser)
-│                   └── registry.go # Assembly & registration entry point
 │
 ├── pkg/
 │   ├── logger/                # Structured logger (zerolog)
