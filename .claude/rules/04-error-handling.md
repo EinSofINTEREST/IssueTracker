@@ -245,57 +245,132 @@ Apply circuit breakers to:
 
 ### Structured Logging
 
-Use `github.com/rs/zerolog` for structured logging:
+Use `pkg/logger` (zerolog 기반 wrapper)로 구조화된 로깅을 수행합니다.
+로그 메시지는 **반드시 영어**로 작성합니다. (주석·문서는 한국어 허용, 로그 msg 문자열은 영어)
 
 ```go
-log.Info().
-    Str("crawler", "cnn").
-    Str("url", articleURL).
-    Int("status_code", resp.StatusCode).
-    Dur("duration", elapsed).
-    Msg("article fetched successfully")
+// Good — pkg/logger wrapper API
+log.WithFields(map[string]interface{}{
+    "crawler":     "cnn",
+    "url":         articleURL,
+    "status_code": resp.StatusCode,
+    "duration_ms": elapsed.Milliseconds(),
+}).Info("article fetched successfully")
 
-log.Error().
-    Err(err).
-    Str("crawler", "cnn").
-    Str("url", articleURL).
-    Str("error_code", "PARSE_001").
-    Msg("failed to parse article")
+log.WithFields(map[string]interface{}{
+    "crawler":    "cnn",
+    "url":        articleURL,
+    "error_code": "PARSE_001",
+}).WithError(err).Error("failed to parse article")
+
+// Bad — 로그 메시지에 한국어 사용 금지
+log.WithError(err).Error("기사 파싱 실패")
 ```
 
 ### Log Levels
 
-1. **DEBUG**: Detailed diagnostic information
-   - Request/response details
-   - Parsing steps
-   - Processing decisions
+레벨 선택 기준:
 
-2. **INFO**: General informational messages
-   - Successful operations
-   - Startup/shutdown
-   - Configuration loaded
-   - Job completed
+| Level | 사용 시점 | 예시 시나리오 |
+|-------|-----------|--------------|
+| **DEBUG** | 개발 또는 트러블슈팅 시에만 필요한 내부 상세 정보 | HTTP 요청 시작, 파싱 단계, 중복 감지, 재시도 결정 |
+| **INFO**  | 운영자가 프로덕션에서 확인하고 싶은 정상 동작 마일스톤 | Job 시작/완료, 서비스 연결 성공, Worker pool 기동, 정기 purge 완료 |
+| **WARN**  | 예상치 못했지만 gracefully 처리된 상황 — 시스템이 계속 동작 | 재시도 시도, fallback 프로토콜 전환, shutdown timeout |
+| **ERROR** | 작업 실패 — 주의가 필요하지만 다른 요청은 계속 처리 가능 | Job 처리 실패, 메시지 발행 실패, 파싱 실패 |
+| **FATAL** | 복구 불가능한 오류 — 프로세스 종료 필요 | 설정 파싱 실패, 기동 시 필수 DB 연결 불가 |
 
-3. **WARN**: Warning messages
-   - Retry attempts
-   - Degraded performance
-   - Deprecated usage
-   - Quality issues
+**빠른 판단 기준:**
+- 운영자가 알림을 받아야 하면: **ERROR** 또는 **FATAL**
+- 처리됐지만 운영자가 알아야 하면: **WARN**
+- 정상 동작 확인: **INFO**
+- 개발자 트레이싱 용: **DEBUG**
 
-4. **ERROR**: Error messages
-   - Failed operations
-   - Validation failures
-   - External service errors
-   - Data corruption
+```go
+// DEBUG — 운영 환경에서는 필터링됨
+log.WithField("url", url).Debug("starting HTTP GET request")
+log.WithField("attempt", attempt).Debug("error not retryable, skipping retry")
 
-5. **FATAL**: Critical errors requiring shutdown
-   - Configuration errors
-   - Fatal database errors
-   - Unrecoverable state
+// INFO — 정상 완료 마일스톤
+log.WithFields(map[string]interface{}{"job_id": id, "crawler": name}).Info("crawl job started")
+log.WithFields(map[string]interface{}{"deleted_count": n, "cutoff": t}).Info("raw content purge completed")
+
+// WARN — 예상 외 상황이지만 처리됨
+log.WithFields(map[string]interface{}{"attempt": a, "max_attempts": m, "delay_ms": d}).Warn("retrying after error")
+log.WithError(err).Warn("primary classifier failed, falling back to secondary protocol")
+
+// ERROR — 작업 실패
+log.WithFields(map[string]interface{}{"job_id": id, "crawler": name}).WithError(err).Error("job processing failed")
+log.WithError(err).Error("failed to send message to dlq")
+```
+
+### Field Naming Conventions
+
+모든 구조화 필드 키는 **snake_case**를 사용합니다. 아래 표에 정의된 표준 이름을 반드시 사용합니다.
+
+| Field Key        | Type     | 설명 |
+|-----------------|----------|------|
+| `crawler`       | string   | Crawler 이름 (예: `"cnn"`, `"naver"`) |
+| `source`        | string   | `SourceInfo.Name`과 동일한 소스 이름 |
+| `country`       | string   | ISO 3166-1 alpha-2 (예: `"US"`, `"KR"`) |
+| `url`           | string   | 처리 대상 URL |
+| `job_id`        | string   | CrawlJob UUID |
+| `request_id`    | string   | 인바운드 요청 추적 ID |
+| `error_code`    | string   | 에러 코드 상수 (예: `"NET_001"`, `"PARSE_001"`) |
+| `status_code`   | int      | HTTP 응답 상태 코드 |
+| `duration_ms`   | int64    | 경과 시간 (밀리초 단위) |
+| `attempt`       | int      | 현재 시도 횟수 (1-based) |
+| `max_attempts`  | int      | 최대 시도 횟수 |
+| `delay_ms`      | int64    | 재시도 backoff 대기 시간 (밀리초) |
+| `worker_count`  | int      | 워커 goroutine 수 |
+| `priority`      | int      | CrawlJob 우선순위 레벨 |
+| `topic`         | string   | Kafka 토픽 이름 |
+| `existing_id`   | string   | 중복 감지 시 기존 레코드 ID |
+| `content_hash`  | string   | 중복 감지용 SHA-256 콘텐츠 해시 |
+| `deleted_count` | int64    | 일괄 삭제된 레코드 수 |
+| `cutoff`        | string   | RFC3339 형식 purge 기준 시각 |
+| `host`          | string   | DB 호스트 |
+| `port`          | int      | DB 포트 |
+| `database`      | string   | DB 이름 |
+| `max_conns`     | int32    | 커넥션 풀 최대 크기 |
+
+**규칙:**
+- 임의의 키 이름 사용 금지 (예: `"db_name"` 대신 `"database"` 사용)
+- 시간 값은 반드시 밀리초 int64로, 키는 `duration_ms` 또는 `delay_ms`
+- 불리언 플래그는 긍정형 이름 사용 (예: `"retryable"`, `"is_duplicate"`)
+
+### Per-Component Required Fields
+
+컴포넌트별로 모든 로그 항목에 반드시 포함해야 하는 최소 필드입니다.
+
+**HTTP Client** (`internal/crawler/core/http_client.go`):
+- 모든 로그: `url`
+- 요청 완료 시: `status_code`, `duration_ms`
+- 에러 발생 시: `error_code`
+
+**Retry Logic** (`internal/crawler/core/retry.go`):
+- 재시도 시: `attempt`, `max_attempts`, `delay_ms`
+- 에러 포함: `.WithError(err)` 체이닝
+
+**Worker Pool** (`internal/crawler/worker/`):
+- Job 처리 로그: `job_id`, `crawler`
+- Job 시작/완료 로그: `job_id`, `crawler`, `url`
+- Pool 라이프사이클 로그: `priority`, `worker_count`
+- 메시지 발행 로그: `job_id`, `crawler`, `priority`, `topic`
+- DLQ/재큐잉 에러: `job_id`, `crawler`
+
+**Storage Service** (`internal/storage/service/`):
+- 중복 감지 로그: `existing_id`, `url` 또는 `content_hash`
+- 일괄 삭제 완료: `deleted_count`, `cutoff`
+
+**Database** (`internal/storage/postgres/`):
+- 연결 성공: `host`, `port`, `database`, `max_conns`
+
+**Classifier** (`internal/classifier/`):
+- fallback 전환 시: `.WithError(err)` 체이닝
 
 ### Log Context
 
-Always include relevant context:
+컴포넌트 초기화 시 scoped logger를 생성하여 반복 필드 중복을 방지합니다:
 
 ```go
 type LogContext struct {
@@ -308,30 +383,28 @@ type LogContext struct {
     JobID       string
 }
 
-// Use context to carry log fields
-func WithLogContext(ctx context.Context, lc LogContext) context.Context {
-    logger := log.With().
-        Str("request_id", lc.RequestID).
-        Str("crawler", lc.CrawlerName).
-        Str("source", lc.Source).
-        Str("country", lc.Country).
-        Logger()
-
-    return logger.WithContext(ctx)
+// pkg/logger를 사용하여 context에 필드 추가
+func buildLogger(ctx context.Context, lc LogContext) *logger.Logger {
+    return logger.FromContext(ctx).WithFields(map[string]interface{}{
+        "request_id": lc.RequestID,
+        "crawler":    lc.CrawlerName,
+        "source":     lc.Source,
+        "country":    lc.Country,
+    })
 }
 ```
 
 ### Log Storage
 
-1. **Console**: Development and debugging
-2. **File**: Structured JSON logs
-   - Rotate daily
-   - Compress old logs
-   - Retain for 30 days
-3. **Centralized**: Production logging
-   - Use Loki, Elasticsearch, or CloudWatch
-   - Enable full-text search
-   - Set up alerts on error patterns
+1. **Console**: 개발 및 디버깅 (Pretty mode)
+2. **File**: 구조화된 JSON 로그
+   - 일별 로테이션
+   - 오래된 로그 압축
+   - 30일 보존
+3. **Centralized**: 프로덕션 로깅
+   - Loki, Elasticsearch, 또는 CloudWatch 사용
+   - 전문 검색 활성화
+   - 에러 패턴 알림 설정
 
 ## Monitoring
 
