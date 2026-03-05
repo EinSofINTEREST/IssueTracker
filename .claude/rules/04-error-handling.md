@@ -382,14 +382,15 @@ type LogContext struct {
     JobID       string
 }
 
-// pkg/logger를 사용하여 context에 필드 추가
-func buildLogger(ctx context.Context, lc LogContext) *logger.Logger {
-    return logger.FromContext(ctx).WithFields(map[string]interface{}{
+// buildLogger는 scoped logger를 생성하여 context에 저장합니다.
+func buildLogger(ctx context.Context, lc LogContext) context.Context {
+    log := logger.FromContext(ctx).WithFields(map[string]interface{}{
         "request_id": lc.RequestID,
         "crawler":    lc.CrawlerName,
         "source":     lc.Source,
         "country":    lc.Country,
     })
+    return log.ToContext(ctx)
 }
 ```
 
