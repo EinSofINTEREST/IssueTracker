@@ -96,7 +96,7 @@ func Load(envFiles ...string) (DBConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return DBConfig{}, fmt.Errorf("load env file: %w", err)
+		return DBConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultDBConfig()
