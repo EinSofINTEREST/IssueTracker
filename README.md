@@ -66,11 +66,13 @@ go mod tidy
 ### Building
 
 ```bash
-# Build all binaries
+# Build all binaries (crawler, processor, issuetracker)
 make build
 
-# Or build specific binary
+# Or build individual binaries
 go build -o bin/crawler ./cmd/crawler
+go build -o bin/processor ./cmd/processor
+go build -o bin/issuetracker ./cmd/issuetracker
 ```
 
 ### Kafka Setup
@@ -100,8 +102,14 @@ make kafka-start
 # Start Kafka first
 make kafka-start
 
-# Run crawler (connects to localhost:9092, subscribes to crawl.normal)
+# Run crawler only (connects to localhost:9092, subscribes to crawl.high/normal/low)
 make run-crawler
+
+# Run validate processor only (subscribes to issuetracker.normalized)
+make run-processor
+
+# Run crawler + processor together (single process)
+make run-issuetracker
 
 # Run Kafka pipeline example (in-memory mock, no Kafka required)
 make run-kafka-pipeline
@@ -109,9 +117,19 @@ make run-kafka-pipeline
 # Run basic example
 make run-example
 
-# Run binary directly
+# Run binaries directly
 ./bin/crawler
+./bin/processor
+./bin/issuetracker
 ```
+
+**Binary summary:**
+
+| Binary | Entry Point | Description |
+|--------|-------------|-------------|
+| `bin/crawler` | `cmd/crawler/` | Crawler pool manager only |
+| `bin/processor` | `cmd/processor/` | Validate worker only |
+| `bin/issuetracker` | `cmd/issuetracker/` | Crawler + Processor combined |
 
 ### Database Setup
 
@@ -246,7 +264,11 @@ Following the [Standard Go Project Layout](https://github.com/golang-standards/p
 ```
 issuetracker/
 ├── cmd/
-│   └── crawler/               # Crawler entry point
+│   ├── crawler/               # Crawler-only entry point
+│   │   └── main.go
+│   ├── processor/             # Validate processor entry point
+│   │   └── main.go
+│   └── issuetracker/          # Crawler + Processor combined entry point
 │       └── main.go
 │
 ├── internal/
@@ -526,8 +548,10 @@ err := core.WithRetry(requestCtx, core.DefaultRetryPolicy, func() error {
 
 ```bash
 # Build & Run
-make build              # Build crawler binary → bin/crawler
-make run-crawler        # Build and run crawler
+make build              # Build all binaries → bin/crawler, bin/processor, bin/issuetracker
+make run-crawler        # Build and run crawler only
+make run-processor      # Build and run validate processor only
+make run-issuetracker   # Build and run crawler + processor combined
 make run-example        # Run basic usage example
 make run-kafka-pipeline # Run in-memory Kafka pipeline example
 
