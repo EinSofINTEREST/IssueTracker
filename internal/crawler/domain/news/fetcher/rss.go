@@ -54,7 +54,7 @@ func (f *RSSFetcher) FetchFeed(ctx context.Context, feedURL string) ([]*news.New
 		"feed_url": feedURL,
 		"total":    len(feed.Items),
 		"parsed":   len(articles),
-	}).Info("rss 피드 fetch 완료")
+	}).Info("rss feed fetched successfully")
 
 	return articles, nil
 }

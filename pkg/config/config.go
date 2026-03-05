@@ -34,7 +34,7 @@ func LoadClassifier(envFiles ...string) (ClassifierConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ClassifierConfig{}, fmt.Errorf("env 파일 로드 실패: %w", err)
+		return ClassifierConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
 	}
 
 	cfg := DefaultClassifierConfig()
@@ -96,7 +96,7 @@ func Load(envFiles ...string) (DBConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return DBConfig{}, fmt.Errorf("env 파일 로드 실패: %w", err)
+		return DBConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultDBConfig()
@@ -107,7 +107,7 @@ func Load(envFiles ...string) (DBConfig, error) {
 	if v := os.Getenv("POSTGRES_PORT"); v != "" {
 		p, err := strconv.Atoi(v)
 		if err != nil {
-			return DBConfig{}, fmt.Errorf("POSTGRES_PORT 파싱 실패 %q: %w", v, err)
+			return DBConfig{}, fmt.Errorf("parse POSTGRES_PORT %q: %w", v, err)
 		}
 		cfg.Port = p
 	}
@@ -126,21 +126,21 @@ func Load(envFiles ...string) (DBConfig, error) {
 	if v := os.Getenv("POSTGRES_MAX_CONNS"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil {
-			return DBConfig{}, fmt.Errorf("POSTGRES_MAX_CONNS 파싱 실패 %q: %w", v, err)
+			return DBConfig{}, fmt.Errorf("parse POSTGRES_MAX_CONNS %q: %w", v, err)
 		}
 		cfg.MaxConns = int32(n)
 	}
 	if v := os.Getenv("POSTGRES_MIN_CONNS"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil {
-			return DBConfig{}, fmt.Errorf("POSTGRES_MIN_CONNS 파싱 실패 %q: %w", v, err)
+			return DBConfig{}, fmt.Errorf("parse POSTGRES_MIN_CONNS %q: %w", v, err)
 		}
 		cfg.MinConns = int32(n)
 	}
 	if v := os.Getenv("POSTGRES_CONN_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return DBConfig{}, fmt.Errorf("POSTGRES_CONN_TIMEOUT 파싱 실패 %q: %w", v, err)
+			return DBConfig{}, fmt.Errorf("parse POSTGRES_CONN_TIMEOUT %q: %w", v, err)
 		}
 		cfg.ConnTimeout = d
 	}

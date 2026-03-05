@@ -74,15 +74,16 @@ func (h *RSSFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core
 		h.log.WithFields(map[string]interface{}{
 			"handler":  "rss",
 			"feed_url": feedURL,
-		}).WithError(err).Warn("rss fetch 실패, 다음 핸들러로 위임")
+		}).WithError(err).Warn("rss fetch failed, delegating to next handler")
 
 		return h.delegateToNext(ctx, job, err)
 	}
 
 	h.log.WithFields(map[string]interface{}{
 		"handler":       "rss",
+		"feed_url":      feedURL,
 		"article_count": len(articles),
-	}).Info("rss fetch 성공")
+	}).Info("rss feed fetched successfully")
 
 	return buildRSSRawContent(job, articles), nil
 }
@@ -159,7 +160,7 @@ func (h *GoQueryFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 		h.log.WithFields(map[string]interface{}{
 			"handler": "goquery",
 			"url":     job.Target.URL,
-		}).WithError(err).Warn("goquery fetch 실패, 다음 핸들러로 위임")
+		}).WithError(err).Warn("goquery fetch failed, delegating to next handler")
 
 		return h.delegateToNext(ctx, job, err)
 	}
@@ -168,11 +169,14 @@ func (h *GoQueryFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 		h.log.WithFields(map[string]interface{}{
 			"handler": "goquery",
 			"url":     job.Target.URL,
-		}).Warn("lazy loading 감지, browser로 위임")
+		}).Warn("lazy loading detected, delegating to browser handler")
 		return h.delegateToNext(ctx, job, fmt.Errorf("lazy loading content detected"))
 	}
 
-	h.log.WithField("handler", "goquery").Info("goquery fetch 성공")
+	h.log.WithFields(map[string]interface{}{
+		"handler": "goquery",
+		"url":     job.Target.URL,
+	}).Info("goquery fetch succeeded")
 	return raw, nil
 }
 
@@ -215,12 +219,15 @@ func (h *BrowserFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 		h.log.WithFields(map[string]interface{}{
 			"handler": "browser",
 			"url":     job.Target.URL,
-		}).WithError(err).Error("browser fetch 실패, 체인 소진")
+		}).WithError(err).Error("browser fetch failed, all strategies exhausted")
 
 		return nil, err
 	}
 
-	h.log.WithField("handler", "browser").Info("browser fetch 성공")
+	h.log.WithFields(map[string]interface{}{
+		"handler": "browser",
+		"url":     job.Target.URL,
+	}).Info("browser fetch succeeded")
 	return raw, nil
 }
 

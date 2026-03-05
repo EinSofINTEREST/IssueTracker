@@ -77,5 +77,5 @@ func registerCNN(registry *handler.Registry, config core.Config, repo storage.Ne
 
 	registry.Register("cnn", news.NewChainHandler(crawler, chain, parser, repo, log))
 
-	log.WithField("crawler", "cnn").Info("cnn 뉴스 크롤러 등록 완료")
+	log.WithField("crawler", "cnn").Info("cnn news crawler registered")
 }

@@ -54,7 +54,7 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.Ra
 		"html_length": len(raw.HTML),
 		"has_parser":  h.Parser != nil,
 		"has_repo":    h.Repo != nil,
-	}).Debug("DB 저장 조건 확인")
+	}).Debug("checking db save conditions")
 
 	isArticle := job.Target.Type == core.TargetTypeArticle
 	canSave := raw.HTML != "" && h.Parser != nil && h.Repo != nil
@@ -68,7 +68,7 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.Ra
 			"has_html":   raw.HTML != "",
 			"has_parser": h.Parser != nil,
 			"has_repo":   h.Repo != nil,
-		}).Warn("조건 불충족: saveArticle 건너뜀")
+		}).Warn("save conditions not met: skipping saveArticle")
 	} else {
 		// 정상적인 non-article 요청에서의 saveArticle 미실행은 debug 수준으로만 로깅
 		h.Log.WithFields(map[string]interface{}{
@@ -76,7 +76,7 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.Ra
 			"has_html":   raw.HTML != "",
 			"has_parser": h.Parser != nil,
 			"has_repo":   h.Repo != nil,
-		}).Debug("조건 불충족(정상 흐름): non-article이므로 saveArticle 건너뜀")
+		}).Debug("non-article target: skipping saveArticle")
 	}
 
 	return raw, nil
@@ -85,11 +85,11 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.Ra
 // saveArticle은 RawContent를 파싱하여 DB에 저장합니다.
 // 에러는 warn 로그로만 기록하며 호출자에게 전파하지 않습니다.
 func (h *ChainHandler) saveArticle(ctx context.Context, raw *core.RawContent) {
-	h.Log.WithField("url", raw.URL).Debug("기사 파싱 시작")
+	h.Log.WithField("url", raw.URL).Debug("parsing article")
 
 	article, err := h.Parser.ParseArticle(raw)
 	if err != nil {
-		h.Log.WithError(err).Warn("기사 파싱 실패, DB 저장 건너뜀")
+		h.Log.WithError(err).Warn("article parse failed, skipping db save")
 		return
 	}
 
@@ -97,16 +97,16 @@ func (h *ChainHandler) saveArticle(ctx context.Context, raw *core.RawContent) {
 		"title":  article.Title,
 		"author": article.Author,
 		"url":    article.URL,
-	}).Debug("기사 파싱 성공, DB 저장 시작")
+	}).Debug("article parsed successfully, saving to db")
 
 	record := ArticleToRecord(article, raw)
 
 	if err := h.Repo.Insert(ctx, record); err != nil {
-		h.Log.WithError(err).Warn("뉴스 기사 DB 저장 실패")
+		h.Log.WithError(err).Warn("failed to save news article to db")
 		return
 	}
 
-	h.Log.WithField("url", raw.URL).Debug("뉴스 기사 DB 저장 성공")
+	h.Log.WithField("url", raw.URL).Debug("news article saved to db")
 }
 
 // ArticleToRecord는 NewsArticle과 RawContent를 storage.NewsArticleRecord로 변환합니다.
