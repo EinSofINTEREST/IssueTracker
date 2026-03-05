@@ -279,8 +279,10 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 
 	if err := p.producer.Publish(ctx, msg); err != nil {
 		log.WithFields(map[string]interface{}{
-			"job_id":  job.ID,
-			"crawler": job.CrawlerName,
+			"job_id":   job.ID,
+			"crawler":  job.CrawlerName,
+			"topic":    topic,
+			"priority": job.Priority,
 		}).WithError(err).Error("failed to requeue job for retry")
 	}
 }
