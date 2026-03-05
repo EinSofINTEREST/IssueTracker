@@ -69,9 +69,9 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 	}
 
 	log.WithFields(map[string]interface{}{
-		"url":      target.URL,
-		"size":     len(html),
-		"duration": elapsed.String(),
+		"url":         target.URL,
+		"size":        len(html),
+		"duration_ms": elapsed.Milliseconds(),
 	}).Info("page rendered successfully with chromedp")
 
 	return rawContent, nil

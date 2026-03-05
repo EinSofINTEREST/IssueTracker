@@ -81,12 +81,12 @@ func main() {
 	// DB 연결 및 뉴스 기사 저장소 생성
 	dbCfg, err := config.Load()
 	if err != nil {
-		log.WithError(err).Fatal("DB 설정 로드 실패")
+		log.WithError(err).Fatal("failed to load db config")
 	}
 
 	pool, err := pgstore.NewPool(ctx, dbCfg, log)
 	if err != nil {
-		log.WithError(err).Fatal("DB 연결 실패")
+		log.WithError(err).Fatal("failed to connect to db")
 	}
 	defer pool.Close()
 

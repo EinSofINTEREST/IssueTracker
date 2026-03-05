@@ -74,7 +74,7 @@ func registerNaver(registry *handler.Registry, config core.Config, repo storage.
 
 	registry.Register("naver", news.NewChainHandler(crawler, chain, parser, repo, log))
 
-	log.WithField("crawler", "naver").Info("naver 뉴스 크롤러 등록 완료")
+	log.WithField("crawler", "naver").Info("naver news crawler registered")
 }
 
 // registerYonhap는 연합뉴스 핸들러를 조립하고 등록합니다.
@@ -105,7 +105,7 @@ func registerYonhap(registry *handler.Registry, config core.Config, repo storage
 
 	registry.Register("yonhap", news.NewChainHandler(crawler, chain, parser, repo, log))
 
-	log.WithField("crawler", "yonhap").Info("yonhap 뉴스 크롤러 등록 완료")
+	log.WithField("crawler", "yonhap").Info("yonhap news crawler registered")
 }
 
 // registerDaum는 다음 뉴스 핸들러를 조립하고 등록합니다.
@@ -153,5 +153,5 @@ func registerDaum(registry *handler.Registry, config core.Config, repo storage.N
 
 	registry.Register("daum", news.NewChainHandler(crawler, chain, parser, repo, log))
 
-	log.WithField("crawler", "daum").Info("daum 뉴스 크롤러 등록 완료")
+	log.WithField("crawler", "daum").Info("daum news crawler registered")
 }

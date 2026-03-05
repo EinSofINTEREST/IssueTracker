@@ -118,13 +118,13 @@ func (p *KafkaConsumerPool) pollMessages(ctx context.Context) {
 				return
 			}
 
-			log.WithError(err).Error("Kafka 메시지 수신 실패")
+			log.WithError(err).Error("failed to receive kafka message")
 			continue
 		}
 
 		job, err := core.UnmarshalCrawlJob(msg.Value)
 		if err != nil {
-			log.WithError(err).Error("CrawlJob 역직렬화 실패, DLQ로 전송")
+			log.WithError(err).Error("failed to unmarshal crawl job, sending to dlq")
 			p.sendToDLQ(ctx, msg, err)
 			continue
 		}
@@ -147,7 +147,7 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 			log.WithFields(map[string]interface{}{
 				"job_id":  item.job.ID,
 				"crawler": item.job.CrawlerName,
-			}).WithError(err).Error("job 처리 실패")
+			}).WithError(err).Error("job processing failed")
 		}
 	}
 }
@@ -159,7 +159,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		"job_id":  item.job.ID,
 		"crawler": item.job.CrawlerName,
 		"url":     item.job.Target.URL,
-	}).Info("crawl job 처리 시작")
+	}).Info("crawl job started")
 
 	raw, err := p.handler.Handle(ctx, item.job)
 	if err != nil {
@@ -203,7 +203,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 func (p *KafkaConsumerPool) publishRawRef(ctx context.Context, ref *core.RawContentRef, job *core.CrawlJob) error {
 	data, err := json.Marshal(ref)
 	if err != nil {
-		return fmt.Errorf("RawContentRef 직렬화 실패: %w", err)
+		return fmt.Errorf("marshal raw content ref: %w", err)
 	}
 
 	msg := queue.Message{
@@ -222,7 +222,7 @@ func (p *KafkaConsumerPool) publishRawRef(ctx context.Context, ref *core.RawCont
 
 func (p *KafkaConsumerPool) commitMessage(ctx context.Context, msg *queue.Message) error {
 	if err := p.consumer.CommitMessages(ctx, msg); err != nil {
-		return fmt.Errorf("offset commit 실패: %w", err)
+		return fmt.Errorf("commit offset: %w", err)
 	}
 
 	return nil
@@ -247,7 +247,7 @@ func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, r
 	}
 
 	if err := p.producer.Publish(ctx, dlqMsg); err != nil {
-		log.WithError(err).Error("DLQ 전송 실패")
+		log.WithError(err).Error("failed to send message to dlq")
 	}
 }
 
@@ -258,7 +258,10 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 
 	data, err := job.Marshal()
 	if err != nil {
-		log.WithError(err).Error("재큐잉을 위한 job 직렬화 실패")
+		log.WithFields(map[string]interface{}{
+			"job_id":  job.ID,
+			"crawler": job.CrawlerName,
+		}).WithError(err).Error("failed to marshal job for retry")
 		return
 	}
 
@@ -275,7 +278,10 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 	}
 
 	if err := p.producer.Publish(ctx, msg); err != nil {
-		log.WithError(err).Error("재시도 재큐잉 실패")
+		log.WithFields(map[string]interface{}{
+			"job_id":  job.ID,
+			"crawler": job.CrawlerName,
+		}).WithError(err).Error("failed to requeue job for retry")
 	}
 }
 

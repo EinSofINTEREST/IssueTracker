@@ -55,13 +55,13 @@ func (c *CNNCrawler) Initialize(_ context.Context, config core.Config) error {
 
 // Start는 크롤러를 시작합니다.
 func (c *CNNCrawler) Start(ctx context.Context) error {
-	logger.FromContext(ctx).WithField("crawler", c.Name()).Info("cnn 크롤러 시작")
+	logger.FromContext(ctx).WithField("crawler", c.Name()).Info("crawler started")
 	return nil
 }
 
 // Stop은 크롤러를 중지합니다.
 func (c *CNNCrawler) Stop(ctx context.Context) error {
-	logger.FromContext(ctx).WithField("crawler", c.Name()).Info("cnn 크롤러 중지")
+	logger.FromContext(ctx).WithField("crawler", c.Name()).Info("crawler stopped")
 	return nil
 }
 
