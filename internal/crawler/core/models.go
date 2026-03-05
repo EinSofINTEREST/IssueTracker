@@ -67,38 +67,38 @@ type RawContentRef struct {
 //   - content_meta: 확장 메타데이터 (파이프라인 업데이트)
 type Content struct {
 	// Identity
-	ID         string
-	SourceID   string
-	SourceType SourceType // "news" | "community" | "social"
-	Country    string
-	Language   string
+	ID         string     `json:"id"`
+	SourceID   string     `json:"source_id"`
+	SourceType SourceType `json:"source_type"` // "news" | "community" | "social"
+	Country    string     `json:"country"`
+	Language   string     `json:"language"`
 
 	// Content (content_bodies 테이블)
-	Title   string
-	Body    string // 상세 조회 시에만 채워짐
-	Summary string
+	Title   string `json:"title"`
+	Body    string `json:"body"` // 상세 조회 시에만 채워짐
+	Summary string `json:"summary"`
 
 	// Metadata
-	Author      string
-	PublishedAt time.Time
-	UpdatedAt   *time.Time
-	Category    string
-	Tags        []string
+	Author      string     `json:"author"`
+	PublishedAt time.Time  `json:"published_at"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
+	Category    string     `json:"category"`
+	Tags        []string   `json:"tags"`
 
 	// Technical
-	URL          string
-	CanonicalURL string
-	ImageURLs    []string // content_meta 테이블
+	URL          string   `json:"url"`
+	CanonicalURL string   `json:"canonical_url"`
+	ImageURLs    []string `json:"image_urls"` // content_meta 테이블
 
 	// Quality
-	ContentHash string
-	WordCount   int     // content_bodies 테이블
-	Reliability float32 // 신뢰도 0.0~1.0 (0.0: 미검증)
+	ContentHash string  `json:"content_hash"`
+	WordCount   int     `json:"word_count"` // content_bodies 테이블
+	Reliability float32 `json:"reliability"` // 신뢰도 0.0~1.0 (0.0: 미검증)
 
 	// Extension (content_meta 테이블)
-	Extra map[string]interface{} // 유형별 메타데이터 (JSONB)
+	Extra map[string]interface{} `json:"extra,omitempty"` // 유형별 메타데이터 (JSONB)
 
-	CreatedAt time.Time
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Config는 크롤러 설정을 나타냅니다.
