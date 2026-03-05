@@ -192,11 +192,10 @@ func WithRetry(ctx context.Context, policy RetryPolicy, fn func() error) error {
 
         lastErr = err
         // Log retry attempt
-        log.Warn().
-            Err(err).
-            Int("attempt", attempt+1).
-            Int("max_attempts", policy.MaxAttempts).
-            Msg("retrying after error")
+        log.WithFields(map[string]interface{}{
+            "attempt":      attempt + 1,
+            "max_attempts": policy.MaxAttempts,
+        }).WithError(err).Warn("retrying after error")
     }
 
     return fmt.Errorf("max retries exceeded: %w", lastErr)
