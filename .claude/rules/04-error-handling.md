@@ -333,7 +333,8 @@ log.WithError(err).Error("failed to send message to dlq")
 | `max_conns`     | int32    | 커넥션 풀 최대 크기 |
 
 **규칙:**
-- 임의의 키 이름 사용 금지 (예: `"db_name"` 대신 `"database"` 사용)
+- 공통 표준 키 테이블에 정의된 키를 우선 사용하고, 표에 없는 컴포넌트 특화 키는 snake_case로 추가 가능 (예: `handler`, `feed_url`, `article_count`, `html_length`)
+- 이미 정의된 키와 의미가 중복되는 임의 키 생성 금지 (예: `"db_name"` 대신 `"database"` 사용)
 - 시간 값은 반드시 밀리초 int64로, 키는 `duration_ms` 또는 `delay_ms`
 - 불리언 플래그는 긍정형 이름 사용 (예: `"retryable"`, `"is_duplicate"`)
 
