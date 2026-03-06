@@ -14,6 +14,7 @@ import (
 	crawlerWorker "issuetracker/internal/crawler/worker"
 	"issuetracker/internal/processor/validate"
 	pgstore "issuetracker/internal/storage/postgres"
+	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -72,13 +73,16 @@ func main() {
 	kr.Register(registry, core.DefaultConfig(), newsRepo, log)
 	us.Register(registry, core.DefaultConfig(), newsRepo, log)
 
+	contentRepo := pgstore.NewContentRepository(pool, log)
+	contentSvc := service.NewContentService(contentRepo, log)
+
 	managerCfg := crawlerWorker.ManagerConfig{
 		High:   crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
 		Normal: crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
 		Low:    crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
 	}
 
-	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, resolver, log)
+	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, contentSvc, resolver, log)
 	manager.Start(ctx)
 
 	log.WithFields(map[string]interface{}{
@@ -105,7 +109,7 @@ func main() {
 	validateProducer := queue.NewProducer(validateKafkaCfg)
 	defer validateProducer.Close()
 
-	validateWorker := validate.NewWorker(validateConsumer, validateProducer, validateWorkerCount, validateCfg)
+	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, validateWorkerCount, validateCfg)
 	validateWorker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{

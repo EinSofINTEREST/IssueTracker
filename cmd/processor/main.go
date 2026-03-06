@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/validate"
+	pgstore "issuetracker/internal/storage/postgres"
+	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -45,7 +47,22 @@ func main() {
 		"group_id": kafkaCfg.GroupID,
 	}).Info("kafka configuration loaded")
 
-	// ── 3. Consumer / Producer 생성 ───────────────────────────────────────────
+	// ── 3. DB 연결 및 ContentService 생성 ────────────────────────────────────
+	dbCfg, err := config.Load()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load db config")
+	}
+
+	pool, err := pgstore.NewPool(ctx, dbCfg, log)
+	if err != nil {
+		log.WithError(err).Fatal("failed to connect to db")
+	}
+	defer pool.Close()
+
+	contentRepo := pgstore.NewContentRepository(pool, log)
+	contentSvc := service.NewContentService(contentRepo, log)
+
+	// ── 4. Consumer / Producer 생성 ───────────────────────────────────────────
 	// Consumer: issuetracker.normalized 구독
 	// Producer: issuetracker.validated, issuetracker.dlq 발행
 	consumer := queue.NewConsumer(kafkaCfg, queue.TopicNormalized)
@@ -54,8 +71,8 @@ func main() {
 	producer := queue.NewProducer(kafkaCfg)
 	defer producer.Close()
 
-	// ── 4. Validate Worker 시작 ───────────────────────────────────────────────
-	worker := validate.NewWorker(consumer, producer, validateWorkerCount, validateCfg)
+	// ── 5. Validate Worker 시작 ───────────────────────────────────────────────
+	worker := validate.NewWorker(consumer, producer, contentSvc, validateWorkerCount, validateCfg)
 	worker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{
