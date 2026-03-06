@@ -248,10 +248,14 @@ func saveContentTx(ctx context.Context, tx pgx.Tx, c *core.Content) error {
 	if imageURLs == nil {
 		imageURLs = []string{}
 	}
+	tags := c.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 
 	_, err := tx.Exec(ctx, upsertContentCTE,
 		c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
-		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, c.Tags,
+		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, tags,
 		c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
 		c.Body, c.Summary, c.WordCount,
 		imageURLs, extraJSON,
@@ -270,9 +274,13 @@ func queueContentBatch(batch *pgx.Batch, c *core.Content) {
 	if imageURLs == nil {
 		imageURLs = []string{}
 	}
+	tags := c.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 	batch.Queue(upsertContentCTE,
 		c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
-		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, c.Tags,
+		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, tags,
 		c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
 		c.Body, c.Summary, c.WordCount,
 		imageURLs, mustMarshalJSON(c.Extra),
