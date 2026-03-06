@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -28,11 +29,13 @@ type JobHandler interface {
 // KafkaConsumerPool은 Kafka consumer group 기반 crawler worker pool입니다.
 //
 // Kafka 토픽에서 CrawlJob 메시지를 읽어 내부 채널을 통해 worker goroutine에 분배합니다.
-// 각 job의 처리 결과(Content)는 issuetracker.normalized 토픽에 ProcessingMessage로 발행됩니다.
+// 각 job의 처리 결과(Content)는 contents DB 테이블에 저장된 뒤 ContentRef만
+// issuetracker.normalized 토픽에 발행됩니다.
 type KafkaConsumerPool struct {
 	consumer    queue.Consumer
 	producer    queue.Producer
 	handler     JobHandler
+	contentSvc  service.ContentService
 	workerCount int
 	jobs        chan jobItem
 	wg          sync.WaitGroup
@@ -46,18 +49,21 @@ type jobItem struct {
 // NewKafkaConsumerPool은 새로운 KafkaConsumerPool을 생성합니다.
 //
 // consumer에서 메시지를 읽어 handler로 처리하고,
-// 결과 Content를 issuetracker.normalized 토픽에 발행합니다.
+// 결과 Content를 contents DB에 저장한 뒤 ContentRef를
+// issuetracker.normalized 토픽에 발행합니다.
 // workerCount는 동시에 실행되는 처리 goroutine 수를 결정합니다.
 func NewKafkaConsumerPool(
 	consumer queue.Consumer,
 	producer queue.Producer,
 	handler JobHandler,
+	contentSvc service.ContentService,
 	workerCount int,
 ) *KafkaConsumerPool {
 	return &KafkaConsumerPool{
-		consumer:    consumer,
-		producer:    producer,
-		handler:     handler,
+		consumer:   consumer,
+		producer:   producer,
+		handler:    handler,
+		contentSvc: contentSvc,
 		workerCount: workerCount,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs: make(chan jobItem, workerCount*2),
@@ -178,18 +184,38 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 	return p.commitMessage(ctx, item.msg)
 }
 
+// publishNormalized는 Content를 contents DB에 저장한 뒤 ContentRef를
+// issuetracker.normalized 토픽에 ProcessingMessage로 발행합니다.
+// 다운스트림 validator는 ref.ID로 DB에서 전체 데이터를 조회합니다.
 func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core.Content, job *core.CrawlJob) error {
-	data, err := json.Marshal(content)
+	storedID, _, err := p.contentSvc.Store(ctx, content)
 	if err != nil {
-		return fmt.Errorf("marshal content: %w", err)
+		return fmt.Errorf("store content for job %s: %w", job.ID, err)
+	}
+
+	ref := core.ContentRef{
+		ID:      storedID,
+		URL:     content.URL,
+		Country: content.Country,
+		SourceInfo: core.SourceInfo{
+			Country:  content.Country,
+			Type:     content.SourceType,
+			Name:     content.SourceID,
+			Language: content.Language,
+		},
+	}
+
+	refData, err := json.Marshal(ref)
+	if err != nil {
+		return fmt.Errorf("marshal content ref: %w", err)
 	}
 
 	pm := core.ProcessingMessage{
-		ID:        content.ID,
+		ID:        storedID,
 		Timestamp: time.Now(),
 		Country:   content.Country,
 		Stage:     "normalized",
-		Data:      data,
+		Data:      refData,
 		Metadata: map[string]interface{}{
 			"job_id":  job.ID,
 			"crawler": job.CrawlerName,

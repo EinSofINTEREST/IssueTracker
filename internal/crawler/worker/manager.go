@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -60,14 +61,15 @@ func NewPoolManager(
 	cfg ManagerConfig,
 	producer queue.Producer,
 	handler JobHandler,
+	contentSvc service.ContentService,
 	resolver PriorityResolver,
 	log *logger.Logger,
 ) *PoolManager {
 	return &PoolManager{
 		pools: map[core.Priority]*KafkaConsumerPool{
-			core.PriorityHigh:   NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, cfg.High.WorkerCount),
-			core.PriorityNormal: NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, cfg.Normal.WorkerCount),
-			core.PriorityLow:    NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, cfg.Low.WorkerCount),
+			core.PriorityHigh:   NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, contentSvc, cfg.High.WorkerCount),
+			core.PriorityNormal: NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, contentSvc, cfg.Normal.WorkerCount),
+			core.PriorityLow:    NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, contentSvc, cfg.Low.WorkerCount),
 		},
 		producer: producer,
 		resolver: resolver,
