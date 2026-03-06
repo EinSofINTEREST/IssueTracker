@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -12,6 +13,16 @@ import (
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
+)
+
+const (
+	// DefaultMaxRetries is the default maximum retry count used when the
+	// "max-retries" header is absent or invalid.
+	// 메시지 헤더에 max-retries가 없거나 유효하지 않을 때 사용하는 기본 최대 재시도 횟수입니다.
+	DefaultMaxRetries = 3
+
+	// headerMaxRetries는 최대 재시도 횟수를 제어하는 Kafka 메시지 헤더 키입니다.
+	headerMaxRetries = "max-retries"
 )
 
 // Worker는 issuetracker.normalized 토픽을 소비하여 검증 후 issuetracker.validated에 발행합니다.
@@ -300,8 +311,19 @@ func (w *Worker) commit(ctx context.Context, msg *queue.Message) error {
 }
 
 // maxRetries는 메시지 헤더에서 최대 재시도 횟수를 결정합니다.
-// 헤더에 없으면 기본값 3을 사용합니다.
+// "max-retries" 헤더가 양의 정수로 설정되어 있으면 그 값을 사용하고,
+// 헤더가 없거나 유효하지 않으면 기본값 DefaultMaxRetries를 사용합니다.
 func maxRetries(msg *queue.Message) int {
-	_ = msg // 향후 헤더 기반 설정으로 확장 가능
-	return 3
+	if msg.Headers == nil {
+		return DefaultMaxRetries
+	}
+	v, ok := msg.Headers[headerMaxRetries]
+	if !ok {
+		return DefaultMaxRetries
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return DefaultMaxRetries
+	}
+	return n
 }

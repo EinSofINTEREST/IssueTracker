@@ -106,6 +106,11 @@ func (m *mockContentService) Delete(ctx context.Context, id string) error {
 
 // makeProcessingMessage는 ContentRef를 Data로 갖는 ProcessingMessage를 만들어 반환합니다.
 func makeProcessingMessage(content *core.Content, retryCount int) *queue.Message {
+	return makeProcessingMessageWithHeaders(content, retryCount, nil)
+}
+
+// makeProcessingMessageWithHeaders는 헤더를 포함한 ProcessingMessage를 만들어 반환합니다.
+func makeProcessingMessageWithHeaders(content *core.Content, retryCount int, headers map[string]string) *queue.Message {
 	ref := core.ContentRef{
 		ID:      content.ID,
 		URL:     content.URL,
@@ -128,9 +133,10 @@ func makeProcessingMessage(content *core.Content, retryCount int) *queue.Message
 	}
 	value, _ := json.Marshal(pm)
 	return &queue.Message{
-		Topic: queue.TopicNormalized,
-		Key:   []byte(content.ID),
-		Value: value,
+		Topic:   queue.TopicNormalized,
+		Key:     []byte(content.ID),
+		Value:   value,
+		Headers: headers,
 	}
 }
 
@@ -218,7 +224,7 @@ func TestValidateWorker_InvalidContent_SendsToDLQ(t *testing.T) {
 	content.Title = "x"         // 너무 짧음
 	content.Body = "short body" // 너무 짧음
 	content.PublishedAt = time.Time{}
-	msg := makeProcessingMessage(content, 3) // retry count >= maxRetries(3)
+	msg := makeProcessingMessage(content, validate.DefaultMaxRetries) // retry count >= maxRetries(DefaultMaxRetries)
 
 	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
 	contentSvc.On("Delete", mock.Anything, content.ID).Return(nil)
@@ -414,4 +420,95 @@ func TestValidateWorker_LargeBody_ValidatesCorrectly(t *testing.T) {
 
 	producer.AssertExpectations(t)
 	contentSvc.AssertExpectations(t)
+}
+
+func TestValidateWorker_HeaderMaxRetries_SendsToDLQAtHeaderLimit(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	content.Title = "x"
+	content.Body = "short body"
+	content.PublishedAt = time.Time{}
+	// max-retries 헤더를 1로 설정 — retryCount=1이면 DLQ로 전송되어야 함
+	msg := makeProcessingMessageWithHeaders(content, 1, map[string]string{
+		"max-retries": "1",
+	})
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	contentSvc.On("Delete", mock.Anything, content.ID).Return(nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorker(t, consumer, w, msg)
+
+	producer.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
+	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicNormalized
+	}))
+}
+
+func TestValidateWorker_HeaderMaxRetries_RetriesBeforeHeaderLimit(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	content.Title = "x"
+	content.Body = "short body"
+	content.PublishedAt = time.Time{}
+	// max-retries 헤더를 5로 설정 — retryCount=1이면 아직 재큐잉해야 함
+	msg := makeProcessingMessageWithHeaders(content, 1, map[string]string{
+		"max-retries": "5",
+	})
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicNormalized
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorker(t, consumer, w, msg)
+
+	producer.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
+	contentSvc.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+}
+
+func TestValidateWorker_InvalidHeaderMaxRetries_UsesDefault(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	content.Title = "x"
+	content.Body = "short body"
+	content.PublishedAt = time.Time{}
+	// 유효하지 않은 max-retries 헤더 → 기본값 DefaultMaxRetries 사용
+	// retryCount=1 < DefaultMaxRetries(3) 이므로 재큐잉해야 함
+	msg := makeProcessingMessageWithHeaders(content, 1, map[string]string{
+		"max-retries": "invalid",
+	})
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicNormalized
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorker(t, consumer, w, msg)
+
+	producer.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
+	contentSvc.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
 }
