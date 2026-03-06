@@ -60,10 +60,10 @@ func NewKafkaConsumerPool(
 	workerCount int,
 ) *KafkaConsumerPool {
 	return &KafkaConsumerPool{
-		consumer:   consumer,
-		producer:   producer,
-		handler:    handler,
-		contentSvc: contentSvc,
+		consumer:    consumer,
+		producer:    producer,
+		handler:     handler,
+		contentSvc:  contentSvc,
 		workerCount: workerCount,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs: make(chan jobItem, workerCount*2),

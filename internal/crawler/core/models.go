@@ -102,7 +102,7 @@ type Content struct {
 
 	// Quality
 	ContentHash string  `json:"content_hash"`
-	WordCount   int     `json:"word_count"` // content_bodies 테이블
+	WordCount   int     `json:"word_count"`  // content_bodies 테이블
 	Reliability float32 `json:"reliability"` // 신뢰도 0.0~1.0 (0.0: 미검증)
 
 	// Extension (content_meta 테이블)

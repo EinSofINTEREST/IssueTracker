@@ -39,7 +39,7 @@ type ValidationError struct {
 // ValidationResult holds the outcome of content validation.
 type ValidationResult struct {
 	IsValid      bool
-	QualityScore float32          // 0.0~1.0; 0.5 미만이면 DLQ로 라우팅
+	QualityScore float32 // 0.0~1.0; 0.5 미만이면 DLQ로 라우팅
 	Errors       []ValidationError
 }
 
