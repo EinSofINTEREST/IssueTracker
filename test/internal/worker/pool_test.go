@@ -12,6 +12,8 @@ import (
 
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/crawler/worker"
+	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/queue"
 )
 
@@ -66,6 +68,46 @@ func (m *mockJobHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*cor
 	return args.Get(0).([]*core.Content), args.Error(1)
 }
 
+type mockContentService struct{ mock.Mock }
+
+func (m *mockContentService) Store(ctx context.Context, content *core.Content) (string, bool, error) {
+	args := m.Called(ctx, content)
+	return args.String(0), args.Bool(1), args.Error(2)
+}
+
+func (m *mockContentService) StoreBatch(ctx context.Context, contents []*core.Content) ([]service.StoreResult, error) {
+	args := m.Called(ctx, contents)
+	return args.Get(0).([]service.StoreResult), args.Error(1)
+}
+
+func (m *mockContentService) GetByID(ctx context.Context, id string) (*core.Content, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*core.Content), args.Error(1)
+}
+
+func (m *mockContentService) ListByCountry(ctx context.Context, country string, filter storage.ContentFilter) ([]*core.Content, error) {
+	args := m.Called(ctx, country, filter)
+	return args.Get(0).([]*core.Content), args.Error(1)
+}
+
+func (m *mockContentService) Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
+	args := m.Called(ctx, filter)
+	return args.Get(0).([]*core.Content), args.Error(1)
+}
+
+func (m *mockContentService) CountByCountry(ctx context.Context, days int) (map[string]int64, error) {
+	args := m.Called(ctx, days)
+	return args.Get(0).(map[string]int64), args.Error(1)
+}
+
+func (m *mockContentService) Delete(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 헬퍼
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,17 +124,17 @@ func newTestJob() *core.CrawlJob {
 
 func newTestContent() *core.Content {
 	return &core.Content{
-		ID:          "cnt-abc123",
-		SourceID:    "test-source",
-		SourceType:  core.SourceTypeNews,
-		Country:     "US",
-		Language:    "en",
-		Title:       "Test Article",
-		Body:        "This is test body content for the article.",
-		URL:         "https://example.com/article",
+		ID:           "cnt-abc123",
+		SourceID:     "test-source",
+		SourceType:   core.SourceTypeNews,
+		Country:      "US",
+		Language:     "en",
+		Title:        "Test Article",
+		Body:         "This is test body content for the article.",
+		URL:          "https://example.com/article",
 		CanonicalURL: "https://example.com/article",
-		PublishedAt: time.Now(),
-		WordCount:   8,
+		PublishedAt:  time.Now(),
+		WordCount:    8,
 	}
 }
 
@@ -108,22 +150,18 @@ func marshaledJobMsg(t *testing.T, job *core.CrawlJob) *queue.Message {
 }
 
 // runPool은 pool을 구동하고 단일 메시지를 처리한 뒤 종료합니다.
-// 두 번째 FetchMessage 호출 시 ctx를 cancel하여 pollMessages가 깨끗이 종료되도록 합니다.
 func runPool(t *testing.T, consumer *mockConsumer, pool *worker.KafkaConsumerPool, msg *queue.Message) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	consumer.On("FetchMessage", mock.Anything).Return(msg, nil).Once()
-	// 두 번째 호출에서 ctx를 cancel → pollMessages가 ctx.Err() != nil로 정상 종료
 	consumer.On("FetchMessage", mock.Anything).
 		Run(func(_ mock.Arguments) { cancel() }).
 		Return(nil, context.Canceled)
 	consumer.On("Close").Return(nil)
 
 	pool.Start(ctx)
-
-	// pollMessages가 ctx cancel을 감지하고 종료할 때까지 대기.
 	<-ctx.Done()
 
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -136,21 +174,22 @@ func runPool(t *testing.T, consumer *mockConsumer, pool *worker.KafkaConsumerPoo
 // ─────────────────────────────────────────────────────────────────────────────
 
 // TestKafkaConsumerPool_ProcessJob_PublishesToNormalized는
-// 정상 흐름에서 Content를 ProcessingMessage로 래핑하여 TopicNormalized에 발행하는지 검증합니다.
+// 정상 흐름에서 ContentRef를 ProcessingMessage로 래핑하여 TopicNormalized에 발행하는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_PublishesToNormalized(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
 	content := newTestContent()
 	msg := marshaledJobMsg(t, job)
 
 	handler.On("Handle", mock.Anything, job).Return([]*core.Content{content}, nil)
+	contentSvc.On("Store", mock.Anything, content).Return(content.ID, false, nil)
 
-	// ProcessingMessage가 TopicNormalized에 발행되는지 확인
 	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
 		if m.Topic != queue.TopicNormalized {
 			return false
@@ -167,26 +206,32 @@ func TestKafkaConsumerPool_ProcessJob_PublishesToNormalized(t *testing.T) {
 	runPool(t, consumer, pool, msg)
 
 	handler.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
 	producer.AssertExpectations(t)
 }
 
 // TestKafkaConsumerPool_ProcessJob_MultipleContents_PublishesAll는
-// handler가 여러 Content(RSS 등)를 반환하면 모두 발행하는지 검증합니다.
+// handler가 여러 Content(RSS 등)를 반환하면 모두 저장하고 발행하는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_MultipleContents_PublishesAll(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
 	c1 := newTestContent()
+	c1.ID = "cnt-001"
 	c1.URL = "https://example.com/article/1"
 	c2 := newTestContent()
+	c2.ID = "cnt-002"
 	c2.URL = "https://example.com/article/2"
 	msg := marshaledJobMsg(t, job)
 
 	handler.On("Handle", mock.Anything, job).Return([]*core.Content{c1, c2}, nil)
+	contentSvc.On("Store", mock.Anything, c1).Return(c1.ID, false, nil)
+	contentSvc.On("Store", mock.Anything, c2).Return(c2.ID, false, nil)
 
 	publishCount := 0
 	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
@@ -199,27 +244,29 @@ func TestKafkaConsumerPool_ProcessJob_MultipleContents_PublishesAll(t *testing.T
 
 	assert.Equal(t, 2, publishCount, "두 Content 모두 발행되어야 합니다")
 	handler.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
 }
 
 // TestKafkaConsumerPool_ProcessJob_EmptyContents_CommitsOnly는
-// handler가 nil을 반환할 때 Publish 없이 commit만 수행하는지 검증합니다.
+// handler가 nil을 반환할 때 Store/Publish 없이 commit만 수행하는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_EmptyContents_CommitsOnly(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
 	msg := marshaledJobMsg(t, job)
 
-	// handler가 nil 반환 (처리할 내용 없음)
 	handler.On("Handle", mock.Anything, job).Return(nil, nil)
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
 	runPool(t, consumer, pool, msg)
 
 	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
+	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
 }
 
@@ -229,8 +276,9 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
 	job.RetryCount = job.MaxRetries // 이미 최대 재시도 도달
@@ -238,7 +286,6 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ(t *testing.T) {
 
 	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("fetch failed"))
 
-	// DLQ 발행 확인
 	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
 		return m.Topic == queue.TopicDLQ
 	})).Return(nil)
@@ -246,22 +293,25 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ(t *testing.T) {
 	runPool(t, consumer, pool, msg)
 
 	producer.AssertExpectations(t)
+	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 }
 
-// TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentBody는
-// 발행된 ProcessingMessage의 Data 필드에 Content.Body가 포함되는지 검증합니다.
-func TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentBody(t *testing.T) {
+// TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef는
+// 발행된 ProcessingMessage의 Data 필드에 ContentRef가 담기는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
 	content := newTestContent()
 	msg := marshaledJobMsg(t, job)
 
 	handler.On("Handle", mock.Anything, job).Return([]*core.Content{content}, nil)
+	contentSvc.On("Store", mock.Anything, content).Return(content.ID, false, nil)
 
 	var capturedMsg queue.Message
 	producer.On("Publish", mock.Anything, mock.Anything).
@@ -273,13 +323,13 @@ func TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentBody(t *testing
 
 	runPool(t, consumer, pool, msg)
 
-	// ProcessingMessage → Content 역직렬화 검증
 	var pm core.ProcessingMessage
 	assert.NoError(t, json.Unmarshal(capturedMsg.Value, &pm))
 	assert.Equal(t, "normalized", pm.Stage)
 
-	var decoded core.Content
-	assert.NoError(t, json.Unmarshal(pm.Data, &decoded))
-	assert.Equal(t, content.Body, decoded.Body)
-	assert.Equal(t, content.Country, decoded.Country)
+	var ref core.ContentRef
+	assert.NoError(t, json.Unmarshal(pm.Data, &ref))
+	assert.Equal(t, content.ID, ref.ID)
+	assert.Equal(t, content.URL, ref.URL)
+	assert.Equal(t, content.Country, ref.Country)
 }
