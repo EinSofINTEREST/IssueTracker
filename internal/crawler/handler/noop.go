@@ -13,7 +13,7 @@ type noopHandler struct {
 	log *logger.Logger
 }
 
-func (h *noopHandler) Handle(_ context.Context, job *core.CrawlJob) (*core.RawContent, error) {
+func (h *noopHandler) Handle(_ context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	h.log.WithFields(map[string]interface{}{
 		"job_id":  job.ID,
 		"crawler": job.CrawlerName,

@@ -4,22 +4,22 @@ import (
 	"context"
 
 	"issuetracker/internal/crawler/core"
+	newshandler "issuetracker/internal/crawler/domain/news/handler"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 )
 
 // ChainHandler는 NewsHandler 체인과 DB 저장을 결합한 handler.Handler 어댑터입니다.
 // worker.KafkaConsumerPool이 요구하는 handler.Handler 인터페이스를 구현하며,
-// TargetTypeArticle 처리 후 파싱 → DB 저장을 자동으로 수행합니다.
+// 크롤링 및 파싱 결과를 []*core.Content로 반환합니다.
+// RSS 피드는 여러 Content를 반환하고, 기사 페이지는 단일 Content를 반환합니다.
 //
-// ChainHandler adapts a NewsHandler chain to the handler.Handler interface
-// required by worker.KafkaConsumerPool. After fetching, it parses and
-// persists articles when all conditions are met (article target, HTML present,
-// parser and repo non-nil).
+// ChainHandler adapts a NewsHandler chain to the handler.Handler interface.
+// RSS feeds yield multiple Content items; HTML article pages yield one.
 type ChainHandler struct {
 	Crawler NewsCrawler
 	Chain   NewsHandler
-	Parser  NewsArticleParser             // nil 허용: 파서 없으면 DB 저장 건너뜀
+	Parser  NewsArticleParser             // nil 허용: 파서 없으면 파싱 건너뜀
 	Repo    storage.NewsArticleRepository // nil 허용: repo 없으면 DB 저장 건너뜀
 	Log     *logger.Logger
 }
@@ -41,97 +41,57 @@ func NewChainHandler(
 	}
 }
 
-// Handle은 CrawlJob을 chain을 통해 처리하고, 기사 조건 충족 시 DB에 저장합니다.
-func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
+// Handle은 CrawlJob을 chain을 통해 처리하고 파싱된 Content(s)를 반환합니다.
+// RSS 피드는 newshandler.ConvertRSSArticles로 다건 변환합니다.
+// HTML 기사 페이지는 파싱 후 newshandler.ConvertArticle로 단건 변환하며,
+// Repo가 설정된 경우 DB에도 저장합니다.
+func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	raw, err := h.Chain.Handle(ctx, job)
 	if err != nil {
 		return nil, err
 	}
 
-	h.Log.WithFields(map[string]interface{}{
-		"target_type": string(job.Target.Type),
-		"has_html":    raw.HTML != "",
-		"html_length": len(raw.HTML),
-		"has_parser":  h.Parser != nil,
-		"has_repo":    h.Repo != nil,
-	}).Debug("checking db save conditions")
+	// RSS result: fetch_strategy가 "rss"이면 newshandler가 metadata에서 기사 목록 변환
+	if strategy, ok := raw.Metadata["fetch_strategy"].(string); ok && strategy == "rss" {
+		return newshandler.ConvertRSSArticles(raw), nil
+	}
 
+	// HTML article result: 기사 페이지에서 단일 Content 파싱
 	isArticle := job.Target.Type == core.TargetTypeArticle
-	canSave := raw.HTML != "" && h.Parser != nil && h.Repo != nil
+	canParse := raw.HTML != "" && h.Parser != nil
 
-	if isArticle && canSave {
-		h.saveArticle(ctx, raw)
-	} else if isArticle {
-		// 기사(target_type=article)인데 저장 조건을 충족하지 못한 경우만 warn으로 로깅
+	if !isArticle || !canParse {
 		h.Log.WithFields(map[string]interface{}{
 			"is_article": isArticle,
 			"has_html":   raw.HTML != "",
 			"has_parser": h.Parser != nil,
-			"has_repo":   h.Repo != nil,
-		}).Warn("save conditions not met: skipping saveArticle")
-	} else {
-		// 정상적인 non-article 요청에서의 saveArticle 미실행은 debug 수준으로만 로깅
-		h.Log.WithFields(map[string]interface{}{
-			"is_article": isArticle,
-			"has_html":   raw.HTML != "",
-			"has_parser": h.Parser != nil,
-			"has_repo":   h.Repo != nil,
-		}).Debug("non-article target: skipping saveArticle")
+		}).Debug("skipping parse: conditions not met")
+		return nil, nil
 	}
 
-	return raw, nil
-}
-
-// saveArticle은 RawContent를 파싱하여 DB에 저장합니다.
-// 에러는 warn 로그로만 기록하며 호출자에게 전파하지 않습니다.
-func (h *ChainHandler) saveArticle(ctx context.Context, raw *core.RawContent) {
-	h.Log.WithField("url", raw.URL).Debug("parsing article")
-
-	article, err := h.Parser.ParseArticle(raw)
+	parsed, err := h.Parser.ParseArticle(raw)
 	if err != nil {
-		h.Log.WithError(err).Warn("article parse failed, skipping db save")
-		return
+		h.Log.WithError(err).Warn("article parse failed, skipping")
+		return nil, nil
 	}
 
-	h.Log.WithFields(map[string]interface{}{
-		"title":  article.Title,
-		"author": article.Author,
-		"url":    article.URL,
-	}).Debug("article parsed successfully, saving to db")
-
-	record := ArticleToRecord(article, raw)
-
-	if err := h.Repo.Insert(ctx, record); err != nil {
-		h.Log.WithError(err).Warn("failed to save news article to db")
-		return
+	article := newshandler.Article{
+		Title:       parsed.Title,
+		Body:        parsed.Body,
+		Summary:     parsed.Summary,
+		Author:      parsed.Author,
+		URL:         parsed.URL,
+		Category:    parsed.Category,
+		Tags:        parsed.Tags,
+		ImageURLs:   parsed.ImageURLs,
+		PublishedAt: parsed.PublishedAt,
 	}
 
-	h.Log.WithField("url", raw.URL).Debug("news article saved to db")
-}
-
-// ArticleToRecord는 NewsArticle과 RawContent를 storage.NewsArticleRecord로 변환합니다.
-// URL은 chain이 확정한 raw.URL을 우선 사용합니다.
-func ArticleToRecord(article *NewsArticle, raw *core.RawContent) *storage.NewsArticleRecord {
-	record := &storage.NewsArticleRecord{
-		SourceName: raw.SourceInfo.Name,
-		SourceType: string(raw.SourceInfo.Type),
-		Country:    raw.SourceInfo.Country,
-		Language:   raw.SourceInfo.Language,
-		URL:        raw.URL,
-		Title:      article.Title,
-		Body:       article.Body,
-		Summary:    article.Summary,
-		Author:     article.Author,
-		Category:   article.Category,
-		Tags:       article.Tags,
-		ImageURLs:  article.ImageURLs,
-		FetchedAt:  raw.FetchedAt,
+	if h.Repo != nil {
+		if err := h.Repo.Insert(ctx, newshandler.ArticleToRecord(article, raw)); err != nil {
+			h.Log.WithError(err).Warn("failed to save news article to db")
+		}
 	}
 
-	if !article.PublishedAt.IsZero() {
-		t := article.PublishedAt
-		record.PublishedAt = &t
-	}
-
-	return record
+	return []*core.Content{newshandler.ConvertArticle(article, raw)}, nil
 }

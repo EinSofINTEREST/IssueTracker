@@ -17,10 +17,12 @@ import (
 
 // Handler는 단일 CrawlJob을 처리하는 인터페이스입니다.
 //
-// Handler processes a single CrawlJob and returns fetched raw content.
+// Handler processes a single CrawlJob, fetches and parses the content,
+// and returns normalized Content(s) ready for the processing pipeline.
+// RSS feeds may return multiple Content items; HTML articles return one.
 // Implementations must be safe for concurrent use by multiple goroutines.
 type Handler interface {
-	Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error)
+	Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error)
 }
 
 // Registry는 crawler name → Handler 매핑을 관리합니다.
@@ -58,7 +60,7 @@ func (r *Registry) Register(name string, h Handler) {
 //
 // Handle dispatches the job to the registered handler for job.CrawlerName.
 // Falls back to noop if no handler is registered.
-func (r *Registry) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
+func (r *Registry) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	h, ok := r.handlers[job.CrawlerName]
 	if !ok {
 		r.log.WithField("crawler", job.CrawlerName).Warn("no handler registered, using noop")
