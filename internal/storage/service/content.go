@@ -42,6 +42,11 @@ type ContentService interface {
 
 	// CountByCountry는 최근 N일간 국가별 content 수를 반환합니다.
 	CountByCountry(ctx context.Context, days int) (map[string]int64, error)
+
+	// Delete는 ID로 content를 삭제합니다.
+	// ON DELETE CASCADE로 content_bodies, content_meta도 함께 삭제됩니다.
+	// 존재하지 않아도 에러를 반환하지 않습니다.
+	Delete(ctx context.Context, id string) error
 }
 
 // contentService는 ContentService의 구현체입니다.
@@ -136,6 +141,11 @@ func (s *contentService) Search(ctx context.Context, filter storage.ContentFilte
 	}
 
 	return contents, nil
+}
+
+// Delete는 ID로 content를 삭제합니다.
+func (s *contentService) Delete(ctx context.Context, id string) error {
+	return s.repo.Delete(ctx, id)
 }
 
 // CountByCountry는 최근 N일간 국가별 content 수를 반환합니다.
