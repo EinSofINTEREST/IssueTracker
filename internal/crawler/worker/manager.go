@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -25,21 +24,11 @@ type PoolConfig struct {
 
 // ManagerConfig는 PoolManager 생성에 필요한 설정입니다.
 //
-// ManagerConfig aggregates the three per-priority pool configs and the
-// raw topic routing function.
+// ManagerConfig aggregates the three per-priority pool configs.
 type ManagerConfig struct {
 	High   PoolConfig
 	Normal PoolConfig
 	Low    PoolConfig
-
-	// RawTopicFn은 크롤링 결과를 publish할 raw 토픽을 국가 코드 기반으로 결정합니다.
-	// nil이면 DefaultRawTopicFunc(US→raw.us, KR→raw.kr)를 사용합니다.
-	RawTopicFn RawTopicFunc
-
-	// RawContentSvc는 크롤링 결과를 Postgres에 저장하는 서비스입니다.
-	// Kafka 메시지 크기 제한(1MB)을 초과하는 대용량 HTML을 오프로딩하며,
-	// raw 토픽에는 ID만 포함된 RawContentRef를 발행합니다.
-	RawContentSvc service.RawContentService
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -67,7 +56,6 @@ type PoolManager struct {
 // NewPoolManager는 설정에 따라 우선순위별 KafkaConsumerPool을 생성하고 PoolManager를 반환합니다.
 //
 // NewPoolManager creates one KafkaConsumerPool per priority level (high/normal/low).
-// cfg.RawTopicFn이 nil이면 DefaultRawTopicFunc를 사용합니다.
 func NewPoolManager(
 	cfg ManagerConfig,
 	producer queue.Producer,
@@ -75,16 +63,11 @@ func NewPoolManager(
 	resolver PriorityResolver,
 	log *logger.Logger,
 ) *PoolManager {
-	rawTopicFn := cfg.RawTopicFn
-	if rawTopicFn == nil {
-		rawTopicFn = DefaultRawTopicFunc
-	}
-
 	return &PoolManager{
 		pools: map[core.Priority]*KafkaConsumerPool{
-			core.PriorityHigh:   NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, cfg.RawContentSvc, cfg.High.WorkerCount, rawTopicFn),
-			core.PriorityNormal: NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, cfg.RawContentSvc, cfg.Normal.WorkerCount, rawTopicFn),
-			core.PriorityLow:    NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, cfg.RawContentSvc, cfg.Low.WorkerCount, rawTopicFn),
+			core.PriorityHigh:   NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, cfg.High.WorkerCount),
+			core.PriorityNormal: NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, cfg.Normal.WorkerCount),
+			core.PriorityLow:    NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, cfg.Low.WorkerCount),
 		},
 		producer: producer,
 		resolver: resolver,

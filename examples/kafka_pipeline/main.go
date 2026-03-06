@@ -14,7 +14,6 @@ import (
 
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/crawler/worker"
-	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -104,31 +103,12 @@ func (c *mockConsumer) Close() error { return nil }
 // 테스트용 크롤러 핸들러
 // =========================================================
 
-// mockRawContentService는 Postgres 저장 없이 ID를 그대로 반환하는 테스트용 RawContentService입니다.
-type mockRawContentService struct{}
-
-func (s *mockRawContentService) Store(_ context.Context, raw *core.RawContent) (string, bool, error) {
-	return raw.ID, false, nil
-}
-
-func (s *mockRawContentService) GetByID(_ context.Context, id string) (*core.RawContent, error) {
-	return nil, nil
-}
-
-func (s *mockRawContentService) List(_ context.Context, _ storage.RawContentFilter) ([]*core.RawContent, error) {
-	return nil, nil
-}
-
-func (s *mockRawContentService) PurgeOlderThan(_ context.Context, _ time.Time) (int64, error) {
-	return 0, nil
-}
-
-// testCrawlerHandler는 실제 HTTP 요청 없이 더미 RawContent를 생성합니다.
+// testCrawlerHandler는 실제 HTTP 요청 없이 더미 Content를 생성합니다.
 type testCrawlerHandler struct {
 	log *logger.Logger
 }
 
-func (h *testCrawlerHandler) Handle(_ context.Context, job *core.CrawlJob) (*core.RawContent, error) {
+func (h *testCrawlerHandler) Handle(_ context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	// 크롤링 지연 시뮬레이션
 	time.Sleep(30 * time.Millisecond)
 
@@ -138,18 +118,17 @@ func (h *testCrawlerHandler) Handle(_ context.Context, job *core.CrawlJob) (*cor
 		"url":     job.Target.URL,
 	}).Info("crawling URL (simulated)")
 
-	return &core.RawContent{
-		ID:         job.ID,
-		URL:        job.Target.URL,
-		HTML:       fmt.Sprintf("<html><body><h1>Article from %s</h1></body></html>", job.CrawlerName),
-		StatusCode: 200,
-		FetchedAt:  time.Now(),
-		SourceInfo: core.SourceInfo{
-			Country:  "US",
-			Name:     job.CrawlerName,
-			Language: "en",
-		},
-	}, nil
+	content := &core.Content{
+		ID:       job.ID,
+		SourceID: job.CrawlerName,
+		Country:  "US",
+		Language: "en",
+		Title:    fmt.Sprintf("Article from %s", job.CrawlerName),
+		Body:     fmt.Sprintf("Body content crawled from %s", job.Target.URL),
+		URL:      job.Target.URL,
+	}
+
+	return []*core.Content{content}, nil
 }
 
 // =========================================================
@@ -322,14 +301,7 @@ func main() {
 	consumer := newMockConsumer(msgs)
 	handler := &testCrawlerHandler{log: log}
 
-	pool := worker.NewKafkaConsumerPool(
-		consumer,
-		producer,
-		handler,
-		&mockRawContentService{}, // Postgres 오프로딩 서비스 (예제용 in-memory mock)
-		workerCount,
-		worker.DefaultRawTopicFunc, // 국가 코드 기반 raw 토픽 결정
-	)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, workerCount)
 
 	start := time.Now()
 	pool.Start(ctx)

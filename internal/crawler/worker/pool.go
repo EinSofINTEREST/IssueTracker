@@ -9,34 +9,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
 
 // JobHandler는 CrawlJob을 처리하는 인터페이스입니다.
 // 구현체는 여러 goroutine에서 동시에 호출되므로 goroutine-safe해야 합니다.
+// Handle은 크롤링 및 파싱 결과를 []*core.Content로 반환합니다.
+// RSS처럼 다수의 기사를 반환하는 경우 슬라이스에 여러 항목이 담깁니다.
+// 처리할 내용이 없으면 nil, nil을 반환합니다.
 type JobHandler interface {
-	Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error)
+	Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error)
 }
 
 // KafkaConsumerPool은 Kafka consumer group 기반 crawler worker pool입니다.
 //
 // Kafka 토픽에서 CrawlJob 메시지를 읽어 내부 채널을 통해 worker goroutine에 분배합니다.
-// 각 job의 RawContent는 먼저 rawContentSvc를 통해 Postgres에 저장되고,
-// HTML을 제외한 경량 RawContentRef(ID만 포함)만 raw 토픽에 발행합니다.
-// 이를 통해 대용량 페이지(예: CNN ~5.6MB)의 Kafka 메시지 크기 초과 문제를 방지합니다.
+// 각 job의 처리 결과(Content)는 issuetracker.normalized 토픽에 ProcessingMessage로 발행됩니다.
 type KafkaConsumerPool struct {
-	consumer      queue.Consumer
-	producer      queue.Producer
-	handler       JobHandler
-	rawContentSvc service.RawContentService // RawContent를 Postgres에 저장하는 서비스
-	workerCount   int
-	rawTopicFn    RawTopicFunc // 국가 코드 → raw 토픽 이름 결정 함수
-	jobs          chan jobItem
-	wg            sync.WaitGroup
+	consumer    queue.Consumer
+	producer    queue.Producer
+	handler     JobHandler
+	workerCount int
+	jobs        chan jobItem
+	wg          sync.WaitGroup
 }
 
 type jobItem struct {
@@ -46,28 +45,20 @@ type jobItem struct {
 
 // NewKafkaConsumerPool은 새로운 KafkaConsumerPool을 생성합니다.
 //
-// consumer에서 메시지를 읽어 handler로 처리하고, rawContentSvc로 Postgres에 저장한 뒤
-// rawTopicFn이 반환하는 토픽에 RawContentRef를 발행합니다.
+// consumer에서 메시지를 읽어 handler로 처리하고,
+// 결과 Content를 issuetracker.normalized 토픽에 발행합니다.
 // workerCount는 동시에 실행되는 처리 goroutine 수를 결정합니다.
-// rawTopicFn이 nil이면 DefaultRawTopicFunc를 사용합니다.
 func NewKafkaConsumerPool(
 	consumer queue.Consumer,
 	producer queue.Producer,
 	handler JobHandler,
-	rawContentSvc service.RawContentService,
 	workerCount int,
-	rawTopicFn RawTopicFunc,
 ) *KafkaConsumerPool {
-	if rawTopicFn == nil {
-		rawTopicFn = DefaultRawTopicFunc
-	}
 	return &KafkaConsumerPool{
-		consumer:      consumer,
-		producer:      producer,
-		handler:       handler,
-		rawContentSvc: rawContentSvc,
-		workerCount:   workerCount,
-		rawTopicFn:    rawTopicFn,
+		consumer:    consumer,
+		producer:    producer,
+		handler:     handler,
+		workerCount: workerCount,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs: make(chan jobItem, workerCount*2),
 	}
@@ -161,7 +152,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		"url":     item.job.Target.URL,
 	}).Info("crawl job started")
 
-	raw, err := p.handler.Handle(ctx, item.job)
+	contents, err := p.handler.Handle(ctx, item.job)
 	if err != nil {
 		// 재시도 횟수 초과 시 DLQ로 전송, 아니면 재큐잉
 		if item.job.RetryCount >= item.job.MaxRetries {
@@ -173,46 +164,50 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		return fmt.Errorf("handle job %s: %w", item.job.ID, err)
 	}
 
-	if raw == nil {
-		// handler가 nil을 반환하면 발행 없이 commit만 수행
+	if len(contents) == 0 {
+		// handler가 빈 슬라이스나 nil을 반환하면 발행 없이 commit만 수행
 		return p.commitMessage(ctx, item.msg)
 	}
 
-	// Postgres에 HTML 본문을 포함한 전체 RawContent 저장
-	// 중복 URL이면 기존 ID를 반환하며 에러를 반환하지 않습니다
-	id, _, err := p.rawContentSvc.Store(ctx, raw)
-	if err != nil {
-		return fmt.Errorf("store raw content for job %s: %w", item.job.ID, err)
-	}
-
-	// Kafka에는 ID만 포함된 경량 참조 메시지 발행 (1MB 한도 초과 방지)
-	ref := &core.RawContentRef{
-		ID:         id,
-		URL:        raw.URL,
-		FetchedAt:  raw.FetchedAt,
-		SourceInfo: raw.SourceInfo,
-	}
-
-	if err := p.publishRawRef(ctx, ref, item.job); err != nil {
-		return fmt.Errorf("publish raw ref for job %s: %w", item.job.ID, err)
+	for _, c := range contents {
+		if err := p.publishNormalized(ctx, c, item.job); err != nil {
+			return fmt.Errorf("publish normalized for job %s: %w", item.job.ID, err)
+		}
 	}
 
 	return p.commitMessage(ctx, item.msg)
 }
 
-func (p *KafkaConsumerPool) publishRawRef(ctx context.Context, ref *core.RawContentRef, job *core.CrawlJob) error {
-	data, err := json.Marshal(ref)
+func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core.Content, job *core.CrawlJob) error {
+	data, err := json.Marshal(content)
 	if err != nil {
-		return fmt.Errorf("marshal raw content ref: %w", err)
+		return fmt.Errorf("marshal content: %w", err)
+	}
+
+	pm := core.ProcessingMessage{
+		ID:        content.ID,
+		Timestamp: time.Now(),
+		Country:   content.Country,
+		Stage:     "normalized",
+		Data:      data,
+		Metadata: map[string]interface{}{
+			"job_id":  job.ID,
+			"crawler": job.CrawlerName,
+		},
+	}
+
+	pmBytes, err := json.Marshal(pm)
+	if err != nil {
+		return fmt.Errorf("marshal processing message: %w", err)
 	}
 
 	msg := queue.Message{
-		Topic: p.rawTopicFn(ref.SourceInfo.Country), // 국가 코드 기반으로 raw 토픽 결정
-		Key:   []byte(ref.URL),                      // URL을 파티션 키로 사용하여 동일 URL의 순서 보장
-		Value: data,
+		Topic: queue.TopicNormalized,
+		Key:   []byte(content.URL),
+		Value: pmBytes,
 		Headers: map[string]string{
-			"source":  ref.SourceInfo.Name,
-			"country": ref.SourceInfo.Country,
+			"source":  content.SourceID,
+			"country": content.Country,
 			"job_id":  job.ID,
 		},
 	}
