@@ -59,6 +59,16 @@ type RawContentRef struct {
 	SourceInfo SourceInfo `json:"source_info"`
 }
 
+// ContentRef는 contents 테이블에 저장된 Content의 경량 참조입니다.
+// Kafka normalized/validated 토픽에서 Full Content 대신 전달되어,
+// 다운스트림 소비자가 ref.ID로 DB에서 전체 데이터를 조회합니다.
+type ContentRef struct {
+	ID         string     `json:"id"`
+	URL        string     `json:"url"`
+	Country    string     `json:"country"`
+	SourceInfo SourceInfo `json:"source_info"`
+}
+
 // Content는 파싱된 컨텐츠 데이터를 나타냅니다.
 // 뉴스 기사, 커뮤니티 게시글, 소셜 미디어 포스트 등을 포함합니다.
 // DB 저장 시 3개 테이블로 분리됩니다:
