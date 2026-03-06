@@ -180,7 +180,13 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 				"source":  content.SourceID,
 				"country": content.Country,
 			}).WithError(err).Error("content validation failed, deleting content and sending to dlq")
-			_ = w.contentSvc.Delete(ctx, ref.ID)
+
+			if delErr := w.contentSvc.Delete(ctx, ref.ID); delErr != nil {
+				log.WithFields(map[string]interface{}{
+					"job_id": pm.ID,
+					"ref_id": ref.ID,
+				}).WithError(delErr).Error("failed to delete content after validation failure")
+			}
 			w.sendToDLQ(ctx, msg, err)
 		} else {
 			log.WithFields(map[string]interface{}{
