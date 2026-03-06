@@ -2,10 +2,7 @@
 package worker
 
 import (
-	"strings"
-
 	"issuetracker/internal/crawler/core"
-	"issuetracker/pkg/queue"
 )
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -247,26 +244,3 @@ func (r *CompositeResolver) Resolve(job *core.CrawlJob) core.Priority {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Raw 토픽 라우팅
-// ─────────────────────────────────────────────────────────────────────────
-
-// RawTopicFunc는 국가 코드(ISO 3166-1 alpha-2)를 raw Kafka 토픽 이름으로 변환하는 함수 타입입니다.
-//
-// RawTopicFunc maps a country code to the corresponding raw Kafka topic name.
-// Used by KafkaConsumerPool to route crawled RawContent to the correct topic.
-type RawTopicFunc func(country string) string
-
-// DefaultRawTopicFunc는 국가 코드를 raw 토픽으로 변환하는 기본 구현입니다.
-//
-// DefaultRawTopicFunc maps country codes to raw topics:
-//
-//	KR → issuetracker.raw.kr
-//	* (그 외) → issuetracker.raw.us
-func DefaultRawTopicFunc(country string) string {
-	switch strings.ToUpper(country) {
-	case "KR":
-		return queue.TopicRawKR
-	default:
-		return queue.TopicRawUS
-	}
-}

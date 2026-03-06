@@ -243,24 +243,39 @@ const upsertContentCTE = `
 // saveContentTx는 트랜잭션 내에서 3개 테이블에 content를 upsert합니다.
 // CTE로 단일 쿼리 실행하여 URL 충돌 시 실제 id를 하위 테이블에 전달합니다.
 func saveContentTx(ctx context.Context, tx pgx.Tx, c *core.Content) error {
-	extraJSON := mustMarshalJSON(c.Extra)
 	imageURLs := c.ImageURLs
 	if imageURLs == nil {
 		imageURLs = []string{}
 	}
+	tags := c.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 
 	_, err := tx.Exec(ctx, upsertContentCTE,
 		c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
-		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, c.Tags,
+		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, tags,
 		c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
 		c.Body, c.Summary, c.WordCount,
-		imageURLs, extraJSON,
+		imageURLs, mustMarshalJSON(buildContentMetaExtra(c)),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert content %s: %w", c.ID, err)
 	}
 
 	return nil
+}
+
+// buildContentMetaExtra는 content_meta.extra에 저장할 JSON 맵을 생성합니다.
+// contents/content_bodies에 전용 컬럼이 없는 모든 필드를 extra에 통합합니다:
+//   - c.Extra: 크롤러가 추가한 소스별 메타데이터
+func buildContentMetaExtra(c *core.Content) map[string]interface{} {
+	extra := make(map[string]interface{}, len(c.Extra)+1)
+	for k, v := range c.Extra {
+		extra[k] = v
+	}
+
+	return extra
 }
 
 // queueContentBatch는 pgx.Batch에 content 관련 CTE 쿼리를 추가합니다.
@@ -270,12 +285,16 @@ func queueContentBatch(batch *pgx.Batch, c *core.Content) {
 	if imageURLs == nil {
 		imageURLs = []string{}
 	}
+	tags := c.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 	batch.Queue(upsertContentCTE,
 		c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
-		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, c.Tags,
+		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, tags,
 		c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
 		c.Body, c.Summary, c.WordCount,
-		imageURLs, mustMarshalJSON(c.Extra),
+		imageURLs, mustMarshalJSON(buildContentMetaExtra(c)),
 	)
 }
 

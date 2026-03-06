@@ -1,4 +1,4 @@
-.PHONY: help build test clean run-crawler run-example lint coverage \
+.PHONY: help build build-all test clean run-crawler run-processor run-issuetracker run-example lint coverage \
         chrome-start chrome-stop chrome-status run-example-docker \
         run-kafka-pipeline \
         kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics \
@@ -12,6 +12,8 @@ PG_ENV_FILE=.env
 # .env가 없으면 기본값(localhost:5432, postgres/postgres) 사용
 PG_ENV_ARGS=$(shell [ -f $(PG_ENV_FILE) ] && echo "--env-file $(PG_ENV_FILE)")
 CRAWLER_BINARY=$(BINARY_DIR)/crawler
+PROCESSOR_BINARY=$(BINARY_DIR)/processor
+ISSUETRACKER_BINARY=$(BINARY_DIR)/issuetracker
 GO=go
 GOFLAGS=-v
 
@@ -35,17 +37,23 @@ build: ## 모든 바이너리 빌드
 	@echo "Building binaries..."
 	@mkdir -p $(BINARY_DIR)
 	$(GO) build $(GOFLAGS) -o $(CRAWLER_BINARY) ./cmd/crawler
-	@echo "Build complete: $(CRAWLER_BINARY)"
+	$(GO) build $(GOFLAGS) -o $(PROCESSOR_BINARY) ./cmd/processor
+	$(GO) build $(GOFLAGS) -o $(ISSUETRACKER_BINARY) ./cmd/issuetracker
+	@echo "Build complete: $(CRAWLER_BINARY), $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY)"
 
-build-all: ## 모든 실행 파일 빌드
-	@echo "Building all binaries..."
-	@mkdir -p $(BINARY_DIR)
-	$(GO) build $(GOFLAGS) -o $(BINARY_DIR)/crawler ./cmd/crawler
-	@echo "All builds complete"
+build-all: build ## 모든 실행 파일 빌드 (build와 동일)
 
 run-crawler: build ## Crawler 실행
 	@echo "Running crawler..."
 	./$(CRAWLER_BINARY)
+
+run-processor: build ## Validate processor 실행
+	@echo "Running processor..."
+	./$(PROCESSOR_BINARY)
+
+run-issuetracker: build ## Crawler + Processor 통합 실행
+	@echo "Running issuetracker (crawler + processor)..."
+	./$(ISSUETRACKER_BINARY)
 
 run-example: ## Basic example 실행 (로컬 Chrome 또는 Docker Chrome 필요)
 	@echo "Running basic example..."
@@ -212,7 +220,7 @@ clean: ## 빌드 파일 정리
 	@echo "Cleaning..."
 	rm -rf $(BINARY_DIR)
 	rm -f coverage.out coverage.html
-	rm -f crawler basic_usage crawler_comparison kafka_pipeline
+	rm -f crawler processor issuetracker basic_usage crawler_comparison kafka_pipeline
 	@echo "Clean complete"
 
 deps: ## 의존성 다운로드

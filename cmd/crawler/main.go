@@ -13,6 +13,7 @@ import (
 	"issuetracker/internal/crawler/handler"
 	"issuetracker/internal/crawler/worker"
 	pgstore "issuetracker/internal/storage/postgres"
+	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -98,6 +99,9 @@ func main() {
 	// US 뉴스 크롤러 등록 (cnn)
 	us.Register(registry, core.DefaultConfig(), newsRepo, log)
 
+	contentRepo := pgstore.NewContentRepository(pool, log)
+	contentSvc := service.NewContentService(contentRepo, log)
+
 	// ── 5. 조율 (Pool 생성 및 시작) ───────────────────────────────────────────
 	// 워커 수는 각 토픽의 파티션 수를 초과하지 않도록 설정
 	//   High: 파티션 6 → 워커 3 (긴급, 즉시 처리)
@@ -109,7 +113,7 @@ func main() {
 		Low:    worker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
 	}
 
-	manager := worker.NewPoolManager(managerCfg, producer, registry, resolver, log)
+	manager := worker.NewPoolManager(managerCfg, producer, registry, contentSvc, resolver, log)
 	manager.Start(ctx)
 
 	log.WithFields(map[string]interface{}{

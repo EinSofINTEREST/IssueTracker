@@ -13,6 +13,7 @@ import (
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/crawler/worker"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/queue"
 )
 
@@ -59,40 +60,52 @@ func (m *mockProducer) Close() error {
 
 type mockJobHandler struct{ mock.Mock }
 
-func (m *mockJobHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
+func (m *mockJobHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	args := m.Called(ctx, job)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*core.RawContent), args.Error(1)
+	return args.Get(0).([]*core.Content), args.Error(1)
 }
 
-type mockRawContentService struct{ mock.Mock }
+type mockContentService struct{ mock.Mock }
 
-func (m *mockRawContentService) Store(ctx context.Context, raw *core.RawContent) (string, bool, error) {
-	args := m.Called(ctx, raw)
+func (m *mockContentService) Store(ctx context.Context, content *core.Content) (string, bool, error) {
+	args := m.Called(ctx, content)
 	return args.String(0), args.Bool(1), args.Error(2)
 }
 
-func (m *mockRawContentService) GetByID(ctx context.Context, id string) (*core.RawContent, error) {
+func (m *mockContentService) StoreBatch(ctx context.Context, contents []*core.Content) ([]service.StoreResult, error) {
+	args := m.Called(ctx, contents)
+	return args.Get(0).([]service.StoreResult), args.Error(1)
+}
+
+func (m *mockContentService) GetByID(ctx context.Context, id string) (*core.Content, error) {
 	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*core.RawContent), args.Error(1)
+	return args.Get(0).(*core.Content), args.Error(1)
 }
 
-func (m *mockRawContentService) List(ctx context.Context, filter storage.RawContentFilter) ([]*core.RawContent, error) {
+func (m *mockContentService) ListByCountry(ctx context.Context, country string, filter storage.ContentFilter) ([]*core.Content, error) {
+	args := m.Called(ctx, country, filter)
+	return args.Get(0).([]*core.Content), args.Error(1)
+}
+
+func (m *mockContentService) Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
 	args := m.Called(ctx, filter)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*core.RawContent), args.Error(1)
+	return args.Get(0).([]*core.Content), args.Error(1)
 }
 
-func (m *mockRawContentService) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	args := m.Called(ctx, cutoff)
-	return args.Get(0).(int64), args.Error(1)
+func (m *mockContentService) CountByCountry(ctx context.Context, days int) (map[string]int64, error) {
+	args := m.Called(ctx, days)
+	return args.Get(0).(map[string]int64), args.Error(1)
+}
+
+func (m *mockContentService) Delete(ctx context.Context, id string) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,24 +116,25 @@ func newTestJob() *core.CrawlJob {
 	return &core.CrawlJob{
 		ID:          "job-001",
 		CrawlerName: "test-crawler",
-		Target:      core.Target{URL: "https://example.com/article"},
+		Target:      core.Target{URL: "https://example.com/article", Type: core.TargetTypeArticle},
 		Priority:    core.PriorityNormal,
 		MaxRetries:  3,
 	}
 }
 
-func newTestRawContent() *core.RawContent {
-	return &core.RawContent{
-		ID:        "raw-001",
-		URL:       "https://example.com/article",
-		HTML:      "<html><body>Test</body></html>",
-		FetchedAt: time.Now(),
-		SourceInfo: core.SourceInfo{
-			Country:  "US",
-			Type:     core.SourceTypeNews,
-			Name:     "test-source",
-			Language: "en",
-		},
+func newTestContent() *core.Content {
+	return &core.Content{
+		ID:           "cnt-abc123",
+		SourceID:     "test-source",
+		SourceType:   core.SourceTypeNews,
+		Country:      "US",
+		Language:     "en",
+		Title:        "Test Article",
+		Body:         "This is test body content for the article.",
+		URL:          "https://example.com/article",
+		CanonicalURL: "https://example.com/article",
+		PublishedAt:  time.Now(),
+		WordCount:    8,
 	}
 }
 
@@ -136,25 +150,18 @@ func marshaledJobMsg(t *testing.T, job *core.CrawlJob) *queue.Message {
 }
 
 // runPool은 pool을 구동하고 단일 메시지를 처리한 뒤 종료합니다.
-// 두 번째 FetchMessage 호출 시 ctx를 cancel하여 pollMessages가 깨끗이 종료되도록 합니다.
 func runPool(t *testing.T, consumer *mockConsumer, pool *worker.KafkaConsumerPool, msg *queue.Message) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	consumer.On("FetchMessage", mock.Anything).Return(msg, nil).Once()
-	// 두 번째 호출에서 ctx를 cancel → pollMessages가 ctx.Err() != nil로 정상 종료
 	consumer.On("FetchMessage", mock.Anything).
 		Run(func(_ mock.Arguments) { cancel() }).
 		Return(nil, context.Canceled)
 	consumer.On("Close").Return(nil)
 
 	pool.Start(ctx)
-
-	// pollMessages가 ctx cancel을 감지하고 종료할 때까지 대기.
-	// cancel()은 두 번째 FetchMessage 호출의 Run 훅에서 실행되므로,
-	// 이 시점에는 첫 번째 메시지가 이미 p.jobs 채널에 버퍼링된 상태입니다.
-	// pool.Stop이 p.jobs를 닫기 전에 pollMessages가 반드시 종료되어야 패닉을 방지합니다.
 	<-ctx.Done()
 
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -166,33 +173,32 @@ func runPool(t *testing.T, consumer *mockConsumer, pool *worker.KafkaConsumerPoo
 // 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestKafkaConsumerPool_ProcessJob_StoresInPostgresAndPublishesRef는
-// 정상 흐름에서 RawContent를 Postgres에 저장하고 ID만 담긴 RawContentRef를 Kafka에 발행하는지 검증합니다.
-func TestKafkaConsumerPool_ProcessJob_StoresInPostgresAndPublishesRef(t *testing.T) {
+// TestKafkaConsumerPool_ProcessJob_PublishesToNormalized는
+// 정상 흐름에서 ContentRef를 ProcessingMessage로 래핑하여 TopicNormalized에 발행하는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_PublishesToNormalized(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
-	rawSvc := new(mockRawContentService)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
-	raw := newTestRawContent()
+	content := newTestContent()
 	msg := marshaledJobMsg(t, job)
 
-	handler.On("Handle", mock.Anything, job).Return(raw, nil)
-	rawSvc.On("Store", mock.Anything, raw).Return("raw-001", false, nil)
+	handler.On("Handle", mock.Anything, job).Return([]*core.Content{content}, nil)
+	contentSvc.On("Store", mock.Anything, content).Return(content.ID, false, nil)
 
-	// RawContentRef가 올바른 토픽과 ID로 발행되는지 확인
 	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		if m.Topic != queue.TopicRawUS {
+		if m.Topic != queue.TopicNormalized {
 			return false
 		}
-		var ref core.RawContentRef
-		if err := json.Unmarshal(m.Value, &ref); err != nil {
+		var pm core.ProcessingMessage
+		if err := json.Unmarshal(m.Value, &pm); err != nil {
 			return false
 		}
-		return ref.ID == "raw-001" && ref.URL == raw.URL
+		return pm.Stage == "normalized" && pm.Country == content.Country
 	})).Return(nil)
 
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
@@ -200,113 +206,112 @@ func TestKafkaConsumerPool_ProcessJob_StoresInPostgresAndPublishesRef(t *testing
 	runPool(t, consumer, pool, msg)
 
 	handler.AssertExpectations(t)
-	rawSvc.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
 	producer.AssertExpectations(t)
 }
 
-// TestKafkaConsumerPool_ProcessJob_DuplicateURL_PublishesExistingID는
-// 중복 URL에서 Store가 기존 ID를 반환해도 RawContentRef를 정상 발행하는지 검증합니다.
-func TestKafkaConsumerPool_ProcessJob_DuplicateURL_PublishesExistingID(t *testing.T) {
+// TestKafkaConsumerPool_ProcessJob_MultipleContents_PublishesAll는
+// handler가 여러 Content(RSS 등)를 반환하면 모두 저장하고 발행하는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_MultipleContents_PublishesAll(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
-	rawSvc := new(mockRawContentService)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
-	raw := newTestRawContent()
+	c1 := newTestContent()
+	c1.ID = "cnt-001"
+	c1.URL = "https://example.com/article/1"
+	c2 := newTestContent()
+	c2.ID = "cnt-002"
+	c2.URL = "https://example.com/article/2"
 	msg := marshaledJobMsg(t, job)
 
-	handler.On("Handle", mock.Anything, job).Return(raw, nil)
-	// 중복: Store가 기존 ID와 isDuplicate=true를 반환
-	rawSvc.On("Store", mock.Anything, raw).Return("existing-raw-999", true, nil)
+	handler.On("Handle", mock.Anything, job).Return([]*core.Content{c1, c2}, nil)
+	contentSvc.On("Store", mock.Anything, c1).Return(c1.ID, false, nil)
+	contentSvc.On("Store", mock.Anything, c2).Return(c2.ID, false, nil)
 
-	// 기존 ID가 ref에 포함되어야 합니다
+	publishCount := 0
 	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		var ref core.RawContentRef
-		if err := json.Unmarshal(m.Value, &ref); err != nil {
-			return false
-		}
-		return ref.ID == "existing-raw-999"
-	})).Return(nil)
+		return m.Topic == queue.TopicNormalized
+	})).Run(func(_ mock.Arguments) { publishCount++ }).Return(nil)
 
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
 	runPool(t, consumer, pool, msg)
 
-	rawSvc.AssertExpectations(t)
-	producer.AssertExpectations(t)
+	assert.Equal(t, 2, publishCount, "두 Content 모두 발행되어야 합니다")
+	handler.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
 }
 
-// TestKafkaConsumerPool_ProcessJob_StoreError_DoesNotPublish는
-// Postgres 저장 실패 시 Kafka 발행 없이 에러를 반환하는지 검증합니다.
-func TestKafkaConsumerPool_ProcessJob_StoreError_DoesNotPublish(t *testing.T) {
+// TestKafkaConsumerPool_ProcessJob_EmptyContents_CommitsOnly는
+// handler가 nil을 반환할 때 Store/Publish 없이 commit만 수행하는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_EmptyContents_CommitsOnly(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
-	rawSvc := new(mockRawContentService)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
-
-	job := newTestJob()
-	raw := newTestRawContent()
-	msg := marshaledJobMsg(t, job)
-
-	handler.On("Handle", mock.Anything, job).Return(raw, nil)
-	rawSvc.On("Store", mock.Anything, raw).Return("", false, errors.New("db connection failed"))
-
-	runPool(t, consumer, pool, msg)
-
-	rawSvc.AssertExpectations(t)
-	// Store 실패 시 Publish가 호출되면 안 됩니다
-	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
-}
-
-// TestKafkaConsumerPool_ProcessJob_NilRaw_CommitsWithoutStore는
-// handler가 nil RawContent를 반환할 때 Store와 Publish를 호출하지 않고
-// 바로 commit하는지 검증합니다.
-func TestKafkaConsumerPool_ProcessJob_NilRaw_CommitsWithoutStore(t *testing.T) {
-	consumer := new(mockConsumer)
-	producer := new(mockProducer)
-	handler := new(mockJobHandler)
-	rawSvc := new(mockRawContentService)
-
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
 	msg := marshaledJobMsg(t, job)
 
-	// handler가 nil 반환 (처리할 내용 없음)
 	handler.On("Handle", mock.Anything, job).Return(nil, nil)
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
 	runPool(t, consumer, pool, msg)
 
-	rawSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
+	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
 }
 
-// TestKafkaConsumerPool_ProcessJob_PublishedRefHasNoHTML는
-// Kafka에 발행되는 메시지에 HTML이 포함되지 않음을 검증합니다 (대용량 페이지 오프로딩).
-func TestKafkaConsumerPool_ProcessJob_PublishedRefHasNoHTML(t *testing.T) {
+// TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ는
+// handler 에러 발생 시 MaxRetries 초과 후 DLQ로 전송하는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
-	rawSvc := new(mockRawContentService)
+	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	job := newTestJob()
-	raw := newTestRawContent()
-	// 대용량 HTML 시뮬레이션 (~5.6MB, CNN live blog 수준)
-	raw.HTML = string(make([]byte, 5*1024*1024))
-
+	job.RetryCount = job.MaxRetries // 이미 최대 재시도 도달
 	msg := marshaledJobMsg(t, job)
 
-	handler.On("Handle", mock.Anything, job).Return(raw, nil)
-	rawSvc.On("Store", mock.Anything, raw).Return("raw-001", false, nil)
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("fetch failed"))
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil)
+
+	runPool(t, consumer, pool, msg)
+
+	producer.AssertExpectations(t)
+	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
+}
+
+// TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef는
+// 발행된 ProcessingMessage의 Data 필드에 ContentRef가 담기는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	content := newTestContent()
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return([]*core.Content{content}, nil)
+	contentSvc.On("Store", mock.Anything, content).Return(content.ID, false, nil)
 
 	var capturedMsg queue.Message
 	producer.On("Publish", mock.Anything, mock.Anything).
@@ -318,43 +323,13 @@ func TestKafkaConsumerPool_ProcessJob_PublishedRefHasNoHTML(t *testing.T) {
 
 	runPool(t, consumer, pool, msg)
 
-	producer.AssertExpectations(t)
+	var pm core.ProcessingMessage
+	assert.NoError(t, json.Unmarshal(capturedMsg.Value, &pm))
+	assert.Equal(t, "normalized", pm.Stage)
 
-	// 발행된 메시지가 1MB 이하인지 확인 (HTML이 없어야 함)
-	assert.Less(t, len(capturedMsg.Value), 1024*1024, "Kafka 메시지가 1MB 이하여야 합니다")
-
-	// RawContentRef로 역직렬화 가능하고 ID가 올바른지 확인
-	var ref core.RawContentRef
-	assert.NoError(t, json.Unmarshal(capturedMsg.Value, &ref))
-	assert.Equal(t, "raw-001", ref.ID)
-}
-
-// TestKafkaConsumerPool_ProcessJob_KRSource_PublishesToKRTopic는
-// 한국 소스의 RawContent를 kr 토픽에 발행하는지 검증합니다.
-func TestKafkaConsumerPool_ProcessJob_KRSource_PublishesToKRTopic(t *testing.T) {
-	consumer := new(mockConsumer)
-	producer := new(mockProducer)
-	handler := new(mockJobHandler)
-	rawSvc := new(mockRawContentService)
-
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, rawSvc, 1, nil)
-
-	job := newTestJob()
-	raw := newTestRawContent()
-	raw.SourceInfo.Country = "KR"
-
-	msg := marshaledJobMsg(t, job)
-
-	handler.On("Handle", mock.Anything, job).Return(raw, nil)
-	rawSvc.On("Store", mock.Anything, raw).Return("raw-kr-001", false, nil)
-
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicRawKR
-	})).Return(nil)
-
-	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
-
-	runPool(t, consumer, pool, msg)
-
-	producer.AssertExpectations(t)
+	var ref core.ContentRef
+	assert.NoError(t, json.Unmarshal(pm.Data, &ref))
+	assert.Equal(t, content.ID, ref.ID)
+	assert.Equal(t, content.URL, ref.URL)
+	assert.Equal(t, content.Country, ref.Country)
 }
