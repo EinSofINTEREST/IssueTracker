@@ -30,6 +30,8 @@ type Worker struct {
 	workerCount int
 	jobs        chan *queue.Message
 	wg          sync.WaitGroup
+	pollWg      sync.WaitGroup
+	pollCancel  context.CancelFunc
 }
 
 // NewWorker는 새로운 Worker를 생성합니다.
@@ -58,12 +60,20 @@ func (w *Worker) Start(ctx context.Context) {
 		go w.work(ctx)
 	}
 
-	go w.poll(ctx)
+	pollCtx, cancel := context.WithCancel(ctx)
+	w.pollCancel = cancel
+	w.pollWg.Add(1)
+	go w.poll(pollCtx)
 }
 
 // Stop은 Worker를 정상 종료합니다.
-// jobs 채널을 닫아 모든 worker가 현재 처리를 완료한 후 종료되도록 합니다.
+// poll goroutine이 닫힌 jobs 채널에 송신하여 패닉이 발생하는 것을 방지하기 위해,
+// poll 종료를 먼저 보장한 뒤 jobs 채널을 닫습니다.
 func (w *Worker) Stop(ctx context.Context) error {
+	// poll goroutine의 FetchMessage 루프를 중단시켜 jobs 송신이 완전히 멈추도록 보장
+	w.pollCancel()
+	w.pollWg.Wait()
+
 	close(w.jobs)
 
 	done := make(chan struct{})
@@ -85,6 +95,8 @@ func (w *Worker) Stop(ctx context.Context) error {
 }
 
 func (w *Worker) poll(ctx context.Context) {
+	defer w.pollWg.Done()
+
 	log := logger.FromContext(ctx)
 
 	for {
