@@ -8,19 +8,24 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
 
 // Worker는 issuetracker.normalized 토픽을 소비하여 검증 후 issuetracker.validated에 발행합니다.
-// 검증 실패(IsValid == false) 또는 메시지 파싱 오류 시 DLQ로 라우팅합니다.
+// ProcessingMessage.Data는 ContentRef를 담고 있으며, Worker는 ref.ID로 contents DB에서
+// 전체 데이터를 조회하여 검증합니다.
+// 검증 실패 시 contents에서 해당 레코드를 삭제하고 DLQ로 라우팅합니다.
 //
-// Worker consumes from issuetracker.normalized, validates each Content,
-// and publishes to issuetracker.validated. Failed messages are routed to DLQ.
+// Worker consumes from issuetracker.normalized, fetches Content from DB via ContentRef,
+// validates it, and publishes ContentRef to issuetracker.validated.
+// On failure, deletes the contents record and routes to DLQ.
 type Worker struct {
 	consumer    queue.Consumer
 	producer    queue.Producer
+	contentSvc  service.ContentService
 	cfg         config.ValidateConfig
 	workerCount int
 	jobs        chan *queue.Message
@@ -29,10 +34,17 @@ type Worker struct {
 
 // NewWorker는 새로운 Worker를 생성합니다.
 // workerCount는 동시에 실행되는 처리 goroutine 수를 결정합니다.
-func NewWorker(consumer queue.Consumer, producer queue.Producer, workerCount int, cfg config.ValidateConfig) *Worker {
+func NewWorker(
+	consumer queue.Consumer,
+	producer queue.Producer,
+	contentSvc service.ContentService,
+	workerCount int,
+	cfg config.ValidateConfig,
+) *Worker {
 	return &Worker{
 		consumer:    consumer,
 		producer:    producer,
+		contentSvc:  contentSvc,
 		cfg:         cfg,
 		workerCount: workerCount,
 		jobs:        make(chan *queue.Message, workerCount*2),
@@ -115,17 +127,30 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		return w.commit(ctx, msg)
 	}
 
-	var content core.Content
-	if err := json.Unmarshal(pm.Data, &content); err != nil {
+	// Data 필드에는 ContentRef가 직렬화되어 있음
+	var ref core.ContentRef
+	if err := json.Unmarshal(pm.Data, &ref); err != nil {
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
-		}).WithError(err).Error("failed to unmarshal content from processing message, sending to dlq")
+		}).WithError(err).Error("failed to unmarshal content ref, sending to dlq")
+		w.sendToDLQ(ctx, msg, err)
+		return w.commit(ctx, msg)
+	}
+
+	// DB에서 Content 조회 (content_bodies, content_meta 포함)
+	content, err := w.contentSvc.GetByID(ctx, ref.ID)
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+		}).WithError(err).Error("failed to fetch content from db, sending to dlq")
 		w.sendToDLQ(ctx, msg, err)
 		return w.commit(ctx, msg)
 	}
 
 	log.WithFields(map[string]interface{}{
 		"job_id":  pm.ID,
+		"ref_id":  ref.ID,
 		"source":  content.SourceID,
 		"country": content.Country,
 	}).Debug("starting content validation")
@@ -133,15 +158,17 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 	v := NewValidator(content.SourceType, w.cfg)
 	cp := NewContentProcessor(v)
 
-	validated, err := cp.Process(ctx, &content)
+	_, err = cp.Process(ctx, content)
 	if err != nil {
-		// 검증 실패: retry count 확인 후 DLQ 또는 재큐잉
+		// 검증 실패: contents에서 삭제 후 DLQ 또는 재큐잉
 		if pm.RetryCount >= maxRetries(msg) {
 			log.WithFields(map[string]interface{}{
 				"job_id":  pm.ID,
+				"ref_id":  ref.ID,
 				"source":  content.SourceID,
 				"country": content.Country,
-			}).WithError(err).Error("content validation failed, sending to dlq")
+			}).WithError(err).Error("content validation failed, deleting content and sending to dlq")
+			_ = w.contentSvc.Delete(ctx, ref.ID)
 			w.sendToDLQ(ctx, msg, err)
 		} else {
 			log.WithFields(map[string]interface{}{
@@ -153,23 +180,25 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		return w.commit(ctx, msg)
 	}
 
-	if err := w.publishValidated(ctx, validated, &pm, msg); err != nil {
-		return fmt.Errorf("publish validated content %s: %w", pm.ID, err)
+	if err := w.publishValidatedRef(ctx, &ref, &pm, msg); err != nil {
+		return fmt.Errorf("publish validated ref %s: %w", ref.ID, err)
 	}
 
 	return w.commit(ctx, msg)
 }
 
-func (w *Worker) publishValidated(ctx context.Context, content *core.Content, pm *core.ProcessingMessage, orig *queue.Message) error {
-	data, err := json.Marshal(content)
+// publishValidatedRef는 검증을 통과한 ContentRef를 issuetracker.validated 토픽에 발행합니다.
+// 다운스트림 소비자는 ref.ID로 DB에서 전체 데이터를 조회합니다.
+func (w *Worker) publishValidatedRef(ctx context.Context, ref *core.ContentRef, pm *core.ProcessingMessage, orig *queue.Message) error {
+	data, err := json.Marshal(ref)
 	if err != nil {
-		return fmt.Errorf("marshal validated content: %w", err)
+		return fmt.Errorf("marshal content ref: %w", err)
 	}
 
 	out := core.ProcessingMessage{
 		ID:        pm.ID,
 		Timestamp: time.Now(),
-		Country:   content.Country,
+		Country:   ref.Country,
 		Stage:     "validated",
 		Data:      data,
 		Metadata:  pm.Metadata,
@@ -185,8 +214,8 @@ func (w *Worker) publishValidated(ctx context.Context, content *core.Content, pm
 		Key:   orig.Key,
 		Value: outBytes,
 		Headers: map[string]string{
-			"source":  content.SourceID,
-			"country": content.Country,
+			"source":  ref.SourceInfo.Name,
+			"country": ref.Country,
 			"stage":   "validated",
 		},
 	}
@@ -258,4 +287,3 @@ func maxRetries(msg *queue.Message) int {
 	_ = msg // 향후 헤더 기반 설정으로 확장 가능
 	return 3
 }
-
