@@ -39,6 +39,25 @@ services:
   #   restart: unless-stopped
 
 
+  # ─────────────────────────────────────────────────────────────
+  # Redis 7 – 분산 락 및 캐시
+  # localhost:6379
+  # ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: issuetracker-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - /data/ELArchive/issuetracker/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
   kafka:
     image: apache/kafka:latest
     container_name: issuetracker-kafka
