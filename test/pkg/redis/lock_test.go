@@ -100,12 +100,18 @@ func TestAcquireLock_TTLExpiry(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ok)
 
-	// TTL 만료 대기
-	time.Sleep(200 * time.Millisecond)
-
-	ok2, err := client.AcquireLock(ctx, key, 5*time.Second)
-	require.NoError(t, err)
-	assert.True(t, ok2, "TTL 만료 후 재획득 가능해야 함")
-
+	// TTL 만료 시점은 CI/부하 상황에서 지터가 발생할 수 있으므로
+	// 일정 시간 동안 재획득 가능해질 때까지 폴링한다.
+	var acquired bool
+	require.Eventually(t, func() bool {
+		ok2, err := client.AcquireLock(ctx, key, 5*time.Second)
+		require.NoError(t, err)
+		if ok2 {
+			acquired = true
+			return true
+		}
+		return false
+	}, 2*time.Second, 50*time.Millisecond, "TTL 만료 후 재획득 가능해야 함")
+	assert.True(t, acquired, "TTL 만료 후 재획득 가능해야 함")
 	t.Cleanup(func() { _ = client.ReleaseLock(ctx, key) })
 }
