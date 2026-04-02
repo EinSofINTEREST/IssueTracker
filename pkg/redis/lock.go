@@ -17,6 +17,7 @@ const LockKeyPrefix = "lock:crawl:"
 // AcquireLock attempts to acquire a distributed lock via SET … NX PX.
 // Returns true if the lock was acquired, false if it is already held.
 // key 형식: "lock:crawl:{url_hash}" (LockKey 헬퍼 사용 권장)
+// TODO: 향후 필요 시 고급 락 구현 (예: RedLock)으로 확장, TEST 케이스 추가
 func (c *Client) AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
 	err := c.rdb.SetArgs(ctx, key, 1, goredis.SetArgs{
 		Mode: "NX",
