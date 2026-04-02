@@ -190,6 +190,97 @@ func DefaultDBConfig() DBConfig {
 	}
 }
 
+// RedisConfig는 Redis 연결 설정을 나타냅니다.
+// 모든 필드는 환경변수(LoadRedis 참조)로 덮어쓸 수 있습니다.
+type RedisConfig struct {
+	Host         string        // REDIS_HOST (default: localhost)
+	Port         int           // REDIS_PORT (default: 6379)
+	Password     string        // REDIS_PASSWORD (default: "")
+	DB           int           // REDIS_DB (default: 0)
+	DialTimeout  time.Duration // REDIS_DIAL_TIMEOUT (default: 5s)
+	ReadTimeout  time.Duration // REDIS_READ_TIMEOUT (default: 3s)
+	WriteTimeout time.Duration // REDIS_WRITE_TIMEOUT (default: 3s)
+	PoolSize     int           // REDIS_POOL_SIZE (default: 10)
+}
+
+// DefaultRedisConfig는 로컬 개발 환경용 기본 RedisConfig를 반환합니다.
+func DefaultRedisConfig() RedisConfig {
+	return RedisConfig{
+		Host:         "localhost",
+		Port:         6379,
+		Password:     "",
+		DB:           0,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		PoolSize:     10,
+	}
+}
+
+// LoadRedis는 .env 파일을 로드한 후 OS 환경변수로 RedisConfig를 구성합니다.
+// 환경변수 값이 설정되어 있지만 파싱에 실패하면 에러를 반환합니다.
+func LoadRedis(envFiles ...string) (RedisConfig, error) {
+	if len(envFiles) == 0 {
+		envFiles = []string{".env"}
+	}
+	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return RedisConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+	}
+
+	cfg := DefaultRedisConfig()
+
+	if v := os.Getenv("REDIS_HOST"); v != "" {
+		cfg.Host = v
+	}
+	if v := os.Getenv("REDIS_PORT"); v != "" {
+		p, err := strconv.Atoi(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse REDIS_PORT %q: %w", v, err)
+		}
+		cfg.Port = p
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		cfg.Password = v
+	}
+	if v := os.Getenv("REDIS_DB"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse REDIS_DB %q: %w", v, err)
+		}
+		cfg.DB = n
+	}
+	if v := os.Getenv("REDIS_DIAL_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse REDIS_DIAL_TIMEOUT %q: %w", v, err)
+		}
+		cfg.DialTimeout = d
+	}
+	if v := os.Getenv("REDIS_READ_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse REDIS_READ_TIMEOUT %q: %w", v, err)
+		}
+		cfg.ReadTimeout = d
+	}
+	if v := os.Getenv("REDIS_WRITE_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse REDIS_WRITE_TIMEOUT %q: %w", v, err)
+		}
+		cfg.WriteTimeout = d
+	}
+	if v := os.Getenv("REDIS_POOL_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse REDIS_POOL_SIZE %q: %w", v, err)
+		}
+		cfg.PoolSize = n
+	}
+
+	return cfg, nil
+}
+
 // Load는 .env 파일을 로드한 후 OS 환경변수로 DBConfig를 구성합니다.
 // .env 파일이 없으면 무시되고, OS 환경변수가 항상 .env 값보다 우선합니다.
 // 환경변수 값이 설정되어 있지만 파싱에 실패하면 에러를 반환합니다.
