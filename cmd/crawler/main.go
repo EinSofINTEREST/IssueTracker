@@ -17,6 +17,7 @@ import (
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
+	pkgredis "issuetracker/pkg/redis"
 )
 
 func main() {
@@ -32,6 +33,7 @@ func main() {
 
 	ctx = log.ToContext(ctx)
 
+	// ── Kafka 설정 ────────────────────────────────────────────────────────
 	kafkaCfg := queue.DefaultConfig()
 	kafkaCfg.GroupID = queue.GroupCrawlerWorkers
 
@@ -40,7 +42,24 @@ func main() {
 		"group_id": kafkaCfg.GroupID,
 	}).Info("kafka configuration loaded")
 
-	// ── 1. 발행 (Job → crawl.high / normal / low) ─────────────────────────────
+	// ── Redis 연결 ────────────────────────────────────────────────────────
+	redisCfg, err := config.LoadRedis()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load redis config")
+	}
+
+	redisClient, err := pkgredis.New(ctx, redisCfg)
+	if err != nil {
+		log.WithError(err).Fatal("failed to connect to redis")
+	}
+	defer redisClient.Close()
+
+	log.WithFields(map[string]interface{}{
+		"host": redisCfg.Host,
+		"port": redisCfg.Port,
+	}).Info("redis connected")
+
+	// ── 1. 발행 (Job → crawl.high / normal / low) ───────────────────────────
 	producer := queue.NewProducer(kafkaCfg)
 	defer producer.Close()
 
@@ -76,10 +95,9 @@ func main() {
 	lowConsumer := queue.NewConsumer(kafkaCfg, queue.TopicCrawlLow)
 	defer lowConsumer.Close()
 
-	// ── 4. 실행 (Worker → 크롤링 → raw.us / raw.kr) ───────────────────────────
+	// ── 4. 크롤러 Registry + DB 연결 ─────────────────────────────────────────
 	registry := handler.NewRegistry(log)
 
-	// DB 연결 및 뉴스 기사 저장소 생성
 	dbCfg, err := config.Load()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load db config")
@@ -93,16 +111,13 @@ func main() {
 
 	newsRepo := pgstore.NewNewsArticleRepository(pool, log)
 
-	// KR 뉴스 크롤러 등록 (naver, yonhap, daum)
 	kr.Register(registry, core.DefaultConfig(), newsRepo, log)
-
-	// US 뉴스 크롤러 등록 (cnn)
 	us.Register(registry, core.DefaultConfig(), newsRepo, log)
 
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
 
-	// ── 5. 조율 (Pool 생성 및 시작) ───────────────────────────────────────────
+	// ── 5. Worker Pool ────────────────────────────────────────────────────────
 	// 워커 수는 각 토픽의 파티션 수를 초과하지 않도록 설정
 	//   High: 파티션 6 → 워커 3 (긴급, 즉시 처리)
 	//   Normal: 파티션 8 → 워커 6 (일반 크롤링, 최대 처리량)
