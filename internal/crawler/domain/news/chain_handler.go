@@ -65,7 +65,7 @@ func NewChainHandler(
 //  3. 기사 페이지 (TargetTypeArticle): ParseArticle → ConvertArticle → 단건 반환
 func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	if h.Chain == nil || h.Log == nil {
-		return nil, fmt.Errorf("ChainHandler is not properly initialized: chain or log is nil")
+		return nil, fmt.Errorf("chain handler is not properly initialized: chain or log is nil")
 	}
 
 	raw, err := h.Chain.Handle(ctx, job)
