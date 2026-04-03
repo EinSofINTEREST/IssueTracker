@@ -347,20 +347,11 @@ func TestChainHandler_Handle_Article_파서없음_nilContent반환(t *testing.T)
 
 func TestChainHandler_Handle_Category_대량URL_상한적용(t *testing.T) {
 	const total = 500
-	items := make([]news.NewsItem, total)
-	for i := range items {
-		items[i] = news.NewsItem{URL: "https://example.com/" + string(rune('a'+i%26)) + string(rune('0'+i%10))}
-	}
-	// URL이 서로 다르도록 인덱스 포함
-	for i := range items {
-		items[i].URL = "https://example.com/article-" + string(rune('0'+i%10)) + string(rune('a'+i%26)) + "-" + "x"[0:1]
-	}
 
 	raw := htmlRaw("https://news.example.com/category", "<html></html>")
 	chain := &stubChain{raw: raw}
 	pub := &capturePublisher{}
 
-	// 500개 중 일부는 중복될 수 있으므로 고유 URL로 재생성
 	uniqueItems := make([]news.NewsItem, total)
 	for i := range uniqueItems {
 		uniqueItems[i] = news.NewsItem{URL: "https://example.com/article-" + itoa(i)}
