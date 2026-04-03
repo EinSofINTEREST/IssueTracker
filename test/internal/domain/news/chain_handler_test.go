@@ -137,7 +137,7 @@ func TestChainHandler_Handle_ChainRawNil_에러반환(t *testing.T) {
 // RSS 경로
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestChainHandler_Handle_RSSSrategegy_다건Content반환(t *testing.T) {
+func TestChainHandler_Handle_RSSStrategy_다건Content반환(t *testing.T) {
 	raw := &core.RawContent{
 		ID:        "rss-1",
 		FetchedAt: time.Now(),
