@@ -55,6 +55,16 @@ func (s *Scheduler) Stop() {
 func (s *Scheduler) run(ctx context.Context, entry ScheduleEntry) {
 	defer s.wg.Done()
 
+	// Interval이 0 이하면 time.NewTicker가 panic을 발생시킵니다.
+	if entry.Interval <= 0 {
+		s.log.WithFields(map[string]interface{}{
+			"crawler":  entry.CrawlerName,
+			"url":      entry.URL,
+			"interval": entry.Interval,
+		}).Error("invalid schedule interval, skipping entry")
+		return
+	}
+
 	// 시작 시 즉시 1회 실행
 	s.publish(ctx, entry)
 
