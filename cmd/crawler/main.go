@@ -12,6 +12,8 @@ import (
 	"issuetracker/internal/crawler/domain/news/us"
 	"issuetracker/internal/crawler/handler"
 	"issuetracker/internal/crawler/worker"
+	"issuetracker/internal/publisher"
+	"issuetracker/internal/scheduler"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -137,6 +139,27 @@ func main() {
 		"low_workers":    managerCfg.Low.WorkerCount,
 	}).Info("pool manager started")
 
+	// ── 6. Publisher (체이닝 Job 발행) ────────────────────────────────────────
+	// 크롤러가 카테고리/피드 페이지에서 발견한 URL을 다음 CrawlJob으로 연결합니다.
+	// resolver를 공유하여 우선순위 결정 로직을 일관되게 유지합니다.
+	jobPublisher := publisher.New(producer, resolver, log)
+	_ = jobPublisher // TODO: JobHandler에 주입하여 체이닝 발행에 사용
+
+	// ── 7. Scheduler (시드 Job 발행) ──────────────────────────────────────────
+	// 등록된 소스의 시드 Job만 생성합니다. 체이닝은 Publisher가 담당합니다.
+	schedulerCfg, err := config.LoadScheduler()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load scheduler config")
+	}
+
+	emitter := scheduler.NewJobEmitter(producer, log)
+	entries := scheduler.DefaultEntries(schedulerCfg)
+	sched := scheduler.New(entries, emitter, log)
+	sched.Start(ctx)
+
+	log.WithField("entry_count", len(entries)).Info("scheduler started")
+
+	// ── 9. Graceful Shutdown ──────────────────────────────────────────────────
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -146,6 +169,9 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+
+	// Scheduler goroutine 종료 대기
+	sched.Stop()
 
 	if err := manager.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during pool manager shutdown")
