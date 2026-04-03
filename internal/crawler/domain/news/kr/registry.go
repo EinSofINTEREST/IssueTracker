@@ -22,19 +22,20 @@ import (
 // Register는 모든 한국 뉴스 크롤러를 registry에 등록합니다.
 // cmd/crawler/main.go에서 이 함수를 호출하여 KR 뉴스 크롤러를 활성화합니다.
 // repo가 nil이면 DB 저장 없이 크롤링만 수행합니다.
+// publisher가 nil이면 카테고리 페이지에서의 체이닝 발행을 건너뜁니다.
 //
 // Register wires all Korean news crawlers and registers them with the provided Registry.
 // If repo is nil, articles are crawled but not persisted to the database.
-func Register(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, log *logger.Logger) {
-	registerNaver(registry, config, repo, log)
-	registerYonhap(registry, config, repo, log)
-	registerDaum(registry, config, repo, log)
+func Register(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, publisher news.JobPublisher, log *logger.Logger) {
+	registerNaver(registry, config, repo, publisher, log)
+	registerYonhap(registry, config, repo, publisher, log)
+	registerDaum(registry, config, repo, publisher, log)
 }
 
 // registerNaver는 네이버 뉴스 핸들러를 조립하고 등록합니다.
 // 체인: GoQuery(주) → Browser(폴백)
 // 네이버는 RSS 공식 지원이 제한적이므로 goquery를 주 전략으로 사용합니다.
-func registerNaver(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, log *logger.Logger) {
+func registerNaver(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, publisher news.JobPublisher, log *logger.Logger) {
 	naverCfg := naver.DefaultNaverConfig()
 	naverCfg.CrawlerConfig = config
 	naverCfg.CrawlerConfig.SourceInfo = core.SourceInfo{
@@ -72,14 +73,14 @@ func registerNaver(registry *handler.Registry, config core.Config, repo storage.
 		"data-lazy",
 	)
 
-	registry.Register("naver", news.NewChainHandler(crawler, chain, parser, repo, log))
+	registry.Register("naver", news.NewChainHandler(crawler, chain, parser, parser, publisher, repo, log))
 
 	log.WithField("crawler", "naver").Info("naver news crawler registered")
 }
 
 // registerYonhap는 연합뉴스 핸들러를 조립하고 등록합니다.
 // 체인: GoQuery 단독 (연합뉴스는 정적 HTML이므로 RSS·Browser 불필요)
-func registerYonhap(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, log *logger.Logger) {
+func registerYonhap(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, publisher news.JobPublisher, log *logger.Logger) {
 	yonhapCfg := yonhap.DefaultYonhapConfig()
 	yonhapCfg.CrawlerConfig = config
 	yonhapCfg.CrawlerConfig.SourceInfo = core.SourceInfo{
@@ -103,7 +104,7 @@ func registerYonhap(registry *handler.Registry, config core.Config, repo storage
 	// 체인 조립: GoQuery 단독
 	chain := news.BuildChain(nil, gqFetcher, nil, log)
 
-	registry.Register("yonhap", news.NewChainHandler(crawler, chain, parser, repo, log))
+	registry.Register("yonhap", news.NewChainHandler(crawler, chain, parser, parser, publisher, repo, log))
 
 	log.WithField("crawler", "yonhap").Info("yonhap news crawler registered")
 }
@@ -111,7 +112,7 @@ func registerYonhap(registry *handler.Registry, config core.Config, repo storage
 // registerDaum는 다음 뉴스 핸들러를 조립하고 등록합니다.
 // 체인: GoQuery(주) → Browser(폴백)
 // 다음 뉴스는 일부 페이지에서 lazy loading을 사용하므로 browser 폴백을 포함합니다.
-func registerDaum(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, log *logger.Logger) {
+func registerDaum(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, publisher news.JobPublisher, log *logger.Logger) {
 	daumCfg := daum.DefaultDaumConfig()
 	daumCfg.CrawlerConfig = config
 	daumCfg.CrawlerConfig.SourceInfo = core.SourceInfo{
@@ -151,7 +152,7 @@ func registerDaum(registry *handler.Registry, config core.Config, repo storage.N
 		"data-lazy",
 	)
 
-	registry.Register("daum", news.NewChainHandler(crawler, chain, parser, repo, log))
+	registry.Register("daum", news.NewChainHandler(crawler, chain, parser, parser, publisher, repo, log))
 
 	log.WithField("crawler", "daum").Info("daum news crawler registered")
 }

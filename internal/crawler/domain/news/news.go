@@ -89,3 +89,12 @@ type NewsListParser interface {
 	// ParseList는 목록 페이지에서 NewsItem 슬라이스를 추출합니다.
 	ParseList(raw *core.RawContent) ([]NewsItem, error)
 }
+
+// JobPublisher는 카테고리/목록 페이지에서 발견된 URL을 다음 CrawlJob으로 연결하는 인터페이스입니다.
+// publisher.Publisher가 이 인터페이스를 구현하며, ChainHandler에 주입됩니다.
+//
+// JobPublisher dispatches article CrawlJobs discovered from list/category pages.
+// publisher.Publisher implements this interface.
+type JobPublisher interface {
+	Publish(ctx context.Context, crawlerName string, urls []string, targetType core.TargetType, timeout time.Duration) error
+}

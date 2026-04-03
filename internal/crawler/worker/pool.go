@@ -31,6 +31,12 @@ type JobHandler interface {
 // Kafka 토픽에서 CrawlJob 메시지를 읽어 내부 채널을 통해 worker goroutine에 분배합니다.
 // 각 job의 처리 결과(Content)는 contents DB 테이블에 저장된 뒤 ContentRef만
 // issuetracker.normalized 토픽에 발행됩니다.
+//
+// 종료 순서 보장:
+//  1. ctx cancel → pollMessages 루프 탈출 → pollDone 닫힘
+//  2. Stop이 pollDone 대기 후 jobs 채널 close (send on closed channel panic 방지)
+//  3. worker goroutine들이 jobs 드레인 후 종료
+//  4. consumer.Close()
 type KafkaConsumerPool struct {
 	consumer    queue.Consumer
 	producer    queue.Producer
@@ -39,6 +45,9 @@ type KafkaConsumerPool struct {
 	workerCount int
 	jobs        chan jobItem
 	wg          sync.WaitGroup
+	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
+	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
+	pollDone chan struct{}
 }
 
 type jobItem struct {
@@ -66,7 +75,8 @@ func NewKafkaConsumerPool(
 		contentSvc:  contentSvc,
 		workerCount: workerCount,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
-		jobs: make(chan jobItem, workerCount*2),
+		jobs:     make(chan jobItem, workerCount*2),
+		pollDone: make(chan struct{}),
 	}
 }
 
@@ -78,25 +88,45 @@ func (p *KafkaConsumerPool) Start(ctx context.Context) {
 		go p.worker(ctx)
 	}
 
-	go p.pollMessages(ctx)
+	// pollDone은 pollMessages가 완전히 종료된 후 닫힙니다.
+	// Stop에서 close(p.jobs) 전에 이 채널을 대기하여 send on closed channel panic을 방지합니다.
+	go func() {
+		defer close(p.pollDone)
+		p.pollMessages(ctx)
+	}()
 }
 
 // Stop은 pool을 정상 종료합니다.
-// jobs 채널을 닫아 모든 worker가 현재 작업을 완료한 후 종료되도록 합니다.
-// ctx timeout 초과 시 강제 종료합니다.
+//
+// 종료 순서:
+//  1. pollMessages goroutine 종료 대기 (ctx cancel로 이미 탈출 중)
+//  2. jobs 채널 close — poll이 종료된 이후이므로 send/close 경합 없음
+//  3. worker goroutine 드레인 대기
+//  4. consumer close
 func (p *KafkaConsumerPool) Stop(ctx context.Context) error {
-	close(p.jobs)
-
-	done := make(chan struct{})
-	go func() {
-		p.wg.Wait()
-		close(done)
-	}()
-
 	log := logger.FromContext(ctx)
 
+	// 1단계: poll goroutine이 완전히 종료될 때까지 대기
+	// ctx(shutdown timeout)가 만료되면 강제 진행하되, 이 경우 worker도 곧 timeout으로 종료됨
 	select {
-	case <-done:
+	case <-p.pollDone:
+	case <-ctx.Done():
+		log.Warn("poll goroutine shutdown timeout, proceeding with force close")
+	}
+
+	// 2단계: poll이 종료된 이후에만 jobs 채널 close
+	// poll goroutine이 더 이상 send하지 않으므로 send on closed channel panic 없음
+	close(p.jobs)
+
+	// 3단계: worker goroutine 드레인 대기
+	workersDone := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(workersDone)
+	}()
+
+	select {
+	case <-workersDone:
 		log.Info("all crawler workers finished gracefully")
 	case <-ctx.Done():
 		log.Warn("worker pool shutdown timeout, forcing close")

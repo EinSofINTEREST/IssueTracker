@@ -12,6 +12,8 @@ import (
 	"issuetracker/internal/crawler/domain/news/us"
 	"issuetracker/internal/crawler/handler"
 	"issuetracker/internal/crawler/worker"
+	"issuetracker/internal/publisher"
+	"issuetracker/internal/scheduler"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -86,14 +88,11 @@ func main() {
 
 	// ── 3. 소비 (crawl.high / normal / low → Worker) ──────────────────────────
 	// 각 consumer가 서로 다른 토픽을 구독하므로 동일 GroupID 사용 가능
+	// consumer close는 pool.Stop() 내부에서 수행합니다.
+	// 여기서 defer Close를 추가하면 pool.Stop 이후 중복 close가 발생합니다.
 	highConsumer := queue.NewConsumer(kafkaCfg, queue.TopicCrawlHigh)
-	defer highConsumer.Close()
-
 	normalConsumer := queue.NewConsumer(kafkaCfg, queue.TopicCrawlNormal)
-	defer normalConsumer.Close()
-
 	lowConsumer := queue.NewConsumer(kafkaCfg, queue.TopicCrawlLow)
-	defer lowConsumer.Close()
 
 	// ── 4. 크롤러 Registry + DB 연결 ─────────────────────────────────────────
 	registry := handler.NewRegistry(log)
@@ -111,8 +110,14 @@ func main() {
 
 	newsRepo := pgstore.NewNewsArticleRepository(pool, log)
 
-	kr.Register(registry, core.DefaultConfig(), newsRepo, log)
-	us.Register(registry, core.DefaultConfig(), newsRepo, log)
+	// ── 6. Publisher (체이닝 Job 발행) ────────────────────────────────────────
+	// 크롤러가 카테고리/피드 페이지에서 발견한 URL을 다음 CrawlJob으로 연결합니다.
+	// resolver를 공유하여 우선순위 결정 로직을 일관되게 유지합니다.
+	// Registry 등록 전에 생성하여 ChainHandler에 주입합니다.
+	jobPublisher := publisher.New(producer, resolver, log)
+
+	kr.Register(registry, core.DefaultConfig(), newsRepo, jobPublisher, log)
+	us.Register(registry, core.DefaultConfig(), newsRepo, jobPublisher, log)
 
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
@@ -137,6 +142,21 @@ func main() {
 		"low_workers":    managerCfg.Low.WorkerCount,
 	}).Info("pool manager started")
 
+	// ── 7. Scheduler (시드 Job 발행) ──────────────────────────────────────────
+	// 등록된 소스의 시드 Job만 생성합니다. 체이닝은 Publisher가 담당합니다.
+	schedulerCfg, err := config.LoadScheduler()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load scheduler config")
+	}
+
+	emitter := scheduler.NewJobEmitter(producer, log)
+	entries := scheduler.DefaultEntries(schedulerCfg)
+	sched := scheduler.New(entries, emitter, log, schedulerCfg.MaxRetries)
+	sched.Start(ctx)
+
+	log.WithField("entry_count", len(entries)).Info("scheduler started")
+
+	// ── 9. Graceful Shutdown ──────────────────────────────────────────────────
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -146,6 +166,9 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+
+	// Scheduler goroutine 종료 대기
+	sched.Stop()
 
 	if err := manager.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during pool manager shutdown")

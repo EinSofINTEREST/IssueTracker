@@ -20,17 +20,18 @@ import (
 // Register는 모든 미국 뉴스 크롤러를 registry에 등록합니다.
 // cmd/crawler/main.go에서 이 함수를 호출하여 US 뉴스 크롤러를 활성화합니다.
 // repo가 nil이면 DB 저장 없이 크롤링만 수행합니다.
+// publisher가 nil이면 카테고리 페이지에서의 체이닝 발행을 건너뜁니다.
 //
 // Register wires all US news crawlers and registers them with the provided Registry.
 // If repo is nil, articles are crawled but not persisted to the database.
-func Register(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, log *logger.Logger) {
-	registerCNN(registry, config, repo, log)
+func Register(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, publisher news.JobPublisher, log *logger.Logger) {
+	registerCNN(registry, config, repo, publisher, log)
 }
 
 // registerCNN은 CNN 뉴스 핸들러를 조립하고 등록합니다.
 // 체인: RSS(주) → GoQuery(HTML 폴백) → Browser(최종 폴백)
 // RSS는 기사 목록 수집에 사용되고, GoQuery/Browser는 전체 기사 본문 수집에 사용됩니다.
-func registerCNN(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, log *logger.Logger) {
+func registerCNN(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, publisher news.JobPublisher, log *logger.Logger) {
 	cnnCfg := cnn.DefaultCNNConfig()
 	cnnCfg.CrawlerConfig = config
 	cnnCfg.CrawlerConfig.SourceInfo = core.SourceInfo{
@@ -75,7 +76,7 @@ func registerCNN(registry *handler.Registry, config core.Config, repo storage.Ne
 		"data-lazy",
 	)
 
-	registry.Register("cnn", news.NewChainHandler(crawler, chain, parser, repo, log))
+	registry.Register("cnn", news.NewChainHandler(crawler, chain, parser, parser, publisher, repo, log))
 
 	log.WithField("crawler", "cnn").Info("cnn news crawler registered")
 }
