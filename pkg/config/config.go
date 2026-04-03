@@ -341,3 +341,56 @@ func Load(envFiles ...string) (DBConfig, error) {
 
 	return cfg, nil
 }
+
+// SchedulerConfig는 Job Scheduler의 크롤 주기 설정을 나타냅니다.
+// 소스 타입별로 독립적으로 조정할 수 있습니다.
+type SchedulerConfig struct {
+	FeedInterval     time.Duration // RSS 피드 폴링 주기 — SCHEDULER_FEED_INTERVAL (default: 20m)
+	CategoryInterval time.Duration // 카테고리 목록 폴링 주기 — SCHEDULER_CATEGORY_INTERVAL (default: 2h)
+	JobTimeout       time.Duration // 개별 Job 최대 실행 시간 — SCHEDULER_JOB_TIMEOUT (default: 30s)
+}
+
+// DefaultSchedulerConfig는 기본 SchedulerConfig를 반환합니다.
+func DefaultSchedulerConfig() SchedulerConfig {
+	return SchedulerConfig{
+		FeedInterval:     20 * time.Minute,
+		CategoryInterval: 2 * time.Hour,
+		JobTimeout:       30 * time.Second,
+	}
+}
+
+// LoadScheduler는 .env 파일을 로드한 후 OS 환경변수로 SchedulerConfig를 구성합니다.
+// 환경변수 값이 설정되어 있지만 파싱에 실패하면 에러를 반환합니다.
+func LoadScheduler(envFiles ...string) (SchedulerConfig, error) {
+	if len(envFiles) == 0 {
+		envFiles = []string{".env"}
+	}
+	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return SchedulerConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+	}
+
+	cfg := DefaultSchedulerConfig()
+
+	parseDuration := func(key string, dest *time.Duration) error {
+		if v := os.Getenv(key); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				return fmt.Errorf("parse %s %q: %w", key, v, err)
+			}
+			*dest = d
+		}
+		return nil
+	}
+
+	for _, op := range []error{
+		parseDuration("SCHEDULER_FEED_INTERVAL", &cfg.FeedInterval),
+		parseDuration("SCHEDULER_CATEGORY_INTERVAL", &cfg.CategoryInterval),
+		parseDuration("SCHEDULER_JOB_TIMEOUT", &cfg.JobTimeout),
+	} {
+		if op != nil {
+			return SchedulerConfig{}, op
+		}
+	}
+
+	return cfg, nil
+}
