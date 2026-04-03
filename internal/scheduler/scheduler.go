@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 
@@ -86,8 +87,17 @@ func (s *Scheduler) run(ctx context.Context, entry ScheduleEntry) {
 
 // publish는 CrawlJob을 생성하고 Kafka crawl 토픽에 발행합니다.
 func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
+	id, err := newJobID()
+	if err != nil {
+		s.log.WithFields(map[string]interface{}{
+			"crawler": entry.CrawlerName,
+			"url":     entry.URL,
+		}).WithError(err).Error("failed to generate job id")
+		return
+	}
+
 	job := &core.CrawlJob{
-		ID:          newJobID(),
+		ID:          id,
 		CrawlerName: entry.CrawlerName,
 		Target: core.Target{
 			URL:  entry.URL,
@@ -117,8 +127,10 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 }
 
 // newJobID는 crypto/rand 기반의 고유 Job ID(32자 hex)를 생성합니다.
-func newJobID() string {
+func newJobID() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate job id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
