@@ -81,7 +81,7 @@ func TestScheduler_PublishesJobOnStart(t *testing.T) {
 	entry := testEntry("https://example.com/feed/start", 10*time.Minute)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger())
+	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger(), 3)
 	sched.Start(ctx)
 
 	require.Eventually(t, func() bool {
@@ -97,7 +97,7 @@ func TestScheduler_PublishesRepeatedly(t *testing.T) {
 	entry := testEntry("https://example.com/feed/repeat", 100*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger())
+	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger(), 3)
 	sched.Start(ctx)
 
 	// 즉시 1회 + interval 경과 후 추가 발행
@@ -114,7 +114,7 @@ func TestScheduler_LogsPublishError(t *testing.T) {
 	entry := testEntry("https://example.com/feed/fail", 10*time.Minute)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger())
+	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger(), 3)
 	sched.Start(ctx)
 
 	// 발행 실패 시 패닉 없이 진행되어야 함
@@ -130,7 +130,7 @@ func TestScheduler_StopsOnContextCancel(t *testing.T) {
 	entry := testEntry("https://example.com/feed/cancel", 50*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger())
+	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger(), 3)
 	sched.Start(ctx)
 
 	time.Sleep(30 * time.Millisecond)
@@ -159,7 +159,7 @@ func TestScheduler_MultipleEntries(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sched := scheduler.New(entries, pub, testLogger())
+	sched := scheduler.New(entries, pub, testLogger(), 3)
 	sched.Start(ctx)
 
 	// 3개 엔트리 × 즉시 1회 = 3회 발행
@@ -183,7 +183,7 @@ func TestScheduler_JobFieldsAreCorrect(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger())
+	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, testLogger(), 3)
 	sched.Start(ctx)
 
 	require.Eventually(t, func() bool { return pub.count() == 1 }, 2*time.Second, 50*time.Millisecond)

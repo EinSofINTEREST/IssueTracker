@@ -348,6 +348,7 @@ type SchedulerConfig struct {
 	FeedInterval     time.Duration // RSS 피드 폴링 주기 — SCHEDULER_FEED_INTERVAL (default: 20m)
 	CategoryInterval time.Duration // 카테고리 목록 폴링 주기 — SCHEDULER_CATEGORY_INTERVAL (default: 2h)
 	JobTimeout       time.Duration // 개별 Job 최대 실행 시간 — SCHEDULER_JOB_TIMEOUT (default: 30s)
+	MaxRetries       int           // Job 최대 재시도 횟수 — SCHEDULER_MAX_RETRIES (default: 3)
 }
 
 // DefaultSchedulerConfig는 기본 SchedulerConfig를 반환합니다.
@@ -356,6 +357,7 @@ func DefaultSchedulerConfig() SchedulerConfig {
 		FeedInterval:     20 * time.Minute,
 		CategoryInterval: 2 * time.Hour,
 		JobTimeout:       30 * time.Second,
+		MaxRetries:       3,
 	}
 }
 
@@ -382,10 +384,22 @@ func LoadScheduler(envFiles ...string) (SchedulerConfig, error) {
 		return nil
 	}
 
+	parseInt := func(key string, dest *int) error {
+		if v := os.Getenv(key); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("parse %s %q: %w", key, v, err)
+			}
+			*dest = n
+		}
+		return nil
+	}
+
 	for _, op := range []error{
 		parseDuration("SCHEDULER_FEED_INTERVAL", &cfg.FeedInterval),
 		parseDuration("SCHEDULER_CATEGORY_INTERVAL", &cfg.CategoryInterval),
 		parseDuration("SCHEDULER_JOB_TIMEOUT", &cfg.JobTimeout),
+		parseInt("SCHEDULER_MAX_RETRIES", &cfg.MaxRetries),
 	} {
 		if op != nil {
 			return SchedulerConfig{}, op

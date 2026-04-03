@@ -15,10 +15,11 @@ import (
 // Emitter를 통해 Kafka crawl 토픽에 발행합니다.
 // 체이닝 Job(크롤된 페이지에서 발견된 URL)은 internal/publisher 패키지가 담당합니다.
 type Scheduler struct {
-	entries []ScheduleEntry
-	emitter Emitter
-	log     *logger.Logger
-	wg      sync.WaitGroup
+	entries    []ScheduleEntry
+	emitter    Emitter
+	log        *logger.Logger
+	wg         sync.WaitGroup
+	maxRetries int
 }
 
 // New는 새 Scheduler를 생성합니다.
@@ -26,11 +27,13 @@ func New(
 	entries []ScheduleEntry,
 	emitter Emitter,
 	log *logger.Logger,
+	maxRetries int,
 ) *Scheduler {
 	return &Scheduler{
-		entries: entries,
-		emitter: emitter,
-		log:     log,
+		entries:    entries,
+		emitter:    emitter,
+		log:        log,
+		maxRetries: maxRetries,
 	}
 }
 
@@ -93,7 +96,7 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 		Priority:    entry.Priority,
 		ScheduledAt: time.Now(),
 		Timeout:     entry.Timeout,
-		MaxRetries:  3,
+		MaxRetries:  s.maxRetries,
 	}
 
 	if err := s.emitter.Emit(ctx, job); err != nil {

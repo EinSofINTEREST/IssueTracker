@@ -151,7 +151,7 @@ func main() {
 
 	emitter := scheduler.NewJobEmitter(producer, log)
 	entries := scheduler.DefaultEntries(schedulerCfg)
-	sched := scheduler.New(entries, emitter, log)
+	sched := scheduler.New(entries, emitter, log, schedulerCfg.MaxRetries)
 	sched.Start(ctx)
 
 	log.WithField("entry_count", len(entries)).Info("scheduler started")
