@@ -146,37 +146,36 @@ func (e *Extractor) Extract(html, pageURL string) ([]Link, error) {
 	seen := make(map[string]struct{})
 	var result []Link
 
-	doc.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
-		// maxLinks 초과 시 이후 링크 건너뜀
+	doc.Find("a[href]").EachWithBreak(func(_ int, s *goquery.Selection) bool {
 		if e.maxLinks > 0 && len(result) >= e.maxLinks {
-			return
+			return false
 		}
 
 		href, _ := s.Attr("href")
 		href = strings.TrimSpace(href)
 		if href == "" {
-			return
+			return true
 		}
 
 		abs, ok := e.toAbsolute(href, base)
 		if !ok {
-			return
+			return true
 		}
 
 		if e.shouldExclude(abs) {
-			return
+			return true
 		}
 
 		if e.sameOriginOnly && base != nil && !e.sameOrigin(abs, base) {
-			return
+			return true
 		}
 
 		if !e.matchesPathPrefix(abs) {
-			return
+			return true
 		}
 
 		if _, dup := seen[abs]; dup {
-			return
+			return true
 		}
 		seen[abs] = struct{}{}
 
@@ -184,6 +183,7 @@ func (e *Extractor) Extract(html, pageURL string) ([]Link, error) {
 			URL:  abs,
 			Text: strings.TrimSpace(s.Text()),
 		})
+		return true
 	})
 
 	return result, nil
