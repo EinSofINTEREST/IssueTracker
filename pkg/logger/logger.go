@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -13,6 +14,17 @@ import (
 type Logger struct {
 	logger zerolog.Logger
 }
+
+// timeFormatOnce는 zerolog.TimeFieldFormat 전역 쓰기를 1회로 제한합니다.
+// zerolog.TimeFieldFormat은 패키지 전역 변수이므로 다중 goroutine에서 동시 쓰기 시 race가 발생합니다.
+var timeFormatOnce sync.Once
+
+// defaultLoggerOnce / defaultLoggerVal은 FromContext fallback용 기본 Logger를 1회만 생성합니다.
+// 매 호출마다 New()를 실행하면 zerolog.TimeFieldFormat 동시 쓰기 race가 발생합니다.
+var (
+	defaultLoggerOnce sync.Once
+	defaultLoggerVal  *Logger
+)
 
 // Level은 로그 레벨을 나타냅니다.
 type Level string
@@ -59,8 +71,11 @@ func New(cfg Config) *Logger {
 		}
 	}
 
-	// Zerolog 설정
-	zerolog.TimeFieldFormat = cfg.TimeFormat
+	// zerolog.TimeFieldFormat은 패키지 전역 변수이므로 sync.Once로 1회만 설정합니다.
+	// 첫 번째 New() 호출의 TimeFormat이 적용되며, 이후 호출은 무시됩니다.
+	timeFormatOnce.Do(func() {
+		zerolog.TimeFieldFormat = cfg.TimeFormat
+	})
 	zlog := zerolog.New(output).With().Timestamp().Logger()
 
 	// Level 설정
@@ -170,12 +185,15 @@ func (l *Logger) ToContext(ctx context.Context) context.Context {
 }
 
 // FromContext는 context에서 logger를 가져옵니다.
-// logger가 없으면 기본 logger를 반환합니다.
+// logger가 없으면 패키지 수준 기본 logger를 반환합니다.
 func FromContext(ctx context.Context) *Logger {
-	if logger, ok := ctx.Value(loggerKey).(*Logger); ok {
-		return logger
+	if l, ok := ctx.Value(loggerKey).(*Logger); ok {
+		return l
 	}
-	return New(DefaultConfig())
+	defaultLoggerOnce.Do(func() {
+		defaultLoggerVal = New(DefaultConfig())
+	})
+	return defaultLoggerVal
 }
 
 // WithRequestID는 request ID를 포함한 새로운 Logger를 반환합니다.
