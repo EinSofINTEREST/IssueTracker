@@ -88,14 +88,11 @@ func main() {
 
 	// ── 3. 소비 (crawl.high / normal / low → Worker) ──────────────────────────
 	// 각 consumer가 서로 다른 토픽을 구독하므로 동일 GroupID 사용 가능
+	// consumer close는 pool.Stop() 내부에서 수행합니다.
+	// 여기서 defer Close를 추가하면 pool.Stop 이후 중복 close가 발생합니다.
 	highConsumer := queue.NewConsumer(kafkaCfg, queue.TopicCrawlHigh)
-	defer highConsumer.Close()
-
 	normalConsumer := queue.NewConsumer(kafkaCfg, queue.TopicCrawlNormal)
-	defer normalConsumer.Close()
-
 	lowConsumer := queue.NewConsumer(kafkaCfg, queue.TopicCrawlLow)
-	defer lowConsumer.Close()
 
 	// ── 4. 크롤러 Registry + DB 연결 ─────────────────────────────────────────
 	registry := handler.NewRegistry(log)
