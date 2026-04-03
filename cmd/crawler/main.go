@@ -110,8 +110,14 @@ func main() {
 
 	newsRepo := pgstore.NewNewsArticleRepository(pool, log)
 
-	kr.Register(registry, core.DefaultConfig(), newsRepo, log)
-	us.Register(registry, core.DefaultConfig(), newsRepo, log)
+	// ── 6. Publisher (체이닝 Job 발행) ────────────────────────────────────────
+	// 크롤러가 카테고리/피드 페이지에서 발견한 URL을 다음 CrawlJob으로 연결합니다.
+	// resolver를 공유하여 우선순위 결정 로직을 일관되게 유지합니다.
+	// Registry 등록 전에 생성하여 ChainHandler에 주입합니다.
+	jobPublisher := publisher.New(producer, resolver, log)
+
+	kr.Register(registry, core.DefaultConfig(), newsRepo, jobPublisher, log)
+	us.Register(registry, core.DefaultConfig(), newsRepo, jobPublisher, log)
 
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
@@ -135,12 +141,6 @@ func main() {
 		"normal_workers": managerCfg.Normal.WorkerCount,
 		"low_workers":    managerCfg.Low.WorkerCount,
 	}).Info("pool manager started")
-
-	// ── 6. Publisher (체이닝 Job 발행) ────────────────────────────────────────
-	// 크롤러가 카테고리/피드 페이지에서 발견한 URL을 다음 CrawlJob으로 연결합니다.
-	// resolver를 공유하여 우선순위 결정 로직을 일관되게 유지합니다.
-	jobPublisher := publisher.New(producer, resolver, log)
-	_ = jobPublisher // TODO: JobHandler에 주입하여 체이닝 발행에 사용
 
 	// ── 7. Scheduler (시드 Job 발행) ──────────────────────────────────────────
 	// 등록된 소스의 시드 Job만 생성합니다. 체이닝은 Publisher가 담당합니다.
