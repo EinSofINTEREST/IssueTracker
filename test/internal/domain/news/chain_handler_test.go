@@ -196,7 +196,7 @@ func TestChainHandler_Handle_Category_중복URL제거(t *testing.T) {
 		{URL: "https://news.example.com/1"},
 		{URL: "https://news.example.com/1"}, // 중복
 		{URL: "https://news.example.com/2"},
-		{URL: ""},                            // 빈 URL
+		{URL: ""}, // 빈 URL
 	}}
 	pub := &capturePublisher{}
 
