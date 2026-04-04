@@ -53,7 +53,7 @@ run-processor: build ## Validate processor 실행
 
 run-issuetracker: build ## Crawler + Processor 통합 실행
 	@echo "Running issuetracker (crawler + processor)..."
-	./$(ISSUETRACKER_BINARY)
+	./scripts/entrypoint.sh
 
 run-example: ## Basic example 실행 (로컬 Chrome 또는 Docker Chrome 필요)
 	@echo "Running basic example..."
