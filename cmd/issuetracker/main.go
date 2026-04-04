@@ -13,6 +13,8 @@ import (
 	"issuetracker/internal/crawler/handler"
 	crawlerWorker "issuetracker/internal/crawler/worker"
 	"issuetracker/internal/processor/validate"
+	"issuetracker/internal/publisher"
+	"issuetracker/internal/scheduler"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -70,8 +72,9 @@ func main() {
 	defer pool.Close()
 
 	newsRepo := pgstore.NewNewsArticleRepository(pool, log)
-	kr.Register(registry, core.DefaultConfig(), newsRepo, log)
-	us.Register(registry, core.DefaultConfig(), newsRepo, log)
+	jobPublisher := publisher.New(crawlerProducer, resolver, log)
+	kr.Register(registry, core.DefaultConfig(), newsRepo, jobPublisher, log)
+	us.Register(registry, core.DefaultConfig(), newsRepo, jobPublisher, log)
 
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
@@ -90,6 +93,19 @@ func main() {
 		"normal_workers": managerCfg.Normal.WorkerCount,
 		"low_workers":    managerCfg.Low.WorkerCount,
 	}).Info("crawler pool manager started")
+
+	// ── Scheduler (시드 Job 발행) ─────────────────────────────────────────────
+	schedulerCfg, err := config.LoadScheduler()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load scheduler config")
+	}
+
+	emitter := scheduler.NewJobEmitter(crawlerProducer, log)
+	entries := scheduler.DefaultEntries(schedulerCfg)
+	sched := scheduler.New(entries, emitter, log, schedulerCfg.MaxRetries)
+	sched.Start(ctx)
+
+	log.WithField("entry_count", len(entries)).Info("scheduler started")
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Processor (Validate)
@@ -131,6 +147,8 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+
+	sched.Stop()
 
 	if err := manager.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during crawler shutdown")
