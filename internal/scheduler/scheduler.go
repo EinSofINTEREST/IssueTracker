@@ -69,7 +69,12 @@ func (s *Scheduler) run(ctx context.Context, entry ScheduleEntry) {
 		return
 	}
 
-	// 시작 시 즉시 1회 실행
+	s.log.WithFields(map[string]interface{}{
+		"crawler":  entry.CrawlerName,
+		"url":      entry.URL,
+		"interval": entry.Interval.String(),
+	}).Info("scheduler entry started, triggering initial crawl")
+
 	s.publish(ctx, entry)
 
 	ticker := time.NewTicker(entry.Interval)
@@ -80,6 +85,10 @@ func (s *Scheduler) run(ctx context.Context, entry ScheduleEntry) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.log.WithFields(map[string]interface{}{
+				"crawler": entry.CrawlerName,
+				"url":     entry.URL,
+			}).Info("scheduler tick, triggering crawl")
 			s.publish(ctx, entry)
 		}
 	}
