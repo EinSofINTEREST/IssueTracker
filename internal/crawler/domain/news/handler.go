@@ -2,6 +2,7 @@ package news
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -157,6 +158,16 @@ func NewGoQueryFetchHandler(fetcher NewsFetcher, log *logger.Logger, lazyKeyword
 func (h *GoQueryFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
 	raw, err := h.fetcher.Fetch(ctx, job.Target)
 	if err != nil {
+		// URL 자체가 존재하지 않는 경우 다른 전략도 동일하게 실패하므로 즉시 반환
+		var crawlerErr *core.CrawlerError
+		if errors.As(err, &crawlerErr) && crawlerErr.Category == core.ErrCategoryNotFound {
+			h.log.WithFields(map[string]interface{}{
+				"handler": "goquery",
+				"url":     job.Target.URL,
+			}).WithError(err).Error("resource not found, aborting chain")
+			return nil, err
+		}
+
 		h.log.WithFields(map[string]interface{}{
 			"handler": "goquery",
 			"url":     job.Target.URL,
