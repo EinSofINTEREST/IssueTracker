@@ -66,13 +66,15 @@ go mod tidy
 ### Building
 
 ```bash
-# Build all binaries (crawler, processor, issuetracker)
+# Build all binaries
 make build
 
 # Or build individual binaries
 go build -o bin/crawler ./cmd/crawler
 go build -o bin/processor ./cmd/processor
 go build -o bin/issuetracker ./cmd/issuetracker
+go build -o bin/migrate ./cmd/migrate
+go build -o bin/migrate-down ./cmd/migrate-down
 ```
 
 ### Kafka Setup
@@ -130,6 +132,8 @@ make run-example
 | `bin/crawler` | `cmd/crawler/` | Crawler pool manager only |
 | `bin/processor` | `cmd/processor/` | Validate worker only |
 | `bin/issuetracker` | `cmd/issuetracker/` | Crawler + Processor combined |
+| `bin/migrate` | `cmd/migrate/` | Run database migrations (up) |
+| `bin/migrate-down` | `cmd/migrate-down/` | Rollback database migrations |
 
 ### Database Setup
 
@@ -263,12 +267,16 @@ Following the [Standard Go Project Layout](https://github.com/golang-standards/p
 
 ```
 issuetracker/
-├── cmd/
-│   ├── crawler/               # Crawler-only entry point
+├── cmd/                           # Application entry points (all build to bin/)
+│   ├── crawler/               # Crawler-only entry point → bin/crawler
 │   │   └── main.go
-│   ├── processor/             # Validate processor entry point
+│   ├── processor/             # Validate processor entry point → bin/processor
 │   │   └── main.go
-│   └── issuetracker/          # Crawler + Processor combined entry point
+│   ├── issuetracker/          # Crawler + Processor combined entry point → bin/issuetracker
+│   │   └── main.go
+│   ├── migrate/               # DB migration (up) → bin/migrate
+│   │   └── main.go
+│   └── migrate-down/          # DB migration (down) → bin/migrate-down
 │       └── main.go
 │
 ├── internal/
@@ -548,7 +556,7 @@ err := core.WithRetry(requestCtx, core.DefaultRetryPolicy, func() error {
 
 ```bash
 # Build & Run
-make build              # Build all binaries → bin/crawler, bin/processor, bin/issuetracker
+make build              # Build all binaries → bin/crawler, bin/processor, bin/issuetracker, bin/migrate, bin/migrate-down
 make run-crawler        # Build and run crawler only
 make run-processor      # Build and run validate processor only
 make run-issuetracker   # Build and run crawler + processor combined

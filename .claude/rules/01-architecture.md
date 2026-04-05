@@ -89,11 +89,17 @@ Following [Standard Go Project Layout](https://github.com/golang-standards/proje
 
 ```
 issuetracker/
-├── cmd/                        # Application entry points
-│   ├── crawler/               # Crawler executable
+├── cmd/                        # Application entry points (all build to bin/)
+│   ├── crawler/               # ✅ Crawler pool manager → bin/crawler
 │   │   └── main.go
-│   ├── processor/             # Processor executable (planned)
-│   └── api/                   # API server executable (planned)
+│   ├── processor/             # ✅ Validate worker → bin/processor
+│   │   └── main.go
+│   ├── issuetracker/          # ✅ Crawler + Processor combined → bin/issuetracker
+│   │   └── main.go
+│   ├── migrate/               # ✅ DB migration (up) → bin/migrate
+│   │   └── main.go
+│   └── migrate-down/          # ✅ DB migration (down) → bin/migrate-down
+│       └── main.go
 │
 ├── internal/                   # Private application code
 │   ├── crawler/
@@ -167,8 +173,9 @@ issuetracker/
 ### Directory Purposes
 
 **`cmd/`**: Application entry points (main packages)
-- Each subdirectory is an executable
+- Each subdirectory is an executable; all build to `bin/<name>` via `make build`
 - Minimal logic, imports from `internal/` and `pkg/`
+- New entry points MUST be added to the `build` target in `Makefile` alongside the corresponding `*_BINARY` variable
 
 **`internal/`**: Private application code
 - Cannot be imported by external projects

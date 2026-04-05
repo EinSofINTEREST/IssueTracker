@@ -14,6 +14,8 @@ PG_ENV_ARGS=$(shell [ -f $(PG_ENV_FILE) ] && echo "--env-file $(PG_ENV_FILE)")
 CRAWLER_BINARY=$(BINARY_DIR)/crawler
 PROCESSOR_BINARY=$(BINARY_DIR)/processor
 ISSUETRACKER_BINARY=$(BINARY_DIR)/issuetracker
+MIGRATE_BINARY=$(BINARY_DIR)/migrate
+MIGRATE_DOWN_BINARY=$(BINARY_DIR)/migrate-down
 GO=go
 GOFLAGS=-v
 
@@ -39,7 +41,9 @@ build: ## 모든 바이너리 빌드
 	$(GO) build $(GOFLAGS) -o $(CRAWLER_BINARY) ./cmd/crawler
 	$(GO) build $(GOFLAGS) -o $(PROCESSOR_BINARY) ./cmd/processor
 	$(GO) build $(GOFLAGS) -o $(ISSUETRACKER_BINARY) ./cmd/issuetracker
-	@echo "Build complete: $(CRAWLER_BINARY), $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY)"
+	$(GO) build $(GOFLAGS) -o $(MIGRATE_BINARY) ./cmd/migrate
+	$(GO) build $(GOFLAGS) -o $(MIGRATE_DOWN_BINARY) ./cmd/migrate-down
+	@echo "Build complete: $(CRAWLER_BINARY), $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY), $(MIGRATE_BINARY), $(MIGRATE_DOWN_BINARY)"
 
 build-all: build ## 모든 실행 파일 빌드 (build와 동일)
 
@@ -168,14 +172,14 @@ pg-clean: ## PostgreSQL 중지 + 볼륨 데이터 삭제
 	rm -rf $(PG_DATA_DIR)
 	@echo "PostgreSQL stopped and data removed"
 
-pg-migrate: ## DB 마이그레이션 실행 (schema_migrations 기준 멱등)
+pg-migrate: build ## DB 마이그레이션 실행 (schema_migrations 기준 멱등)
 	@echo "Running database migrations..."
-	$(GO) run ./cmd/migrate/...
+	./$(MIGRATE_BINARY)
 	@echo "Migrations complete"
 
-pg-migrate-down: ## DB 마이그레이션 롤백 실행 (배포 환경용, dev에서는 사용 지양)
+pg-migrate-down: build ## DB 마이그레이션 롤백 실행 (배포 환경용, dev에서는 사용 지양)
 	@echo "Rolling back database migrations..."
-	$(GO) run ./cmd/migrate-down/...
+	./$(MIGRATE_DOWN_BINARY)
 	@echo "Rollback complete"
 
 pg-status: ## PostgreSQL 컨테이너 상태 확인
@@ -220,7 +224,6 @@ clean: ## 빌드 파일 정리
 	@echo "Cleaning..."
 	rm -rf $(BINARY_DIR)
 	rm -f coverage.out coverage.html
-	rm -f crawler processor issuetracker basic_usage crawler_comparison kafka_pipeline
 	@echo "Clean complete"
 
 deps: ## 의존성 다운로드
