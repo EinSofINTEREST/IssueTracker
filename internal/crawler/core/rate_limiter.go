@@ -37,27 +37,34 @@ func NewRateLimiter(requestsPerHour, burst int) RateLimiter {
 // token이 없으면 token이 생성될 때까지 대기합니다.
 func (r *TokenBucketRateLimiter) Wait(ctx context.Context) error {
 	log := logger.FromContext(ctx)
-	waitStarted := false
+	waitCount := 0
 
 	for {
 		if r.Allow() {
-			if waitStarted {
-				log.Debug("rate limit wait completed")
+			if waitCount > 0 {
+				log.WithField("wait_count", waitCount).Debug("rate limit wait completed")
 			}
 			return nil
 		}
 
-		// 다음 token이 생성될 때까지 대기
 		sleepDuration := r.timeToNextToken()
+		waitCount++
 
-		if !waitStarted {
-			log.WithField("wait_ms", sleepDuration.Milliseconds()).
-				Debug("rate limit reached, waiting for token")
-			waitStarted = true
+		if waitCount == 1 {
+			log.WithFields(map[string]interface{}{
+				"wait_ms": sleepDuration.Milliseconds(),
+				"rate":    r.rate,
+				"burst":   r.burst,
+			}).Debug("rate limit reached, waiting for token")
 		}
 
 		select {
 		case <-ctx.Done():
+			log.WithFields(map[string]interface{}{
+				"wait_count": waitCount,
+				"rate":       r.rate,
+				"burst":      r.burst,
+			}).Debug("rate limit wait cancelled by context")
 			return ctx.Err()
 		case <-time.After(sleepDuration):
 			// continue to check again
