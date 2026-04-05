@@ -25,14 +25,16 @@ import (
 const validateWorkerCount = 8
 
 func main() {
+	log := logger.New(logger.DefaultConfig())
+
 	logCfg, err := config.LoadLog()
 	if err != nil {
-		panic("failed to load log config: " + err.Error())
+		log.WithError(err).Fatal("failed to load log config")
 	}
 	loggerCfg := logger.DefaultConfig()
 	loggerCfg.Level = logger.Level(logCfg.Level)
 	loggerCfg.Pretty = logCfg.Pretty
-	log := logger.New(loggerCfg)
+	log = logger.New(loggerCfg)
 
 	log.Info("starting IssueTracker")
 
