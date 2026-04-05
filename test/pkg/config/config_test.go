@@ -124,3 +124,168 @@ func unsetEnvVars(t *testing.T) {
 		t.Setenv(v, "")
 	}
 }
+
+// unsetRedisEnvVars는 테스트 격리를 위해 REDIS_* 환경변수를 초기화합니다.
+func unsetRedisEnvVars(t *testing.T) {
+	t.Helper()
+	vars := []string{
+		"REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD",
+		"REDIS_DB", "REDIS_DIAL_TIMEOUT", "REDIS_READ_TIMEOUT",
+		"REDIS_WRITE_TIMEOUT", "REDIS_POOL_SIZE",
+	}
+	for _, v := range vars {
+		t.Setenv(v, "")
+	}
+}
+
+func TestLoadRedis_DefaultValues(t *testing.T) {
+	unsetRedisEnvVars(t)
+
+	cfg, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("기본값 로드 실패: %v", err)
+	}
+
+	def := config.DefaultRedisConfig()
+	if cfg.Host != def.Host {
+		t.Errorf("Host: got %q, want %q", cfg.Host, def.Host)
+	}
+	if cfg.Port != def.Port {
+		t.Errorf("Port: got %d, want %d", cfg.Port, def.Port)
+	}
+	if cfg.DB != def.DB {
+		t.Errorf("DB: got %d, want %d", cfg.DB, def.DB)
+	}
+	if cfg.PoolSize != def.PoolSize {
+		t.Errorf("PoolSize: got %d, want %d", cfg.PoolSize, def.PoolSize)
+	}
+	if cfg.DialTimeout != def.DialTimeout {
+		t.Errorf("DialTimeout: got %v, want %v", cfg.DialTimeout, def.DialTimeout)
+	}
+}
+
+func TestLoadRedis_EnvOverride(t *testing.T) {
+	unsetRedisEnvVars(t)
+	t.Setenv("REDIS_HOST", "redis.example.com")
+	t.Setenv("REDIS_PORT", "6380")
+	t.Setenv("REDIS_DB", "2")
+	t.Setenv("REDIS_POOL_SIZE", "20")
+	t.Setenv("REDIS_DIAL_TIMEOUT", "10s")
+
+	cfg, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("환경변수 로드 실패: %v", err)
+	}
+
+	if cfg.Host != "redis.example.com" {
+		t.Errorf("Host: got %q, want %q", cfg.Host, "redis.example.com")
+	}
+	if cfg.Port != 6380 {
+		t.Errorf("Port: got %d, want 6380", cfg.Port)
+	}
+	if cfg.DB != 2 {
+		t.Errorf("DB: got %d, want 2", cfg.DB)
+	}
+	if cfg.PoolSize != 20 {
+		t.Errorf("PoolSize: got %d, want 20", cfg.PoolSize)
+	}
+	if cfg.DialTimeout != 10*time.Second {
+		t.Errorf("DialTimeout: got %v, want 10s", cfg.DialTimeout)
+	}
+}
+
+func TestLoadRedis_InvalidPort(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"not a number", "not-a-number"},
+		{"port zero", "0"},
+		{"port too large", "70000"},
+		{"negative port", "-1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetRedisEnvVars(t)
+			t.Setenv("REDIS_PORT", tt.value)
+
+			_, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+			if err == nil {
+				t.Fatalf("REDIS_PORT=%q: 에러가 반환되어야 합니다", tt.value)
+			}
+		})
+	}
+}
+
+func TestLoadRedis_InvalidDB(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"not a number", "not-a-number"},
+		{"negative db index", "-1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetRedisEnvVars(t)
+			t.Setenv("REDIS_DB", tt.value)
+
+			_, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+			if err == nil {
+				t.Fatalf("REDIS_DB=%q: 에러가 반환되어야 합니다", tt.value)
+			}
+		})
+	}
+}
+
+func TestLoadRedis_InvalidPoolSize(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"not a number", "not-a-number"},
+		{"zero", "0"},
+		{"negative", "-5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetRedisEnvVars(t)
+			t.Setenv("REDIS_POOL_SIZE", tt.value)
+
+			_, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+			if err == nil {
+				t.Fatalf("REDIS_POOL_SIZE=%q: 에러가 반환되어야 합니다", tt.value)
+			}
+		})
+	}
+}
+
+func TestLoadRedis_InvalidTimeouts(t *testing.T) {
+	timeoutEnvVars := []string{
+		"REDIS_DIAL_TIMEOUT",
+		"REDIS_READ_TIMEOUT",
+		"REDIS_WRITE_TIMEOUT",
+	}
+	invalidValues := []struct {
+		name  string
+		value string
+	}{
+		{"not a duration", "not-a-duration"},
+		{"zero", "0s"},
+		{"negative", "-1s"},
+	}
+
+	for _, envVar := range timeoutEnvVars {
+		for _, tt := range invalidValues {
+			t.Run(envVar+"/"+tt.name, func(t *testing.T) {
+				unsetRedisEnvVars(t)
+				t.Setenv(envVar, tt.value)
+
+				_, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+				if err == nil {
+					t.Fatalf("%s=%q: 에러가 반환되어야 합니다", envVar, tt.value)
+				}
+			})
+		}
+	}
+}
