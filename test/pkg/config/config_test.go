@@ -112,6 +112,106 @@ func TestLoad_MissingEnvFileIsIgnored(t *testing.T) {
 	}
 }
 
+// unsetLogEnvVars는 테스트 격리를 위해 LOG_* 환경변수를 초기화합니다.
+func unsetLogEnvVars(t *testing.T) {
+	t.Helper()
+	t.Setenv("LOG_LEVEL", "")
+	t.Setenv("LOG_PRETTY", "")
+}
+
+func TestLoadLog_DefaultValues(t *testing.T) {
+	unsetLogEnvVars(t)
+
+	cfg, err := config.LoadLog("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("기본값 로드 실패: %v", err)
+	}
+
+	def := config.DefaultLogConfig()
+	if cfg.Level != def.Level {
+		t.Errorf("Level: got %q, want %q", cfg.Level, def.Level)
+	}
+	if cfg.Pretty != def.Pretty {
+		t.Errorf("Pretty: got %v, want %v", cfg.Pretty, def.Pretty)
+	}
+}
+
+func TestLoadLog_EnvOverride(t *testing.T) {
+	tests := []struct {
+		name       string
+		level      string
+		pretty     string
+		wantLevel  string
+		wantPretty bool
+	}{
+		{"debug level", "debug", "false", "debug", false},
+		{"warn level", "warn", "false", "warn", false},
+		{"error level", "error", "false", "error", false},
+		{"pretty true", "info", "true", "info", true},
+		{"pretty false", "info", "false", "info", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetLogEnvVars(t)
+			t.Setenv("LOG_LEVEL", tt.level)
+			t.Setenv("LOG_PRETTY", tt.pretty)
+
+			cfg, err := config.LoadLog("/tmp/nonexistent-env-file.env")
+			if err != nil {
+				t.Fatalf("환경변수 로드 실패: %v", err)
+			}
+			if cfg.Level != tt.wantLevel {
+				t.Errorf("Level: got %q, want %q", cfg.Level, tt.wantLevel)
+			}
+			if cfg.Pretty != tt.wantPretty {
+				t.Errorf("Pretty: got %v, want %v", cfg.Pretty, tt.wantPretty)
+			}
+		})
+	}
+}
+
+func TestLoadLog_InvalidLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"uppercase", "INFO"},
+		{"mixed case", "Debug"},
+		{"unknown level", "verbose"},
+		{"empty-like typo", "infoo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetLogEnvVars(t)
+			t.Setenv("LOG_LEVEL", tt.value)
+
+			_, err := config.LoadLog("/tmp/nonexistent-env-file.env")
+			if err == nil {
+				t.Fatalf("LOG_LEVEL=%q: 에러가 반환되어야 합니다", tt.value)
+			}
+		})
+	}
+}
+
+func TestLoadLog_InvalidPretty(t *testing.T) {
+	unsetLogEnvVars(t)
+	t.Setenv("LOG_PRETTY", "not-a-bool")
+
+	_, err := config.LoadLog("/tmp/nonexistent-env-file.env")
+	if err == nil {
+		t.Fatal("잘못된 LOG_PRETTY 값에 대해 에러가 반환되어야 합니다")
+	}
+}
+
+func TestLoadLog_MissingEnvFileIsIgnored(t *testing.T) {
+	unsetLogEnvVars(t)
+
+	_, err := config.LoadLog("/tmp/does-not-exist.env")
+	if err != nil {
+		t.Fatalf("존재하지 않는 .env 파일은 에러를 반환하면 안 됩니다: %v", err)
+	}
+}
+
 // unsetEnvVars는 테스트 격리를 위해 POSTGRES_* 환경변수를 초기화합니다.
 func unsetEnvVars(t *testing.T) {
 	t.Helper()
