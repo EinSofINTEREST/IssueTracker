@@ -33,7 +33,7 @@ func LoadLog(envFiles ...string) (LogConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return LogConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return LogConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultLogConfig()
@@ -108,7 +108,7 @@ func LoadValidate(envFiles ...string) (ValidateConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ValidateConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return ValidateConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultValidateConfig()
@@ -182,7 +182,7 @@ func LoadClassifier(envFiles ...string) (ClassifierConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ClassifierConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return ClassifierConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultClassifierConfig()
@@ -269,7 +269,7 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return RedisConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return RedisConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultRedisConfig()
@@ -431,7 +431,7 @@ func LoadScheduler(envFiles ...string) (SchedulerConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return SchedulerConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return SchedulerConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultSchedulerConfig()
