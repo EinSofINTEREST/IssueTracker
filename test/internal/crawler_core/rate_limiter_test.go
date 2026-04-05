@@ -16,12 +16,10 @@ import (
 
 // debugContext는 debug 레벨 logger를 buf에 기록하는 context를 반환합니다.
 func debugContext(buf *bytes.Buffer) context.Context {
-	log := logger.New(logger.Config{
-		Level:      logger.LevelDebug,
-		Output:     buf,
-		TimeFormat: time.RFC3339,
-	})
-	return log.ToContext(context.Background())
+	cfg := logger.DefaultConfig()
+	cfg.Level = logger.LevelDebug
+	cfg.Output = buf
+	return logger.New(cfg).ToContext(context.Background())
 }
 
 // lastLog는 buf에서 마지막 JSON 로그 라인을 파싱해 반환합니다.
@@ -195,7 +193,10 @@ func TestRateLimiter_Wait_LogsContextCancelled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	ctx = logger.New(logger.Config{Level: logger.LevelDebug, Output: &buf}).ToContext(ctx)
+	logCfg := logger.DefaultConfig()
+	logCfg.Level = logger.LevelDebug
+	logCfg.Output = &buf
+	ctx = logger.New(logCfg).ToContext(ctx)
 
 	err := limiter.Wait(ctx)
 	require.ErrorIs(t, err, context.Canceled)
