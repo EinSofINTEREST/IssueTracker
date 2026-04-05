@@ -218,7 +218,7 @@ func DefaultRedisConfig() RedisConfig {
 }
 
 // LoadRedis는 .env 파일을 로드한 후 OS 환경변수로 RedisConfig를 구성합니다.
-// 환경변수 값이 설정되어 있지만 파싱에 실패하면 에러를 반환합니다.
+// 환경변수 값이 설정되어 있지만 파싱에 실패하거나 범위를 벗어나면 에러를 반환합니다.
 func LoadRedis(envFiles ...string) (RedisConfig, error) {
 	if len(envFiles) == 0 {
 		envFiles = []string{".env"}
@@ -237,6 +237,9 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		if err != nil {
 			return RedisConfig{}, fmt.Errorf("parse REDIS_PORT %q: %w", v, err)
 		}
+		if p < 1 || p > 65535 {
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_PORT %d: must be between 1 and 65535", p)
+		}
 		cfg.Port = p
 	}
 	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
@@ -247,12 +250,18 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		if err != nil {
 			return RedisConfig{}, fmt.Errorf("parse REDIS_DB %q: %w", v, err)
 		}
+		if n < 0 {
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_DB %d: must be 0 or greater", n)
+		}
 		cfg.DB = n
 	}
 	if v := os.Getenv("REDIS_DIAL_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return RedisConfig{}, fmt.Errorf("parse REDIS_DIAL_TIMEOUT %q: %w", v, err)
+		}
+		if d <= 0 {
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_DIAL_TIMEOUT %q: must be positive", v)
 		}
 		cfg.DialTimeout = d
 	}
@@ -261,6 +270,9 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		if err != nil {
 			return RedisConfig{}, fmt.Errorf("parse REDIS_READ_TIMEOUT %q: %w", v, err)
 		}
+		if d <= 0 {
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_READ_TIMEOUT %q: must be positive", v)
+		}
 		cfg.ReadTimeout = d
 	}
 	if v := os.Getenv("REDIS_WRITE_TIMEOUT"); v != "" {
@@ -268,12 +280,18 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		if err != nil {
 			return RedisConfig{}, fmt.Errorf("parse REDIS_WRITE_TIMEOUT %q: %w", v, err)
 		}
+		if d <= 0 {
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_WRITE_TIMEOUT %q: must be positive", v)
+		}
 		cfg.WriteTimeout = d
 	}
 	if v := os.Getenv("REDIS_POOL_SIZE"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return RedisConfig{}, fmt.Errorf("parse REDIS_POOL_SIZE %q: %w", v, err)
+		}
+		if n < 1 {
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_POOL_SIZE %d: must be 1 or greater", n)
 		}
 		cfg.PoolSize = n
 	}
