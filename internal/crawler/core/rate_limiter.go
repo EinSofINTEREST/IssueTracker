@@ -60,12 +60,14 @@ func (r *TokenBucketRateLimiter) Wait(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
+			ctxErr := ctx.Err()
 			log.WithFields(map[string]interface{}{
 				"wait_count": waitCount,
 				"rate":       r.rate,
 				"burst":      r.burst,
-			}).Debug("rate limit wait cancelled by context")
-			return ctx.Err()
+				"ctx_err":    ctxErr,
+			}).Debug("rate limit wait context done")
+			return ctxErr
 		case <-time.After(sleepDuration):
 			// continue to check again
 		}
