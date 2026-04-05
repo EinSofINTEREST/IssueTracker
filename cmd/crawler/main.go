@@ -23,10 +23,14 @@ import (
 )
 
 func main() {
-	logConfig := logger.DefaultConfig()
-	logConfig.Level = logger.LevelInfo
-	logConfig.Pretty = false
-	log := logger.New(logConfig)
+	logCfg, err := config.LoadLog()
+	if err != nil {
+		panic("failed to load log config: " + err.Error())
+	}
+	log := logger.New(logger.Config{
+		Level:  logger.Level(logCfg.Level),
+		Pretty: logCfg.Pretty,
+	})
 
 	log.Info("starting IssueTracker crawler")
 
