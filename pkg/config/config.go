@@ -12,6 +12,51 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// LogConfig는 로거 설정을 나타냅니다.
+type LogConfig struct {
+	Level  string // LOG_LEVEL: debug | info | warn | error (default: info)
+	Pretty bool   // LOG_PRETTY: true | false (default: false)
+}
+
+// DefaultLogConfig는 기본 LogConfig를 반환합니다.
+func DefaultLogConfig() LogConfig {
+	return LogConfig{
+		Level:  "info",
+		Pretty: false,
+	}
+}
+
+// LoadLog는 .env 파일을 로드한 후 OS 환경변수로 LogConfig를 구성합니다.
+// 지원 환경변수: LOG_LEVEL (debug|info|warn|error), LOG_PRETTY (true|false)
+func LoadLog(envFiles ...string) (LogConfig, error) {
+	if len(envFiles) == 0 {
+		envFiles = []string{".env"}
+	}
+	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return LogConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
+	}
+
+	cfg := DefaultLogConfig()
+
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		switch v {
+		case "debug", "info", "warn", "error":
+			cfg.Level = v
+		default:
+			return LogConfig{}, fmt.Errorf("invalid LOG_LEVEL %q: must be one of debug, info, warn, error", v)
+		}
+	}
+	if v := os.Getenv("LOG_PRETTY"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return LogConfig{}, fmt.Errorf("parse LOG_PRETTY %q: %w", v, err)
+		}
+		cfg.Pretty = b
+	}
+
+	return cfg, nil
+}
+
 // ValidateConfig는 Content 검증 단계의 임계값 설정을 나타냅니다.
 // 뉴스/커뮤니티 소스 타입별로 독립적으로 조정할 수 있습니다.
 type ValidateConfig struct {
@@ -63,7 +108,7 @@ func LoadValidate(envFiles ...string) (ValidateConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ValidateConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return ValidateConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultValidateConfig()
@@ -137,7 +182,7 @@ func LoadClassifier(envFiles ...string) (ClassifierConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ClassifierConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return ClassifierConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultClassifierConfig()
@@ -224,7 +269,7 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return RedisConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return RedisConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultRedisConfig()
@@ -386,7 +431,7 @@ func LoadScheduler(envFiles ...string) (SchedulerConfig, error) {
 		envFiles = []string{".env"}
 	}
 	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return SchedulerConfig{}, fmt.Errorf("failed to load env file %q: %w", envFiles[0], err)
+		return SchedulerConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
 	}
 
 	cfg := DefaultSchedulerConfig()
