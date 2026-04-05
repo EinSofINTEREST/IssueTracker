@@ -3,8 +3,10 @@ package chromedp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
 	"issuetracker/internal/crawler/core"
@@ -34,8 +36,24 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, c.config.Timeout)
 	defer timeoutCancel()
 
-	// 렌더링 액션 구성
-	actions := c.buildFetchActions(target.URL)
+	// 메인 document의 HTTP 상태코드 캡처
+	var (
+		statusCode int64 = 200
+		statusMu   sync.Mutex
+	)
+	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
+		if e, ok := ev.(*network.EventResponseReceived); ok {
+			if e.Type == network.ResourceTypeDocument {
+				statusMu.Lock()
+				statusCode = int64(e.Response.Status)
+				statusMu.Unlock()
+			}
+		}
+	})
+
+	// 렌더링 액션 구성 (network 이벤트 활성화 포함)
+	actions := []chromedp.Action{network.Enable()}
+	actions = append(actions, c.buildFetchActions(target.URL)...)
 
 	var html string
 	actions = append(actions, chromedp.OuterHTML("html", &html))
@@ -57,13 +75,47 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 
 	elapsed := time.Since(start)
 
+	statusMu.Lock()
+	capturedStatus := int(statusCode)
+	statusMu.Unlock()
+
+	// HTTP 상태코드 검사
+	if capturedStatus == 404 {
+		return nil, core.NewNotFoundError(target.URL)
+	}
+	if capturedStatus == 429 {
+		return nil, core.NewRateLimitError("HTTP_429", "rate limited", target.URL, capturedStatus)
+	}
+	if capturedStatus >= 500 {
+		return nil, &core.CrawlerError{
+			Category:   core.ErrCategoryNetwork,
+			Code:       fmt.Sprintf("HTTP_%d", capturedStatus),
+			Message:    "server error",
+			Source:     c.name,
+			URL:        target.URL,
+			StatusCode: capturedStatus,
+			Retryable:  true,
+		}
+	}
+	if capturedStatus >= 400 {
+		return nil, &core.CrawlerError{
+			Category:   core.ErrCategoryInternal,
+			Code:       fmt.Sprintf("HTTP_%d", capturedStatus),
+			Message:    "client error",
+			Source:     c.name,
+			URL:        target.URL,
+			StatusCode: capturedStatus,
+			Retryable:  false,
+		}
+	}
+
 	rawContent := &core.RawContent{
 		ID:         fmt.Sprintf("%s-%d", c.name, time.Now().UnixNano()),
 		SourceInfo: c.sourceInfo,
 		FetchedAt:  time.Now(),
 		URL:        target.URL,
 		HTML:       html,
-		StatusCode: 200,
+		StatusCode: capturedStatus,
 		Headers:    make(map[string]string),
 		Metadata:   target.Metadata,
 	}
