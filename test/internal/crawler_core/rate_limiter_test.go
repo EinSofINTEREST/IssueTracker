@@ -17,8 +17,9 @@ import (
 // debugContext는 debug 레벨 logger를 buf에 기록하는 context를 반환합니다.
 func debugContext(buf *bytes.Buffer) context.Context {
 	log := logger.New(logger.Config{
-		Level:  logger.LevelDebug,
-		Output: buf,
+		Level:      logger.LevelDebug,
+		Output:     buf,
+		TimeFormat: time.RFC3339,
 	})
 	return log.ToContext(context.Background())
 }
