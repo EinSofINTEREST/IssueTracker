@@ -47,6 +47,10 @@ build: ## 모든 바이너리 빌드
 
 build-all: build ## 모든 실행 파일 빌드 (build와 동일)
 
+start: run-issuetracker ## Crawler + Processor 통합 실행 (start로도 가능)
+	@echo "Starting issuetracker (crawler + processor)..."
+	./scripts/entrypoint.sh
+
 run-crawler: build ## Crawler 실행
 	@echo "Running crawler..."
 	./$(CRAWLER_BINARY)
