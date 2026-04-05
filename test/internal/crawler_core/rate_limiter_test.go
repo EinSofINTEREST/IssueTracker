@@ -97,7 +97,7 @@ func TestRateLimiter_Wait_Success(t *testing.T) {
 
 func TestRateLimiter_Wait_ContextCanceled(t *testing.T) {
 	limiter := core.NewRateLimiter(10, 1) // 낮은 rate로 설정
-	limiter.Allow()                        // 토큰 소진
+	limiter.Allow()                       // 토큰 소진
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -108,7 +108,7 @@ func TestRateLimiter_Wait_ContextCanceled(t *testing.T) {
 
 func TestRateLimiter_Wait_ContextTimeout(t *testing.T) {
 	limiter := core.NewRateLimiter(10, 1) // 낮은 rate로 설정
-	limiter.Allow()                        // 토큰 소진
+	limiter.Allow()                       // 토큰 소진
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
