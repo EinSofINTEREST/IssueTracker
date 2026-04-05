@@ -3,8 +3,11 @@ package chromedp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
 	"issuetracker/internal/crawler/core"
@@ -34,8 +37,44 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, c.config.Timeout)
 	defer timeoutCancel()
 
-	// 렌더링 액션 구성
-	actions := c.buildFetchActions(target.URL)
+	// 메인 네비게이션의 LoaderID를 추적하여 iframe/서브프레임 응답과 구분
+	// - 메인 프레임과 리다이렉트 체인은 동일한 LoaderID를 공유
+	// - iframe/서브프레임은 별도의 LoaderID를 가지므로 필터링됨
+	// - statusCode 초기값 0: 이벤트를 한 번도 수신하지 못한 경우와 명시적 구분
+	var (
+		statusCode       int64
+		statusMu         sync.Mutex
+		mainLoaderID     cdp.LoaderID
+		loaderIDCaptured bool
+	)
+	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
+		switch e := ev.(type) {
+		case *network.EventRequestWillBeSent:
+			// 첫 번째 Document 요청의 LoaderID를 메인 네비게이션으로 고정
+			if e.Type == network.ResourceTypeDocument {
+				statusMu.Lock()
+				if !loaderIDCaptured {
+					mainLoaderID = e.LoaderID
+					loaderIDCaptured = true
+				}
+				statusMu.Unlock()
+			}
+		case *network.EventResponseReceived:
+			// 메인 네비게이션 LoaderID와 일치하는 Document 응답만 채택
+			// 리다이렉트 체인은 같은 LoaderID를 공유하므로 최종 상태코드가 올바르게 갱신됨
+			if e.Type == network.ResourceTypeDocument {
+				statusMu.Lock()
+				if loaderIDCaptured && e.LoaderID == mainLoaderID {
+					statusCode = int64(e.Response.Status)
+				}
+				statusMu.Unlock()
+			}
+		}
+	})
+
+	// 렌더링 액션 구성 (network 이벤트 활성화 포함)
+	actions := []chromedp.Action{network.Enable()}
+	actions = append(actions, c.buildFetchActions(target.URL)...)
 
 	var html string
 	actions = append(actions, chromedp.OuterHTML("html", &html))
@@ -57,13 +96,53 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 
 	elapsed := time.Since(start)
 
+	statusMu.Lock()
+	capturedStatus := int(statusCode)
+	statusMu.Unlock()
+
+	// 네비게이션이 중간에 취소되는 등의 이유로 응답 이벤트를 수신하지 못한 경우
+	if capturedStatus == 0 {
+		log.WithField("url", target.URL).Warn("no HTTP status code captured from navigation, treating as success")
+		capturedStatus = 200
+	}
+
+	// HTTP 상태코드 검사
+	if capturedStatus == 404 {
+		return nil, core.NewNotFoundError(target.URL)
+	}
+	if capturedStatus == 429 {
+		return nil, core.NewRateLimitError("HTTP_429", "rate limited", target.URL, capturedStatus)
+	}
+	if capturedStatus >= 500 {
+		return nil, &core.CrawlerError{
+			Category:   core.ErrCategoryNetwork,
+			Code:       fmt.Sprintf("HTTP_%d", capturedStatus),
+			Message:    "server error",
+			Source:     c.name,
+			URL:        target.URL,
+			StatusCode: capturedStatus,
+			Retryable:  true,
+		}
+	}
+	if capturedStatus >= 400 {
+		return nil, &core.CrawlerError{
+			Category:   core.ErrCategoryInternal,
+			Code:       fmt.Sprintf("HTTP_%d", capturedStatus),
+			Message:    "client error",
+			Source:     c.name,
+			URL:        target.URL,
+			StatusCode: capturedStatus,
+			Retryable:  false,
+		}
+	}
+
 	rawContent := &core.RawContent{
 		ID:         fmt.Sprintf("%s-%d", c.name, time.Now().UnixNano()),
 		SourceInfo: c.sourceInfo,
 		FetchedAt:  time.Now(),
 		URL:        target.URL,
 		HTML:       html,
-		StatusCode: 200,
+		StatusCode: capturedStatus,
 		Headers:    make(map[string]string),
 		Metadata:   target.Metadata,
 	}
