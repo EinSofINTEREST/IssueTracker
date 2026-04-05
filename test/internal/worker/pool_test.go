@@ -271,7 +271,7 @@ func TestKafkaConsumerPool_ProcessJob_EmptyContents_CommitsOnly(t *testing.T) {
 }
 
 // TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ는
-// handler 에러 발생 시 MaxRetries 초과 후 DLQ로 전송하는지 검증합니다.
+// handler 에러 발생 시 MaxRetries 초과 후 DLQ로 전송하고 원본 메시지를 커밋하는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
@@ -290,9 +290,44 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ(t *testing.T) {
 		return m.Topic == queue.TopicDLQ
 	})).Return(nil)
 
+	// DLQ 전송 후 원본 메시지가 커밋되어야 합니다.
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
 	runPool(t, consumer, pool, msg)
 
 	producer.AssertExpectations(t)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
+}
+
+// TestKafkaConsumerPool_ProcessJob_HandlerError_RequeuesAndCommits는
+// handler 에러 발생 시 MaxRetries 미달이면 재큐잉하고 원본 메시지를 커밋하는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_HandlerError_RequeuesAndCommits(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = 1 // MaxRetries(3) 미달
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("temporary error"))
+
+	// crawl 토픽으로 재발행되어야 합니다.
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicCrawlNormal
+	})).Return(nil)
+
+	// 재발행 후 원본 메시지가 커밋되어야 합니다.
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runPool(t, consumer, pool, msg)
+
+	producer.AssertExpectations(t)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
 	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 }
 

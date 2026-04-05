@@ -197,6 +197,14 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 			p.requeueWithRetry(ctx, item.job, err)
 		}
 
+		// 재발행/DLQ 전송 후 원본 메시지를 반드시 커밋해야 합니다.
+		if commitErr := p.commitMessage(ctx, item.msg); commitErr != nil {
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+			}).WithError(commitErr).Error("failed to commit message after error handling")
+		}
+
 		return fmt.Errorf("handle job %s: %w", item.job.ID, err)
 	}
 
