@@ -40,10 +40,11 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 	// 메인 네비게이션의 LoaderID를 추적하여 iframe/서브프레임 응답과 구분
 	// - 메인 프레임과 리다이렉트 체인은 동일한 LoaderID를 공유
 	// - iframe/서브프레임은 별도의 LoaderID를 가지므로 필터링됨
+	// - statusCode 초기값 0: 이벤트를 한 번도 수신하지 못한 경우와 명시적 구분
 	var (
-		statusCode     int64 = 200
-		statusMu       sync.Mutex
-		mainLoaderID   cdp.LoaderID
+		statusCode       int64
+		statusMu         sync.Mutex
+		mainLoaderID     cdp.LoaderID
 		loaderIDCaptured bool
 	)
 	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
@@ -98,6 +99,12 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 	statusMu.Lock()
 	capturedStatus := int(statusCode)
 	statusMu.Unlock()
+
+	// 네비게이션이 중간에 취소되는 등의 이유로 응답 이벤트를 수신하지 못한 경우
+	if capturedStatus == 0 {
+		log.WithField("url", target.URL).Warn("no HTTP status code captured from navigation, treating as success")
+		capturedStatus = 200
+	}
 
 	// HTTP 상태코드 검사
 	if capturedStatus == 404 {
