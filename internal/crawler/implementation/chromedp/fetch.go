@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
@@ -36,16 +37,35 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, c.config.Timeout)
 	defer timeoutCancel()
 
-	// 메인 document의 HTTP 상태코드 캡처
+	// 메인 네비게이션의 LoaderID를 추적하여 iframe/서브프레임 응답과 구분
+	// - 메인 프레임과 리다이렉트 체인은 동일한 LoaderID를 공유
+	// - iframe/서브프레임은 별도의 LoaderID를 가지므로 필터링됨
 	var (
-		statusCode int64 = 200
-		statusMu   sync.Mutex
+		statusCode     int64 = 200
+		statusMu       sync.Mutex
+		mainLoaderID   cdp.LoaderID
+		loaderIDCaptured bool
 	)
 	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
-		if e, ok := ev.(*network.EventResponseReceived); ok {
+		switch e := ev.(type) {
+		case *network.EventRequestWillBeSent:
+			// 첫 번째 Document 요청의 LoaderID를 메인 네비게이션으로 고정
 			if e.Type == network.ResourceTypeDocument {
 				statusMu.Lock()
-				statusCode = int64(e.Response.Status)
+				if !loaderIDCaptured {
+					mainLoaderID = e.LoaderID
+					loaderIDCaptured = true
+				}
+				statusMu.Unlock()
+			}
+		case *network.EventResponseReceived:
+			// 메인 네비게이션 LoaderID와 일치하는 Document 응답만 채택
+			// 리다이렉트 체인은 같은 LoaderID를 공유하므로 최종 상태코드가 올바르게 갱신됨
+			if e.Type == network.ResourceTypeDocument {
+				statusMu.Lock()
+				if loaderIDCaptured && e.LoaderID == mainLoaderID {
+					statusCode = int64(e.Response.Status)
+				}
 				statusMu.Unlock()
 			}
 		}
