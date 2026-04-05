@@ -54,26 +54,10 @@ func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.R
 		return nil, core.NewRateLimitError("HTTP_429", "rate limited", target.URL, resp.StatusCode)
 	}
 	if resp.StatusCode >= 500 {
-		return nil, &core.CrawlerError{
-			Category:   core.ErrCategoryNetwork,
-			Code:       fmt.Sprintf("HTTP_%d", resp.StatusCode),
-			Message:    "server error",
-			Source:     c.name,
-			URL:        target.URL,
-			StatusCode: resp.StatusCode,
-			Retryable:  true,
-		}
+		return nil, core.NewHTTPServerError(target.URL, resp.StatusCode)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, &core.CrawlerError{
-			Category:   core.ErrCategoryInternal,
-			Code:       fmt.Sprintf("HTTP_%d", resp.StatusCode),
-			Message:    "client error",
-			Source:     c.name,
-			URL:        target.URL,
-			StatusCode: resp.StatusCode,
-			Retryable:  false,
-		}
+		return nil, core.NewHTTPClientError(target.URL, resp.StatusCode)
 	}
 
 	// goquery Document 생성

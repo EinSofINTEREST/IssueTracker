@@ -2,6 +2,32 @@ package core
 
 import "fmt"
 
+// NewHTTPServerError는 5xx 서버 에러를 생성합니다 (retryable).
+func NewHTTPServerError(url string, statusCode int) *CrawlerError {
+	return &CrawlerError{
+		Category:   ErrCategoryNetwork,
+		Code:       fmt.Sprintf("HTTP_%d", statusCode),
+		Message:    "server error",
+		URL:        url,
+		StatusCode: statusCode,
+		Retryable:  true,
+		Err:        fmt.Errorf("status code: %d", statusCode),
+	}
+}
+
+// NewHTTPClientError는 4xx 클라이언트 에러를 생성합니다 (non-retryable).
+func NewHTTPClientError(url string, statusCode int) *CrawlerError {
+	return &CrawlerError{
+		Category:   ErrCategoryInternal,
+		Code:       fmt.Sprintf("HTTP_%d", statusCode),
+		Message:    "client error",
+		URL:        url,
+		StatusCode: statusCode,
+		Retryable:  false,
+		Err:        fmt.Errorf("status code: %d", statusCode),
+	}
+}
+
 // ErrorCategory는 에러의 카테고리를 나타냅니다.
 type ErrorCategory string
 

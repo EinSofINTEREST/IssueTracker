@@ -114,26 +114,10 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		return nil, core.NewRateLimitError("HTTP_429", "rate limited", target.URL, capturedStatus)
 	}
 	if capturedStatus >= 500 {
-		return nil, &core.CrawlerError{
-			Category:   core.ErrCategoryNetwork,
-			Code:       fmt.Sprintf("HTTP_%d", capturedStatus),
-			Message:    "server error",
-			Source:     c.name,
-			URL:        target.URL,
-			StatusCode: capturedStatus,
-			Retryable:  true,
-		}
+		return nil, core.NewHTTPServerError(target.URL, capturedStatus)
 	}
 	if capturedStatus >= 400 {
-		return nil, &core.CrawlerError{
-			Category:   core.ErrCategoryInternal,
-			Code:       fmt.Sprintf("HTTP_%d", capturedStatus),
-			Message:    "client error",
-			Source:     c.name,
-			URL:        target.URL,
-			StatusCode: capturedStatus,
-			Retryable:  false,
-		}
+		return nil, core.NewHTTPClientError(target.URL, capturedStatus)
 	}
 
 	rawContent := &core.RawContent{
