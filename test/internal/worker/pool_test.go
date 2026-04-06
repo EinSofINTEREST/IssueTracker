@@ -331,6 +331,62 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_RequeuesAndCommits(t *testing
 	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 }
 
+// TestKafkaConsumerPool_ProcessJob_DLQPublishFails_SkipsCommit는
+// DLQ 발행 실패 시 원본 offset을 commit하지 않아 메시지 유실을 방지하는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_DLQPublishFails_SkipsCommit(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = job.MaxRetries // DLQ 경로
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("fetch failed"))
+
+	// DLQ 발행 실패를 시뮬레이션합니다.
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(errors.New("kafka unavailable"))
+
+	runPool(t, consumer, pool, msg)
+
+	// 발행 실패 시 commit을 호출하지 않아야 합니다.
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
+}
+
+// TestKafkaConsumerPool_ProcessJob_RequeuePublishFails_SkipsCommit는
+// 재큐잉 발행 실패 시 원본 offset을 commit하지 않아 메시지 유실을 방지하는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_RequeuePublishFails_SkipsCommit(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = 1 // MaxRetries(3) 미달 → requeue 경로
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("temporary error"))
+
+	// requeue 발행 실패를 시뮬레이션합니다.
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicCrawlNormal
+	})).Return(errors.New("kafka unavailable"))
+
+	runPool(t, consumer, pool, msg)
+
+	// 발행 실패 시 commit을 호출하지 않아야 합니다.
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
+}
+
 // TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef는
 // 발행된 ProcessingMessage의 Data 필드에 ContentRef가 담기는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef(t *testing.T) {

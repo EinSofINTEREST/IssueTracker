@@ -26,6 +26,16 @@ type JobHandler interface {
 	Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error)
 }
 
+// kafkaRequeuePolicy는 Kafka 재큐잉 시 적용할 backoff 정책입니다.
+// HTTP 레벨 재시도(core.DefaultRetryPolicy)와 달리 Kafka 레벨 재큐잉 간격을 제어합니다.
+// RetryCount=1 → 약 5s, RetryCount=2 → 약 10s, RetryCount=3 → 약 20s (±25% jitter)
+var kafkaRequeuePolicy = core.RetryPolicy{
+	InitialDelay: 5 * time.Second,
+	MaxDelay:     5 * time.Minute,
+	Multiplier:   2.0,
+	Jitter:       true,
+}
+
 // KafkaConsumerPool은 Kafka consumer group 기반 crawler worker pool입니다.
 //
 // Kafka 토픽에서 CrawlJob 메시지를 읽어 내부 채널을 통해 worker goroutine에 분배합니다.
@@ -182,6 +192,21 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error {
 	log := logger.FromContext(ctx)
 
+	// 재큐잉 시 설정된 ScheduledAt이 미래면 해당 시점까지 대기
+	if delay := time.Until(item.job.ScheduledAt); delay > 0 {
+		log.WithFields(map[string]interface{}{
+			"job_id":   item.job.ID,
+			"crawler":  item.job.CrawlerName,
+			"delay_ms": delay.Milliseconds(),
+		}).Debug("waiting for backoff before processing retried job")
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+
 	log.WithFields(map[string]interface{}{
 		"job_id":  item.job.ID,
 		"crawler": item.job.CrawlerName,
@@ -190,14 +215,23 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 
 	contents, err := p.handler.Handle(ctx, item.job)
 	if err != nil {
-		// 재시도 횟수 초과 시 DLQ로 전송, 아니면 재큐잉
+		// 재발행(requeue/DLQ)이 성공한 경우에만 원본 offset을 commit
+		// 발행 실패 시 commit하지 않아 offset이 남고, 재소비 시 재처리
+		var publishErr error
 		if item.job.RetryCount >= item.job.MaxRetries {
-			p.sendToDLQ(ctx, item.msg, err)
+			publishErr = p.sendToDLQ(ctx, item.msg, err)
 		} else {
-			p.requeueWithRetry(ctx, item.job, err)
+			publishErr = p.requeueWithRetry(ctx, item.job, err)
 		}
 
-		// 재발행/DLQ 전송 후 원본 메시지를 반드시 커밋해야 합니다.
+		if publishErr != nil {
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+			}).WithError(publishErr).Error("failed to republish job, skipping commit to preserve message")
+			return fmt.Errorf("handle job %s: republish: %w", item.job.ID, publishErr)
+		}
+
 		if commitErr := p.commitMessage(ctx, item.msg); commitErr != nil {
 			log.WithFields(map[string]interface{}{
 				"job_id":  item.job.ID,
@@ -287,7 +321,7 @@ func (p *KafkaConsumerPool) commitMessage(ctx context.Context, msg *queue.Messag
 	return nil
 }
 
-func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, reason error) {
+func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, reason error) error {
 	log := logger.FromContext(ctx)
 
 	headers := make(map[string]string, len(msg.Headers)+2)
@@ -307,13 +341,21 @@ func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, r
 
 	if err := p.producer.Publish(ctx, dlqMsg); err != nil {
 		log.WithError(err).Error("failed to send message to dlq")
+		return fmt.Errorf("send to dlq: %w", err)
 	}
+
+	return nil
 }
 
-func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.CrawlJob, reason error) {
+func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.CrawlJob, reason error) error {
 	log := logger.FromContext(ctx)
 
 	job.RetryCount++
+
+	// RetryCount 기반 exponential backoff 계산 후 ScheduledAt에 저장합니다.
+	// worker는 메시지를 소비한 뒤 processJob에서 ScheduledAt까지 대기하여 backoff를 적용합니다.
+	backoffDelay := core.CalculateBackoff(kafkaRequeuePolicy, job.RetryCount)
+	job.ScheduledAt = time.Now().Add(backoffDelay)
 
 	data, err := job.Marshal()
 	if err != nil {
@@ -321,7 +363,7 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 			"job_id":  job.ID,
 			"crawler": job.CrawlerName,
 		}).WithError(err).Error("failed to marshal job for retry")
-		return
+		return fmt.Errorf("marshal job for retry: %w", err)
 	}
 
 	topic := topicForPriority(job.Priority)
@@ -336,6 +378,14 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 		},
 	}
 
+	log.WithFields(map[string]interface{}{
+		"job_id":   job.ID,
+		"crawler":  job.CrawlerName,
+		"retry":    job.RetryCount,
+		"delay_ms": backoffDelay.Milliseconds(),
+		"topic":    topic,
+	}).Warn("requeuing job with backoff delay")
+
 	if err := p.producer.Publish(ctx, msg); err != nil {
 		log.WithFields(map[string]interface{}{
 			"job_id":   job.ID,
@@ -343,7 +393,10 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 			"topic":    topic,
 			"priority": job.Priority,
 		}).WithError(err).Error("failed to requeue job for retry")
+		return fmt.Errorf("publish retry job: %w", err)
 	}
+
+	return nil
 }
 
 // topicForPriority는 우선순위에 맞는 Kafka 토픽 이름을 반환합니다.
