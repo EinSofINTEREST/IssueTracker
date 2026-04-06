@@ -331,6 +331,40 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_RequeuesAndCommits(t *testing
 	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 }
 
+// TestKafkaConsumerPool_ProcessJob_CircuitOpen_SendsToDLQ는
+// circuit breaker가 open 상태일 때 handler를 호출하지 않고 DLQ로 전송하는지 검증합니다.
+func TestKafkaConsumerPool_ProcessJob_CircuitOpen_SendsToDLQ(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	// MaxFailures=1로 설정하여 즉시 circuit open 유도
+	cbRegistry := worker.NewCircuitBreakerRegistry(worker.CircuitBreakerConfig{
+		MaxFailures: 1,
+		OpenTimeout: time.Minute,
+	})
+	// 첫 번째 실패로 circuit을 미리 open 상태로 만듭니다.
+	cbRegistry.Get("test-crawler").RecordFailure()
+
+	pool := worker.NewKafkaConsumerPoolWithCB(consumer, producer, handler, contentSvc, 1, cbRegistry)
+
+	job := newTestJob()
+	msg := marshaledJobMsg(t, job)
+
+	// circuit open이므로 handler는 호출되지 않아야 합니다.
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runPool(t, consumer, pool, msg)
+
+	handler.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
+	producer.AssertExpectations(t)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
 // TestKafkaConsumerPool_ProcessJob_DLQPublishFails_SkipsCommit는
 // DLQ 발행 실패 시 원본 offset을 commit하지 않아 메시지 유실을 방지하는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_DLQPublishFails_SkipsCommit(t *testing.T) {

@@ -55,6 +55,7 @@ type KafkaConsumerPool struct {
 	workerCount int
 	jobs        chan jobItem
 	wg          sync.WaitGroup
+	cbRegistry  *CircuitBreakerRegistry
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -78,12 +79,29 @@ func NewKafkaConsumerPool(
 	contentSvc service.ContentService,
 	workerCount int,
 ) *KafkaConsumerPool {
+	return NewKafkaConsumerPoolWithCB(
+		consumer, producer, handler, contentSvc, workerCount,
+		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig),
+	)
+}
+
+// NewKafkaConsumerPoolWithCB는 외부에서 주입한 CircuitBreakerRegistry를 사용하는
+// KafkaConsumerPool을 생성합니다. 테스트에서 circuit breaker 동작을 제어할 때 사용합니다.
+func NewKafkaConsumerPoolWithCB(
+	consumer queue.Consumer,
+	producer queue.Producer,
+	handler JobHandler,
+	contentSvc service.ContentService,
+	workerCount int,
+	cbRegistry *CircuitBreakerRegistry,
+) *KafkaConsumerPool {
 	return &KafkaConsumerPool{
 		consumer:    consumer,
 		producer:    producer,
 		handler:     handler,
 		contentSvc:  contentSvc,
 		workerCount: workerCount,
+		cbRegistry:  cbRegistry,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
@@ -213,8 +231,38 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		"url":     item.job.Target.URL,
 	}).Info("crawl job started")
 
+	// circuit breaker가 open이면 DLQ로 보내고 원본을 commit합니다.
+	// 소스 복구 후 운영자가 DLQ에서 재처리합니다.
+	cb := p.cbRegistry.Get(item.job.CrawlerName)
+	if !cb.Allow() {
+		cbErr := &ErrCircuitOpen{Source: item.job.CrawlerName}
+		log.WithFields(map[string]interface{}{
+			"job_id":  item.job.ID,
+			"crawler": item.job.CrawlerName,
+		}).Warn("circuit breaker open, sending job to dlq")
+
+		if publishErr := p.sendToDLQ(ctx, item.msg, cbErr); publishErr != nil {
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+			}).WithError(publishErr).Error("failed to send circuit-broken job to dlq, skipping commit to preserve message")
+			return fmt.Errorf("circuit open dlq for job %s: %w", item.job.ID, publishErr)
+		}
+
+		if commitErr := p.commitMessage(ctx, item.msg); commitErr != nil {
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+			}).WithError(commitErr).Error("failed to commit message after circuit breaker dlq")
+		}
+
+		return cbErr
+	}
+
 	contents, err := p.handler.Handle(ctx, item.job)
 	if err != nil {
+		cb.RecordFailure()
+
 		// 재발행(requeue/DLQ)이 성공한 경우에만 원본 offset을 commit
 		// 발행 실패 시 commit하지 않아 offset이 남고, 재소비 시 재처리
 		var publishErr error
@@ -241,6 +289,8 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 
 		return fmt.Errorf("handle job %s: %w", item.job.ID, err)
 	}
+
+	cb.RecordSuccess()
 
 	if len(contents) == 0 {
 		// handler가 빈 슬라이스나 nil을 반환하면 발행 없이 commit만 수행
