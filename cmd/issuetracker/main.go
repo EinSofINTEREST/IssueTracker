@@ -86,21 +86,26 @@ func main() {
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
 
-	// Redis 기반 JobLocker: 동일 job_id가 여러 worker/인스턴스에서 중복 처리되는 것을 방지
+	// Redis 기반 JobLocker: 동일 job_id가 여러 worker/인스턴스에서 중복 처리되는 것을 방지합니다.
+	// worker/manager가 JobLocker nil을 NoopJobLocker로 fallback 처리하는 설계와 일관되게,
+	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade합니다.
+	var jobLocker crawlerWorker.JobLocker
 	redisCfg, err := config.LoadRedis()
 	if err != nil {
-		log.WithError(err).Fatal("failed to load redis config")
+		log.WithError(err).Warn("failed to load redis config, falling back to noop job locker")
+	} else {
+		redisClient, redisErr := redis.New(ctx, redisCfg)
+		if redisErr != nil {
+			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop job locker")
+		} else {
+			defer redisClient.Close()
+			log.WithFields(map[string]interface{}{
+				"host": redisCfg.Host,
+				"port": redisCfg.Port,
+			}).Info("redis connected for job locker")
+			jobLocker = crawlerWorker.NewRedisJobLocker(redisClient, crawlerWorker.DefaultJobLockTTL)
+		}
 	}
-	redisClient, err := redis.New(ctx, redisCfg)
-	if err != nil {
-		log.WithError(err).Fatal("failed to connect to redis")
-	}
-	defer redisClient.Close()
-	log.WithFields(map[string]interface{}{
-		"host": redisCfg.Host,
-		"port": redisCfg.Port,
-	}).Info("redis connected for job locker")
-	jobLocker := crawlerWorker.NewRedisJobLocker(redisClient, crawlerWorker.DefaultJobLockTTL)
 
 	managerCfg := crawlerWorker.ManagerConfig{
 		High:      crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
