@@ -231,8 +231,30 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error {
 	log := logger.FromContext(ctx)
 
+	// 재큐잉 시 설정된 ScheduledAt이 미래면 해당 시점까지 대기합니다.
+	// JobLocker 획득 전에 대기하는 이유는 다음과 같습니다:
+	//  - 락을 먼저 잡으면 backoff 대기 시간(최대 5분)이 TTL(10분)을 소진시킴
+	//  - 다른 worker가 동일 job을 "처리 중"으로 오인해 불필요한 중복 스킵 발생
+	// time.After가 아닌 NewTimer + Stop을 사용하여 ctx 취소 시 타이머 자원을 즉시 해제합니다.
+	if delay := time.Until(item.job.ScheduledAt); delay > 0 {
+		log.WithFields(map[string]interface{}{
+			"job_id":   item.job.ID,
+			"crawler":  item.job.CrawlerName,
+			"delay_ms": delay.Milliseconds(),
+		}).Debug("waiting for backoff before processing retried job")
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+
 	// 동일 job_id가 여러 worker에서 동시에 처리되는 것을 방지합니다.
 	// Kafka rebalance/재시작으로 동일 메시지가 중복 소비될 때 idempotency를 보장합니다.
+	// backoff 대기 이후에 Acquire하여 락 점유 시간을 실제 처리 구간으로 최소화합니다.
 	acquired, err := p.jobLocker.Acquire(ctx, item.job.ID)
 	if err != nil {
 		// 락 획득 오류 시 처리를 건너뛰지 않고 경고 후 진행합니다.
@@ -262,25 +284,6 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 				}).WithError(releaseErr).Warn("failed to release job lock")
 			}
 		}()
-	}
-
-	// 재큐잉 시 설정된 ScheduledAt이 미래면 해당 시점까지 대기
-	// time.After가 아닌 NewTimer + Stop을 사용하여 ctx 취소 시에도 타이머 자원을 즉시 해제합니다.
-	// MaxDelay가 최대 5분이므로 대기 중 ctx 취소가 누적되면 time.After는 GC까지 자원이 유지됩니다.
-	if delay := time.Until(item.job.ScheduledAt); delay > 0 {
-		log.WithFields(map[string]interface{}{
-			"job_id":   item.job.ID,
-			"crawler":  item.job.CrawlerName,
-			"delay_ms": delay.Milliseconds(),
-		}).Debug("waiting for backoff before processing retried job")
-
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
 	}
 
 	log.WithFields(map[string]interface{}{
