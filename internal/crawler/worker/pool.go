@@ -348,19 +348,22 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		return fmt.Errorf("handle job %s: %w", item.job.ID, err)
 	}
 
-	cb.RecordSuccess()
-
 	if len(contents) == 0 {
 		// handler가 빈 슬라이스나 nil을 반환하면 발행 없이 commit만 수행
+		cb.RecordSuccess()
 		return p.commitMessage(ctx, item.msg)
 	}
 
 	for _, c := range contents {
 		if err := p.publishNormalized(ctx, c, item.job); err != nil {
+			// publishNormalized 실패는 DB 저장/Kafka 발행 문제로 소스 자체의 건전성과 무관하지만
+			// 작업이 완결되지 않았으므로 성공으로 기록하지 않고 반환합니다.
 			return fmt.Errorf("publish normalized for job %s: %w", item.job.ID, err)
 		}
 	}
 
+	// 모든 부수 효과(DB 저장 + Kafka 발행)가 성공한 시점에 circuit breaker에 성공 기록
+	cb.RecordSuccess()
 	return p.commitMessage(ctx, item.msg)
 }
 
