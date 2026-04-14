@@ -265,6 +265,8 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 	}
 
 	// 재큐잉 시 설정된 ScheduledAt이 미래면 해당 시점까지 대기
+	// time.After가 아닌 NewTimer + Stop을 사용하여 ctx 취소 시에도 타이머 자원을 즉시 해제합니다.
+	// MaxDelay가 최대 5분이므로 대기 중 ctx 취소가 누적되면 time.After는 GC까지 자원이 유지됩니다.
 	if delay := time.Until(item.job.ScheduledAt); delay > 0 {
 		log.WithFields(map[string]interface{}{
 			"job_id":   item.job.ID,
@@ -272,10 +274,12 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 			"delay_ms": delay.Milliseconds(),
 		}).Debug("waiting for backoff before processing retried job")
 
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(delay):
+		case <-timer.C:
 		}
 	}
 
