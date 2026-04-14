@@ -201,7 +201,17 @@ func (p *KafkaConsumerPool) pollMessages(ctx context.Context) {
 		job, err := core.UnmarshalCrawlJob(msg.Value)
 		if err != nil {
 			log.WithError(err).Error("failed to unmarshal crawl job, sending to dlq")
-			p.sendToDLQ(ctx, msg, err)
+
+			// DLQ 발행 성공 시에만 원본 offset을 commit합니다.
+			// 발행 실패 시 commit을 건너뛰면 재소비 시 재시도되고,
+			// 발행 성공 시 commit을 수행해야 동일 메시지의 DLQ 중복 전송 루프를 방지할 수 있습니다.
+			if dlqErr := p.sendToDLQ(ctx, msg, err); dlqErr != nil {
+				log.WithError(dlqErr).Error("failed to send unmarshal-failed message to dlq, skipping commit to preserve message")
+				continue
+			}
+			if commitErr := p.commitMessage(ctx, msg); commitErr != nil {
+				log.WithError(commitErr).Error("failed to commit message after unmarshal-failure dlq")
+			}
 			continue
 		}
 

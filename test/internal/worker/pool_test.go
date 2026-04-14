@@ -331,6 +331,64 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_RequeuesAndCommits(t *testing
 	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 }
 
+// TestKafkaConsumerPool_PollMessages_UnmarshalFails_DLQSuccess_Commits는
+// pollMessages의 unmarshal 실패 경로에서 DLQ 발행 성공 시 원본 offset을 commit하는지 검증합니다.
+// commit 누락 시 재소비로 DLQ 중복 전송 루프가 발생할 수 있습니다.
+func TestKafkaConsumerPool_PollMessages_UnmarshalFails_DLQSuccess_Commits(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	// 유효하지 않은 JSON을 담은 메시지로 unmarshal 실패 유발
+	malformed := &queue.Message{
+		Topic: queue.TopicCrawlNormal,
+		Key:   []byte("bad-job"),
+		Value: []byte("not-json"),
+	}
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runPool(t, consumer, pool, malformed)
+
+	handler.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
+	producer.AssertExpectations(t)
+	// DLQ 발행 성공 시 원본 메시지가 commit되어야 합니다.
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// TestKafkaConsumerPool_PollMessages_UnmarshalFails_DLQFails_SkipsCommit는
+// pollMessages의 unmarshal 실패 경로에서 DLQ 발행 실패 시 commit을 건너뛰는지 검증합니다.
+func TestKafkaConsumerPool_PollMessages_UnmarshalFails_DLQFails_SkipsCommit(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	malformed := &queue.Message{
+		Topic: queue.TopicCrawlNormal,
+		Key:   []byte("bad-job"),
+		Value: []byte("not-json"),
+	}
+
+	// DLQ 발행 실패 시뮬레이션
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(errors.New("kafka unavailable"))
+
+	runPool(t, consumer, pool, malformed)
+
+	// DLQ 발행 실패 시 commit을 호출하지 않아야 합니다.
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
 // TestKafkaConsumerPool_ProcessJob_CircuitOpen_SendsToDLQ는
 // circuit breaker가 open 상태일 때 handler를 호출하지 않고 DLQ로 전송하는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_CircuitOpen_SendsToDLQ(t *testing.T) {
