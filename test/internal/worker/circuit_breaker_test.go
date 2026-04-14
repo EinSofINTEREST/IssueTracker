@@ -5,8 +5,16 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/crawler/worker"
+)
+
+// cbPollTimeout은 OpenTimeout 경과를 기다리는 require.Eventually 상한입니다.
+// CI 부하 상황에서 간헐적 실패를 방지하기 위해 실제 OpenTimeout 대비 충분히 크게 설정합니다.
+const (
+	cbPollTimeout = 500 * time.Millisecond
+	cbPollTick    = 2 * time.Millisecond
 )
 
 func newTestCBConfig(maxFailures int, openTimeout time.Duration) worker.CircuitBreakerConfig {
@@ -67,10 +75,11 @@ func TestCircuitBreaker_OpenTimeout_TransitionsToHalfOpen(t *testing.T) {
 	assert.Equal(t, "open", cb.State())
 	assert.False(t, cb.Allow())
 
-	time.Sleep(20 * time.Millisecond) // OpenTimeout 경과
-
-	// 첫 번째 Allow()는 HalfOpen probe로 허용
-	assert.True(t, cb.Allow())
+	// OpenTimeout 경과 후 Allow()가 HalfOpen probe로 전환되기를 폴링합니다.
+	// time.Sleep 대신 Eventually를 사용하여 CI 부하로 인한 flakiness 제거.
+	require.Eventually(t, func() bool {
+		return cb.Allow()
+	}, cbPollTimeout, cbPollTick, "allow should return true after OpenTimeout")
 	assert.Equal(t, "half_open", cb.State())
 
 	// probe 진행 중에는 추가 요청 차단
@@ -84,8 +93,7 @@ func TestCircuitBreaker_HalfOpenProbeSuccess_ClosesCircuit(t *testing.T) {
 	cb := registry.Get("naver")
 
 	cb.RecordFailure()
-	time.Sleep(20 * time.Millisecond)
-	cb.Allow() // HalfOpen 진입
+	require.Eventually(t, cb.Allow, cbPollTimeout, cbPollTick, "half_open entry expected after OpenTimeout")
 
 	cb.RecordSuccess() // probe 성공 → Closed
 	assert.Equal(t, "closed", cb.State())
@@ -99,8 +107,7 @@ func TestCircuitBreaker_HalfOpenProbeFailure_ReopensCircuit(t *testing.T) {
 	cb := registry.Get("naver")
 
 	cb.RecordFailure()
-	time.Sleep(20 * time.Millisecond)
-	cb.Allow() // HalfOpen 진입
+	require.Eventually(t, cb.Allow, cbPollTimeout, cbPollTick, "half_open entry expected after OpenTimeout")
 
 	cb.RecordFailure() // probe 실패 → 다시 Open
 	assert.Equal(t, "open", cb.State())
