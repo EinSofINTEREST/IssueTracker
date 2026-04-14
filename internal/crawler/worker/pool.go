@@ -56,6 +56,7 @@ type KafkaConsumerPool struct {
 	jobs        chan jobItem
 	wg          sync.WaitGroup
 	cbRegistry  *CircuitBreakerRegistry
+	jobLocker   JobLocker
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -79,9 +80,10 @@ func NewKafkaConsumerPool(
 	contentSvc service.ContentService,
 	workerCount int,
 ) *KafkaConsumerPool {
-	return NewKafkaConsumerPoolWithCB(
+	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
 		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig),
+		NoopJobLocker{},
 	)
 }
 
@@ -95,6 +97,24 @@ func NewKafkaConsumerPoolWithCB(
 	workerCount int,
 	cbRegistry *CircuitBreakerRegistry,
 ) *KafkaConsumerPool {
+	return NewKafkaConsumerPoolWithOptions(
+		consumer, producer, handler, contentSvc, workerCount,
+		cbRegistry,
+		NoopJobLocker{},
+	)
+}
+
+// NewKafkaConsumerPoolWithOptions는 모든 의존성을 외부에서 주입하는 생성자입니다.
+// 테스트에서 circuit breaker, job locker를 개별 제어할 때 사용합니다.
+func NewKafkaConsumerPoolWithOptions(
+	consumer queue.Consumer,
+	producer queue.Producer,
+	handler JobHandler,
+	contentSvc service.ContentService,
+	workerCount int,
+	cbRegistry *CircuitBreakerRegistry,
+	jobLocker JobLocker,
+) *KafkaConsumerPool {
 	return &KafkaConsumerPool{
 		consumer:    consumer,
 		producer:    producer,
@@ -102,6 +122,7 @@ func NewKafkaConsumerPoolWithCB(
 		contentSvc:  contentSvc,
 		workerCount: workerCount,
 		cbRegistry:  cbRegistry,
+		jobLocker:   jobLocker,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
@@ -209,6 +230,33 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 
 func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error {
 	log := logger.FromContext(ctx)
+
+	// 동일 job_id가 여러 worker에서 동시에 처리되는 것을 방지합니다.
+	// Kafka rebalance/재시작으로 동일 메시지가 중복 소비될 때 idempotency를 보장합니다.
+	acquired, err := p.jobLocker.Acquire(ctx, item.job.ID)
+	if err != nil {
+		// 락 획득 오류 시 처리를 건너뛰지 않고 경고 후 진행합니다.
+		// JobLocker 장애가 크롤링 전체를 중단시키지 않도록 합니다.
+		log.WithFields(map[string]interface{}{
+			"job_id":  item.job.ID,
+			"crawler": item.job.CrawlerName,
+		}).WithError(err).Warn("failed to acquire job lock, proceeding without lock")
+	} else if !acquired {
+		log.WithFields(map[string]interface{}{
+			"job_id":  item.job.ID,
+			"crawler": item.job.CrawlerName,
+		}).Debug("job already being processed by another worker, skipping")
+		return p.commitMessage(ctx, item.msg)
+	} else {
+		defer func() {
+			if releaseErr := p.jobLocker.Release(ctx, item.job.ID); releaseErr != nil {
+				log.WithFields(map[string]interface{}{
+					"job_id":  item.job.ID,
+					"crawler": item.job.CrawlerName,
+				}).WithError(releaseErr).Warn("failed to release job lock")
+			}
+		}()
+	}
 
 	// 재큐잉 시 설정된 ScheduledAt이 미래면 해당 시점까지 대기
 	if delay := time.Until(item.job.ScheduledAt); delay > 0 {
