@@ -61,4 +61,4 @@ func jobLockKey(jobID string) string {
 type NoopJobLocker struct{}
 
 func (NoopJobLocker) Acquire(_ context.Context, _ string) (bool, error) { return true, nil }
-func (NoopJobLocker) Release(_ context.Context, _ string) error          { return nil }
+func (NoopJobLocker) Release(_ context.Context, _ string) error         { return nil }
