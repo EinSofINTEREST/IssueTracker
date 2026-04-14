@@ -78,9 +78,11 @@ func TestNoopJobLocker_ReleaseNoError(t *testing.T) {
 // Pool + JobLocker 통합 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsProcessing는
-// 다른 worker가 이미 락을 보유 중일 때 처리를 건너뛰고 commit만 수행하는지 검증합니다.
-func TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsProcessing(t *testing.T) {
+// TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsWithoutCommit는
+// 다른 worker가 이미 락을 보유 중일 때 처리와 commit을 모두 건너뛰는지 검증합니다.
+// 메시지 유실 방지: 락 보유 워커가 처리 도중 장애로 종료되어도 해당 워커가 commit하지
+// 않았다면 Kafka가 메시지를 재전달하여 재처리가 보장됩니다.
+func TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsWithoutCommit(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
@@ -98,15 +100,13 @@ func TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsProcessing(t *testing.
 
 	// 이미 다른 worker가 락을 보유 중
 	locker.On("Acquire", mock.Anything, job.ID).Return(false, nil)
-	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
 	runPoolWithLocker(t, consumer, pool, msg)
 
-	// handler, producer 미호출 검증
+	// handler, producer, commit 모두 미호출 검증
 	handler.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
 	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
-	// 중복 skip 시에도 원본 메시지는 commit해야 함
-	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
 	locker.AssertExpectations(t)
 }
 

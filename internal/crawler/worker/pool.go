@@ -246,10 +246,16 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
 		}).Debug("job already being processed by another worker, skipping")
-		return p.commitMessage(ctx, item.msg)
+		// 다른 워커가 처리 중이므로 commit 없이 종료합니다.
+		// 처리 담당 워커의 commit에 의존하여, 해당 워커 장애 시 재처리가 보장되도록 합니다.
+		return nil
 	} else {
 		defer func() {
-			if releaseErr := p.jobLocker.Release(ctx, item.job.ID); releaseErr != nil {
+			// 셧다운 시 ctx가 취소되어도 락 해제는 반드시 수행되어야 합니다.
+			// 작업 ctx를 그대로 사용하면 Redis 호출이 즉시 실패해 락이 TTL(10분) 동안 점유됩니다.
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if releaseErr := p.jobLocker.Release(releaseCtx, item.job.ID); releaseErr != nil {
 				log.WithFields(map[string]interface{}{
 					"job_id":  item.job.ID,
 					"crawler": item.job.CrawlerName,
