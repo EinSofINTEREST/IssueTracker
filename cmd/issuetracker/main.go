@@ -20,6 +20,7 @@ import (
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
+	"issuetracker/pkg/redis"
 )
 
 const validateWorkerCount = 8
@@ -85,10 +86,27 @@ func main() {
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
 
+	// Redis 기반 JobLocker: 동일 job_id가 여러 worker/인스턴스에서 중복 처리되는 것을 방지
+	redisCfg, err := config.LoadRedis()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load redis config")
+	}
+	redisClient, err := redis.New(ctx, redisCfg)
+	if err != nil {
+		log.WithError(err).Fatal("failed to connect to redis")
+	}
+	defer redisClient.Close()
+	log.WithFields(map[string]interface{}{
+		"host": redisCfg.Host,
+		"port": redisCfg.Port,
+	}).Info("redis connected for job locker")
+	jobLocker := crawlerWorker.NewRedisJobLocker(redisClient, crawlerWorker.DefaultJobLockTTL)
+
 	managerCfg := crawlerWorker.ManagerConfig{
-		High:   crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
-		Normal: crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
-		Low:    crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
+		High:      crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
+		Normal:    crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
+		Low:       crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
+		JobLocker: jobLocker,
 	}
 
 	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, contentSvc, resolver, log)
