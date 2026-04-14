@@ -1,0 +1,34 @@
+# CODEOWNERS
+#
+# 규칙
+# - SPOF 방지를 위해 핵심 경로는 개인 + 팀(또는 보조 owner)을 중복 지정합니다.
+# - `.github/`, CI/CD, 배포, Harness 설정 변경은 반드시 owner 승인 필요.
+# - GitHub Ruleset의 "Require review from Code Owners"와 함께 동작합니다.
+#
+# TODO(juhy0987): 아래 @EinSofINTEREST/devops 팀을 GitHub Org에 실제 생성 후 활성화하세요.
+#   생성 전에는 단일 소유자(@juhy0987)로만 강제되며 SPOF 위험이 남습니다.
+
+# 기본 소유자
+*                               @juhy0987
+
+# 거버넌스 / CI / 배포 (이중 owner 필수)
+/.github/                       @juhy0987
+/.github/workflows/             @juhy0987
+/.github/CODEOWNERS             @juhy0987
+/.github/PULL_REQUEST_TEMPLATE.md @juhy0987
+
+# Harness 운영 규약 / 샘플 파이프라인
+/docs/harness/                  @juhy0987
+/docs/ci/                       @juhy0987
+
+# 크롤러 코어
+/internal/crawler/core/         @juhy0987
+
+# 처리 파이프라인 / 분류기 / 스토리지
+/internal/processor/            @juhy0987
+/internal/classifier/           @juhy0987
+/internal/storage/              @juhy0987
+
+# 빌드/배포 산출물
+/Makefile                       @juhy0987
+/cmd/                           @juhy0987

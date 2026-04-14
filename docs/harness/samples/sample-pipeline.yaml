@@ -1,0 +1,167 @@
+# Harness 샘플 파이프라인
+#
+# 목적:
+#   1) Approval Stage 표준(Disallow Executor, timeout=Reject) 시연
+#   2) Failure Strategy Inner-most 우선 규칙 재현
+#      - Step Group: Retry 정책
+#      - 내부 Step: Abort 정책 → Abort가 실제 동작
+#   3) JEXL 조건 실행과 Failure Strategy의 우선순위 데모
+#
+# 주의:
+#   - 아래 account/org/project/connector identifier는 placeholder 입니다.
+#   - 실제 적용 시 본인의 Harness 스코프 값으로 치환하세요.
+#   - 규칙 검증용이며, 그대로 배포에 쓰지 마세요.
+
+pipeline:
+  name: EinSofINTEREST_Github_Connector
+  identifier: EinSofINTEREST_Github_Connector
+  projectIdentifier: default_project
+  orgIdentifier: default
+  tags: {}
+
+  stages:
+    # ---------------------------------------------------------------
+    # Stage 1: Build — Failure Strategy Inner-most 우선 규칙 재현
+    # ---------------------------------------------------------------
+    - stage:
+        name: build
+        identifier: build
+        type: CI
+        spec:
+          cloneCodebase: true
+          execution:
+            steps:
+              - stepGroup:
+                  name: build-group
+                  identifier: build_group
+                  # Step Group 레벨: Retry
+                  failureStrategies:
+                    - onFailure:
+                        errors:
+                          - AllErrors
+                        action:
+                          type: Retry
+                          spec:
+                            retryCount: 2
+                            retryIntervals:
+                              - 10s
+                            onRetryFailure:
+                              action:
+                                type: MarkAsFailure
+                  steps:
+                    - step:
+                        name: unit-test
+                        identifier: unit_test
+                        type: Run
+                        spec:
+                          shell: Sh
+                          command: |
+                            go test ./...
+                        # Step 레벨: Abort
+                        # ★ Inner-most 우선 → 실패 시 Retry 대신 Abort 동작
+                        failureStrategies:
+                          - onFailure:
+                              errors:
+                                - AllErrors
+                              action:
+                                type: Abort
+        # Stage 레벨 Failure Strategy는 의도적으로 생략
+        # (Inner-most가 이미 결정되므로 중복 정의 금지)
+
+    # ---------------------------------------------------------------
+    # Stage 2: Approval — Disallow Executor + Reject on timeout
+    # ---------------------------------------------------------------
+    - stage:
+        name: approval
+        identifier: approval
+        type: Approval
+        spec:
+          execution:
+            steps:
+              - step:
+                  name: prod-approval
+                  identifier: prod_approval
+                  type: HarnessApproval
+                  # timeout 초과 시 Reject 처리를 위해
+                  # Stage 레벨 Failure Strategy에서 Abort를 선언
+                  timeout: 24h
+                  spec:
+                    approvalMessage: |
+                      프로덕션 배포 승인 요청입니다.
+                      - 영향 범위 확인 완료?
+                      - 롤백 계획 공유 완료?
+                    includePipelineExecutionHistory: true
+                    isAutoRejectEnabled: true
+                    approvers:
+                      # ★ 실행자 자기 승인 금지 (감사 필수)
+                      disallowPipelineExecutor: true
+                      minimumCount: 2
+                      userGroups:
+                        - PLACEHOLDER_APPROVER_USER_GROUP
+                    approverInputs: []
+        # Approval 자체가 실패/타임아웃되면 파이프라인 중단(Reject fail-safe)
+        failureStrategies:
+          - onFailure:
+              errors:
+                - Timeout
+                - Unknown
+                - AllErrors
+              action:
+                type: Abort
+
+    # ---------------------------------------------------------------
+    # Stage 3: Deploy — JEXL 조건 실행 vs Failure Strategy 우선순위
+    # ---------------------------------------------------------------
+    - stage:
+        name: deploy
+        identifier: deploy
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  name: conditional-probe
+                  identifier: conditional_probe
+                  type: ShellScript
+                  # JEXL 조건: 브랜치가 main일 때만 실행
+                  when:
+                    stageStatus: Success
+                    condition: <+codebase.branch> == "main"
+                  timeout: 10m
+                  spec:
+                    shell: Bash
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          echo "probe ok"
+                    environmentVariables: []
+                    outputVariables: []
+                  # ★ 실패 시 Failure Strategy가 먼저 평가되어 Abort
+                  #    (조건 실행의 skip 여부보다 우선)
+                  failureStrategies:
+                    - onFailure:
+                        errors:
+                          - AllErrors
+                        action:
+                          type: Abort
+
+              - step:
+                  name: deploy-step
+                  identifier: deploy_step
+                  type: ShellScript
+                  timeout: 15m
+                  spec:
+                    shell: Bash
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          echo "deploy placeholder"
+                  # 배포 실패 시 Rollback은 별도 Stage에서 트리거 권장
+                  failureStrategies:
+                    - onFailure:
+                        errors:
+                          - AllErrors
+                        action:
+                          type: StageRollback
