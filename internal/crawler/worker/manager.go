@@ -26,10 +26,12 @@ type PoolConfig struct {
 // ManagerConfig는 PoolManager 생성에 필요한 설정입니다.
 //
 // ManagerConfig aggregates the three per-priority pool configs.
+// JobLocker가 nil이면 NoopJobLocker가 사용되어 중복 처리 방지가 비활성화됩니다.
 type ManagerConfig struct {
-	High   PoolConfig
-	Normal PoolConfig
-	Low    PoolConfig
+	High      PoolConfig
+	Normal    PoolConfig
+	Low       PoolConfig
+	JobLocker JobLocker
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -65,11 +67,27 @@ func NewPoolManager(
 	resolver PriorityResolver,
 	log *logger.Logger,
 ) *PoolManager {
+	jobLocker := cfg.JobLocker
+	if jobLocker == nil {
+		jobLocker = NoopJobLocker{}
+	}
+
+	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여
+	// 소스별 실패 카운팅이 우선순위 경계 없이 누적됩니다.
+	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig)
+
+	newPool := func(pc PoolConfig) *KafkaConsumerPool {
+		return NewKafkaConsumerPoolWithOptions(
+			pc.Consumer, producer, handler, contentSvc, pc.WorkerCount,
+			cbRegistry, jobLocker,
+		)
+	}
+
 	return &PoolManager{
 		pools: map[core.Priority]*KafkaConsumerPool{
-			core.PriorityHigh:   NewKafkaConsumerPool(cfg.High.Consumer, producer, handler, contentSvc, cfg.High.WorkerCount),
-			core.PriorityNormal: NewKafkaConsumerPool(cfg.Normal.Consumer, producer, handler, contentSvc, cfg.Normal.WorkerCount),
-			core.PriorityLow:    NewKafkaConsumerPool(cfg.Low.Consumer, producer, handler, contentSvc, cfg.Low.WorkerCount),
+			core.PriorityHigh:   newPool(cfg.High),
+			core.PriorityNormal: newPool(cfg.Normal),
+			core.PriorityLow:    newPool(cfg.Low),
 		},
 		producer: producer,
 		resolver: resolver,

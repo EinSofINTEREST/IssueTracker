@@ -1,4 +1,4 @@
-.PHONY: help build build-all test clean run-crawler run-processor run-issuetracker run-example lint coverage \
+.PHONY: help build build-all test clean run-processor run-issuetracker run-example lint coverage \
         chrome-start chrome-stop chrome-status run-example-docker \
         run-kafka-pipeline \
         kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics \
@@ -11,7 +11,6 @@ PG_DATA_DIR=/data/ELArchive/issuetracker/postgres
 PG_ENV_FILE=.env
 # .env가 없으면 기본값(localhost:5432, postgres/postgres) 사용
 PG_ENV_ARGS=$(shell [ -f $(PG_ENV_FILE) ] && echo "--env-file $(PG_ENV_FILE)")
-CRAWLER_BINARY=$(BINARY_DIR)/crawler
 PROCESSOR_BINARY=$(BINARY_DIR)/processor
 ISSUETRACKER_BINARY=$(BINARY_DIR)/issuetracker
 MIGRATE_BINARY=$(BINARY_DIR)/migrate
@@ -38,22 +37,17 @@ help: ## 도움말 표시
 build: ## 모든 바이너리 빌드
 	@echo "Building binaries..."
 	@mkdir -p $(BINARY_DIR)
-	$(GO) build $(GOFLAGS) -o $(CRAWLER_BINARY) ./cmd/crawler
 	$(GO) build $(GOFLAGS) -o $(PROCESSOR_BINARY) ./cmd/processor
 	$(GO) build $(GOFLAGS) -o $(ISSUETRACKER_BINARY) ./cmd/issuetracker
 	$(GO) build $(GOFLAGS) -o $(MIGRATE_BINARY) ./cmd/migrate
 	$(GO) build $(GOFLAGS) -o $(MIGRATE_DOWN_BINARY) ./cmd/migrate-down
-	@echo "Build complete: $(CRAWLER_BINARY), $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY), $(MIGRATE_BINARY), $(MIGRATE_DOWN_BINARY)"
+	@echo "Build complete: $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY), $(MIGRATE_BINARY), $(MIGRATE_DOWN_BINARY)"
 
 build-all: build ## 모든 실행 파일 빌드 (build와 동일)
 
 start: run-issuetracker ## Crawler + Processor 통합 실행 (start로도 가능)
 	@echo "Starting issuetracker (crawler + processor)..."
 	./scripts/entrypoint.sh
-
-run-crawler: build ## Crawler 실행
-	@echo "Running crawler..."
-	./$(CRAWLER_BINARY)
 
 run-processor: build ## Validate processor 실행
 	@echo "Running processor..."
