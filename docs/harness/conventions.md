@@ -70,8 +70,11 @@ Branch Protection 대신 **Repository Ruleset**을 기본 수단으로 운영합
 ## 4. Failure Strategy + Conditional Execution 규칙
 
 ### 4.1 우선순위 (핵심 규칙)
-1. **Failure Strategy가 Conditional Execution보다 우선한다.**
-   - 실패가 발생하면 조건 실행을 평가하기 전에 Failure Strategy가 먼저 동작.
+1. **실행된 Step의 실패는 Failure Strategy로만 처리한다.**
+   - Conditional Execution(`when`)은 Step의 **실행 여부**를 결정하는 게이트이며, 실패 처리 정책이 아니다.
+   - `when` 이 false면 Step은 실행되지 않으므로 실패가 발생하지 않는다(=Failure Strategy 평가 대상 아님).
+   - `when` 이 true로 평가되어 실행된 Step이 실패한 경우에만 Failure Strategy가 동작한다.
+   - **금지 패턴**: 실패 가능성이 있는 Step을 `when` 조건으로 우회시켜 Failure Strategy를 회피하도록 설계하는 것.
 2. **가장 좁은 범위(Inner-most scope)가 우선한다.**
    - 적용 순서: `Step` > `Step Group` > `Stage` > `Pipeline`.
    - Step에 Abort, 상위 Step Group에 Retry가 있으면 **Abort가 실행됨.**

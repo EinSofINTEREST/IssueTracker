@@ -137,8 +137,9 @@ pipeline:
                           echo "probe ok"
                     environmentVariables: []
                     outputVariables: []
-                  # ★ 실패 시 Failure Strategy가 먼저 평가되어 Abort
-                  #    (조건 실행의 skip 여부보다 우선)
+                  # ★ when 조건이 true로 평가되어 실행된 경우에만, 실패 시 Failure Strategy로 Abort 처리됨.
+                  #    when 이 false면 Step 자체가 skip 되어 실패가 발생하지 않음(= Failure Strategy 평가 대상 아님).
+                  #    Conditional Execution을 실패 회피 수단으로 쓰지 말 것.
                   failureStrategies:
                     - onFailure:
                         errors:
