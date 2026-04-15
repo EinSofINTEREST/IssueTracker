@@ -13,11 +13,13 @@
 #   - 규칙 검증용이며, 그대로 배포에 쓰지 마세요.
 
 pipeline:
-  name: EinSofINTEREST_Github_Connector
-  identifier: EinSofINTEREST_Github_Connector
+  name: Sample_Harness_Governance
+  identifier: Sample_Harness_Governance
   projectIdentifier: default_project
   orgIdentifier: default
   tags: {}
+  # GitHub Connector 식별자(예: EinSofINTEREST_Github_Connector)는
+  # CI 스테이지의 codebase / connectorRef 에서 참조하며, 파이프라인 식별자와는 분리한다.
 
   stages:
     # ---------------------------------------------------------------
