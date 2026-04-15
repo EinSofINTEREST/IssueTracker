@@ -5,11 +5,13 @@
 # - `.github/`, CI/CD, 배포, Harness 설정 변경은 반드시 owner 승인 필요.
 # - GitHub Ruleset의 "Require review from Code Owners"와 함께 동작합니다.
 #
-# TODO(juhy0987): 아래 @EinSofINTEREST/devops 팀을 GitHub Org에 실제 생성 후 활성화하세요.
-#   생성 전에는 단일 소유자(@juhy0987)로만 강제되며 SPOF 위험이 남습니다.
-
-# 기본 소유자
-*                               @juhy0987
+# TODO(juhy0987): @EinSofINTEREST/devops 팀에 멤버 1명 이상 추가 후 아래 경로별 owner를
+#   팀과 개인 이중 지정(`@juhy0987 @EinSofINTEREST/devops`)으로 전환하세요.
+#
+# 의도적으로 전역 `*` 패턴을 두지 않습니다.
+#   - Ruleset "Require review from Code Owners" 와 결합 시 전역 `*`는
+#     저장소의 모든 PR이 단일 소유자 승인에 종속되어 머지 병목을 유발합니다.
+#   - 보호가 필요한 핵심 경로만 명시적으로 나열합니다.
 
 # 거버넌스 / CI / 배포 (이중 owner 필수)
 /.github/                       @juhy0987
