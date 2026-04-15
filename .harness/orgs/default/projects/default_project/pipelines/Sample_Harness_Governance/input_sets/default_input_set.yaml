@@ -1,0 +1,14 @@
+inputSet:
+  name: default_input_set
+  identifier: default_input_set
+  orgIdentifier: default
+  projectIdentifier: default_project
+  pipeline:
+    identifier: Sample_Harness_Governance
+    properties:
+      ci:
+        codebase:
+          build:
+            type: PR
+            spec:
+              number: <+trigger.prNumber>
