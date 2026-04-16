@@ -91,17 +91,6 @@ func (p *Publisher) Publish(
 	return nil
 }
 
-// publish는 단일 CrawlJob을 직렬화하여 Kafka crawl 토픽에 발행합니다.
-// Publish 루프 외에도 단건 발행이 필요한 경우 재사용할 수 있습니다.
-func (p *Publisher) publish(ctx context.Context, job *core.CrawlJob) error {
-	msg, err := p.buildMessage(job)
-	if err != nil {
-		return err
-	}
-
-	return p.producer.Publish(ctx, msg)
-}
-
 // buildMessage는 CrawlJob을 Kafka Message로 변환합니다.
 func (p *Publisher) buildMessage(job *core.CrawlJob) (queue.Message, error) {
 	data, err := job.Marshal()
