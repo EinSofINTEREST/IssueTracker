@@ -2,33 +2,42 @@
 - #
 
 <!--
-자세한 개발 내용을 PR title로 달아주세요
-    ex) [FEAT#issue번호]: 어쩌구저쩌
-!-->
+PR title 예시: [FEAT#issue번호]: 어쩌구저쩌
+-->
 
 <br>
 
 ## 구현 내용
-<!--
-PR이 포함한 변경사항과 관련 중요한 스크립트나 오브젝트를 명시해주세요
-   ex) 스크립트/함수: 어쩌구저쩌
-!-->
+- 
+
+<br>
+
+## CI / 머지 게이트 점검
+
+> [CI 운영 규약](../docs/ci/conventions.md) 및 [Required Status Checks 단일 소스](../docs/ci/status-checks.md)에 따라 작성합니다.
+
+### 변경 영향 범위
+- 영향 패키지/모듈: 
+- 위험도(택1): `Low` / `Medium` / `High`
+
+### Required Status Checks
+- 통과 확인 대상 (PR Checks 탭에서 확인):
+  - [ ] `Format Check`
+  - [ ] `Build`
+  - [ ] `Test`
+  - [ ] `Lint`
+
+### 롤백 계획
 - 
 
 <br>
 
 ## TODO
-<!--
-보완해야 할 사항을 적어주세요
-!-->
 - 
 
 <br>
 
 ## 논의 사항
-<!--
-개발이나 기획 관련 논의가 필요한 사항을 적어주세요
-!-->
 - 
 
 <br>
