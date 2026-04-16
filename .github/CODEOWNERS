@@ -10,12 +10,13 @@
 
 # 거버넌스 / CI / 워크플로
 /.github/                       @juhy0987
-/.github/workflows/             @juhy0987
-/.github/CODEOWNERS             @juhy0987
-/.github/PULL_REQUEST_TEMPLATE.md @juhy0987
 
 # CI 운영 문서
 /docs/ci/                       @juhy0987
+
+# 의존성 / 공급망 보안
+/go.mod                         @juhy0987
+/go.sum                         @juhy0987
 
 # 크롤러 코어
 /internal/crawler/core/         @juhy0987
