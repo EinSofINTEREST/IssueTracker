@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -76,24 +75,9 @@ func TestKafkaConsumerPool_URLCache_Hit_SkipsWithCommit(t *testing.T) {
 
 	// URL이 이미 캐시에 존재
 	urlCache.On("Exists", mock.Anything, job.Target.URL).Return(true, nil)
-
-	consumer.On("FetchMessage", mock.Anything).Return(msg, nil).Once()
-	consumer.On("FetchMessage", mock.Anything).
-		Run(func(_ mock.Arguments) {}).
-		Return(nil, context.Canceled)
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
-	consumer.On("Close").Return(nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	pool.Start(ctx)
-
-	// commit이 호출될 때까지 잠시 대기
-	time.Sleep(200 * time.Millisecond)
-	cancel()
-
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer stopCancel()
-	_ = pool.Stop(stopCtx)
+	runPool(t, consumer, pool, msg)
 
 	// handler는 호출되지 않아야 합니다
 	handler.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)

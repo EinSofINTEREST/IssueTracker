@@ -403,8 +403,9 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 	}
 
 	// fetch + 저장 + 발행이 모두 성공한 URL을 캐시에 등록합니다.
+	// 카테고리 페이지는 매 주기마다 새 기사 URL을 추출해야 하므로 캐시 대상에서 제외합니다.
 	// 캐시 등록 실패는 다음 주기에 중복 fetch가 발생할 뿐이므로 에러를 전파하지 않습니다.
-	if targetURL := item.job.Target.URL; targetURL != "" {
+	if targetURL := item.job.Target.URL; targetURL != "" && item.job.Target.Type != core.TargetTypeCategory {
 		if cacheErr := p.urlCache.Set(ctx, targetURL); cacheErr != nil {
 			log.WithFields(map[string]interface{}{
 				"job_id":  item.job.ID,

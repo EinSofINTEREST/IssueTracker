@@ -19,11 +19,9 @@ func TestURLCacheKey_Format(t *testing.T) {
 func TestSetURL_And_ExistsURL(t *testing.T) {
 	client := newTestClient(t)
 	ctx := context.Background()
-	url := "https://example.com/test-set-exists"
+	url := "https://example.com/test-set-exists-" + time.Now().Format(time.RFC3339Nano)
 
-	// 사전 정리: 키가 있으면 제거
-	_ = client.SetURL(ctx, url, 100*time.Millisecond)
-	time.Sleep(200 * time.Millisecond)
+	// 고유한 URL을 사용해 사전 정리 없이 빈 캐시 상태를 보장
 
 	// 캐시에 없는 상태 확인
 	exists, err := client.ExistsURL(ctx, url)

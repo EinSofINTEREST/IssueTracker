@@ -5,12 +5,6 @@ import (
 	"time"
 )
 
-const (
-	// DefaultURLCacheTTL은 URL 캐시의 기본 TTL입니다.
-	// 동일 URL에 대해 24시간 동안 중복 fetch를 방지합니다.
-	DefaultURLCacheTTL = 24 * time.Hour
-)
-
 // URLCache는 URL 중복 fetch를 방지하는 캐시 인터페이스입니다.
 // 구현체는 goroutine-safe해야 합니다.
 type URLCache interface {
