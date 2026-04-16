@@ -50,8 +50,6 @@ pipeline:
                                 - AllErrors
                               action:
                                 type: Abort
-        # GitHub Commit Status 전송 (Required status check: harness-ci-build).
-        # 값은 docs/ci/status-checks.md 의 단일 소스와 토씨 단위 일치 (Fixed).
         sendGitStatus:
           enabled: true
           name: harness-ci-build
@@ -83,8 +81,6 @@ pipeline:
         failureStrategies:
           - onFailure:
               errors:
-                - Timeout
-                - Unknown
                 - AllErrors
               action:
                 type: Abort
