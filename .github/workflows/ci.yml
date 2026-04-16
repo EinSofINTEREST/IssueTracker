@@ -1,12 +1,83 @@
 name: CI
 
 on:
-  push:
-    branches: ["**"]
   pull_request:
     branches: ["**"]
 
 jobs:
+  # ── 3. CI 강제: 커밋 메시지 / PR 타이틀 포맷 검증 ─────────────
+  commit-lint:
+    name: Commit Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)\]'
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            commits=$(git log --format='%s' "$base".."$head")
+          else
+            commits=$(git log --format='%s' -1)
+          fi
+
+          failed=0
+          while IFS= read -r msg; do
+            [ -z "$msg" ] && continue
+            if ! echo "$msg" | grep -qE "$pattern"; then
+              echo "::error::커밋 메시지 규칙 위반: '$msg'"
+              echo "  허용 형식: [FEAT]: / [FIX]: / [REFAC]: / [DOCS]: / [CHORE]:"
+              failed=1
+            fi
+          done <<< "$commits"
+
+          if [ "$failed" -eq 1 ]; then
+            {
+              echo "## ❌ Commit Lint 실패"
+              echo "커밋 메시지가 \`[카테고리]: 설명\` 형식을 따르지 않습니다."
+              echo ""
+              echo "허용 카테고리: \`FEAT\` \`FIX\` \`REFAC\` \`DOCS\` \`CHORE\`"
+              echo ""
+              echo "예시: \`[FIX]: Redis 연결 실패 시 NoopJobLocker로 graceful degrade\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "## ✅ Commit Lint 통과" >> "$GITHUB_STEP_SUMMARY"
+
+  pr-title-lint:
+    name: PR Title Lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        run: |
+          title="${{ github.event.pull_request.title }}"
+          pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)'
+
+          if ! echo "$title" | grep -qE "$pattern"; then
+            {
+              echo "## ❌ PR Title Lint 실패"
+              echo "PR 타이틀이 \`[카테고리...]: 설명\` 형식을 따르지 않습니다."
+              echo ""
+              echo "현재 타이틀: \`$title\`"
+              echo ""
+              echo "허용 카테고리: \`FEAT\` \`FIX\` \`REFAC\` \`DOCS\` \`CHORE\`"
+              echo ""
+              echo "예시: \`[FEAT#15]: Kafka consumer pool을 활용한 크롤러 워커 구현\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "## ✅ PR Title Lint 통과" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 기존 CI: 코드 품질 ─────────────────────────────────────────
   format:
     name: Format Check
     runs-on: ubuntu-latest
@@ -23,9 +94,96 @@ jobs:
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
-            echo "다음 파일이 gofmt 포맷을 따르지 않습니다:"
-            echo "$unformatted"
-            echo ""
-            echo "'gofmt -w .' 를 실행하여 수정하세요."
+            {
+              echo "## ❌ Format Check 실패"
+              echo "다음 파일이 gofmt 포맷을 따르지 않습니다:"
+              echo ""
+              echo '```'
+              echo "$unformatted"
+              echo '```'
+              echo ""
+              echo "\`gofmt -w .\` 를 실행하여 수정하세요."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+          echo "## ✅ Format Check 통과" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: |
+          go build ./... 2>&1 | tee build.log
+          echo "## ✅ Build 성공" >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test -race -coverprofile=coverage.out -coverpkg=./internal/...,./pkg/... -count=1 ./...
+
+      # ── 1. 가시성: 커버리지 결과를 PR Summary에 직접 표시 ────────
+      - name: Coverage summary
+        if: ${{ !cancelled() }}
+        run: |
+          if [ ! -f coverage.out ]; then
+            echo "## ⚠️ 커버리지 파일 없음 (테스트 실패)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          total=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          threshold=40
+
+          {
+            echo "## 📊 테스트 커버리지: ${total}%"
+            echo ""
+            echo "| 항목 | 값 |"
+            echo "|------|-----|"
+            echo "| 전체 커버리지 | **${total}%** |"
+            echo "| 임계값 | ${threshold}% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ── 3. CI 강제: 임계값 미달 시 에러 ───────────────────────
+          if [ "$(echo "$total < $threshold" | bc -l)" -eq 1 ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ 커버리지 ${total}%가 임계값 ${threshold}% 미만입니다." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8

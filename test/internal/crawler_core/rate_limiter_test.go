@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,16 +121,16 @@ func TestRateLimiter_ConcurrentRequests(t *testing.T) {
 	limiter := core.NewRateLimiter(100, 10)
 
 	// 동시에 20개 요청
-	allowed := 0
-	denied := 0
+	var allowed atomic.Int32
+	var denied atomic.Int32
 
 	done := make(chan bool, 20)
 	for i := 0; i < 20; i++ {
 		go func() {
 			if limiter.Allow() {
-				allowed++
+				allowed.Add(1)
 			} else {
-				denied++
+				denied.Add(1)
 			}
 			done <- true
 		}()
@@ -140,8 +141,8 @@ func TestRateLimiter_ConcurrentRequests(t *testing.T) {
 	}
 
 	// Burst는 10이므로 최대 10개만 허용
-	assert.LessOrEqual(t, allowed, 10)
-	assert.GreaterOrEqual(t, denied, 10)
+	assert.LessOrEqual(t, allowed.Load(), int32(10))
+	assert.GreaterOrEqual(t, denied.Load(), int32(10))
 }
 
 func TestTokenBucketRateLimiter_String(t *testing.T) {
@@ -203,7 +204,7 @@ func TestRateLimiter_Wait_LogsContextCancelled(t *testing.T) {
 
 	entry := lastLog(t, &buf)
 	assert.Equal(t, "debug", entry["level"])
-	assert.Equal(t, "rate limit wait cancelled by context", entry["message"])
+	assert.Equal(t, "rate limit wait context done", entry["message"])
 	assert.Contains(t, entry, "wait_count")
 	assert.Contains(t, entry, "rate")
 	assert.Contains(t, entry, "burst")
