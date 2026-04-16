@@ -16,7 +16,8 @@ pipeline:
             arch: Amd64
           runtime:
             type: Docker
-            spec: {}
+            spec:
+              harnessImageConnectorRef: account.harnessImage
           execution:
             steps:
               - stepGroup:
