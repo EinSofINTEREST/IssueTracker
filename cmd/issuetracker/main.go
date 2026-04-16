@@ -90,20 +90,22 @@ func main() {
 	// worker/manager가 JobLocker nil을 NoopJobLocker로 fallback 처리하는 설계와 일관되게,
 	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade합니다.
 	var jobLocker crawlerWorker.JobLocker
+	var urlCache crawlerWorker.URLCache
 	redisCfg, err := config.LoadRedis()
 	if err != nil {
-		log.WithError(err).Warn("failed to load redis config, falling back to noop job locker")
+		log.WithError(err).Warn("failed to load redis config, falling back to noop job locker and url cache")
 	} else {
 		redisClient, redisErr := redis.New(ctx, redisCfg)
 		if redisErr != nil {
-			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop job locker")
+			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop job locker and url cache")
 		} else {
 			defer redisClient.Close()
 			log.WithFields(map[string]interface{}{
 				"host": redisCfg.Host,
 				"port": redisCfg.Port,
-			}).Info("redis connected for job locker")
+			}).Info("redis connected for job locker and url cache")
 			jobLocker = crawlerWorker.NewRedisJobLocker(redisClient, crawlerWorker.DefaultJobLockTTL)
+			urlCache = crawlerWorker.NewRedisURLCache(redisClient, redisCfg.URLCacheTTL)
 		}
 	}
 
@@ -112,6 +114,7 @@ func main() {
 		Normal:    crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
 		Low:       crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
 		JobLocker: jobLocker,
+		URLCache:  urlCache,
 	}
 
 	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, contentSvc, resolver, log)

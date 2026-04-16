@@ -57,6 +57,7 @@ type KafkaConsumerPool struct {
 	wg          sync.WaitGroup
 	cbRegistry  *CircuitBreakerRegistry
 	jobLocker   JobLocker
+	urlCache    URLCache
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -84,6 +85,7 @@ func NewKafkaConsumerPool(
 		consumer, producer, handler, contentSvc, workerCount,
 		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig),
 		NoopJobLocker{},
+		NoopURLCache{},
 	)
 }
 
@@ -101,6 +103,7 @@ func NewKafkaConsumerPoolWithCB(
 		consumer, producer, handler, contentSvc, workerCount,
 		cbRegistry,
 		NoopJobLocker{},
+		NoopURLCache{},
 	)
 }
 
@@ -114,6 +117,7 @@ func NewKafkaConsumerPoolWithOptions(
 	workerCount int,
 	cbRegistry *CircuitBreakerRegistry,
 	jobLocker JobLocker,
+	urlCache URLCache,
 ) *KafkaConsumerPool {
 	return &KafkaConsumerPool{
 		consumer:    consumer,
@@ -123,6 +127,7 @@ func NewKafkaConsumerPoolWithOptions(
 		workerCount: workerCount,
 		cbRegistry:  cbRegistry,
 		jobLocker:   jobLocker,
+		urlCache:    urlCache,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
@@ -296,6 +301,28 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		}()
 	}
 
+	// 카테고리 페이지는 URL 캐시 대상에서 제외합니다.
+	// 카테고리 페이지는 매 주기마다 새 기사 URL을 추출해야 하므로 캐싱하면 안 됩니다.
+	targetURL := item.job.Target.URL
+	if targetURL != "" && item.job.Target.Type != core.TargetTypeCategory {
+		cached, cacheErr := p.urlCache.Exists(ctx, targetURL)
+		if cacheErr != nil {
+			// 캐시 장애 시 fetch를 차단하지 않고 경고 후 진행합니다.
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+				"url":     targetURL,
+			}).WithError(cacheErr).Warn("url cache check failed, proceeding with fetch")
+		} else if cached {
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+				"url":     targetURL,
+			}).Debug("url already cached, skipping fetch")
+			return p.commitMessage(ctx, item.msg)
+		}
+	}
+
 	log.WithFields(map[string]interface{}{
 		"job_id":  item.job.ID,
 		"crawler": item.job.CrawlerName,
@@ -372,6 +399,18 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 			// publishNormalized 실패는 DB 저장/Kafka 발행 문제로 소스 자체의 건전성과 무관하지만
 			// 작업이 완결되지 않았으므로 성공으로 기록하지 않고 반환합니다.
 			return fmt.Errorf("publish normalized for job %s: %w", item.job.ID, err)
+		}
+	}
+
+	// fetch + 저장 + 발행이 모두 성공한 URL을 캐시에 등록합니다.
+	// 캐시 등록 실패는 다음 주기에 중복 fetch가 발생할 뿐이므로 에러를 전파하지 않습니다.
+	if targetURL := item.job.Target.URL; targetURL != "" {
+		if cacheErr := p.urlCache.Set(ctx, targetURL); cacheErr != nil {
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+				"url":     targetURL,
+			}).WithError(cacheErr).Warn("failed to cache url after successful fetch")
 		}
 	}
 
