@@ -43,6 +43,7 @@ func DefaultCNNConfig() CNNConfig {
 	return CNNConfig{
 		BaseURL: "https://www.cnn.com",
 		CategoryURLs: map[string]string{
+			"top":           "https://edition.cnn.com",
 			"us":            "https://edition.cnn.com/us",
 			"world":         "https://edition.cnn.com/world",
 			"politics":      "https://edition.cnn.com/politics",
