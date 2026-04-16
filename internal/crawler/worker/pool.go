@@ -389,7 +389,9 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 	}
 
 	if len(contents) == 0 {
-		// handler가 빈 슬라이스나 nil을 반환하면 발행 없이 commit만 수행
+		// handler가 빈 슬라이스나 nil을 반환해도 fetch 자체는 성공했으므로 캐시에 등록합니다.
+		// 다음 주기에 동일 URL을 불필요하게 재요청하는 것을 방지합니다.
+		p.cacheURLIfEligible(ctx, item, log)
 		cb.RecordSuccess()
 		return p.commitMessage(ctx, item.msg)
 	}
@@ -402,18 +404,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		}
 	}
 
-	// fetch + 저장 + 발행이 모두 성공한 URL을 캐시에 등록합니다.
-	// 카테고리 페이지는 매 주기마다 새 기사 URL을 추출해야 하므로 캐시 대상에서 제외합니다.
-	// 캐시 등록 실패는 다음 주기에 중복 fetch가 발생할 뿐이므로 에러를 전파하지 않습니다.
-	if targetURL := item.job.Target.URL; targetURL != "" && item.job.Target.Type != core.TargetTypeCategory {
-		if cacheErr := p.urlCache.Set(ctx, targetURL); cacheErr != nil {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-				"url":     targetURL,
-			}).WithError(cacheErr).Warn("failed to cache url after successful fetch")
-		}
-	}
+	p.cacheURLIfEligible(ctx, item, log)
 
 	// 모든 부수 효과(DB 저장 + Kafka 발행)가 성공한 시점에 circuit breaker에 성공 기록
 	cb.RecordSuccess()
@@ -475,6 +466,22 @@ func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core
 	}
 
 	return p.producer.Publish(ctx, msg)
+}
+
+// cacheURLIfEligible은 fetch 성공 후 URL을 캐시에 등록합니다.
+// 카테고리 페이지는 매 주기마다 새 기사 URL을 추출해야 하므로 캐시 대상에서 제외합니다.
+// 캐시 등록 실패는 다음 주기에 중복 fetch가 발생할 뿐이므로 에러를 전파하지 않습니다.
+func (p *KafkaConsumerPool) cacheURLIfEligible(ctx context.Context, item jobItem, log *logger.Logger) {
+	url := item.job.Target.URL
+	if url != "" && item.job.Target.Type != core.TargetTypeCategory {
+		if cacheErr := p.urlCache.Set(ctx, url); cacheErr != nil {
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+				"url":     url,
+			}).WithError(cacheErr).Warn("failed to cache url after successful fetch")
+		}
+	}
 }
 
 func (p *KafkaConsumerPool) commitMessage(ctx context.Context, msg *queue.Message) error {

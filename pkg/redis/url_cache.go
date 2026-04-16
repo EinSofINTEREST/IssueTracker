@@ -2,6 +2,8 @@ package redis
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -35,5 +37,6 @@ func (c *Client) ExistsURL(ctx context.Context, url string) (bool, error) {
 }
 
 func urlCacheKey(url string) string {
-	return URLCacheKeyPrefix + url
+	hash := sha256.Sum256([]byte(url))
+	return URLCacheKeyPrefix + hex.EncodeToString(hash[:])
 }
