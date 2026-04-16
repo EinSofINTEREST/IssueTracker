@@ -144,7 +144,7 @@ jobs:
 
       # ── 1. 가시성: 커버리지 결과를 PR Summary에 직접 표시 ────────
       - name: Coverage summary
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           if [ ! -f coverage.out ]; then
             echo "## ⚠️ 커버리지 파일 없음 (테스트 실패)" >> "$GITHUB_STEP_SUMMARY"
@@ -186,4 +186,4 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.64.8

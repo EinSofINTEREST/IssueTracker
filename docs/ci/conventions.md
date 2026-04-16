@@ -68,7 +68,8 @@ Branch Protection 대신 **Repository Ruleset**을 기본 수단으로 운영합
 - 기본: job 실패 시 PR 머지 차단 (Required check).
 - `continue-on-error: true` 사용 금지 (Required check를 우회하게 됨).
 - 예외: non-blocking 정보성 job (예: 커버리지 리포트)은 Required에 등록하지 않고
-  `if: always()` 로 실행하되 `continue-on-error: true` 허용.
+  `if: !cancelled()` 로 실행하되 `continue-on-error: true` 허용.
+  (`if: always()` 는 수동 취소 시에도 실행되어 러너 리소스를 낭비하므로 사용 금지)
 
 ---
 
