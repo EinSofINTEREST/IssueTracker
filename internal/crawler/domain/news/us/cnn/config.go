@@ -1,9 +1,8 @@
 // Package cnn implements a crawler for CNN (www.cnn.com).
 //
 // Package cnn은 CNN 뉴스 크롤러를 구현합니다.
-// Primary strategy: RSS feed (for article lists).
-// Secondary strategy: HTML scraping via goquery (for full article content).
-// Fallback strategy: headless browser via chromedp.
+// Primary strategy: HTML scraping via goquery (for category lists and full article content).
+// Fallback strategy: headless browser via chromedp (for JavaScript-rendered pages).
 package cnn
 
 import (

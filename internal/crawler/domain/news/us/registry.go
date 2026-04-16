@@ -43,17 +43,14 @@ func registerCNN(registry *handler.Registry, config core.Config, repo storage.Ne
 	}
 
 	// goquery fetcher (주 전략: 카테고리 목록 + 기사 본문 수집)
-	gqSource := cnnCfg.CrawlerConfig.SourceInfo
-	gqSource.Name = "cnn-goquery"
-	gqCrawler := goquery.NewGoqueryCrawler("cnn-goquery", gqSource, config)
+	// SourceInfo.Name은 논리 소스명("cnn")을 유지하여 DB/Kafka 소스 식별자 일관성 보장
+	gqCrawler := goquery.NewGoqueryCrawler("cnn-goquery", cnnCfg.CrawlerConfig.SourceInfo, config)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
 	// chromedp fetcher (폴백: JavaScript 렌더링 필요 시)
-	cdpSource := cnnCfg.CrawlerConfig.SourceInfo
-	cdpSource.Name = "cnn-browser"
 	cdpCrawler := cdp.NewChromedpCrawlerWithOptions(
 		"cnn-browser",
-		cdpSource,
+		cnnCfg.CrawlerConfig.SourceInfo,
 		config,
 		cdp.DefaultRemoteOptions(),
 	)

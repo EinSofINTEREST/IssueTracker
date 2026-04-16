@@ -408,7 +408,6 @@ func Load(envFiles ...string) (DBConfig, error) {
 // SchedulerConfig는 Job Scheduler의 크롤 주기 설정을 나타냅니다.
 // 소스 타입별로 독립적으로 조정할 수 있습니다.
 type SchedulerConfig struct {
-	FeedInterval     time.Duration // RSS 피드 폴링 주기 — SCHEDULER_FEED_INTERVAL (default: 20m)
 	CategoryInterval time.Duration // 카테고리 목록 폴링 주기 — SCHEDULER_CATEGORY_INTERVAL (default: 2h)
 	JobTimeout       time.Duration // 개별 Job 최대 실행 시간 — SCHEDULER_JOB_TIMEOUT (default: 30s)
 	MaxRetries       int           // Job 최대 재시도 횟수 — SCHEDULER_MAX_RETRIES (default: 3)
@@ -417,7 +416,6 @@ type SchedulerConfig struct {
 // DefaultSchedulerConfig는 기본 SchedulerConfig를 반환합니다.
 func DefaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
-		FeedInterval:     20 * time.Minute,
 		CategoryInterval: 2 * time.Hour,
 		JobTimeout:       30 * time.Second,
 		MaxRetries:       3,
@@ -459,7 +457,6 @@ func LoadScheduler(envFiles ...string) (SchedulerConfig, error) {
 	}
 
 	for _, op := range []error{
-		parseDuration("SCHEDULER_FEED_INTERVAL", &cfg.FeedInterval),
 		parseDuration("SCHEDULER_CATEGORY_INTERVAL", &cfg.CategoryInterval),
 		parseDuration("SCHEDULER_JOB_TIMEOUT", &cfg.JobTimeout),
 		parseInt("SCHEDULER_MAX_RETRIES", &cfg.MaxRetries),
