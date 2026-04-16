@@ -15,9 +15,6 @@ type CNNConfig struct {
 	// BaseURL은 CNN 메인 URL입니다.
 	BaseURL string
 
-	// FeedURLs는 카테고리명 → RSS 피드 URL 매핑입니다.
-	FeedURLs map[string]string
-
 	// CategoryURLs는 카테고리명 → HTML 목록 페이지 URL 매핑입니다.
 	CategoryURLs map[string]string
 
@@ -45,16 +42,6 @@ func DefaultCNNConfig() CNNConfig {
 
 	return CNNConfig{
 		BaseURL: "https://www.cnn.com",
-		FeedURLs: map[string]string{
-			"top":           "https://rss.cnn.com/rss/cnn_topstories.rss",
-			"us":            "https://rss.cnn.com/rss/cnn_us.rss",
-			"world":         "https://rss.cnn.com/rss/cnn_world.rss",
-			"politics":      "https://rss.cnn.com/rss/cnn_allpolitics.rss",
-			"business":      "https://rss.cnn.com/rss/money_latest.rss",
-			"tech":          "https://rss.cnn.com/rss/cnn_tech.rss",
-			"health":        "https://rss.cnn.com/rss/cnn_health.rss",
-			"entertainment": "https://rss.cnn.com/rss/showbiz_video.rss",
-		},
 		CategoryURLs: map[string]string{
 			"us":            "https://edition.cnn.com/us",
 			"world":         "https://edition.cnn.com/world",

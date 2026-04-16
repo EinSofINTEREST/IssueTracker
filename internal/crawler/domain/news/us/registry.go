@@ -29,8 +29,8 @@ func Register(registry *handler.Registry, config core.Config, repo storage.NewsA
 }
 
 // registerCNN은 CNN 뉴스 핸들러를 조립하고 등록합니다.
-// 체인: RSS(주) → GoQuery(HTML 폴백) → Browser(최종 폴백)
-// RSS는 기사 목록 수집에 사용되고, GoQuery/Browser는 전체 기사 본문 수집에 사용됩니다.
+// 체인: GoQuery(주) → Browser(폴백)
+// CNN RSS 피드가 지원 중단되어 HTML 기반 크롤링을 기본 전략으로 사용합니다.
 func registerCNN(registry *handler.Registry, config core.Config, repo storage.NewsArticleRepository, publisher news.JobPublisher, log *logger.Logger) {
 	cnnCfg := cnn.DefaultCNNConfig()
 	cnnCfg.CrawlerConfig = config
@@ -42,17 +42,13 @@ func registerCNN(registry *handler.Registry, config core.Config, repo storage.Ne
 		Language: "en",
 	}
 
-	// RSS fetcher (주 전략: 기사 목록)
-	rssSource := cnnCfg.CrawlerConfig.SourceInfo
-	rssFetcher := fetcher.NewRSSFetcher(rssSource, log)
-
-	// goquery fetcher (기사 본문 수집)
+	// goquery fetcher (주 전략: 카테고리 목록 + 기사 본문 수집)
 	gqSource := cnnCfg.CrawlerConfig.SourceInfo
 	gqSource.Name = "cnn-goquery"
 	gqCrawler := goquery.NewGoqueryCrawler("cnn-goquery", gqSource, config)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
-	// chromedp fetcher (최종 폴백: JavaScript 렌더링 필요 시)
+	// chromedp fetcher (폴백: JavaScript 렌더링 필요 시)
 	cdpSource := cnnCfg.CrawlerConfig.SourceInfo
 	cdpSource.Name = "cnn-browser"
 	cdpCrawler := cdp.NewChromedpCrawlerWithOptions(
@@ -67,10 +63,9 @@ func registerCNN(registry *handler.Registry, config core.Config, repo storage.Ne
 	parser := cnn.NewCNNParser(cnnCfg)
 	crawler := cnn.NewCNNCrawler(cnnCfg, gqFetcher, parser, log)
 
-	// 체인 조립: RSS → GoQuery → Browser
-	// CNN은 RSS로 목록을 수집하고, GoQuery로 전체 기사를 파싱합니다.
+	// 체인 조립: GoQuery → Browser (RSS 제외)
 	// lazy loading 감지 시 GoQuery에서 Browser로 자동 위임합니다.
-	chain := news.BuildChain(rssFetcher, gqFetcher, brFetcher, log,
+	chain := news.BuildChain(nil, gqFetcher, brFetcher, log,
 		"data-lazy-src",
 		"lazyload",
 		"data-lazy",
