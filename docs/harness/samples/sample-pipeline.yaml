@@ -1,0 +1,148 @@
+pipeline:
+  name: Sample_Harness_Governance
+  identifier: Sample_Harness_Governance
+  projectIdentifier: default_project
+  orgIdentifier: default
+  tags: {}
+  stages:
+    - stage:
+        name: build
+        identifier: build
+        type: CI
+        spec:
+          cloneCodebase: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Docker
+            spec: {}
+          execution:
+            steps:
+              - stepGroup:
+                  name: build-group
+                  identifier: build_group
+                  failureStrategies:
+                    - onFailure:
+                        errors:
+                          - AllErrors
+                        action:
+                          type: Retry
+                          spec:
+                            retryCount: 2
+                            retryIntervals:
+                              - 10s
+                            onRetryFailure:
+                              action:
+                                type: MarkAsFailure
+                  steps:
+                    - step:
+                        name: unit-test
+                        identifier: unit_test
+                        type: Run
+                        spec:
+                          shell: Sh
+                          command: |
+                            go test ./...
+                        failureStrategies:
+                          - onFailure:
+                              errors:
+                                - AllErrors
+                              action:
+                                type: Abort
+        # GitHub Commit Status 전송 (Required status check: harness-ci-build).
+        # 값은 docs/ci/status-checks.md 의 단일 소스와 토씨 단위 일치 (Fixed).
+        sendGitStatus:
+          enabled: true
+          name: harness-ci-build
+    - stage:
+        name: approval
+        identifier: approval
+        type: Approval
+        spec:
+          execution:
+            steps:
+              - step:
+                  name: prod-approval
+                  identifier: prod_approval
+                  type: HarnessApproval
+                  timeout: 24h
+                  spec:
+                    approvalMessage: |
+                      프로덕션 배포 승인 요청입니다.
+                      - 영향 범위 확인 완료?
+                      - 롤백 계획 공유 완료?
+                    includePipelineExecutionHistory: true
+                    isAutoRejectEnabled: true
+                    approvers:
+                      disallowPipelineExecutor: true
+                      minimumCount: 2
+                      userGroups:
+                        - PLACEHOLDER_APPROVER_USER_GROUP
+                    approverInputs: []
+        failureStrategies:
+          - onFailure:
+              errors:
+                - Timeout
+                - Unknown
+                - AllErrors
+              action:
+                type: Abort
+        sendGitStatus:
+          enabled: true
+          name: harness-approval
+    - stage:
+        name: deploy
+        identifier: deploy
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  name: conditional-probe
+                  identifier: conditional_probe
+                  type: ShellScript
+                  when:
+                    stageStatus: Success
+                    condition: <+codebase.branch> == "main"
+                  timeout: 10m
+                  spec:
+                    shell: Bash
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          echo "probe ok"
+                    environmentVariables: []
+                    outputVariables: []
+                  failureStrategies:
+                    - onFailure:
+                        errors:
+                          - AllErrors
+                        action:
+                          type: Abort
+              - step:
+                  name: deploy-step
+                  identifier: deploy_step
+                  type: ShellScript
+                  timeout: 15m
+                  spec:
+                    shell: Bash
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          echo "deploy placeholder"
+                  failureStrategies:
+                    - onFailure:
+                        errors:
+                          - AllErrors
+                        action:
+                          type: StageRollback
+  properties:
+    ci:
+      codebase:
+        connectorRef: EinSofConnector
+        repoName: IssueTracker
+        build: <+input>
+        sparseCheckout: []
