@@ -16,8 +16,10 @@ GitHub Ruleset과 PR 템플릿은 모두 이 문서의 이름과 **토씨 단위
 |------|---------------|------|----------|--------|
 | `Format Check` | `ci.yml` / `format` | `gofmt -l .` 결과 검증 | Yes | Yes (대문자/공백 표기 유지) |
 | `Build` | `ci.yml` / `build` | `go build ./...` 컴파일 검증 | Yes | Yes |
-| `Test` | `ci.yml` / `test` | `go test -race` + 커버리지 | Yes | Yes |
+| `Test` | `ci.yml` / `test` | `go test -race` + 커버리지 70% 강제 | Yes | Yes |
 | `Lint` | `ci.yml` / `lint` | `golangci-lint run` | Yes | Yes |
+| `Commit Lint` | `ci.yml` / `commit-lint` | 커밋 메시지 `[카테고리]:` 포맷 강제 | Yes | Yes |
+| `PR Title Lint` | `ci.yml` / `pr-title-lint` | PR 타이틀 `[카테고리]:` 포맷 강제 (PR only) | Yes | Yes |
 
 ## 변경 절차
 

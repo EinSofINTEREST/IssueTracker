@@ -22,6 +22,8 @@ PR title 예시: [FEAT#issue번호]: 어쩌구저쩌
 
 ### Required Status Checks
 - 통과 확인 대상 (PR Checks 탭에서 확인):
+  - [ ] `Commit Lint`
+  - [ ] `PR Title Lint`
   - [ ] `Format Check`
   - [ ] `Build`
   - [ ] `Test`
