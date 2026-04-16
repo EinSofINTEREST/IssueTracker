@@ -14,7 +14,7 @@ PR title 예시: [FEAT#issue번호]: 어쩌구저쩌
 
 ## CI / 머지 게이트 점검
 
-> [CI 운영 규약](../docs/ci/conventions.md) 및 [Required Status Checks 단일 소스](../docs/ci/status-checks.md)에 따라 작성합니다.
+> [CI 운영 규약](docs/ci/conventions.md) 및 [Required Status Checks 단일 소스](docs/ci/status-checks.md)에 따라 작성합니다.
 
 ### 변경 영향 범위
 - 영향 패키지/모듈: 
