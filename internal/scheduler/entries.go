@@ -22,18 +22,18 @@ func DefaultEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 	return entries
 }
 
-// cnnEntries는 CNN RSS 피드 기반 스케줄 항목을 반환합니다.
-// CNN은 RSS 피드를 제공하므로 TargetTypeFeed + FeedInterval을 사용합니다.
+// cnnEntries는 CNN 카테고리 페이지 기반 스케줄 항목을 반환합니다.
+// CNN RSS 피드가 지원 중단되어 HTML 카테고리 페이지를 직접 크롤링합니다.
 func cnnEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 	cnnCfg := cnn.DefaultCNNConfig()
-	entries := make([]ScheduleEntry, 0, len(cnnCfg.FeedURLs))
+	entries := make([]ScheduleEntry, 0, len(cnnCfg.CategoryURLs))
 
-	for _, url := range cnnCfg.FeedURLs {
+	for _, url := range cnnCfg.CategoryURLs {
 		entries = append(entries, ScheduleEntry{
 			CrawlerName: "cnn",
 			URL:         url,
-			TargetType:  core.TargetTypeFeed,
-			Interval:    cfg.FeedInterval,
+			TargetType:  core.TargetTypeCategory,
+			Interval:    cfg.CategoryInterval,
 			Priority:    core.PriorityNormal,
 			Timeout:     cfg.JobTimeout,
 		})

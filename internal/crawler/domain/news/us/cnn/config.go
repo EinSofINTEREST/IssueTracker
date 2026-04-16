@@ -1,9 +1,8 @@
 // Package cnn implements a crawler for CNN (www.cnn.com).
 //
 // Package cnn은 CNN 뉴스 크롤러를 구현합니다.
-// Primary strategy: RSS feed (for article lists).
-// Secondary strategy: HTML scraping via goquery (for full article content).
-// Fallback strategy: headless browser via chromedp.
+// Primary strategy: HTML scraping via goquery (for category lists and full article content).
+// Fallback strategy: headless browser via chromedp (for JavaScript-rendered pages).
 package cnn
 
 import (
@@ -14,9 +13,6 @@ import (
 type CNNConfig struct {
 	// BaseURL은 CNN 메인 URL입니다.
 	BaseURL string
-
-	// FeedURLs는 카테고리명 → RSS 피드 URL 매핑입니다.
-	FeedURLs map[string]string
 
 	// CategoryURLs는 카테고리명 → HTML 목록 페이지 URL 매핑입니다.
 	CategoryURLs map[string]string
@@ -45,17 +41,8 @@ func DefaultCNNConfig() CNNConfig {
 
 	return CNNConfig{
 		BaseURL: "https://www.cnn.com",
-		FeedURLs: map[string]string{
-			"top":           "https://rss.cnn.com/rss/cnn_topstories.rss",
-			"us":            "https://rss.cnn.com/rss/cnn_us.rss",
-			"world":         "https://rss.cnn.com/rss/cnn_world.rss",
-			"politics":      "https://rss.cnn.com/rss/cnn_allpolitics.rss",
-			"business":      "https://rss.cnn.com/rss/money_latest.rss",
-			"tech":          "https://rss.cnn.com/rss/cnn_tech.rss",
-			"health":        "https://rss.cnn.com/rss/cnn_health.rss",
-			"entertainment": "https://rss.cnn.com/rss/showbiz_video.rss",
-		},
 		CategoryURLs: map[string]string{
+			"top":           "https://edition.cnn.com",
 			"us":            "https://edition.cnn.com/us",
 			"world":         "https://edition.cnn.com/world",
 			"politics":      "https://edition.cnn.com/politics",
