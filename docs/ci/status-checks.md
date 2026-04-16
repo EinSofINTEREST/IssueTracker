@@ -5,21 +5,22 @@ GitHub Ruleset과 PR 템플릿은 모두 이 문서의 이름과 **토씨 단위
 
 ## 명명 규칙
 
-- **신규 추가되는 체크는** 소문자 + 하이픈만 사용 (`ci-deploy`, `security-scan`).
-- 워크플로 간 중복 금지 (동일한 job name을 두 워크플로에 두지 않음).
-- **레거시 예외**: 이미 Ruleset에 등록되어 운영 중인 체크는 리네임 시
-  머지 게이트가 일시 중단되므로 기존 표기를 유지한다. 단, 본 표에 명시.
+- **표의 `이름` 열에는 GitHub Ruleset에 실제 등록된 체크 이름을 그대로 기재**한다.
+  (GitHub Actions job `name:` 값이 그대로 context가 되므로 Title Case 포함 가능)
+- **신규 추가 시 가독성을 위해 Title Case를 허용**하되, 워크플로 간 중복은 금지.
+- 리네임 시 머지 게이트가 일시 중단되므로, 기존 체크 이름 변경은 문서/워크플로/Ruleset
+  3곳을 같은 PR에서 동시 갱신해야 한다.
 
 ## 현재 등록된 체크
 
-| 이름 | 워크플로 / Job | 설명 | Required | 레거시 |
-|------|---------------|------|----------|--------|
-| `Format Check` | `ci.yml` / `format` | `gofmt -l .` 결과 검증 | Yes | Yes (대문자/공백 표기 유지) |
-| `Build` | `ci.yml` / `build` | `go build ./...` 컴파일 검증 | Yes | Yes |
-| `Test` | `ci.yml` / `test` | `go test -race` + 커버리지 70% 강제 | Yes | Yes |
-| `Lint` | `ci.yml` / `lint` | `golangci-lint run` | Yes | Yes |
-| `Commit Lint` | `ci.yml` / `commit-lint` | 커밋 메시지 `[카테고리]:` 포맷 강제 | Yes | Yes |
-| `PR Title Lint` | `ci.yml` / `pr-title-lint` | PR 타이틀 `[카테고리]:` 포맷 강제 (PR only) | Yes | Yes |
+| 이름 | 워크플로 / Job | 설명 | Required |
+|------|---------------|------|----------|
+| `Format Check` | `ci.yml` / `format` | `gofmt -l .` 결과 검증 | Yes |
+| `Build` | `ci.yml` / `build` | `go build ./...` 컴파일 검증 | Yes |
+| `Test` | `ci.yml` / `test` | `go test -race` + 커버리지 40% 강제 | Yes |
+| `Lint` | `ci.yml` / `lint` | `golangci-lint run` (v1.64.8 고정) | Yes |
+| `Commit Lint` | `ci.yml` / `commit-lint` | 커밋 메시지 `[카테고리]:` 포맷 강제 | Yes |
+| `PR Title Lint` | `ci.yml` / `pr-title-lint` | PR 타이틀 `[카테고리]:` 포맷 강제 (PR only) | Yes |
 
 ## 변경 절차
 
