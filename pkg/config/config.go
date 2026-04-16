@@ -246,6 +246,7 @@ type RedisConfig struct {
 	ReadTimeout  time.Duration // REDIS_READ_TIMEOUT (default: 3s)
 	WriteTimeout time.Duration // REDIS_WRITE_TIMEOUT (default: 3s)
 	PoolSize     int           // REDIS_POOL_SIZE (default: 10)
+	URLCacheTTL  time.Duration // REDIS_URL_CACHE_TTL (default: 24h)
 }
 
 // DefaultRedisConfig는 로컬 개발 환경용 기본 RedisConfig를 반환합니다.
@@ -259,6 +260,7 @@ func DefaultRedisConfig() RedisConfig {
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,
 		PoolSize:     10,
+		URLCacheTTL:  24 * time.Hour,
 	}
 }
 
@@ -339,6 +341,16 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 			return RedisConfig{}, fmt.Errorf("invalid REDIS_POOL_SIZE %d: must be 1 or greater", n)
 		}
 		cfg.PoolSize = n
+	}
+	if v := os.Getenv("REDIS_URL_CACHE_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse REDIS_URL_CACHE_TTL %q: %w", v, err)
+		}
+		if d <= 0 {
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_URL_CACHE_TTL %q: must be positive", v)
+		}
+		cfg.URLCacheTTL = d
 	}
 
 	return cfg, nil
