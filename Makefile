@@ -60,24 +60,27 @@ run-issuetracker: build ## Crawler + Processor 통합 실행
 	@echo "Running issuetracker (crawler + processor)..."
 	./scripts/entrypoint.sh
 
-run-example: ## Basic example 실행 (로컬 Chrome 또는 Docker Chrome 필요)
-	@echo "Building basic example..."
+$(EXAMPLE_BINARY): ./examples/basic_usage/
 	@mkdir -p $(BINARY_DIR)
-	$(GO) build $(GOFLAGS) -o $(EXAMPLE_BINARY) ./examples/basic_usage.go
+	$(GO) build $(GOFLAGS) -o $(EXAMPLE_BINARY) ./examples/basic_usage/
+
+$(COMPARISON_BINARY): ./examples/crawler_comparison/
+	@mkdir -p $(BINARY_DIR)
+	$(GO) build $(GOFLAGS) -o $(COMPARISON_BINARY) ./examples/crawler_comparison/
+
+$(KAFKA_PIPELINE_BINARY): ./examples/kafka_pipeline/
+	@mkdir -p $(BINARY_DIR)
+	$(GO) build $(GOFLAGS) -o $(KAFKA_PIPELINE_BINARY) ./examples/kafka_pipeline/
+
+run-example: $(EXAMPLE_BINARY) ## Basic example 실행 (로컬 Chrome 또는 Docker Chrome 필요)
 	@echo "Running basic example..."
 	./$(EXAMPLE_BINARY)
 
-run-comparison: ## Crawler 구현체 비교 예제 실행
-	@echo "Building crawler comparison..."
-	@mkdir -p $(BINARY_DIR)
-	$(GO) build $(GOFLAGS) -o $(COMPARISON_BINARY) ./examples/crawler_comparison.go
+run-comparison: $(COMPARISON_BINARY) ## Crawler 구현체 비교 예제 실행
 	@echo "Running crawler comparison..."
 	./$(COMPARISON_BINARY)
 
-run-kafka-pipeline: ## Kafka 파이프라인 예제 실행 (mock, Kafka 불필요)
-	@echo "Building Kafka pipeline example..."
-	@mkdir -p $(BINARY_DIR)
-	$(GO) build $(GOFLAGS) -o $(KAFKA_PIPELINE_BINARY) ./examples/kafka_pipeline/
+run-kafka-pipeline: $(KAFKA_PIPELINE_BINARY) ## Kafka 파이프라인 예제 실행 (mock, Kafka 불필요)
 	@echo "Running Kafka pipeline example..."
 	./$(KAFKA_PIPELINE_BINARY)
 
@@ -101,17 +104,17 @@ chrome-status: ## Docker Chrome 컨테이너 상태 확인
 	  --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" \
 	  | { read header; read line 2>/dev/null && echo "$$header" && echo "$$line" || echo "$$header\n(not running)"; }
 
-run-example-docker: ## Docker Chrome으로 basic example 실행 (컨테이너 자동 시작/중지)
+run-example-docker: $(EXAMPLE_BINARY) ## Docker Chrome으로 basic example 실행 (컨테이너 자동 시작/중지)
 	@echo "=== Docker Chrome + Basic Example ==="
-	@mkdir -p $(BINARY_DIR)
-	$(GO) build $(GOFLAGS) -o $(EXAMPLE_BINARY) ./examples/basic_usage.go
 	@docker run -d --rm \
 	  -p $(CHROME_PORT):9222 \
 	  --name $(CHROME_CONTAINER) \
 	  $(CHROME_IMAGE); \
 	sleep 2; \
 	./$(EXAMPLE_BINARY); \
-	docker stop $(CHROME_CONTAINER) 2>/dev/null || true
+	status=$$?; \
+	docker stop $(CHROME_CONTAINER) 2>/dev/null || true; \
+	exit $$status
 
 ## ─── Kafka ───────────────────────────────────────────────────
 
