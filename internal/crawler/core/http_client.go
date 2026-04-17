@@ -36,23 +36,35 @@ func defaultHTTPClient(config Config) *http.Client {
 
 // StandardHTTPClient는 표준 HTTP 클라이언트 구현입니다.
 type StandardHTTPClient struct {
-	client    *http.Client
-	userAgent string
-	timeout   time.Duration
+	client      *http.Client
+	userAgent   string
+	timeout     time.Duration
+	rateLimiter *IPRateLimiterRegistry
 }
 
 // NewHTTPClient는 새로운 HTTP 클라이언트를 생성합니다.
+// Config의 RequestsPerHour, BurstSize로 IP 기반 rate limiter를 초기화합니다.
 func NewHTTPClient(config Config) HTTPClient {
+	resolver := NewDNSIPResolver(5 * time.Minute)
+	rateLimiter := NewIPRateLimiterRegistry(resolver, config.RequestsPerHour, config.BurstSize)
+
 	return &StandardHTTPClient{
-		client:    defaultHTTPClient(config),
-		userAgent: config.UserAgent,
-		timeout:   config.Timeout,
+		client:      defaultHTTPClient(config),
+		userAgent:   config.UserAgent,
+		timeout:     config.Timeout,
+		rateLimiter: rateLimiter,
 	}
 }
 
 // Get은 GET 요청을 수행합니다.
 func (c *StandardHTTPClient) Get(ctx context.Context, url string) (*HTTPResponse, error) {
 	log := logger.FromContext(ctx)
+
+	// IP 기반 rate limiting: 요청 전 목적지 IP의 rate limiter에서 대기
+	if err := c.rateLimiter.Wait(ctx, url); err != nil {
+		return nil, fmt.Errorf("rate limit wait for %s: %w", url, err)
+	}
+
 	start := time.Now()
 
 	log.WithField("url", url).Debug("starting HTTP GET request")
@@ -94,6 +106,12 @@ func (c *StandardHTTPClient) Get(ctx context.Context, url string) (*HTTPResponse
 // Post는 POST 요청을 수행합니다.
 func (c *StandardHTTPClient) Post(ctx context.Context, url string, body []byte) (*HTTPResponse, error) {
 	log := logger.FromContext(ctx)
+
+	// IP 기반 rate limiting: 요청 전 목적지 IP의 rate limiter에서 대기
+	if err := c.rateLimiter.Wait(ctx, url); err != nil {
+		return nil, fmt.Errorf("rate limit wait for %s: %w", url, err)
+	}
+
 	start := time.Now()
 
 	log.WithFields(map[string]interface{}{
