@@ -38,11 +38,16 @@ func IsTimeoutError(err error) bool {
 // 최소 조건:
 //  1. minPartialDOMLength 이상의 길이 (빈 페이지/스켈레톤 페이지 배제)
 //  2. <body> 태그 존재 (DOM 구조의 최소 완전성 보장)
+//
+// 대소문자 처리: strings.ToLower(html)는 전체 HTML 복사본을 할당하므로
+// 대용량 페이지에서 불필요한 메모리 부하가 발생한다. HTML5는 소문자 태그를
+// 권장하고 일부 레거시 페이지가 대문자를 사용하는 점만 고려하면 충분하므로,
+// 두 케이스만 명시적으로 검사하여 zero-allocation 경로로 처리한다.
 func IsValidPartialDOM(html string) bool {
 	if len(html) < minPartialDOMLength {
 		return false
 	}
-	return strings.Contains(strings.ToLower(html), "<body")
+	return strings.Contains(html, "<body") || strings.Contains(html, "<BODY")
 }
 
 // captureOuterHTML: timeout 이후 별도 context로 OuterHTML 추출 시도
