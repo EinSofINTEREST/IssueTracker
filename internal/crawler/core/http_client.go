@@ -68,8 +68,12 @@ func (c *StandardHTTPClient) Get(ctx context.Context, url string) (*HTTPResponse
 	log := logger.FromContext(ctx)
 
 	// 목적지 기반 rate limiting: rate limiter가 주입된 경우에만 적용
+	// request timeout과 동일한 제한을 적용하여 무한 블로킹을 방지
 	if c.rateLimiter != nil {
-		if err := c.rateLimiter.Wait(ctx, url); err != nil {
+		rlCtx, rlCancel := context.WithTimeout(ctx, c.timeout)
+		err := c.rateLimiter.Wait(rlCtx, url)
+		rlCancel()
+		if err != nil {
 			return nil, fmt.Errorf("rate limit wait for %s: %w", url, err)
 		}
 	}
@@ -117,8 +121,12 @@ func (c *StandardHTTPClient) Post(ctx context.Context, url string, body []byte) 
 	log := logger.FromContext(ctx)
 
 	// 목적지 기반 rate limiting: rate limiter가 주입된 경우에만 적용
+	// request timeout과 동일한 제한을 적용하여 무한 블로킹을 방지
 	if c.rateLimiter != nil {
-		if err := c.rateLimiter.Wait(ctx, url); err != nil {
+		rlCtx, rlCancel := context.WithTimeout(ctx, c.timeout)
+		err := c.rateLimiter.Wait(rlCtx, url)
+		rlCancel()
+		if err != nil {
 			return nil, fmt.Errorf("rate limit wait for %s: %w", url, err)
 		}
 	}

@@ -22,7 +22,7 @@ type staticIPResolver struct {
 	err error
 }
 
-func (r *staticIPResolver) Resolve(_ string) (string, error) {
+func (r *staticIPResolver) Resolve(_ context.Context, _ string) (string, error) {
 	return r.ip, r.err
 }
 
@@ -31,7 +31,7 @@ type multiIPResolver struct {
 	mapping map[string]string
 }
 
-func (r *multiIPResolver) Resolve(rawURL string) (string, error) {
+func (r *multiIPResolver) Resolve(_ context.Context, rawURL string) (string, error) {
 	for host, ip := range r.mapping {
 		if strings.Contains(rawURL, host) {
 			return ip, nil
@@ -68,7 +68,6 @@ func TestIPRateLimiterRegistry_Wait_SameIPSharesLimiter(t *testing.T) {
 	err = registry.Wait(ctx, "http://domain-b.com/page")
 	require.NoError(t, err)
 
-	// burst 소진 후 세 번째 요청은 대기 필요
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
@@ -121,4 +120,25 @@ func TestIPRateLimiterRegistry_Wait_DNSFailure_ProceedsWithoutLimit(t *testing.T
 	}
 
 	assert.Equal(t, int32(10), successCount)
+}
+
+func TestIPRateLimiterRegistry_Wait_DNSFailure_ContextCanceled_ReturnsCtxErr(t *testing.T) {
+	resolver := &staticIPResolver{ip: "", err: assert.AnError}
+	registry := ratelimiter.NewIPRateLimiterRegistry(resolver, 1, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := registry.Wait(ctx, "http://broken.com/page")
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestNewRateLimiter_ZeroRequestsPerHour_ReturnsNoopLimiter(t *testing.T) {
+	limiter := ratelimiter.NewRateLimiter(0, 10)
+
+	// 0 이하 RequestsPerHour는 noop limiter를 반환 (모든 요청 허용)
+	for i := 0; i < 100; i++ {
+		assert.True(t, limiter.Allow())
+	}
+	assert.NoError(t, limiter.Wait(context.Background()))
 }

@@ -1,6 +1,7 @@
 package rate_limiter
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
@@ -33,22 +34,35 @@ func NewDNSIPResolver(cacheTTL time.Duration) *DNSIPResolver {
 
 // Resolve는 URL의 호스트를 DNS로 해석하여 첫 번째 IP를 반환합니다.
 // 캐시된 결과가 유효하면 DNS 조회 없이 반환합니다.
-func (r *DNSIPResolver) Resolve(rawURL string) (string, error) {
+// 만료된 캐시 엔트리는 삭제하여 메모리 누수를 방지합니다.
+func (r *DNSIPResolver) Resolve(ctx context.Context, rawURL string) (string, error) {
 	host, err := extractHost(rawURL)
 	if err != nil {
 		return "", err
 	}
 
+	now := time.Now()
+
 	// 캐시 확인 (read lock)
 	r.mu.RLock()
-	if entry, ok := r.cache[host]; ok && time.Now().Before(entry.expiresAt) {
+	entry, ok := r.cache[host]
+	if ok && now.Before(entry.expiresAt) {
 		r.mu.RUnlock()
 		return entry.ip, nil
 	}
 	r.mu.RUnlock()
 
-	// DNS 해석
-	ips, err := net.LookupHost(host)
+	// 만료된 엔트리 삭제 (write lock)
+	if ok {
+		r.mu.Lock()
+		if current, exists := r.cache[host]; exists && !time.Now().Before(current.expiresAt) {
+			delete(r.cache, host)
+		}
+		r.mu.Unlock()
+	}
+
+	// DNS 해석 (context 지원)
+	ips, err := net.DefaultResolver.LookupHost(ctx, host)
 	if err != nil {
 		return "", fmt.Errorf("dns lookup %s: %w", host, err)
 	}
