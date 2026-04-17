@@ -2,6 +2,7 @@ package chromedp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -117,6 +118,8 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		partialHTML, captureErr := captureOuterHTML(browserCtx)
 		if captureErr != nil {
 			// 부분 캡처 자체가 실패 → 빈 페이지/네트워크 불가와 동등한 완전 실패로 분류
+			// runErr(원인 timeout)와 captureErr(캡처 실패 사유 — target closed,
+			// context canceled, CDP 오류 등)를 모두 보존하여 디버깅 가능성 유지
 			return nil, &core.CrawlerError{
 				Category:  core.ErrCategoryTimeout,
 				Code:      "CDP_006",
@@ -124,12 +127,15 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 				Source:    c.name,
 				URL:       target.URL,
 				Retryable: true,
-				Err:       runErr,
+				Err:       errors.Join(runErr, captureErr),
 			}
 		}
 
 		// 부분 로드 DOM 유효성 검증 (최소 body + 길이 충족)
 		if !IsValidPartialDOM(partialHTML) {
+			// runErr(timeout) + DOM 검증 실패 사유(길이 정보 포함)를 함께 보존하여
+			// 에러 체인에서 "어떤 검증이 실패했는지"를 추적할 수 있도록 한다
+			validationErr := fmt.Errorf("partial DOM failed validation: length=%d", len(partialHTML))
 			return nil, &core.CrawlerError{
 				Category:  core.ErrCategoryTimeout,
 				Code:      "CDP_007",
@@ -137,7 +143,7 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 				Source:    c.name,
 				URL:       target.URL,
 				Retryable: true,
-				Err:       runErr,
+				Err:       errors.Join(runErr, validationErr),
 			}
 		}
 
