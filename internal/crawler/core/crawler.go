@@ -49,3 +49,12 @@ type RateLimiter interface {
 	// Allow는 현재 요청이 허용되는지 확인합니다.
 	Allow() bool
 }
+
+// URLRateLimiter는 URL 기반 rate limiting을 수행하는 인터페이스입니다.
+// URL에서 목적지(IP 등)를 해석하여 대상별로 독립된 rate limiting을 적용합니다.
+//
+// URLRateLimiter performs rate limiting based on the target resolved from a URL.
+type URLRateLimiter interface {
+	// Wait는 URL의 목적지를 해석하고 해당 대상의 rate limiter에서 대기합니다.
+	Wait(ctx context.Context, rawURL string) error
+}

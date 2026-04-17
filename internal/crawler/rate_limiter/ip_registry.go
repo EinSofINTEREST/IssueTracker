@@ -1,8 +1,10 @@
-package core
+package rate_limiter
 
 import (
 	"context"
 	"sync"
+
+	"issuetracker/internal/crawler/core"
 )
 
 // IPRateLimiterRegistry는 IP별 독립 RateLimiter를 관리합니다.
@@ -12,20 +14,20 @@ import (
 // IPRateLimiterRegistry manages per-IP rate limiters.
 // Multiple domains resolving to the same IP share one limiter.
 type IPRateLimiterRegistry struct {
-	resolver        IPResolver
+	resolver        core.IPResolver
 	requestsPerHour int
 	burst           int
-	limiters        map[string]RateLimiter
+	limiters        map[string]core.RateLimiter
 	mu              sync.Mutex
 }
 
 // NewIPRateLimiterRegistry는 IP별 rate limiter 레지스트리를 생성합니다.
-func NewIPRateLimiterRegistry(resolver IPResolver, requestsPerHour, burst int) *IPRateLimiterRegistry {
+func NewIPRateLimiterRegistry(resolver core.IPResolver, requestsPerHour, burst int) *IPRateLimiterRegistry {
 	return &IPRateLimiterRegistry{
 		resolver:        resolver,
 		requestsPerHour: requestsPerHour,
 		burst:           burst,
-		limiters:        make(map[string]RateLimiter),
+		limiters:        make(map[string]core.RateLimiter),
 	}
 }
 
@@ -43,7 +45,7 @@ func (r *IPRateLimiterRegistry) Wait(ctx context.Context, rawURL string) error {
 }
 
 // getOrCreate는 IP에 대한 rate limiter를 반환하거나 새로 생성합니다.
-func (r *IPRateLimiterRegistry) getOrCreate(ip string) RateLimiter {
+func (r *IPRateLimiterRegistry) getOrCreate(ip string) core.RateLimiter {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
