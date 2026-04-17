@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
+	"issuetracker/pkg/logger"
 )
 
 // IPRateLimiterRegistry는 IP별 독립 RateLimiter를 관리합니다.
@@ -51,7 +52,11 @@ func (r *IPRateLimiterRegistry) Wait(ctx context.Context, rawURL string) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		// DNS 해석 실패 시 rate limiting 없이 진행
+		// DNS 해석 실패 시 rate limiting 없이 진행하되, 운영 중 감지할 수 있도록 경고 로그 출력
+		log := logger.FromContext(ctx)
+		log.WithFields(map[string]interface{}{
+			"url": rawURL,
+		}).WithError(err).Warn("dns resolve failed, proceeding without rate limiting")
 		return nil
 	}
 

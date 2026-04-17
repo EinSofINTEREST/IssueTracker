@@ -43,7 +43,7 @@ type StandardHTTPClient struct {
 }
 
 // NewHTTPClient는 새로운 HTTP 클라이언트를 생성합니다.
-// rate limiter 없이 동작하며, WithRateLimiter로 주입할 수 있습니다.
+// rate limiter 없이 동작하며, rate limiter가 필요하면 NewHTTPClientWithRateLimiter를 사용합니다.
 func NewHTTPClient(config Config) HTTPClient {
 	return &StandardHTTPClient{
 		client:    defaultHTTPClient(config),
