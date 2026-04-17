@@ -179,7 +179,7 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 				"ref_id":  ref.ID,
 				"source":  content.SourceID,
 				"country": content.Country,
-			}).WithError(err).Error("content validation failed, deleting content and sending to dlq")
+			}).WithError(err).Info("content validation failed, deleting content and sending to dlq")
 
 			if delErr := w.contentSvc.Delete(ctx, ref.ID); delErr != nil {
 				log.WithFields(map[string]interface{}{
@@ -192,7 +192,7 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 			log.WithFields(map[string]interface{}{
 				"job_id":      pm.ID,
 				"retry_count": pm.RetryCount,
-			}).WithError(err).Warn("content validation failed, requeueing")
+			}).WithError(err).Info("content validation failed, requeueing")
 			w.requeue(ctx, msg, &pm)
 		}
 		return w.commit(ctx, msg)
