@@ -15,6 +15,9 @@ PROCESSOR_BINARY=$(BINARY_DIR)/processor
 ISSUETRACKER_BINARY=$(BINARY_DIR)/issuetracker
 MIGRATE_BINARY=$(BINARY_DIR)/migrate
 MIGRATE_DOWN_BINARY=$(BINARY_DIR)/migrate-down
+EXAMPLE_BINARY=$(BINARY_DIR)/basic_usage
+COMPARISON_BINARY=$(BINARY_DIR)/crawler_comparison
+KAFKA_PIPELINE_BINARY=$(BINARY_DIR)/kafka_pipeline
 GO=go
 GOFLAGS=-v
 
@@ -58,16 +61,25 @@ run-issuetracker: build ## Crawler + Processor 통합 실행
 	./scripts/entrypoint.sh
 
 run-example: ## Basic example 실행 (로컬 Chrome 또는 Docker Chrome 필요)
+	@echo "Building basic example..."
+	@mkdir -p $(BINARY_DIR)
+	$(GO) build $(GOFLAGS) -o $(EXAMPLE_BINARY) ./examples/basic_usage.go
 	@echo "Running basic example..."
-	$(GO) run ./examples/basic_usage.go
+	./$(EXAMPLE_BINARY)
 
 run-comparison: ## Crawler 구현체 비교 예제 실행
+	@echo "Building crawler comparison..."
+	@mkdir -p $(BINARY_DIR)
+	$(GO) build $(GOFLAGS) -o $(COMPARISON_BINARY) ./examples/crawler_comparison.go
 	@echo "Running crawler comparison..."
-	$(GO) run ./examples/crawler_comparison.go
+	./$(COMPARISON_BINARY)
 
 run-kafka-pipeline: ## Kafka 파이프라인 예제 실행 (mock, Kafka 불필요)
+	@echo "Building Kafka pipeline example..."
+	@mkdir -p $(BINARY_DIR)
+	$(GO) build $(GOFLAGS) -o $(KAFKA_PIPELINE_BINARY) ./examples/kafka_pipeline/
 	@echo "Running Kafka pipeline example..."
-	$(GO) run ./examples/kafka_pipeline/
+	./$(KAFKA_PIPELINE_BINARY)
 
 chrome-start: ## Docker Chrome 컨테이너 시작 (포트 9222)
 	@echo "Starting Chrome container ($(CHROME_IMAGE))..."
@@ -91,12 +103,14 @@ chrome-status: ## Docker Chrome 컨테이너 상태 확인
 
 run-example-docker: ## Docker Chrome으로 basic example 실행 (컨테이너 자동 시작/중지)
 	@echo "=== Docker Chrome + Basic Example ==="
+	@mkdir -p $(BINARY_DIR)
+	$(GO) build $(GOFLAGS) -o $(EXAMPLE_BINARY) ./examples/basic_usage.go
 	@docker run -d --rm \
 	  -p $(CHROME_PORT):9222 \
 	  --name $(CHROME_CONTAINER) \
 	  $(CHROME_IMAGE); \
 	sleep 2; \
-	$(GO) run ./examples/basic_usage.go; \
+	./$(EXAMPLE_BINARY); \
 	docker stop $(CHROME_CONTAINER) 2>/dev/null || true
 
 ## ─── Kafka ───────────────────────────────────────────────────
