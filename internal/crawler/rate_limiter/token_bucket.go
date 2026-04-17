@@ -1,4 +1,8 @@
-package core
+// Package rate_limiter는 IP 기반 rate limiting 구현체를 제공합니다.
+// core.RateLimiter 인터페이스의 구현체와 IP별 레지스트리를 포함합니다.
+//
+// Package rate_limiter provides IP-based rate limiting implementations.
+package rate_limiter
 
 import (
 	"context"
@@ -6,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"issuetracker/internal/crawler/core"
 	"issuetracker/pkg/logger"
 )
 
@@ -20,9 +25,17 @@ type TokenBucketRateLimiter struct {
 }
 
 // NewRateLimiter는 새로운 rate limiter를 생성합니다.
-// requestsPerHour: 시간당 허용 요청 수
-// burst: 한번에 허용되는 최대 요청 수
-func NewRateLimiter(requestsPerHour, burst int) RateLimiter {
+// requestsPerHour: 시간당 허용 요청 수 (0 이하면 제한 없음)
+// burst: 한번에 허용되는 최대 요청 수 (최소 1)
+func NewRateLimiter(requestsPerHour, burst int) core.RateLimiter {
+	// 0 이하 값 방어: divide by zero 및 무한 대기 방지
+	if requestsPerHour <= 0 {
+		return &noopRateLimiter{}
+	}
+	if burst < 1 {
+		burst = 1
+	}
+
 	rate := float64(requestsPerHour) / 3600.0 // convert to per second
 
 	return &TokenBucketRateLimiter{
@@ -32,6 +45,13 @@ func NewRateLimiter(requestsPerHour, burst int) RateLimiter {
 		lastRefill: time.Now(),
 	}
 }
+
+// noopRateLimiter는 제한 없이 모든 요청을 허용하는 rate limiter입니다.
+// RequestsPerHour가 0 이하일 때 사용됩니다.
+type noopRateLimiter struct{}
+
+func (noopRateLimiter) Wait(_ context.Context) error { return nil }
+func (noopRateLimiter) Allow() bool                  { return true }
 
 // Wait는 rate limit에 따라 대기합니다.
 // token이 없으면 token이 생성될 때까지 대기합니다.
@@ -98,7 +118,7 @@ func (r *TokenBucketRateLimiter) refill() {
 
 	// 경과 시간에 비례하여 token 추가
 	newTokens := elapsed * r.rate
-	r.tokens = min(r.tokens+newTokens, float64(r.burst))
+	r.tokens = minFloat(r.tokens+newTokens, float64(r.burst))
 	r.lastRefill = now
 }
 
@@ -118,8 +138,7 @@ func (r *TokenBucketRateLimiter) timeToNextToken() time.Duration {
 	return time.Duration(secondsNeeded * float64(time.Second))
 }
 
-// min은 두 float64 중 작은 값을 반환합니다.
-func min(a, b float64) float64 {
+func minFloat(a, b float64) float64 {
 	if a < b {
 		return a
 	}

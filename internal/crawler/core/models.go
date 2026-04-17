@@ -122,6 +122,7 @@ type Config struct {
 	// Rate Limiting
 	RequestsPerHour int
 	BurstSize       int
+	DNSCacheTTL     time.Duration // DNS 해석 결과 캐시 TTL (기본: 5분)
 
 	// Retry 설정
 	MaxRetries   int
@@ -140,6 +141,7 @@ func DefaultConfig() Config {
 		UserAgent:       "IssueTracker/1.0 (+https://example.com/bot) Go-http-client",
 		RequestsPerHour: 100,
 		BurstSize:       10,
+		DNSCacheTTL:     5 * time.Minute,
 		MaxRetries:      3,
 		RetryBackoff:    1 * time.Second,
 	}

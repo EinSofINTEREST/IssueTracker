@@ -1,9 +1,6 @@
-package core_test
+package rate_limiter_test
 
 import (
-	core "issuetracker/internal/crawler/core"
-	"issuetracker/pkg/logger"
-
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +10,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	ratelimiter "issuetracker/internal/crawler/rate_limiter"
+	"issuetracker/pkg/logger"
 )
 
 // debugContext는 debug 레벨 logger를 buf에 기록하는 context를 반환합니다.
@@ -47,12 +47,12 @@ func findLog(buf *bytes.Buffer, message string) map[string]interface{} {
 }
 
 func TestNewRateLimiter(t *testing.T) {
-	limiter := core.NewRateLimiter(3600, 10)
+	limiter := ratelimiter.NewRateLimiter(3600, 10)
 	assert.NotNil(t, limiter)
 }
 
 func TestRateLimiter_Allow_InitialBurst(t *testing.T) {
-	limiter := core.NewRateLimiter(3600, 5)
+	limiter := ratelimiter.NewRateLimiter(3600, 5)
 
 	// 초기 burst만큼 허용되어야 함
 	for i := 0; i < 5; i++ {
@@ -65,7 +65,7 @@ func TestRateLimiter_Allow_InitialBurst(t *testing.T) {
 
 func TestRateLimiter_Allow_Refill(t *testing.T) {
 	// 시간당 3600 요청 = 초당 1 요청
-	limiter := core.NewRateLimiter(3600, 1)
+	limiter := ratelimiter.NewRateLimiter(3600, 1)
 
 	assert.True(t, limiter.Allow())
 
@@ -79,7 +79,7 @@ func TestRateLimiter_Allow_Refill(t *testing.T) {
 }
 
 func TestRateLimiter_Wait_Success(t *testing.T) {
-	limiter := core.NewRateLimiter(3600, 2)
+	limiter := ratelimiter.NewRateLimiter(3600, 2)
 	ctx := context.Background()
 
 	// 처음 2개는 즉시 허용
@@ -96,8 +96,8 @@ func TestRateLimiter_Wait_Success(t *testing.T) {
 }
 
 func TestRateLimiter_Wait_ContextCanceled(t *testing.T) {
-	limiter := core.NewRateLimiter(10, 1) // 낮은 rate로 설정
-	limiter.Allow()                       // 토큰 소진
+	limiter := ratelimiter.NewRateLimiter(10, 1) // 낮은 rate로 설정
+	limiter.Allow()                              // 토큰 소진
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -107,8 +107,8 @@ func TestRateLimiter_Wait_ContextCanceled(t *testing.T) {
 }
 
 func TestRateLimiter_Wait_ContextTimeout(t *testing.T) {
-	limiter := core.NewRateLimiter(10, 1) // 낮은 rate로 설정
-	limiter.Allow()                       // 토큰 소진
+	limiter := ratelimiter.NewRateLimiter(10, 1) // 낮은 rate로 설정
+	limiter.Allow()                              // 토큰 소진
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -118,7 +118,7 @@ func TestRateLimiter_Wait_ContextTimeout(t *testing.T) {
 }
 
 func TestRateLimiter_ConcurrentRequests(t *testing.T) {
-	limiter := core.NewRateLimiter(100, 10)
+	limiter := ratelimiter.NewRateLimiter(100, 10)
 
 	// 동시에 20개 요청
 	var allowed atomic.Int32
@@ -146,8 +146,8 @@ func TestRateLimiter_ConcurrentRequests(t *testing.T) {
 }
 
 func TestTokenBucketRateLimiter_String(t *testing.T) {
-	limiter := core.NewRateLimiter(3600, 10)
-	str := limiter.(*core.TokenBucketRateLimiter).String()
+	limiter := ratelimiter.NewRateLimiter(3600, 10)
+	str := limiter.(*ratelimiter.TokenBucketRateLimiter).String()
 
 	assert.Contains(t, str, "RateLimiter")
 	assert.Contains(t, str, "rate=1.00/s")
@@ -158,7 +158,7 @@ func TestRateLimiter_Wait_LogsWaitStart(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := debugContext(&buf)
 
-	limiter := core.NewRateLimiter(3600, 1)
+	limiter := ratelimiter.NewRateLimiter(3600, 1)
 	require.NoError(t, limiter.Wait(ctx)) // 첫 번째 — 즉시 통과
 	buf.Reset()
 
@@ -175,7 +175,7 @@ func TestRateLimiter_Wait_LogsWaitCompleted(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := debugContext(&buf)
 
-	limiter := core.NewRateLimiter(3600, 1)
+	limiter := ratelimiter.NewRateLimiter(3600, 1)
 	require.NoError(t, limiter.Wait(ctx)) // 첫 번째 — 즉시 통과
 	buf.Reset()
 
@@ -189,7 +189,7 @@ func TestRateLimiter_Wait_LogsWaitCompleted(t *testing.T) {
 func TestRateLimiter_Wait_LogsContextCancelled(t *testing.T) {
 	var buf bytes.Buffer
 
-	limiter := core.NewRateLimiter(10, 1)
+	limiter := ratelimiter.NewRateLimiter(10, 1)
 	limiter.Allow() // 토큰 소진
 
 	ctx, cancel := context.WithCancel(context.Background())

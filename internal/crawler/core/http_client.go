@@ -36,12 +36,14 @@ func defaultHTTPClient(config Config) *http.Client {
 
 // StandardHTTPClient는 표준 HTTP 클라이언트 구현입니다.
 type StandardHTTPClient struct {
-	client    *http.Client
-	userAgent string
-	timeout   time.Duration
+	client      *http.Client
+	userAgent   string
+	timeout     time.Duration
+	rateLimiter URLRateLimiter
 }
 
 // NewHTTPClient는 새로운 HTTP 클라이언트를 생성합니다.
+// rate limiter 없이 동작하며, rate limiter가 필요하면 NewHTTPClientWithRateLimiter를 사용합니다.
 func NewHTTPClient(config Config) HTTPClient {
 	return &StandardHTTPClient{
 		client:    defaultHTTPClient(config),
@@ -50,9 +52,32 @@ func NewHTTPClient(config Config) HTTPClient {
 	}
 }
 
+// NewHTTPClientWithRateLimiter는 URLRateLimiter가 주입된 HTTP 클라이언트를 생성합니다.
+// HTTP 요청 전 목적지 기반 rate limiting을 적용합니다.
+func NewHTTPClientWithRateLimiter(config Config, rateLimiter URLRateLimiter) HTTPClient {
+	return &StandardHTTPClient{
+		client:      defaultHTTPClient(config),
+		userAgent:   config.UserAgent,
+		timeout:     config.Timeout,
+		rateLimiter: rateLimiter,
+	}
+}
+
 // Get은 GET 요청을 수행합니다.
 func (c *StandardHTTPClient) Get(ctx context.Context, url string) (*HTTPResponse, error) {
 	log := logger.FromContext(ctx)
+
+	// 목적지 기반 rate limiting: rate limiter가 주입된 경우에만 적용
+	// request timeout과 동일한 제한을 적용하여 무한 블로킹을 방지
+	if c.rateLimiter != nil {
+		rlCtx, rlCancel := context.WithTimeout(ctx, c.timeout)
+		err := c.rateLimiter.Wait(rlCtx, url)
+		rlCancel()
+		if err != nil {
+			return nil, fmt.Errorf("rate limit wait for %s: %w", url, err)
+		}
+	}
+
 	start := time.Now()
 
 	log.WithField("url", url).Debug("starting HTTP GET request")
@@ -94,6 +119,18 @@ func (c *StandardHTTPClient) Get(ctx context.Context, url string) (*HTTPResponse
 // Post는 POST 요청을 수행합니다.
 func (c *StandardHTTPClient) Post(ctx context.Context, url string, body []byte) (*HTTPResponse, error) {
 	log := logger.FromContext(ctx)
+
+	// 목적지 기반 rate limiting: rate limiter가 주입된 경우에만 적용
+	// request timeout과 동일한 제한을 적용하여 무한 블로킹을 방지
+	if c.rateLimiter != nil {
+		rlCtx, rlCancel := context.WithTimeout(ctx, c.timeout)
+		err := c.rateLimiter.Wait(rlCtx, url)
+		rlCancel()
+		if err != nil {
+			return nil, fmt.Errorf("rate limit wait for %s: %w", url, err)
+		}
+	}
+
 	start := time.Now()
 
 	log.WithFields(map[string]interface{}{
