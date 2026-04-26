@@ -80,3 +80,58 @@ jobs:
           fi
 
           echo "## ✅ PR Title Lint 통과" >> "$GITHUB_STEP_SUMMARY"
+
+  linked-issue:
+    name: Linked Issue Check
+    # PR 이 최소 1개 이슈와 연결(closing reference)되어 있는지 검증한다.
+    # GraphQL `pullRequest.closingIssuesReferences` 는 이슈의 Development 사이드바에
+    # 표시되는 항목과 동일한 집합이므로, 통과 시 "이슈 Development 섹션에서 이 PR 이
+    # 보인다" 가 보장된다.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify PR is linked from issue Development section
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_OWNER: ${{ github.event.pull_request.base.repo.owner.login }}
+          PR_REPO: ${{ github.event.pull_request.base.repo.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          response=$(gh api graphql \
+            -F owner="$PR_OWNER" \
+            -F repo="$PR_REPO" \
+            -F number="$PR_NUMBER" \
+            -f query='
+              query($owner:String!, $repo:String!, $number:Int!) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$number) {
+                    closingIssuesReferences(first: 20) {
+                      nodes { number title state }
+                    }
+                  }
+                }
+              }
+            ')
+
+          count=$(echo "$response" | jq '.data.repository.pullRequest.closingIssuesReferences.nodes | length')
+
+          if [ "$count" -eq 0 ]; then
+            {
+              echo "## ❌ Linked Issue Check 실패"
+              echo "이 PR 과 연결된 이슈를 찾을 수 없습니다 (이슈의 \`Development\` 섹션에 표시되지 않음)."
+              echo ""
+              echo "다음 중 하나의 방법으로 이슈를 연결하세요:"
+              echo "1. PR 본문에 GitHub closing 키워드 추가 — \`Closes #이슈번호\` / \`Fixes #이슈번호\` / \`Resolves #이슈번호\`"
+              echo "2. PR 사이드바의 \`Development\` 섹션에서 이슈 직접 링크"
+              echo ""
+              echo "연결되면 해당 이슈의 \`Development\` 섹션에 이 PR 이 표시되며, 머지 시 자동으로 close 됩니다."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          {
+            echo "## ✅ Linked Issue Check 통과"
+            echo ""
+            echo "연결된 이슈 ${count}건:"
+            echo "$response" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[] | "- #\(.number) \(.title) (\(.state))"'
+          } >> "$GITHUB_STEP_SUMMARY"
