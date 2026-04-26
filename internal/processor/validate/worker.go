@@ -149,7 +149,10 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 	var pm core.ProcessingMessage
 	if err := json.Unmarshal(msg.Value, &pm); err != nil {
 		log.WithError(err).Error("failed to unmarshal processing message, sending to dlq")
-		w.sendToDLQ(ctx, msg, err)
+		if dlqErr := w.sendToDLQ(ctx, msg, err); dlqErr != nil {
+			// DLQ 실패 시 commit 하면 메시지 유실 → 에러 반환하여 재소비 보장
+			return fmt.Errorf("send to dlq (unmarshal): %w", dlqErr)
+		}
 		return w.commit(ctx, msg)
 	}
 
@@ -159,7 +162,9 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
 		}).WithError(err).Error("failed to unmarshal content ref, sending to dlq")
-		w.sendToDLQ(ctx, msg, err)
+		if dlqErr := w.sendToDLQ(ctx, msg, err); dlqErr != nil {
+			return fmt.Errorf("send to dlq (ref unmarshal): %w", dlqErr)
+		}
 		return w.commit(ctx, msg)
 	}
 
@@ -170,7 +175,9 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 			"job_id": pm.ID,
 			"ref_id": ref.ID,
 		}).WithError(err).Error("failed to fetch content from db, sending to dlq")
-		w.sendToDLQ(ctx, msg, err)
+		if dlqErr := w.sendToDLQ(ctx, msg, err); dlqErr != nil {
+			return fmt.Errorf("send to dlq (db fetch): %w", dlqErr)
+		}
 		return w.commit(ctx, msg)
 	}
 
@@ -201,13 +208,19 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 					"ref_id": ref.ID,
 				}).WithError(delErr).Error("failed to delete content after validation failure")
 			}
-			w.sendToDLQ(ctx, msg, err)
+			if dlqErr := w.sendToDLQ(ctx, msg, err); dlqErr != nil {
+				// DLQ 실패 시 commit 하면 메시지 유실 → 에러 반환하여 재소비 보장
+				return fmt.Errorf("send to dlq (max retries): %w", dlqErr)
+			}
 		} else {
 			log.WithFields(map[string]interface{}{
 				"job_id":      pm.ID,
 				"retry_count": pm.RetryCount,
 			}).WithError(err).Info("content validation failed, requeueing")
-			w.requeue(ctx, msg, &pm)
+			if rqErr := w.requeue(ctx, msg, &pm); rqErr != nil {
+				// requeue 실패 시 commit 하면 재시도 기회 상실 → 에러 반환하여 재소비 보장
+				return fmt.Errorf("requeue: %w", rqErr)
+			}
 		}
 		return w.commit(ctx, msg)
 	}
@@ -268,7 +281,12 @@ func (w *Worker) publishValidatedRef(ctx context.Context, ref *core.ContentRef, 
 	return w.producer.Publish(ctx, outMsg)
 }
 
-func (w *Worker) sendToDLQ(ctx context.Context, msg *queue.Message, reason error) {
+// sendToDLQ는 메시지를 DLQ 토픽으로 발행합니다.
+// graceful shutdown 시 ctx.Canceled 로 첫 시도가 실패하면 drain context 로 한 번 더 시도합니다.
+//
+// 반환된 에러는 호출자(process)가 commit 여부를 결정하는 데 사용해야 합니다 — DLQ 발행 실패
+// 상태에서 commit 하면 메시지가 유실(message loss)되므로, 에러 시에는 commit 을 건너뛰어야 합니다.
+func (w *Worker) sendToDLQ(ctx context.Context, msg *queue.Message, reason error) error {
 	log := logger.FromContext(ctx)
 
 	headers := make(map[string]string, len(msg.Headers)+2)
@@ -285,12 +303,25 @@ func (w *Worker) sendToDLQ(ctx context.Context, msg *queue.Message, reason error
 		Headers: headers,
 	}
 
-	if err := w.producer.Publish(ctx, dlqMsg); err != nil {
-		log.WithError(err).Error("failed to send message to dlq")
+	err := w.producer.Publish(ctx, dlqMsg)
+	if err != nil && errors.Is(err, context.Canceled) {
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+		defer cancel()
+		err = w.producer.Publish(drainCtx, dlqMsg)
 	}
+	if err != nil {
+		log.WithError(err).Error("failed to send message to dlq")
+		return err
+	}
+	return nil
 }
 
-func (w *Worker) requeue(ctx context.Context, msg *queue.Message, pm *core.ProcessingMessage) {
+// requeue는 검증 실패 메시지를 normalized 토픽에 재발행합니다.
+// graceful shutdown 시 ctx.Canceled 로 첫 시도가 실패하면 drain context 로 한 번 더 시도합니다.
+//
+// 반환된 에러는 호출자(process)가 commit 여부를 결정하는 데 사용해야 합니다 — 재큐잉 실패
+// 상태에서 commit 하면 재시도 기회가 사라지므로, 에러 시에는 commit 을 건너뛰어야 합니다.
+func (w *Worker) requeue(ctx context.Context, msg *queue.Message, pm *core.ProcessingMessage) error {
 	log := logger.FromContext(ctx)
 
 	pm.RetryCount++
@@ -300,7 +331,7 @@ func (w *Worker) requeue(ctx context.Context, msg *queue.Message, pm *core.Proce
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
 		}).WithError(err).Error("failed to marshal processing message for retry")
-		return
+		return err
 	}
 
 	requeueMsg := queue.Message{
@@ -312,11 +343,19 @@ func (w *Worker) requeue(ctx context.Context, msg *queue.Message, pm *core.Proce
 		},
 	}
 
-	if err := w.producer.Publish(ctx, requeueMsg); err != nil {
+	err = w.producer.Publish(ctx, requeueMsg)
+	if err != nil && errors.Is(err, context.Canceled) {
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+		defer cancel()
+		err = w.producer.Publish(drainCtx, requeueMsg)
+	}
+	if err != nil {
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
 		}).WithError(err).Error("failed to requeue processing message for retry")
+		return err
 	}
+	return nil
 }
 
 // commit은 Kafka offset 을 commit 합니다.

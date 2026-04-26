@@ -559,3 +559,98 @@ func TestValidateWorker_PublishDoesNotDrainOnNonCancelError(t *testing.T) {
 	producer.AssertNumberOfCalls(t, "Publish", 1)
 	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// gemini[high] 피드백: DLQ/requeue 실패 시 commit skip 으로 메시지 유실 방지
+// ─────────────────────────────────────────────────────────────────────────────
+
+// DLQ publish 실패 시 commit 이 호출되지 않아야 메시지가 유실되지 않음.
+// 시나리오: malformed JSON message → sendToDLQ 호출 → publish 실패 (drain 도 실패)
+//   → process() 가 에러 반환 → commit 미호출 → 다음 기동 시 재소비.
+func TestValidateWorker_DLQFailureSkipsCommit_PreventsMessageLoss(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	// malformed JSON → 첫 번째 unmarshal 분기에서 sendToDLQ 호출
+	malformedMsg := &queue.Message{
+		Topic: queue.TopicNormalized,
+		Key:   []byte("bad-key"),
+		Value: []byte("not-json{{{"),
+	}
+
+	// DLQ publish: 두 호출 모두 실패 (원본 ctx + drain ctx) — 일반 에러 시뮬레이션
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(errors.New("kafka unavailable")).Once()
+
+	runWorker(t, consumer, w, malformedMsg)
+
+	// DLQ Publish 1회만 호출 (일반 에러는 drain 우회), commit 미호출 확인
+	producer.AssertNumberOfCalls(t, "Publish", 1)
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// requeue publish 실패 시 commit 이 호출되지 않아야 함.
+// 시나리오: 검증 실패 + RetryCount < maxRetries → requeue → publish 실패
+//   → process() 가 에러 반환 → commit 미호출 → 다음 기동 시 재소비.
+func TestValidateWorker_RequeueFailureSkipsCommit_PreservesRetryChance(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	// 검증 실패할 컨텐츠 (제목/본문 길이 미달)
+	content := newNewsContent()
+	content.Title = ""
+	content.Body = "x"
+	content.WordCount = 0
+
+	msg := makeProcessingMessage(content, 0) // RetryCount=0 → requeue 경로
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	// requeue 의 Publish 가 일반 에러로 실패
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicNormalized
+	})).Return(errors.New("kafka unavailable")).Once()
+
+	runWorker(t, consumer, w, msg)
+
+	// requeue Publish 1회 호출, commit 미호출 확인
+	producer.AssertNumberOfCalls(t, "Publish", 1)
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// DLQ 의 첫 publish 가 ctx.Canceled 로 실패해도 drain context 로 재시도하여 성공시키는지 검증.
+// 성공 시 process() 는 commit 으로 진행함.
+func TestValidateWorker_DLQDrainsOnContextCanceled(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	malformedMsg := &queue.Message{
+		Topic: queue.TopicNormalized,
+		Key:   []byte("bad-key"),
+		Value: []byte("not-json{{{"),
+	}
+
+	// 첫 DLQ publish: ctx.Canceled, drain publish: 성공
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(context.Canceled).Once()
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil).Once()
+
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorker(t, consumer, w, malformedMsg)
+
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
