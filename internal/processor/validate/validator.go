@@ -47,13 +47,38 @@ type validatorProcessor struct {
 }
 
 // Process는 content를 검증하고 Reliability를 설정합니다.
+// 검증 실패 시 core.CrawlerError(Validation 카테고리)로 반환하며,
+// 첫 번째 룰에 따라 코드를 부여합니다(임계 미달은 VAL_005, errors 가 비어있는 임계 실패도 VAL_005).
 func (p *validatorProcessor) Process(ctx context.Context, content *core.Content) (*core.Content, error) {
 	result := p.validator.Validate(ctx, content)
 	content.Reliability = result.QualityScore
 
 	if !result.IsValid {
-		return nil, fmt.Errorf("content %s failed validation: %v", content.ID, result.Errors)
+		code := codeForValidationResult(result)
+		message := fmt.Sprintf("content %s failed validation: %v", content.ID, result.Errors)
+		return nil, core.NewValidationError(code, message, nil)
 	}
 
 	return content, nil
+}
+
+// codeForValidationResult는 ValidationResult.Errors 에서 첫 번째 룰을 참조하여
+// 가장 적절한 에러 코드를 결정합니다. errors 가 비어있으면 임계 미달로 간주합니다.
+func codeForValidationResult(result processor.ValidationResult) string {
+	if len(result.Errors) == 0 {
+		return core.CodeValQualityLow
+	}
+
+	switch result.Errors[0].Rule {
+	case "min_length":
+		return core.CodeValContentShort
+	case "max_length":
+		return core.CodeValContentLong
+	case "required":
+		return core.CodeValMissingField
+	case "spam_caps", "spam_punct", "spam_flood":
+		return core.CodeValSpam
+	default:
+		return core.CodeValInvalidFormat
+	}
 }

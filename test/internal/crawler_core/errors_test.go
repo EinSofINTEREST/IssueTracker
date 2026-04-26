@@ -22,6 +22,20 @@ func TestCrawlerError_Error(t *testing.T) {
 	assert.Equal(t, expected, err.Error())
 }
 
+// Err=nil 인 경우 ": <nil>" 깨진 표현 없이 prefix 만 출력하는지 검증
+func TestCrawlerError_Error_NilWrappedErr(t *testing.T) {
+	err := &core.CrawlerError{
+		Category: core.ErrCategoryNotFound,
+		Code:     "HTTP_404",
+		Message:  "resource not found",
+		URL:      "https://example.com",
+		Err:      nil,
+	}
+
+	expected := "[not_found:HTTP_404] resource not found"
+	assert.Equal(t, expected, err.Error())
+}
+
 func TestCrawlerError_Unwrap(t *testing.T) {
 	underlyingErr := errors.New("underlying error")
 	err := &core.CrawlerError{
@@ -42,7 +56,7 @@ func TestCrawlerError_Is(t *testing.T) {
 		expected bool
 	}{
 		{
-			name: "same code",
+			name: "both fields match",
 			err: &core.CrawlerError{
 				Category: core.ErrCategoryNetwork,
 				Code:     "NET_001",
@@ -54,7 +68,29 @@ func TestCrawlerError_Is(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "same category different code",
+			name: "category-only target matches by category",
+			err: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+				Code:     "NET_001",
+			},
+			target: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+			},
+			expected: true,
+		},
+		{
+			name: "code-only target matches by code",
+			err: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+				Code:     "NET_001",
+			},
+			target: &core.CrawlerError{
+				Code: "NET_001",
+			},
+			expected: true,
+		},
+		{
+			name: "both fields populated, only category matches → false (AND semantics)",
 			err: &core.CrawlerError{
 				Category: core.ErrCategoryNetwork,
 				Code:     "NET_001",
@@ -63,18 +99,38 @@ func TestCrawlerError_Is(t *testing.T) {
 				Category: core.ErrCategoryNetwork,
 				Code:     "NET_002",
 			},
-			expected: true,
+			expected: false,
 		},
 		{
-			name: "different category",
+			name: "both fields populated, only code matches → false (AND semantics)",
 			err: &core.CrawlerError{
 				Category: core.ErrCategoryNetwork,
 				Code:     "NET_001",
 			},
 			target: &core.CrawlerError{
 				Category: core.ErrCategoryParse,
-				Code:     "PARSE_001",
+				Code:     "NET_001",
 			},
+			expected: false,
+		},
+		{
+			name: "different category, code-only target → false",
+			err: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+				Code:     "NET_001",
+			},
+			target: &core.CrawlerError{
+				Code: "PARSE_001",
+			},
+			expected: false,
+		},
+		{
+			name: "empty target matches nothing",
+			err: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+				Code:     "NET_001",
+			},
+			target:   &core.CrawlerError{},
 			expected: false,
 		},
 		{
@@ -93,6 +149,32 @@ func TestCrawlerError_Is(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.err.Is(tt.target))
 		})
 	}
+}
+
+func TestNewStorageError_InheritsRetryableFromInnerCrawlerError(t *testing.T) {
+	// inner DatabaseError(Retryable=false, e.g. constraint violation)
+	inner := core.NewDatabaseError(core.CodeDBConstraint, "unique violation", false, errors.New("23505"))
+
+	// 호출자가 retryable=true 로 wrap 해도 inner 의 false 가 보존되어야 함
+	wrapped := core.NewStorageError(core.CodeStorageWrite, "save content", true, inner)
+
+	assert.False(t, wrapped.Retryable, "inner *CrawlerError 의 Retryable=false 가 상속되어야 함")
+	assert.Equal(t, core.ErrCategoryStorage, wrapped.Category, "Category 는 wrapper(Storage) 가 유지")
+}
+
+func TestNewStorageError_UsesDefaultRetryableForNonCrawlerInner(t *testing.T) {
+	// inner 가 일반 error 이면 호출자의 default 가 사용됨
+	wrapped := core.NewStorageError(core.CodeStorageWrite, "save content", true, errors.New("driver failure"))
+
+	assert.True(t, wrapped.Retryable, "non-CrawlerError inner 에 대해 호출자 default(true) 사용")
+}
+
+func TestNewQueueError_InheritsRetryableFromInnerCrawlerError(t *testing.T) {
+	inner := core.NewInternalError(core.CodeInternal, "fatal config", errors.New("boom"))
+
+	wrapped := core.NewQueueError(core.CodeQueuePublish, "publish failed", true, inner)
+
+	assert.False(t, wrapped.Retryable, "inner internal error 의 Retryable=false 가 상속되어야 함")
 }
 
 func TestNewNetworkError(t *testing.T) {
@@ -142,5 +224,90 @@ func TestNewNotFoundError(t *testing.T) {
 	assert.Equal(t, "HTTP_404", err.Code)
 	assert.Equal(t, url, err.URL)
 	assert.Equal(t, 404, err.StatusCode)
+	assert.False(t, err.Retryable)
+}
+
+func TestNewTimeoutError(t *testing.T) {
+	url := "https://example.com"
+	cause := errors.New("deadline exceeded")
+
+	err := core.NewTimeoutError(core.CodeNetTimeout, "request timeout", url, cause)
+
+	assert.Equal(t, core.ErrCategoryTimeout, err.Category)
+	assert.Equal(t, core.CodeNetTimeout, err.Code)
+	assert.Equal(t, url, err.URL)
+	assert.True(t, err.Retryable)
+	assert.Equal(t, cause, err.Err)
+	assert.Equal(t, cause, err.Unwrap())
+}
+
+func TestNewForbiddenError(t *testing.T) {
+	url := "https://example.com"
+
+	err := core.NewForbiddenError(url)
+
+	assert.Equal(t, core.ErrCategoryForbidden, err.Category)
+	assert.Equal(t, "HTTP_403", err.Code)
+	assert.Equal(t, url, err.URL)
+	assert.Equal(t, 403, err.StatusCode)
+	assert.False(t, err.Retryable)
+}
+
+func TestNewValidationError(t *testing.T) {
+	cause := errors.New("title too short")
+
+	err := core.NewValidationError(core.CodeValContentShort, "title length below minimum", cause)
+
+	assert.Equal(t, core.ErrCategoryValidation, err.Category)
+	assert.Equal(t, core.CodeValContentShort, err.Code)
+	assert.False(t, err.Retryable)
+	assert.Equal(t, cause, err.Err)
+}
+
+func TestNewDatabaseError(t *testing.T) {
+	cause := errors.New("connection refused")
+
+	// 일반 inner error → 호출자 default 사용
+	err := core.NewDatabaseError(core.CodeDBConnFail, "connection failed", true, cause)
+	assert.Equal(t, core.ErrCategoryDatabase, err.Category)
+	assert.Equal(t, core.CodeDBConnFail, err.Code)
+	assert.True(t, err.Retryable)
+	assert.Equal(t, cause, err.Err)
+}
+
+func TestNewQueueError(t *testing.T) {
+	cause := errors.New("malformed message")
+
+	err := core.NewQueueError(core.CodeQueueMalformed, "invalid message", false, cause)
+	assert.Equal(t, core.ErrCategoryQueue, err.Category)
+	assert.Equal(t, core.CodeQueueMalformed, err.Code)
+	assert.False(t, err.Retryable)
+}
+
+func TestNewStorageError(t *testing.T) {
+	cause := errors.New("io failure")
+
+	err := core.NewStorageError(core.CodeStorageWrite, "save content", true, cause)
+	assert.Equal(t, core.ErrCategoryStorage, err.Category)
+	assert.Equal(t, core.CodeStorageWrite, err.Code)
+	assert.True(t, err.Retryable)
+}
+
+func TestNewConfigError(t *testing.T) {
+	cause := errors.New("invalid yaml")
+
+	err := core.NewConfigError(core.CodeConfigParse, "failed to parse config", cause)
+	assert.Equal(t, core.ErrCategoryConfig, err.Category)
+	assert.Equal(t, core.CodeConfigParse, err.Code)
+	assert.False(t, err.Retryable, "config error 는 fail-fast 의도로 항상 non-retryable")
+	assert.Equal(t, cause, err.Err)
+}
+
+func TestNewInternalError(t *testing.T) {
+	cause := errors.New("nil pointer")
+
+	err := core.NewInternalError(core.CodeInternal, "internal failure", cause)
+	assert.Equal(t, core.ErrCategoryInternal, err.Category)
+	assert.Equal(t, core.CodeInternal, err.Code)
 	assert.False(t, err.Retryable)
 }

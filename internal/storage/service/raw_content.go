@@ -4,7 +4,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"issuetracker/internal/crawler/core"
@@ -56,13 +55,13 @@ func (s *rawContentService) Store(ctx context.Context, raw *core.RawContent) (st
 	}
 
 	if !errors.Is(err, storage.ErrDuplicate) {
-		return "", false, fmt.Errorf("save raw content: %w", err)
+		return "", false, core.NewStorageError(core.CodeStorageWrite, "save raw content", true, err)
 	}
 
 	// 동일 URL 존재 → 기존 레코드 ID 조회
 	existing, err := s.repo.GetByURL(ctx, raw.URL)
 	if err != nil {
-		return "", false, fmt.Errorf("get existing raw content by url: %w", err)
+		return "", false, core.NewStorageError(core.CodeStorageRead, "get existing raw content by url", true, err)
 	}
 
 	s.log.WithFields(map[string]interface{}{
@@ -77,7 +76,7 @@ func (s *rawContentService) Store(ctx context.Context, raw *core.RawContent) (st
 func (s *rawContentService) GetByID(ctx context.Context, id string) (*core.RawContent, error) {
 	raw, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("get raw content by id: %w", err)
+		return nil, core.NewStorageError(core.CodeStorageRead, "get raw content by id", true, err)
 	}
 
 	return raw, nil
@@ -87,17 +86,22 @@ func (s *rawContentService) GetByID(ctx context.Context, id string) (*core.RawCo
 func (s *rawContentService) List(ctx context.Context, filter storage.RawContentFilter) ([]*core.RawContent, error) {
 	raws, err := s.repo.List(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("list raw contents: %w", err)
+		return nil, core.NewStorageError(core.CodeStorageRead, "list raw contents", true, err)
 	}
 
 	return raws, nil
 }
 
 // PurgeOlderThan은 cutoff 이전 데이터를 일괄 삭제합니다.
+// 에러 메시지는 고정 문자열을 사용하고 cutoff 는 구조화 로그 필드로 분리합니다
+// (에러 문자열이 로그/DLQ 헤더에 그대로 들어갈 때 시간값이 카디널리티를 폭발시키지 않도록).
 func (s *rawContentService) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	n, err := s.repo.DeleteBefore(ctx, cutoff)
 	if err != nil {
-		return 0, fmt.Errorf("purge raw contents older than %s: %w", cutoff.Format(time.RFC3339), err)
+		s.log.WithFields(map[string]interface{}{
+			"cutoff": cutoff.Format(time.RFC3339),
+		}).WithError(err).Error("failed to purge raw contents")
+		return 0, core.NewStorageError(core.CodeStorageDelete, "purge raw contents", true, err)
 	}
 
 	s.log.WithFields(map[string]interface{}{

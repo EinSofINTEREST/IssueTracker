@@ -1,8 +1,6 @@
 package core
 
 import (
-	"fmt"
-
 	"issuetracker/pkg/links"
 )
 
@@ -43,14 +41,17 @@ func NewHTMLLinkExtractor(baseURL string, opts ...links.Option) *HTMLLinkExtract
 
 // Extract는 raw.HTML에서 링크를 추출하여 []Link로 반환합니다.
 // raw가 nil이면 에러를 반환합니다.
+//
+// pkg/links 는 generic 유틸 패키지로 fmt.Errorf 를 유지하고,
+// 본 boundary 에서 CrawlerError 로 변환합니다(.claude/rules/04-error-handling.md 참고).
 func (e *HTMLLinkExtractor) Extract(raw *RawContent) ([]Link, error) {
 	if raw == nil {
-		return nil, fmt.Errorf("raw content is nil")
+		return nil, NewInternalError(CodeInternal, "raw content is nil", nil)
 	}
 
 	extracted, err := e.inner.Extract(raw.HTML, raw.URL)
 	if err != nil {
-		return nil, fmt.Errorf("extract links from %s: %w", raw.URL, err)
+		return nil, NewParseError(CodeParseHTML, "failed to extract links", raw.URL, err)
 	}
 
 	if len(extracted) == 0 {
