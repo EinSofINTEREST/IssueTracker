@@ -42,7 +42,7 @@ func TestCrawlerError_Is(t *testing.T) {
 		expected bool
 	}{
 		{
-			name: "same code",
+			name: "both fields match",
 			err: &core.CrawlerError{
 				Category: core.ErrCategoryNetwork,
 				Code:     "NET_001",
@@ -54,7 +54,29 @@ func TestCrawlerError_Is(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "same category different code",
+			name: "category-only target matches by category",
+			err: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+				Code:     "NET_001",
+			},
+			target: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+			},
+			expected: true,
+		},
+		{
+			name: "code-only target matches by code",
+			err: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+				Code:     "NET_001",
+			},
+			target: &core.CrawlerError{
+				Code: "NET_001",
+			},
+			expected: true,
+		},
+		{
+			name: "both fields populated, only category matches → false (AND semantics)",
 			err: &core.CrawlerError{
 				Category: core.ErrCategoryNetwork,
 				Code:     "NET_001",
@@ -63,18 +85,38 @@ func TestCrawlerError_Is(t *testing.T) {
 				Category: core.ErrCategoryNetwork,
 				Code:     "NET_002",
 			},
-			expected: true,
+			expected: false,
 		},
 		{
-			name: "different category",
+			name: "both fields populated, only code matches → false (AND semantics)",
 			err: &core.CrawlerError{
 				Category: core.ErrCategoryNetwork,
 				Code:     "NET_001",
 			},
 			target: &core.CrawlerError{
 				Category: core.ErrCategoryParse,
-				Code:     "PARSE_001",
+				Code:     "NET_001",
 			},
+			expected: false,
+		},
+		{
+			name: "different category, code-only target → false",
+			err: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+				Code:     "NET_001",
+			},
+			target: &core.CrawlerError{
+				Code: "PARSE_001",
+			},
+			expected: false,
+		},
+		{
+			name: "empty target matches nothing",
+			err: &core.CrawlerError{
+				Category: core.ErrCategoryNetwork,
+				Code:     "NET_001",
+			},
+			target:   &core.CrawlerError{},
 			expected: false,
 		},
 		{
@@ -93,6 +135,32 @@ func TestCrawlerError_Is(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.err.Is(tt.target))
 		})
 	}
+}
+
+func TestNewStorageError_InheritsRetryableFromInnerCrawlerError(t *testing.T) {
+	// inner DatabaseError(Retryable=false, e.g. constraint violation)
+	inner := core.NewDatabaseError(core.CodeDBConstraint, "unique violation", false, errors.New("23505"))
+
+	// 호출자가 retryable=true 로 wrap 해도 inner 의 false 가 보존되어야 함
+	wrapped := core.NewStorageError(core.CodeStorageWrite, "save content", true, inner)
+
+	assert.False(t, wrapped.Retryable, "inner *CrawlerError 의 Retryable=false 가 상속되어야 함")
+	assert.Equal(t, core.ErrCategoryStorage, wrapped.Category, "Category 는 wrapper(Storage) 가 유지")
+}
+
+func TestNewStorageError_UsesDefaultRetryableForNonCrawlerInner(t *testing.T) {
+	// inner 가 일반 error 이면 호출자의 default 가 사용됨
+	wrapped := core.NewStorageError(core.CodeStorageWrite, "save content", true, errors.New("driver failure"))
+
+	assert.True(t, wrapped.Retryable, "non-CrawlerError inner 에 대해 호출자 default(true) 사용")
+}
+
+func TestNewQueueError_InheritsRetryableFromInnerCrawlerError(t *testing.T) {
+	inner := core.NewInternalError(core.CodeInternal, "fatal config", errors.New("boom"))
+
+	wrapped := core.NewQueueError(core.CodeQueuePublish, "publish failed", true, inner)
+
+	assert.False(t, wrapped.Retryable, "inner internal error 의 Retryable=false 가 상속되어야 함")
 }
 
 func TestNewNetworkError(t *testing.T) {

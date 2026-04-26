@@ -106,13 +106,26 @@ func (e *CrawlerError) Unwrap() error {
 	return e.Err
 }
 
-// Is는 errors.Is 와 호환되며, target 이 같은 Code 또는 같은 Category 이면 true 를 반환합니다.
+// Is는 errors.Is 와 호환되며, target 에 지정된 식별 필드(Code, Category)가 모두 일치할 때 true 를 반환합니다.
+// target 의 필드 중 빈 값("")은 비교에서 제외되어, Code 만 / Category 만 / 둘 다 명시한 모든 패턴을 정확히 처리합니다.
+//
+// 예) errors.Is(err, &CrawlerError{Code: CodeNetTimeout})         → Code 만 매칭
+//
+//	errors.Is(err, &CrawlerError{Category: ErrCategoryNetwork}) → Category 만 매칭
+//	errors.Is(err, &CrawlerError{Code: "X", Category: "Y"})     → Code AND Category 모두 매칭
 func (e *CrawlerError) Is(target error) bool {
 	t, ok := target.(*CrawlerError)
 	if !ok {
 		return false
 	}
-	return e.Code == t.Code || e.Category == t.Category
+	if t.Code != "" && t.Code != e.Code {
+		return false
+	}
+	if t.Category != "" && t.Category != e.Category {
+		return false
+	}
+	// target 에 두 필드 모두 비어있으면 임의의 CrawlerError 와 일치하지 않도록 false 처리
+	return t.Code != "" || t.Category != ""
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -231,38 +244,57 @@ func NewHTTPClientError(url string, statusCode int) *CrawlerError {
 	}
 }
 
+// inheritRetryable은 inner err 가 *CrawlerError 이면 그 Retryable 을 상속하고,
+// 아니면 호출자가 지정한 default 값을 반환합니다.
+// 의도: 시스템 계층 wrapper(Storage/Database/Queue)가 inner 의 retry 시맨틱을
+// 무의식적으로 덮어쓰는 것을 방지합니다(예: DB constraint violation 의 Retryable=false 보존).
+func inheritRetryable(err error, defaultRetryable bool) bool {
+	if ce, ok := err.(*CrawlerError); ok {
+		return ce.Retryable
+	}
+	return defaultRetryable
+}
+
 // NewDatabaseError는 database 에러를 생성합니다.
-// retryable 은 호출자가 결정합니다(예: 일시적 connection failure 는 retryable, constraint violation 은 false).
+// retryable 은 호출자가 결정하되, inner err 가 이미 *CrawlerError 이면 그 Retryable 을 상속합니다.
+// (예: 일시적 connection failure 는 retryable, constraint violation 은 false)
 func NewDatabaseError(code, message string, retryable bool, err error) *CrawlerError {
 	return &CrawlerError{
 		Category:  ErrCategoryDatabase,
 		Code:      code,
 		Message:   message,
-		Retryable: retryable,
+		Retryable: inheritRetryable(err, retryable),
 		Err:       err,
 	}
 }
 
 // NewQueueError는 message queue(Kafka 등) 에러를 생성합니다.
 // publish 실패 등 일시적 오류는 retryable=true 로, 메시지 형식 오류는 false 로 호출자가 결정합니다.
+// inner err 가 *CrawlerError 이면 그 Retryable 을 상속합니다.
 func NewQueueError(code, message string, retryable bool, err error) *CrawlerError {
 	return &CrawlerError{
 		Category:  ErrCategoryQueue,
 		Code:      code,
 		Message:   message,
-		Retryable: retryable,
+		Retryable: inheritRetryable(err, retryable),
 		Err:       err,
 	}
 }
 
 // NewStorageError는 storage(content service 등) 경계 에러를 생성합니다.
-// 내부 cause(주로 DatabaseError)를 그대로 wrap 하여 errors.As 로 추출 가능하게 합니다.
+// 내부 cause(주로 DatabaseError 또는 raw repo 에러)를 wrap 하여 errors.As 로 추출 가능하게 합니다.
+// inner err 가 *CrawlerError 이면 그 Retryable 을 상속합니다 — 예: DatabaseError(Retryable=false)
+// 를 NewStorageError(..., true, err) 로 wrap 해도 false 가 보존됩니다.
+//
+// NOTE: Category 는 Storage 로 고정됩니다. retry 정책에서 storage 카테고리를 retryable
+// 대상으로 포함하지 않으면 inner 가 retryable 이어도 결과적으로 재시도되지 않습니다.
+// (.claude/rules/04-error-handling.md 의 layer rules 참고)
 func NewStorageError(code, message string, retryable bool, err error) *CrawlerError {
 	return &CrawlerError{
 		Category:  ErrCategoryStorage,
 		Code:      code,
 		Message:   message,
-		Retryable: retryable,
+		Retryable: inheritRetryable(err, retryable),
 		Err:       err,
 	}
 }
