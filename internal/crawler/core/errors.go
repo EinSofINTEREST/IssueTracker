@@ -37,11 +37,11 @@ const (
 // 에러 코드 상수 — .claude/rules/04-error-handling.md 의 코드 카탈로그와 1:1 대응합니다.
 // 코드는 로그/메트릭에서 카디널리티가 안정적이도록 문자열 상수로 고정합니다.
 const (
-	// Network / HTTP
-	CodeNetConnRefused = "NET_001" // 연결 거부 / 즉시 실패
-	CodeNetTimeout     = "NET_002" // 응답 본문 읽기 또는 연결 타임아웃
-	CodeNetDNSFailure  = "NET_003" // DNS 해상 실패
-	CodeReqBuild       = "REQ_001" // http.Request 생성 실패
+	// Network / HTTP — 모두 NewNetworkError 로 생성되어 retryable=true 가 기본값
+	CodeNetConnRefused = "NET_001" // 일시적 connection refused / 네트워크 단절 (retryable)
+	CodeNetTimeout     = "NET_002" // 응답 본문 읽기 또는 연결 타임아웃 (retryable)
+	CodeNetDNSFailure  = "NET_003" // DNS 해상 실패 (retryable)
+	CodeReqBuild       = "REQ_001" // http.Request 생성 실패 (retryable, 내부 보존)
 
 	// Parse
 	CodeParseHTML     = "PARSE_001" // 잘못된 HTML 구조
@@ -50,12 +50,12 @@ const (
 	CodeParseJSON     = "PARSE_004" // JSON 파싱 실패
 
 	// Validation
-	CodeValMissingField  = "VAL_001" // 필수 필드 누락
-	CodeValInvalidFormat = "VAL_002" // 필드 형식 불일치
-	CodeValContentShort  = "VAL_003" // 본문 길이 미달
-	CodeValContentLong   = "VAL_004" // 본문 길이 초과
-	CodeValQualityLow    = "VAL_005" // 품질 점수 임계 미달
-	CodeValSpam          = "VAL_006" // 스팸/도배 패턴 탐지
+	CodeValMissingField  = "VAL_001" // 필수 필드 누락 (예: PublishedAt)
+	CodeValInvalidFormat = "VAL_002" // 필드 형식 불일치 (default fallback)
+	CodeValContentShort  = "VAL_003" // 텍스트 필드 최소 길이 미달 (Title min_length / Body min_length 등)
+	CodeValContentLong   = "VAL_004" // 텍스트 필드 최대 길이 초과 (Title max_length / Body max_length 등)
+	CodeValQualityLow    = "VAL_005" // 품질 점수 임계 미달 (errors 가 비어 있는 임계 실패도 포함)
+	CodeValSpam          = "VAL_006" // 스팸/도배 패턴 탐지 (caps, punct, flood)
 
 	// Database
 	CodeDBConnFail     = "DB_001" // 커넥션 실패

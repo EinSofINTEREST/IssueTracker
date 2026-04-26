@@ -4,7 +4,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"issuetracker/internal/crawler/core"
@@ -94,15 +93,15 @@ func (s *rawContentService) List(ctx context.Context, filter storage.RawContentF
 }
 
 // PurgeOlderThan은 cutoff 이전 데이터를 일괄 삭제합니다.
+// 에러 메시지는 고정 문자열을 사용하고 cutoff 는 구조화 로그 필드로 분리합니다
+// (에러 문자열이 로그/DLQ 헤더에 그대로 들어갈 때 시간값이 카디널리티를 폭발시키지 않도록).
 func (s *rawContentService) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	n, err := s.repo.DeleteBefore(ctx, cutoff)
 	if err != nil {
-		return 0, core.NewStorageError(
-			core.CodeStorageDelete,
-			fmt.Sprintf("purge raw contents older than %s", cutoff.Format(time.RFC3339)),
-			true,
-			err,
-		)
+		s.log.WithFields(map[string]interface{}{
+			"cutoff": cutoff.Format(time.RFC3339),
+		}).WithError(err).Error("failed to purge raw contents")
+		return 0, core.NewStorageError(core.CodeStorageDelete, "purge raw contents", true, err)
 	}
 
 	s.log.WithFields(map[string]interface{}{

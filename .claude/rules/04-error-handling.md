@@ -136,7 +136,11 @@ type CrawlerError struct {
 }
 
 func (e *CrawlerError) Error() string {
-    return fmt.Sprintf("[%s:%s] %s: %v", e.Category, e.Code, e.Message, e.Err)
+    if e.Err != nil {
+        return fmt.Sprintf("[%s:%s] %s: %v", e.Category, e.Code, e.Message, e.Err)
+    }
+    // wrapped err 가 nil 이면 ": <nil>" 깨진 표현을 출력하지 않음
+    return fmt.Sprintf("[%s:%s] %s", e.Category, e.Code, e.Message)
 }
 
 func (e *CrawlerError) Unwrap() error {
