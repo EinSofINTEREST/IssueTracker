@@ -80,3 +80,108 @@ jobs:
           fi
 
           echo "## ✅ PR Title Lint 통과" >> "$GITHUB_STEP_SUMMARY"
+
+  linked-issue:
+    name: Linked Issue Check
+    # PR 에 머지 시 close 될 이슈(closing reference) 가 최소 1개 연결되어 있는지 검증.
+    # GraphQL `pullRequest.closingIssuesReferences` 는 closing keyword (Closes/Fixes/
+    # Resolves) 또는 Development 사이드바에서 "Will close this issue when merged"
+    # 옵션을 체크한 링크만 포함한다 — 즉 Development 섹션의 모든 표시 항목이 아니라
+    # "머지 시 close" 보장 부분집합이다.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # 토큰 권한이 제한된 Org/Repo 설정에서도 GraphQL 조회가 동작하도록 명시.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      # docs/ci/conventions.md 1.3 절 "Bot/App 예외 처리" 화이트리스트와 동기화.
+      # 부록 A 에 등재된 자동화 계정은 이슈 연결 의무에서 제외 (PR 본문에 closing
+      # 키워드를 넣지 않는 것이 정상 동작).
+      - name: Skip for allowlisted automation accounts
+        id: bot_allowlist
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          allowlist='dependabot[bot]'
+          skipped=false
+          for entry in $allowlist; do
+            if [ "$PR_AUTHOR" = "$entry" ]; then
+              skipped=true
+              break
+            fi
+          done
+
+          echo "skipped=$skipped" >> "$GITHUB_OUTPUT"
+
+          if [ "$skipped" = "true" ]; then
+            {
+              echo "## ⏭️ Linked Issue Check 건너뜀"
+              echo "PR 작성자 \`$PR_AUTHOR\` 는 허용된 자동화 계정 (conventions.md 부록 A)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Verify PR is linked to a closing issue reference
+        if: steps.bot_allowlist.outputs.skipped != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_OWNER: ${{ github.event.pull_request.base.repo.owner.login }}
+          PR_REPO: ${{ github.event.pull_request.base.repo.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          response=$(gh api graphql \
+            -F owner="$PR_OWNER" \
+            -F repo="$PR_REPO" \
+            -F number="$PR_NUMBER" \
+            -f query='
+              query($owner:String!, $repo:String!, $number:Int!) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$number) {
+                    closingIssuesReferences(first: 20) {
+                      totalCount
+                      nodes { number title state }
+                    }
+                  }
+                }
+              }
+            ')
+
+          # GraphQL 자체 에러(권한·rate limit·서버 오류) 우선 처리
+          errors=$(echo "$response" | jq -c '.errors // empty')
+          if [ -n "$errors" ]; then
+            {
+              echo "## ❌ Linked Issue Check 실패 (GraphQL 에러)"
+              echo '```json'
+              echo "$errors"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # pullRequest 가 null 이거나 필드가 없을 수 있음 → jq 기본값 0 으로 안전 처리
+          total=$(echo "$response" | jq '.data.repository.pullRequest.closingIssuesReferences.totalCount // 0')
+
+          if [ "$total" -eq 0 ]; then
+            {
+              echo "## ❌ Linked Issue Check 실패"
+              echo "이 PR 에 머지 시 close 될 이슈(closing reference) 가 연결되어 있지 않습니다."
+              echo ""
+              echo "다음 중 하나의 방법으로 closing reference 를 추가하세요:"
+              echo "1. PR 본문에 GitHub closing 키워드 추가 — \`Closes #이슈번호\` / \`Fixes #이슈번호\` / \`Resolves #이슈번호\`"
+              echo "2. PR 사이드바의 \`Development\` 섹션에서 이슈 링크 시 \`Will close this issue when merged\` 옵션을 체크"
+              echo ""
+              echo "두 방법 모두 해당 이슈의 \`Development\` 섹션에 이 PR 이 \"will close\" 표기와 함께 표시되며, 머지 시 자동으로 close 됩니다."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          shown=$(echo "$response" | jq '.data.repository.pullRequest.closingIssuesReferences.nodes | length')
+          {
+            echo "## ✅ Linked Issue Check 통과"
+            echo ""
+            echo "머지 시 close 될 이슈 ${total}건 (상위 ${shown}건 표시):"
+            echo "$response" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[] | "- #\(.number) \(.title) (\(.state))"'
+          } >> "$GITHUB_STEP_SUMMARY"

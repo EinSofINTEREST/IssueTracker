@@ -61,6 +61,7 @@ Branch Protection 대신 **Repository Ruleset**을 기본 수단으로 운영합
 | `Lint` | `ci-quality.yml` | 정적 분석 (golangci-lint) | 코드 품질/보안 이슈 |
 | `Commit Lint` | `ci-convention.yml` | 커밋 메시지 `[카테고리]:` 포맷 강제 | 컨벤션 위반 |
 | `PR Title Lint` | `ci-convention.yml` | PR 타이틀 `[카테고리]:` 포맷 강제 (PR only) | 컨벤션 위반 |
+| `Linked Issue Check` | `ci-convention.yml` | PR 에 머지 시 close 될 이슈(closing reference) 가 최소 1개 연결되어 있는지 검증 (PR only) | closing reference 누락 — `Closes #N` 키워드 또는 Development 링크 시 `Will close this issue when merged` 옵션 체크 필요 |
 
 ### 3.3 Job 추가/변경 시 규칙
 1. [status-checks.md](status-checks.md) 에 이름 먼저 등록.
@@ -94,3 +95,7 @@ Branch Protection 대신 **Repository Ruleset**을 기본 수단으로 운영합
 |---------|------|-----------|
 | `dependabot[bot]` | 의존성 자동 업데이트 | go.mod / go.sum PR |
 | _(추가 시 PR로 이 표 갱신)_ | - | - |
+
+> 이 표는 `Linked Issue Check` 워크플로(`.github/workflows/ci-convention.yml` 의
+> `bot_allowlist` step) 의 화이트리스트와 동기화되어야 합니다. 신규 항목 추가 시
+> 워크플로의 `allowlist` 변수도 같은 PR 에서 갱신하세요.
