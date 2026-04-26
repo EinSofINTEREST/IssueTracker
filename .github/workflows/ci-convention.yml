@@ -23,12 +23,15 @@ jobs:
         run: |
           pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)\]'
 
+          # --no-merges: GitHub UI 의 "Update branch" 또는 로컬 git merge 가 자동 생성한
+          # "Merge branch '...' ..." 커밋은 메시지가 사용자 통제를 벗어나므로 검사 대상에서 제외.
+          # 일반 squash/rebase merge 의 head commit 은 머지 커밋이 아니므로 정상 검사됨.
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
             head="${{ github.event.pull_request.head.sha }}"
-            commits=$(git log --format='%s' "$base".."$head")
+            commits=$(git log --no-merges --format='%s' "$base".."$head")
           else
-            commits=$(git log --format='%s' -1)
+            commits=$(git log --no-merges --format='%s' -1)
           fi
 
           failed=0
