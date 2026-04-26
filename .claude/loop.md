@@ -6,11 +6,11 @@
 ## 절차
 1. `gh pr view --json number,url,statusCheckRollup` 로 현재 PR 과 CI rollup 을 함께 조회
 2. **CI 실패 확인 (코멘트 처리보다 우선)**
-   - `statusCheckRollup` 항목 중 `conclusion == "FAILURE"` (check_run) 또는 `state == "FAILURE" / "ERROR"` (status_context) 가 있으면, 실패 job 의 로그를 수집해 우선 복구
+   - `statusCheckRollup` 항목 중 `conclusion == "FAILURE"` 인 GitHub Actions check_run 이 있으면, 실패 job 의 로그를 수집해 우선 복구
      - 실패 job 식별: `gh pr checks <PR번호>` 로 이름·URL 조회
      - 로그 수집: `gh run view <runId> --log-failed` (Actions run id 가 URL 에 포함됨)
-     - 원인 분석 → 코드/설정 수정 → 커밋 → 푸시 → 재실행 결과 대기
-     - 복구 한 사이클(수정·푸시) 후엔 본 단계 종료, 다음 회차에서 재확인
+     - 원인 분석 → 코드/설정 수정 → 커밋 → 푸시
+     - 푸시 직후 본 단계 종료. CI 재실행 결과는 다음 회차에서 재확인 (세션 유지 회피)
    - `IN_PROGRESS` / `QUEUED` / `PENDING` 만 있고 FAILURE 가 없으면 코멘트 처리는 계속 진행 (다음 회차에서 결과 재확인)
    - 모두 `SUCCESS` / `NEUTRAL` / `SKIPPED` 면 정상 진행
 3. `gh api repos/{owner}/{repo}/pulls/{number}/comments` 로 리뷰 코멘트 수집
