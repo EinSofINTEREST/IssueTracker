@@ -415,3 +415,63 @@ func TestValidateWorker_LargeBody_ValidatesCorrectly(t *testing.T) {
 	producer.AssertExpectations(t)
 	contentSvc.AssertExpectations(t)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #81: shutdown 시 commit / publish 실패 → drain context 재시도 검증
+// ─────────────────────────────────────────────────────────────────────────────
+
+// commit 첫 시도가 ctx.Canceled 로 실패해도, drain context 로 재시도하여 성공시키는지 검증.
+// 이로써 graceful shutdown 직전 검증 통과 메시지의 offset 이 유실되지 않음.
+func TestValidateWorker_CommitDrainsOnContextCanceled(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	msg := makeProcessingMessage(content, 0)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	})).Return(nil)
+
+	// 첫 commit 호출은 ctx.Canceled, 두 번째(drain ctx)는 성공
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).
+		Return(context.Canceled).Once()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).
+		Return(nil).Once()
+
+	runWorker(t, consumer, w, msg)
+
+	producer.AssertExpectations(t)
+	// CommitMessages 가 정확히 두 번(원본 ctx + drain ctx) 호출되었는지 검증
+	consumer.AssertNumberOfCalls(t, "CommitMessages", 2)
+}
+
+// commit 의 첫 시도가 ctx.Canceled 가 아닌 일반 에러일 때는 drain 재시도를 하지 않고 즉시 에러 반환하는지 검증.
+// (drain 재시도는 graceful shutdown 시나리오 한정이어야 함)
+func TestValidateWorker_CommitDoesNotDrainOnNonCancelError(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	msg := makeProcessingMessage(content, 0)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	})).Return(nil)
+
+	// 일반 에러: drain 재시도 없음
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).
+		Return(errors.New("kafka broker unreachable")).Once()
+
+	runWorker(t, consumer, w, msg)
+
+	consumer.AssertNumberOfCalls(t, "CommitMessages", 1)
+}

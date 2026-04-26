@@ -3,6 +3,7 @@ package validate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -13,6 +14,11 @@ import (
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
+
+// drainTimeout은 graceful shutdown 으로 ctx 가 canceled 된 뒤 Kafka commit 또는 publish 를
+// 한 번 더 시도할 때 사용하는 별도 context 의 타임아웃입니다.
+// at-least-once 시맨틱 보장을 위해 ctx canceled 직후 메시지 커밋·발행을 마무리할 시간을 확보합니다.
+const drainTimeout = 5 * time.Second
 
 // Worker는 issuetracker.normalized 토픽을 소비하여 검증 후 issuetracker.validated에 발행합니다.
 // ProcessingMessage.Data는 ContentRef를 담고 있으며, Worker는 ref.ID로 contents DB에서
@@ -292,11 +298,31 @@ func (w *Worker) requeue(ctx context.Context, msg *queue.Message, pm *core.Proce
 	}
 }
 
+// commit은 Kafka offset 을 commit 합니다.
+// ctx 가 이미 canceled (graceful shutdown) 된 상태에서 commit 이 실패하면,
+// drainTimeout 짜리 fresh context 로 한 번 더 시도하여 at-least-once 정확도를 높입니다.
+//
+// 재시도까지 실패하면 에러를 반환합니다 — 호출자(work)는 이 에러를 보고 적절한 레벨로 로깅하고,
+// commit 되지 않은 offset 은 다음 worker 기동 시 재소비되어 동일 메시지가 다시 처리됩니다
+// (at-least-once 의 정상 동작).
 func (w *Worker) commit(ctx context.Context, msg *queue.Message) error {
-	if err := w.consumer.CommitMessages(ctx, msg); err != nil {
-		return fmt.Errorf("commit offset: %w", err)
+	err := w.consumer.CommitMessages(ctx, msg)
+	if err == nil {
+		return nil
 	}
-	return nil
+
+	// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도
+	if errors.Is(err, context.Canceled) {
+		drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		defer cancel()
+		if retryErr := w.consumer.CommitMessages(drainCtx, msg); retryErr == nil {
+			return nil
+		} else {
+			return fmt.Errorf("commit offset (drain retry failed): %w", retryErr)
+		}
+	}
+
+	return fmt.Errorf("commit offset: %w", err)
 }
 
 // maxRetries는 메시지 헤더에서 최대 재시도 횟수를 결정합니다.
