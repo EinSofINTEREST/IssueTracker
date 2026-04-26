@@ -218,7 +218,7 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		// 발행 시도하여 다음 stage 에서 처리 가능한 상태로 만드는 것이 at-least-once 정확도를 높임.
 		// drain 도 실패하면 commit 하지 않고 에러 반환 → 다음 기동 시 재소비(at-least-once 의 정상 동작).
 		if errors.Is(err, context.Canceled) {
-			drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+			drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 			defer cancel()
 			if drainErr := w.publishValidatedRef(drainCtx, &ref, &pm, msg); drainErr != nil {
 				return fmt.Errorf("publish validated ref %s (drain retry failed): %w", ref.ID, drainErr)
@@ -332,9 +332,10 @@ func (w *Worker) commit(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 
-	// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도
+	// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도.
+	// context.WithoutCancel 로 cancellation 만 분리하고 trace ID·logger 필드 등 메타데이터는 보존.
 	if errors.Is(err, context.Canceled) {
-		drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 		defer cancel()
 		if retryErr := w.consumer.CommitMessages(drainCtx, msg); retryErr == nil {
 			return nil
