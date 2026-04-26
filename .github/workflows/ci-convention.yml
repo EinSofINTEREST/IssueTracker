@@ -90,7 +90,34 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      # docs/ci/conventions.md 1.3 절 "Bot/App 예외 처리" 화이트리스트와 동기화.
+      # 부록 A 에 등재된 자동화 계정은 이슈 연결 의무에서 제외 (PR 본문에 closing
+      # 키워드를 넣지 않는 것이 정상 동작).
+      - name: Skip for allowlisted automation accounts
+        id: bot_allowlist
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          allowlist='dependabot[bot]'
+          skipped=false
+          for entry in $allowlist; do
+            if [ "$PR_AUTHOR" = "$entry" ]; then
+              skipped=true
+              break
+            fi
+          done
+
+          echo "skipped=$skipped" >> "$GITHUB_OUTPUT"
+
+          if [ "$skipped" = "true" ]; then
+            {
+              echo "## ⏭️ Linked Issue Check 건너뜀"
+              echo "PR 작성자 \`$PR_AUTHOR\` 는 허용된 자동화 계정 (conventions.md 부록 A)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Verify PR is linked from issue Development section
+        if: steps.bot_allowlist.outputs.skipped != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_OWNER: ${{ github.event.pull_request.base.repo.owner.login }}

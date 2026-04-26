@@ -95,3 +95,7 @@ Branch Protection 대신 **Repository Ruleset**을 기본 수단으로 운영합
 |---------|------|-----------|
 | `dependabot[bot]` | 의존성 자동 업데이트 | go.mod / go.sum PR |
 | _(추가 시 PR로 이 표 갱신)_ | - | - |
+
+> 이 표는 `Linked Issue Check` 워크플로(`.github/workflows/ci-convention.yml` 의
+> `bot_allowlist` step) 의 화이트리스트와 동기화되어야 합니다. 신규 항목 추가 시
+> 워크플로의 `allowlist` 변수도 같은 PR 에서 갱신하세요.
