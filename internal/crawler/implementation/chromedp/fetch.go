@@ -2,6 +2,7 @@ package chromedp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -15,7 +16,13 @@ import (
 )
 
 // Fetch: 헤드리스 브라우저로 페이지를 렌더링하고 HTML 가져오기
-// JS 렌더링 완료 후의 DOM을 반환
+// JS 렌더링 완료 후의 DOM을 반환한다.
+//
+// timeout 처리:
+//   - 액션 실행은 runCtx(timeout 적용)로 수행하지만, 탭 자체는 browserCtx(timeout 미적용)로 유지
+//   - timeout 발생 시 browserCtx로 OuterHTML 재캡처를 시도하는 graceful fallback 적용
+//   - 캡처 결과가 IsValidPartialDOM 검증을 통과하면 partial_load 플래그와 함께 반환
+//   - 캡처 자체 실패/검증 실패 시에는 timeout 카테고리 에러로 분류
 func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.RawContent, error) {
 	log := logger.FromContext(ctx)
 
@@ -30,24 +37,29 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 	}
 
 	// 탭 생성 (요청별 격리)
-	tabCtx, cancel := chromedp.NewContext(c.allocCtx)
-	defer cancel()
+	// browserCtx는 timeout이 적용되지 않은 tab context로, graceful capture 시 재사용된다.
+	browserCtx, browserCancel := chromedp.NewContext(c.allocCtx)
+	defer browserCancel()
 
-	// Timeout 적용
-	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, c.config.Timeout)
-	defer timeoutCancel()
+	// 액션 실행 전용 timeout context
+	// timeout 발생 시 runCtx만 cancel되고 browserCtx와 탭은 유효 상태로 유지되어
+	// 동일 탭에 OuterHTML 재명령을 발행할 수 있다.
+	runCtx, runCancel := context.WithTimeout(browserCtx, c.config.Timeout)
+	defer runCancel()
 
 	// 메인 네비게이션의 LoaderID를 추적하여 iframe/서브프레임 응답과 구분
 	// - 메인 프레임과 리다이렉트 체인은 동일한 LoaderID를 공유
 	// - iframe/서브프레임은 별도의 LoaderID를 가지므로 필터링됨
 	// - statusCode 초기값 0: 이벤트를 한 번도 수신하지 못한 경우와 명시적 구분
+	// - listener를 browserCtx에 등록하여 timeout 이후 graceful capture 단계에서도
+	//   추가로 도착하는 응답 이벤트를 수신할 수 있도록 한다.
 	var (
 		statusCode       int64
 		statusMu         sync.Mutex
 		mainLoaderID     cdp.LoaderID
 		loaderIDCaptured bool
 	)
-	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
+	chromedp.ListenTarget(browserCtx, func(ev interface{}) {
 		switch e := ev.(type) {
 		case *network.EventRequestWillBeSent:
 			// 첫 번째 Document 요청의 LoaderID를 메인 네비게이션으로 고정
@@ -80,18 +92,67 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 	actions = append(actions, chromedp.OuterHTML("html", &html))
 
 	start := time.Now()
+	partialLoad := false
 
 	// 브라우저 실행
-	if err := chromedp.Run(tabCtx, actions...); err != nil {
-		return nil, &core.CrawlerError{
-			Category:  core.ErrCategoryNetwork,
-			Code:      "CDP_002",
-			Message:   "failed to render page",
-			Source:    c.name,
-			URL:       target.URL,
-			Retryable: true,
-			Err:       err,
+	if runErr := chromedp.Run(runCtx, actions...); runErr != nil {
+		// timeout 외 다른 에러는 즉시 실패 처리 (기존 CDP_002 동작 유지)
+		if !IsTimeoutError(runErr) {
+			return nil, &core.CrawlerError{
+				Category:  core.ErrCategoryNetwork,
+				Code:      "CDP_002",
+				Message:   "failed to render page",
+				Source:    c.name,
+				URL:       target.URL,
+				Retryable: true,
+				Err:       runErr,
+			}
 		}
+
+		// timeout 발생: 별도 context로 부분 DOM 캡처 시도
+		log.WithFields(map[string]interface{}{
+			"url":        target.URL,
+			"timeout_ms": c.config.Timeout.Milliseconds(),
+		}).Warn("page render timed out, attempting graceful capture")
+
+		partialHTML, captureErr := captureOuterHTML(browserCtx)
+		if captureErr != nil {
+			// 부분 캡처 자체가 실패 → 빈 페이지/네트워크 불가와 동등한 완전 실패로 분류
+			// runErr(원인 timeout)와 captureErr(캡처 실패 사유 — target closed,
+			// context canceled, CDP 오류 등)를 모두 보존하여 디버깅 가능성 유지
+			return nil, &core.CrawlerError{
+				Category:  core.ErrCategoryTimeout,
+				Code:      "CDP_006",
+				Message:   "render timeout and graceful capture failed",
+				Source:    c.name,
+				URL:       target.URL,
+				Retryable: true,
+				Err:       errors.Join(runErr, captureErr),
+			}
+		}
+
+		// 부분 로드 DOM 유효성 검증 (최소 body + 길이 충족)
+		if !IsValidPartialDOM(partialHTML) {
+			// runErr(timeout) + DOM 검증 실패 사유(길이 정보 포함)를 함께 보존하여
+			// 에러 체인에서 "어떤 검증이 실패했는지"를 추적할 수 있도록 한다
+			validationErr := fmt.Errorf("partial DOM failed validation: length=%d", len(partialHTML))
+			return nil, &core.CrawlerError{
+				Category:  core.ErrCategoryTimeout,
+				Code:      "CDP_007",
+				Message:   "render timeout and partial DOM invalid",
+				Source:    c.name,
+				URL:       target.URL,
+				Retryable: true,
+				Err:       errors.Join(runErr, validationErr),
+			}
+		}
+
+		html = partialHTML
+		partialLoad = true
+		log.WithFields(map[string]interface{}{
+			"url":  target.URL,
+			"size": len(html),
+		}).Info("graceful timeout capture succeeded")
 	}
 
 	elapsed := time.Since(start)
@@ -120,6 +181,12 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		return nil, core.NewHTTPClientError(target.URL, capturedStatus)
 	}
 
+	// metadata: 부분 로드인 경우 호출자 원본을 보존하기 위해 복사 후 플래그 추가
+	metadata := target.Metadata
+	if partialLoad {
+		metadata = metadataWithPartialLoad(target.Metadata)
+	}
+
 	rawContent := &core.RawContent{
 		ID:         fmt.Sprintf("%s-%d", c.name, time.Now().UnixNano()),
 		SourceInfo: c.sourceInfo,
@@ -128,13 +195,14 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		HTML:       html,
 		StatusCode: capturedStatus,
 		Headers:    make(map[string]string),
-		Metadata:   target.Metadata,
+		Metadata:   metadata,
 	}
 
 	log.WithFields(map[string]interface{}{
-		"url":         target.URL,
-		"size":        len(html),
-		"duration_ms": elapsed.Milliseconds(),
+		"url":          target.URL,
+		"size":         len(html),
+		"duration_ms":  elapsed.Milliseconds(),
+		"partial_load": partialLoad,
 	}).Info("page rendered successfully with chromedp")
 
 	return rawContent, nil
