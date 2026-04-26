@@ -80,12 +80,12 @@ func (s *contentService) Store(ctx context.Context, content *core.Content) (stri
 		}
 
 		if !errors.Is(err, storage.ErrNotFound) {
-			return "", false, fmt.Errorf("check duplicate: %w", err)
+			return "", false, core.NewStorageError(core.CodeStorageRead, "check duplicate", true, err)
 		}
 	}
 
 	if err := s.repo.Save(ctx, content); err != nil {
-		return "", false, fmt.Errorf("save content: %w", err)
+		return "", false, core.NewStorageError(core.CodeStorageWrite, "save content", true, err)
 	}
 
 	return content.ID, false, nil
@@ -111,7 +111,7 @@ func (s *contentService) StoreBatch(ctx context.Context, contents []*core.Conten
 func (s *contentService) GetByID(ctx context.Context, id string) (*core.Content, error) {
 	content, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("get content by id: %w", err)
+		return nil, core.NewStorageError(core.CodeStorageRead, "get content by id", true, err)
 	}
 
 	return content, nil
@@ -127,7 +127,12 @@ func (s *contentService) ListByCountry(
 
 	contents, err := s.repo.List(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("list contents by country %s: %w", country, err)
+		return nil, core.NewStorageError(
+			core.CodeStorageRead,
+			fmt.Sprintf("list contents by country %s", country),
+			true,
+			err,
+		)
 	}
 
 	return contents, nil
@@ -137,7 +142,7 @@ func (s *contentService) ListByCountry(
 func (s *contentService) Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
 	contents, err := s.repo.List(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("search contents: %w", err)
+		return nil, core.NewStorageError(core.CodeStorageRead, "search contents", true, err)
 	}
 
 	return contents, nil
@@ -162,7 +167,12 @@ func (s *contentService) CountByCountry(ctx context.Context, days int) (map[stri
 			PublishedAfter: &after,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("count contents for country %s: %w", country, err)
+			return nil, core.NewStorageError(
+				core.CodeStorageRead,
+				fmt.Sprintf("count contents for country %s", country),
+				true,
+				err,
+			)
 		}
 
 		result[country] = count

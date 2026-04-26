@@ -20,6 +20,77 @@
    - Enable type-based handling
    - Include machine-readable error codes
 
+## Layer Rules — When to Use `CrawlerError` vs `fmt.Errorf`
+
+본 프로젝트는 `internal/crawler/core.CrawlerError` 를 시스템 전반의 구조화 에러 타입으로
+사용합니다(타입 이름은 역사적 사유). 모든 에러 생성을 일률적으로 구조화하지 않고, 레이어별
+규칙을 명확히 분리합니다.
+
+### MUST — `CrawlerError` 로 반환해야 하는 boundary
+
+다음 위치에서 발생하는 에러는 반드시 `core.NewXxxError(...)` 생성자로 만들어 반환합니다.
+재시도/라우팅/로깅 전략이 카테고리·코드에 의존하기 때문입니다.
+
+| 레이어 | 카테고리 | 생성자 |
+|---|---|---|
+| `internal/crawler/` 의 fetch/parse 결과 | `Network`, `RateLimit`, `Timeout`, `Parse`, `NotFound`, `Forbidden` | `NewNetworkError`, `NewRateLimitError`, `NewTimeoutError`, `NewParseError`, `NewNotFoundError`, `NewForbiddenError`, `NewHTTPServerError`, `NewHTTPClientError` |
+| `internal/processor/validate/` 의 검증 결과 | `Validation` | `NewValidationError` (코드: `VAL_001` ~ `VAL_006`) |
+| `internal/storage/service/` 의 boundary 메소드 | `Storage` | `NewStorageError` (`STORAGE_001` 조회 / `STORAGE_002` 저장 / `STORAGE_003` 삭제) |
+| 카테고리화된 DB 에러를 식별 가능한 곳 | `Database` | `NewDatabaseError` (`DB_001` ~ `DB_004`) |
+
+### MAY — `fmt.Errorf` 유지가 적절한 레이어
+
+다음 코드는 `fmt.Errorf("동사 대상 [식별자]: %w", ...)` 패턴을 유지합니다.
+
+- **`pkg/` 의 generic 유틸 패키지** (`pkg/queue`, `pkg/links`, `pkg/redis`, `pkg/config`)
+  - `pkg/` 는 도메인 의존성을 갖지 않는 standalone 라이브러리로 설계됨.
+  - `internal/crawler/core` 를 import 하면 레이어링이 무너짐.
+  - 호출하는 `internal/` boundary 에서 카테고리에 맞는 `CrawlerError` 로 변환해 wrap 합니다.
+- **`internal/` 의 helper / 내부 함수**
+  - 패키지 외부로 노출되지 않는 helper 는 fmt.Errorf 로 충분.
+  - 외부 노출 함수에서 최종 boundary 변환만 보장하면 됩니다.
+- **`internal/classifier`, `internal/publisher` 의 비-boundary 경로**
+  - 외부 시스템(grpc/http) 호출 자체에서 발생한 에러는 호출처에서 카테고리화.
+
+### 예시 — boundary 변환 패턴
+
+```go
+// pkg/links/extractor.go (generic util — fmt.Errorf 유지)
+func (e *Extractor) Extract(html, baseURL string) ([]Link, error) {
+    if _, err := url.Parse(baseURL); err != nil {
+        return nil, fmt.Errorf("resolve base url: %w", err)
+    }
+    ...
+}
+
+// internal/crawler/core/extractor.go (boundary — CrawlerError 로 변환)
+func (e *HTMLLinkExtractor) Extract(raw *RawContent) ([]Link, error) {
+    extracted, err := e.inner.Extract(raw.HTML, raw.URL)
+    if err != nil {
+        return nil, NewParseError(CodeParseHTML, "failed to extract links", raw.URL, err)
+    }
+    ...
+}
+```
+
+### `CrawlerError.Is` 와 `errors.As`
+
+`CrawlerError.Is(target)` 는 `Code` 또는 `Category` 가 동일하면 true.
+호출자는 다음 두 가지 패턴 중 적합한 쪽을 사용합니다.
+
+```go
+// 패턴 A — 카테고리 분기
+var ce *core.CrawlerError
+if errors.As(err, &ce) && ce.Category == core.ErrCategoryRateLimit {
+    // backoff 길게
+}
+
+// 패턴 B — 특정 코드 매칭 (errors.Is 는 CrawlerError.Is 를 호출)
+if errors.Is(err, &core.CrawlerError{Code: core.CodeNetTimeout}) {
+    // 타임아웃 전용 처리
+}
+```
+
 ## Error Taxonomy
 
 ### Error Categories

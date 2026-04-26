@@ -56,13 +56,13 @@ func (s *rawContentService) Store(ctx context.Context, raw *core.RawContent) (st
 	}
 
 	if !errors.Is(err, storage.ErrDuplicate) {
-		return "", false, fmt.Errorf("save raw content: %w", err)
+		return "", false, core.NewStorageError(core.CodeStorageWrite, "save raw content", true, err)
 	}
 
 	// 동일 URL 존재 → 기존 레코드 ID 조회
 	existing, err := s.repo.GetByURL(ctx, raw.URL)
 	if err != nil {
-		return "", false, fmt.Errorf("get existing raw content by url: %w", err)
+		return "", false, core.NewStorageError(core.CodeStorageRead, "get existing raw content by url", true, err)
 	}
 
 	s.log.WithFields(map[string]interface{}{
@@ -77,7 +77,7 @@ func (s *rawContentService) Store(ctx context.Context, raw *core.RawContent) (st
 func (s *rawContentService) GetByID(ctx context.Context, id string) (*core.RawContent, error) {
 	raw, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("get raw content by id: %w", err)
+		return nil, core.NewStorageError(core.CodeStorageRead, "get raw content by id", true, err)
 	}
 
 	return raw, nil
@@ -87,7 +87,7 @@ func (s *rawContentService) GetByID(ctx context.Context, id string) (*core.RawCo
 func (s *rawContentService) List(ctx context.Context, filter storage.RawContentFilter) ([]*core.RawContent, error) {
 	raws, err := s.repo.List(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("list raw contents: %w", err)
+		return nil, core.NewStorageError(core.CodeStorageRead, "list raw contents", true, err)
 	}
 
 	return raws, nil
@@ -97,7 +97,12 @@ func (s *rawContentService) List(ctx context.Context, filter storage.RawContentF
 func (s *rawContentService) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	n, err := s.repo.DeleteBefore(ctx, cutoff)
 	if err != nil {
-		return 0, fmt.Errorf("purge raw contents older than %s: %w", cutoff.Format(time.RFC3339), err)
+		return 0, core.NewStorageError(
+			core.CodeStorageDelete,
+			fmt.Sprintf("purge raw contents older than %s", cutoff.Format(time.RFC3339)),
+			true,
+			err,
+		)
 	}
 
 	s.log.WithFields(map[string]interface{}{
