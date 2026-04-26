@@ -205,6 +205,19 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 	}
 
 	if err := w.publishValidatedRef(ctx, &ref, &pm, msg); err != nil {
+		// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 publish-then-commit 재시도.
+		// 검증 자체는 이미 통과했고 DB 에는 record 가 있으므로, validated 토픽에 한 번 더
+		// 발행 시도하여 다음 stage 에서 처리 가능한 상태로 만드는 것이 at-least-once 정확도를 높임.
+		// drain 도 실패하면 commit 하지 않고 에러 반환 → 다음 기동 시 재소비(at-least-once 의 정상 동작).
+		if errors.Is(err, context.Canceled) {
+			drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+			defer cancel()
+			if drainErr := w.publishValidatedRef(drainCtx, &ref, &pm, msg); drainErr != nil {
+				return fmt.Errorf("publish validated ref %s (drain retry failed): %w", ref.ID, drainErr)
+			}
+			// drain publish 성공: 같은 drain context 로 commit
+			return w.commit(drainCtx, msg)
+		}
 		return fmt.Errorf("publish validated ref %s: %w", ref.ID, err)
 	}
 

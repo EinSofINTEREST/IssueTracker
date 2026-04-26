@@ -475,3 +475,87 @@ func TestValidateWorker_CommitDoesNotDrainOnNonCancelError(t *testing.T) {
 
 	consumer.AssertNumberOfCalls(t, "CommitMessages", 1)
 }
+
+// publish 첫 시도가 ctx.Canceled 로 실패해도, drain context 로 재시도하여 publish + commit 모두 성공시키는지 검증.
+// 이로써 graceful shutdown 직전 검증 통과 메시지가 validated 토픽으로 발행되고 offset 도 commit 됨.
+func TestValidateWorker_PublishDrainsOnContextCanceled(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	msg := makeProcessingMessage(content, 0)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	// 첫 publish 호출은 ctx.Canceled, 두 번째(drain ctx)는 성공
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	})).Return(context.Canceled).Once()
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	})).Return(nil).Once()
+
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorker(t, consumer, w, msg)
+
+	// Publish 가 정확히 두 번(원본 ctx + drain ctx) 호출되었는지 검증
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+	// commit 도 호출되었는지 (drain publish 성공 후 commit 단계 진입)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// publish 첫 시도가 ctx.Canceled, drain 재시도도 실패할 때:
+//   - publish 두 번(원본+drain) 호출됨
+//   - commit 은 호출되지 않음 (offset 보존 → 다음 기동 시 재소비)
+func TestValidateWorker_PublishDrainFails_DoesNotCommit(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	msg := makeProcessingMessage(content, 0)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	// 첫 publish: ctx.Canceled
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	})).Return(context.Canceled).Once()
+	// drain publish: 일반 에러 (broker down 등)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	})).Return(errors.New("broker down")).Once()
+
+	runWorker(t, consumer, w, msg)
+
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+	// commit 은 호출되지 않아야 함 — offset 보존하여 재소비 가능 상태로 둠
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// publish 첫 시도가 ctx.Canceled 가 아닌 일반 에러일 때는 drain 재시도 없이 즉시 에러 반환,
+// commit 도 호출되지 않음을 검증.
+func TestValidateWorker_PublishDoesNotDrainOnNonCancelError(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	msg := makeProcessingMessage(content, 0)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	})).Return(errors.New("network unreachable")).Once()
+
+	runWorker(t, consumer, w, msg)
+
+	producer.AssertNumberOfCalls(t, "Publish", 1)
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
