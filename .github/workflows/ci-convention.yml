@@ -1,0 +1,82 @@
+name: CI - Convention
+
+# PR 메타데이터(커밋 메시지 / PR 타이틀) 형식 강제 워크플로
+# 코드 빌드·테스트와는 독립적으로 운영하여 책임 영역을 분리합니다.
+# job `name:` 값은 GitHub Required Status Check 컨텍스트로 사용되므로 변경 금지
+# (docs/ci/status-checks.md 단일 소스 참조).
+
+on:
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  commit-lint:
+    name: Commit Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)\]'
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            commits=$(git log --format='%s' "$base".."$head")
+          else
+            commits=$(git log --format='%s' -1)
+          fi
+
+          failed=0
+          while IFS= read -r msg; do
+            [ -z "$msg" ] && continue
+            if ! echo "$msg" | grep -qE "$pattern"; then
+              echo "::error::커밋 메시지 규칙 위반: '$msg'"
+              echo "  허용 형식: [FEAT]: / [FIX]: / [REFAC]: / [DOCS]: / [CHORE]:"
+              failed=1
+            fi
+          done <<< "$commits"
+
+          if [ "$failed" -eq 1 ]; then
+            {
+              echo "## ❌ Commit Lint 실패"
+              echo "커밋 메시지가 \`[카테고리]: 설명\` 형식을 따르지 않습니다."
+              echo ""
+              echo "허용 카테고리: \`FEAT\` \`FIX\` \`REFAC\` \`DOCS\` \`CHORE\`"
+              echo ""
+              echo "예시: \`[FIX]: Redis 연결 실패 시 NoopJobLocker로 graceful degrade\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "## ✅ Commit Lint 통과" >> "$GITHUB_STEP_SUMMARY"
+
+  pr-title-lint:
+    name: PR Title Lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        run: |
+          title="${{ github.event.pull_request.title }}"
+          pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)'
+
+          if ! echo "$title" | grep -qE "$pattern"; then
+            {
+              echo "## ❌ PR Title Lint 실패"
+              echo "PR 타이틀이 \`[카테고리...]: 설명\` 형식을 따르지 않습니다."
+              echo ""
+              echo "현재 타이틀: \`$title\`"
+              echo ""
+              echo "허용 카테고리: \`FEAT\` \`FIX\` \`REFAC\` \`DOCS\` \`CHORE\`"
+              echo ""
+              echo "예시: \`[FEAT#15]: Kafka consumer pool을 활용한 크롤러 워커 구현\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "## ✅ PR Title Lint 통과" >> "$GITHUB_STEP_SUMMARY"
