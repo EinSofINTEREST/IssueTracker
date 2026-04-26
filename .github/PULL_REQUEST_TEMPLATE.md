@@ -1,8 +1,13 @@
 ## 연관 이슈
-- #
+- Closes #
 
 <!--
 PR title 예시: [FEAT#issue번호]: 어쩌구저쩌
+
+`Closes` / `Fixes` / `Resolves` 키워드를 사용하면 머지 시 이슈가 자동 close 되며,
+이슈의 `Development` 섹션에 이 PR 이 표시됩니다 (Linked Issue Check 통과 조건).
+키워드 없이 `#123` 만 적으면 자동 연결되지 않으므로, PR 사이드바의 `Development`
+에서 이슈를 수동으로 링크하세요.
 -->
 
 <br>
@@ -24,6 +29,7 @@ PR title 예시: [FEAT#issue번호]: 어쩌구저쩌
 - 통과 확인 대상 (PR Checks 탭에서 확인):
   - [ ] `Commit Lint`
   - [ ] `PR Title Lint`
+  - [ ] `Linked Issue Check`
   - [ ] `Format Check`
   - [ ] `Build`
   - [ ] `Test`
