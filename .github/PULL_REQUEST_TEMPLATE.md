@@ -4,10 +4,14 @@
 <!--
 PR title 예시: [FEAT#issue번호]: 어쩌구저쩌
 
-`Closes` / `Fixes` / `Resolves` 키워드를 사용하면 머지 시 이슈가 자동 close 되며,
-이슈의 `Development` 섹션에 이 PR 이 표시됩니다 (Linked Issue Check 통과 조건).
-키워드 없이 `#123` 만 적으면 자동 연결되지 않으므로, PR 사이드바의 `Development`
-에서 이슈를 수동으로 링크하세요.
+Linked Issue Check 통과 조건 = "머지 시 close 될 이슈(closing reference) 가
+최소 1개 연결되어 있을 것". 다음 두 방법만 closing reference 로 인정됩니다:
+1. PR 본문에 `Closes` / `Fixes` / `Resolves` 키워드 사용
+2. PR 사이드바의 `Development` 에서 이슈 링크 시 `Will close this issue when
+   merged` 옵션 체크
+
+키워드 없이 `#123` 만 적거나, Development 에서 옵션 미체크로 링크하면 이슈의
+Development 섹션에는 보이더라도 close-on-merge 가 설정되지 않아 체크가 실패합니다.
 -->
 
 <br>

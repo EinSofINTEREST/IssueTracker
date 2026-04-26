@@ -21,7 +21,7 @@ GitHub Ruleset과 PR 템플릿은 모두 이 문서의 이름과 **토씨 단위
 | `Lint` | `ci-quality.yml` / `lint` | `golangci-lint run` (v1.64.8 고정) | Yes |
 | `Commit Lint` | `ci-convention.yml` / `commit-lint` | 커밋 메시지 `[카테고리]:` 포맷 강제 | Yes |
 | `PR Title Lint` | `ci-convention.yml` / `pr-title-lint` | PR 타이틀 `[카테고리]:` 포맷 강제 (PR only) | Yes |
-| `Linked Issue Check` | `ci-convention.yml` / `linked-issue` | PR 이 이슈의 `Development` 섹션에 표시되는지 검증 (`closingIssuesReferences` ≥ 1, PR only) | Yes |
+| `Linked Issue Check` | `ci-convention.yml` / `linked-issue` | PR 에 머지 시 close 될 이슈(closing reference) 가 최소 1개 연결되어 있는지 검증 (`closingIssuesReferences.totalCount ≥ 1`, PR only) | Yes |
 
 ## 변경 절차
 
