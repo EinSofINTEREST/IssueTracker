@@ -15,12 +15,12 @@ GitHub Ruleset과 PR 템플릿은 모두 이 문서의 이름과 **토씨 단위
 
 | 이름 | 워크플로 / Job | 설명 | Required |
 |------|---------------|------|----------|
-| `Format Check` | `ci.yml` / `format` | `gofmt -l .` 결과 검증 | Yes |
-| `Build` | `ci.yml` / `build` | `go build ./...` 컴파일 검증 | Yes |
-| `Test` | `ci.yml` / `test` | `go test -race` + 커버리지 40% 강제 | Yes |
-| `Lint` | `ci.yml` / `lint` | `golangci-lint run` (v1.64.8 고정) | Yes |
-| `Commit Lint` | `ci.yml` / `commit-lint` | 커밋 메시지 `[카테고리]:` 포맷 강제 | Yes |
-| `PR Title Lint` | `ci.yml` / `pr-title-lint` | PR 타이틀 `[카테고리]:` 포맷 강제 (PR only) | Yes |
+| `Format Check` | `ci-quality.yml` / `format` | `gofmt -l .` 결과 검증 | Yes |
+| `Build` | `ci-quality.yml` / `build` | `go build ./...` 컴파일 검증 | Yes |
+| `Test` | `ci-quality.yml` / `test` | `go test -race` + 커버리지 40% 강제 | Yes |
+| `Lint` | `ci-quality.yml` / `lint` | `golangci-lint run` (v1.64.8 고정) | Yes |
+| `Commit Lint` | `ci-convention.yml` / `commit-lint` | 커밋 메시지 `[카테고리]:` 포맷 강제 | Yes |
+| `PR Title Lint` | `ci-convention.yml` / `pr-title-lint` | PR 타이틀 `[카테고리]:` 포맷 강제 (PR only) | Yes |
 
 ## 변경 절차
 

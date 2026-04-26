@@ -44,18 +44,23 @@ Branch Protection 대신 **Repository Ruleset**을 기본 수단으로 운영합
 ## 3. GitHub Actions CI 설계 규칙
 
 ### 3.1 워크플로 구조
-- 단일 워크플로(`ci.yml`)에 모든 CI job을 배치.
+- CI workflow 는 **기능별로 분리된 파일** 로 운영합니다 (가독성·관리성 향상, Actions UI 그룹핑 명확화).
+  - `ci-quality.yml` — 코드 빌드/테스트/정적 분석 (`format`, `build`, `test`, `lint`)
+  - `ci-convention.yml` — PR/커밋 메타데이터 형식 강제 (`commit-lint`, `pr-title-lint`)
 - 각 job은 **독립 병렬 실행** (의존 관계 없음 → 빠른 피드백).
 - Go module 캐시 활성화 (`actions/setup-go` 의 `cache: true`).
+- 신규 job 추가 시 기능 그룹에 맞는 파일에 배치하고, 양 그룹에 모두 해당하지 않으면 새 워크플로 파일을 만듭니다.
 
 ### 3.2 현재 CI Jobs
 
-| Job | 목적 | 실패 시 의미 |
-|-----|------|-------------|
-| `Format Check` | gofmt 준수 여부 | 코드 포맷 미정리 |
-| `Build` | 컴파일 가능 여부 | 빌드 깨짐 — 즉시 수정 |
-| `Test` | 유닛 테스트 + race 검출 | 로직 오류 또는 경쟁 조건 |
-| `Lint` | 정적 분석 (golangci-lint) | 코드 품질/보안 이슈 |
+| Job | 워크플로 | 목적 | 실패 시 의미 |
+|-----|---------|------|-------------|
+| `Format Check` | `ci-quality.yml` | gofmt 준수 여부 | 코드 포맷 미정리 |
+| `Build` | `ci-quality.yml` | 컴파일 가능 여부 | 빌드 깨짐 — 즉시 수정 |
+| `Test` | `ci-quality.yml` | 유닛 테스트 + race 검출 | 로직 오류 또는 경쟁 조건 |
+| `Lint` | `ci-quality.yml` | 정적 분석 (golangci-lint) | 코드 품질/보안 이슈 |
+| `Commit Lint` | `ci-convention.yml` | 커밋 메시지 `[카테고리]:` 포맷 강제 | 컨벤션 위반 |
+| `PR Title Lint` | `ci-convention.yml` | PR 타이틀 `[카테고리]:` 포맷 강제 | 컨벤션 위반 |
 
 ### 3.3 Job 추가/변경 시 규칙
 1. [status-checks.md](status-checks.md) 에 이름 먼저 등록.
