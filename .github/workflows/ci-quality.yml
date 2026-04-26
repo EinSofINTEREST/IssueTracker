@@ -1,4 +1,9 @@
-name: CI
+name: CI - Quality
+
+# 코드 빌드/테스트/정적 분석 워크플로
+# Convention 검증(커밋·PR 타이틀 형식)은 ci-convention.yml 에 분리되어 있습니다.
+# job `name:` 값은 GitHub Required Status Check 컨텍스트로 사용되므로 변경 금지
+# (docs/ci/status-checks.md 단일 소스 참조).
 
 on:
   pull_request:
