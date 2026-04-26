@@ -1,7 +1,8 @@
 .PHONY: help build build-all test clean run-processor run-issuetracker run-example lint coverage \
+        start chrome-ensure kafka-ensure \
         chrome-start chrome-stop chrome-status run-example-docker \
         run-kafka-pipeline \
-        kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics \
+        kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics kafka-init \
         pg-start pg-stop pg-clean pg-migrate pg-status pg-psql \
         proto
 
@@ -30,6 +31,7 @@ CHROME_CONTAINER=issuetracker-chrome
 COMPOSE_FILE=deployments/docker/docker-compose.yml
 COMPOSE=docker compose
 KAFKA_DATA_DIR=/data/ELArchive/issuetracker/kafka
+KAFKA_CONTAINER=issuetracker-kafka
 KAFKA_ENV_FILE=deployments/docker/.env
 # .env가 없으면 .env.example 기본값 사용
 KAFKA_ENV_ARGS=$(shell [ -f $(KAFKA_ENV_FILE) ] && echo "--env-file $(KAFKA_ENV_FILE)")
@@ -48,9 +50,27 @@ build: ## 모든 바이너리 빌드
 
 build-all: build ## 모든 실행 파일 빌드 (build와 동일)
 
-start: run-issuetracker ## Crawler + Processor 통합 실행 (start로도 가능)
-	@echo "Starting issuetracker (crawler + processor)..."
-	./scripts/entrypoint.sh
+start: ## Crawler + Processor 통합 실행 (의존: chrome, kafka 자동 기동, 직렬 실행)
+	@$(MAKE) chrome-ensure
+	@$(MAKE) kafka-ensure
+	@$(MAKE) run-issuetracker
+
+chrome-ensure: ## Chrome 컨테이너가 실행 중이 아니면 chrome-start 호출
+	@if [ -z "$$(docker ps --filter name=^/$(CHROME_CONTAINER)$$ --filter status=running --quiet)" ]; then \
+	  echo "Chrome container '$(CHROME_CONTAINER)' not running, starting..."; \
+	  $(MAKE) chrome-start; \
+	else \
+	  echo "Chrome container '$(CHROME_CONTAINER)' already running"; \
+	fi
+
+kafka-ensure: ## Kafka 컨테이너가 실행 중이 아니면 kafka-start, 이미 실행 중이면 토픽 멱등 초기화
+	@if [ -z "$$(docker ps --filter name=^/$(KAFKA_CONTAINER)$$ --filter status=running --quiet)" ]; then \
+	  echo "Kafka container '$(KAFKA_CONTAINER)' not running, starting..."; \
+	  $(MAKE) kafka-start; \
+	else \
+	  echo "Kafka container '$(KAFKA_CONTAINER)' already running, ensuring topics..."; \
+	  $(MAKE) kafka-init; \
+	fi
 
 run-processor: build ## Validate processor 실행
 	@echo "Running processor..."
@@ -124,10 +144,13 @@ kafka-start: ## Kafka 브로커 + UI 시작, 토픽 초기화 (localhost:9092 / 
 	@chmod 777 $(KAFKA_DATA_DIR)
 	$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) up -d kafka kafka-ui
 	@echo "Waiting for Kafka to be healthy..."
-	@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) run --rm kafka-init
+	@$(MAKE) kafka-init
 	@echo ""
 	@echo "  Kafka  → localhost:9092"
 	@echo "  UI     → http://localhost:8080"
+
+kafka-init: ## Kafka 토픽 초기화 (kafka-init compose 서비스, 멱등 — 단독 실행 가능)
+	@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) run --rm kafka-init
 
 kafka-stop: ## Kafka 중지 (볼륨 유지)
 	@echo "Stopping Kafka..."
