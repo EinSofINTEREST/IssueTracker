@@ -566,7 +566,8 @@ func TestValidateWorker_PublishDoesNotDrainOnNonCancelError(t *testing.T) {
 
 // DLQ publish 실패 시 commit 이 호출되지 않아야 메시지가 유실되지 않음.
 // 시나리오: malformed JSON message → sendToDLQ 호출 → publish 실패 (drain 도 실패)
-//   → process() 가 에러 반환 → commit 미호출 → 다음 기동 시 재소비.
+//
+//	→ process() 가 에러 반환 → commit 미호출 → 다음 기동 시 재소비.
 func TestValidateWorker_DLQFailureSkipsCommit_PreventsMessageLoss(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
@@ -595,7 +596,8 @@ func TestValidateWorker_DLQFailureSkipsCommit_PreventsMessageLoss(t *testing.T) 
 
 // requeue publish 실패 시 commit 이 호출되지 않아야 함.
 // 시나리오: 검증 실패 + RetryCount < maxRetries → requeue → publish 실패
-//   → process() 가 에러 반환 → commit 미호출 → 다음 기동 시 재소비.
+//
+//	→ process() 가 에러 반환 → commit 미호출 → 다음 기동 시 재소비.
 func TestValidateWorker_RequeueFailureSkipsCommit_PreservesRetryChance(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
