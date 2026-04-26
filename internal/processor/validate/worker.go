@@ -130,7 +130,15 @@ func (w *Worker) work(ctx context.Context) {
 
 	for msg := range w.jobs {
 		if err := w.process(ctx, msg); err != nil {
-			log.WithError(err).Error("validate worker failed to process message")
+			// graceful shutdown 으로 발생한 context.Canceled 는 운영 장애가 아니라 정상 종료 흐름이므로
+			// DEBUG 로 강등하여 알림·대시보드에서 오탐을 만들지 않도록 합니다.
+			// drain context 로 재시도해도 실패한 경우(드물게 broker 다운 등)도 함께 강등되며,
+			// 이 경우 offset 은 commit 되지 않아 다음 기동에서 재소비되므로 메시지 유실은 발생하지 않습니다.
+			if errors.Is(err, context.Canceled) {
+				log.WithError(err).Debug("validate worker canceled during shutdown")
+			} else {
+				log.WithError(err).Error("validate worker failed to process message")
+			}
 		}
 	}
 }
