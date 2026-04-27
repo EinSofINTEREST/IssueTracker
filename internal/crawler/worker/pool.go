@@ -7,6 +7,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,14 @@ import (
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
+
+// drainTimeout 은 graceful shutdown 으로 ctx 가 canceled 된 뒤 Kafka publish/commit 을
+// 한 번 더 시도할 때 사용하는 별도 context 의 타임아웃입니다.
+// at-least-once 시맨틱 보장을 위해 ctx canceled 직후 in-flight 메시지의 DLQ 발행·재큐잉·
+// offset 커밋을 마무리할 시간을 확보합니다.
+//
+// validate worker (internal/processor/validate/worker.go) 의 동일 상수와 정책을 일치시킵니다.
+const drainTimeout = 5 * time.Second
 
 // JobHandler는 CrawlJob을 처리하는 인터페이스입니다.
 // 구현체는 여러 goroutine에서 동시에 호출되므로 goroutine-safe해야 합니다.
@@ -247,11 +256,11 @@ func (p *KafkaConsumerPool) pollMessages(ctx context.Context) {
 			// 발행 실패 시 commit을 건너뛰면 재소비 시 재시도되고,
 			// 발행 성공 시 commit을 수행해야 동일 메시지의 DLQ 중복 전송 루프를 방지할 수 있습니다.
 			if dlqErr := p.sendToDLQ(ctx, msg, err); dlqErr != nil {
-				log.WithError(dlqErr).Error("failed to send unmarshal-failed message to dlq, skipping commit to preserve message")
+				logShutdownAware(log, dlqErr, "failed to send unmarshal-failed message to dlq, skipping commit to preserve message")
 				continue
 			}
 			if commitErr := p.commitMessage(ctx, msg); commitErr != nil {
-				log.WithError(commitErr).Error("failed to commit message after unmarshal-failure dlq")
+				logShutdownAware(log, commitErr, "failed to commit message after unmarshal-failure dlq")
 			}
 			continue
 		}
@@ -277,10 +286,13 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 
 	for item := range p.jobs {
 		if err := p.processJob(ctx, item); err != nil {
-			log.WithFields(map[string]interface{}{
+			// graceful shutdown 으로 발생한 context.Canceled 는 정상 종료 흐름이므로
+			// DEBUG 로 강등하여 알림·대시보드에서 오탐을 만들지 않도록 합니다.
+			jobLog := log.WithFields(map[string]interface{}{
 				"job_id":  item.job.ID,
 				"crawler": item.job.CrawlerName,
-			}).WithError(err).Error("job processing failed")
+			})
+			logShutdownAware(jobLog, err, "job processing failed")
 		}
 	}
 }
@@ -381,19 +393,17 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 			"crawler": item.job.CrawlerName,
 		}).Warn("circuit breaker open, sending job to dlq")
 
+		jobLog := log.WithFields(map[string]interface{}{
+			"job_id":  item.job.ID,
+			"crawler": item.job.CrawlerName,
+		})
 		if publishErr := p.sendToDLQ(ctx, item.msg, cbErr); publishErr != nil {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-			}).WithError(publishErr).Error("failed to send circuit-broken job to dlq, skipping commit to preserve message")
+			logShutdownAware(jobLog, publishErr, "failed to send circuit-broken job to dlq, skipping commit to preserve message")
 			return fmt.Errorf("circuit open dlq for job %s: %w", item.job.ID, publishErr)
 		}
 
 		if commitErr := p.commitMessage(ctx, item.msg); commitErr != nil {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-			}).WithError(commitErr).Error("failed to commit message after circuit breaker dlq")
+			logShutdownAware(jobLog, commitErr, "failed to commit message after circuit breaker dlq")
 		}
 
 		return cbErr
@@ -412,19 +422,17 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 			publishErr = p.requeueWithRetry(ctx, item.job, err)
 		}
 
+		jobLog := log.WithFields(map[string]interface{}{
+			"job_id":  item.job.ID,
+			"crawler": item.job.CrawlerName,
+		})
 		if publishErr != nil {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-			}).WithError(publishErr).Error("failed to republish job, skipping commit to preserve message")
+			logShutdownAware(jobLog, publishErr, "failed to republish job, skipping commit to preserve message")
 			return fmt.Errorf("handle job %s: republish: %w", item.job.ID, publishErr)
 		}
 
 		if commitErr := p.commitMessage(ctx, item.msg); commitErr != nil {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-			}).WithError(commitErr).Error("failed to commit message after error handling")
+			logShutdownAware(jobLog, commitErr, "failed to commit message after error handling")
 		}
 
 		return fmt.Errorf("handle job %s: %w", item.job.ID, err)
@@ -559,14 +567,37 @@ func (p *KafkaConsumerPool) cacheURLIfEligible(ctx context.Context, item jobItem
 	}
 }
 
+// commitMessage 는 Kafka offset 을 commit 합니다.
+// graceful shutdown 으로 ctx 가 canceled 된 경우 drain context (timeout 포함, parent
+// cancel 분리) 로 한 번 더 시도하여 at-least-once 정확도를 높입니다.
+//
+// 재시도까지 실패하면 에러를 반환합니다 — 호출자(worker)는 이 에러를 보고 적절한 레벨
+// (context.Canceled → DEBUG, 그 외 → ERROR) 로 로깅합니다. commit 되지 않은 offset 은
+// 다음 worker 기동 시 재소비되어 동일 메시지가 다시 처리됩니다.
 func (p *KafkaConsumerPool) commitMessage(ctx context.Context, msg *queue.Message) error {
-	if err := p.consumer.CommitMessages(ctx, msg); err != nil {
-		return fmt.Errorf("commit offset: %w", err)
+	err := p.consumer.CommitMessages(ctx, msg)
+	if err == nil {
+		return nil
 	}
 
-	return nil
+	// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도
+	// context.WithoutCancel 로 cancellation 만 분리하고 trace ID·logger 필드 등 메타데이터는 보존
+	if errors.Is(err, context.Canceled) {
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+		defer cancel()
+		if retryErr := p.consumer.CommitMessages(drainCtx, msg); retryErr == nil {
+			return nil
+		} else {
+			return fmt.Errorf("commit offset (drain retry failed): %w", retryErr)
+		}
+	}
+
+	return fmt.Errorf("commit offset: %w", err)
 }
 
+// sendToDLQ 는 메시지를 DLQ 토픽에 발행합니다.
+// graceful shutdown 으로 ctx 가 canceled 된 경우 drain context 로 한 번 더 시도하여
+// 데이터 무결성 작업(원본 메시지 보존)이 셧다운 직전에도 완료될 수 있도록 보장합니다.
 func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, reason error) error {
 	log := logger.FromContext(ctx)
 
@@ -585,8 +616,21 @@ func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, r
 		Headers: headers,
 	}
 
-	if err := p.producer.Publish(ctx, dlqMsg); err != nil {
-		log.WithError(err).Error("failed to send message to dlq")
+	err := p.producer.Publish(ctx, dlqMsg)
+	if err != nil && errors.Is(err, context.Canceled) {
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+		defer cancel()
+		err = p.producer.Publish(drainCtx, dlqMsg)
+	}
+	if err != nil {
+		// graceful shutdown 으로 인한 cancellation 은 운영 장애가 아니므로 DEBUG 로 강등.
+		// drain 재시도까지 실패한 경우에도 동일하게 강등 — 메시지 유실은 아니며
+		// (원본 offset 미커밋 → 재기동 시 재소비) 정상 종료 흐름의 일부.
+		if errors.Is(err, context.Canceled) {
+			log.WithError(err).Debug("dlq publish canceled during shutdown")
+		} else {
+			log.WithError(err).Error("failed to send message to dlq")
+		}
 		return fmt.Errorf("send to dlq: %w", err)
 	}
 
@@ -632,17 +676,44 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 		"topic":    topic,
 	}).Warn("requeuing job with backoff delay")
 
-	if err := p.producer.Publish(ctx, msg); err != nil {
-		log.WithFields(map[string]interface{}{
+	err = p.producer.Publish(ctx, msg)
+	if err != nil && errors.Is(err, context.Canceled) {
+		// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+		defer cancel()
+		err = p.producer.Publish(drainCtx, msg)
+	}
+	if err != nil {
+		fields := map[string]interface{}{
 			"job_id":   job.ID,
 			"crawler":  job.CrawlerName,
 			"topic":    topic,
 			"priority": job.Priority,
-		}).WithError(err).Error("failed to requeue job for retry")
+		}
+		// shutdown cancellation 은 정상 종료 흐름이므로 DEBUG 로 강등
+		if errors.Is(err, context.Canceled) {
+			log.WithFields(fields).WithError(err).Debug("requeue canceled during shutdown")
+		} else {
+			log.WithFields(fields).WithError(err).Error("failed to requeue job for retry")
+		}
 		return fmt.Errorf("publish retry job: %w", err)
 	}
 
 	return nil
+}
+
+// logShutdownAware 는 graceful shutdown 으로 발생한 context.Canceled 에러를 DEBUG 로,
+// 그 외 에러는 ERROR 로 기록하는 공통 헬퍼입니다.
+//
+// shutdown 직후 in-flight Kafka 작업(DLQ publish, commit, requeue)이 ctx cancel 로
+// 실패하는 것은 정상 종료 흐름의 일부이므로 ERROR 알림에서 제외합니다.
+// drain context 까지 실패해 wrap 된 경우에도 errors.Is 가 chain 을 따라 매칭됩니다.
+func logShutdownAware(log *logger.Logger, err error, msg string) {
+	if errors.Is(err, context.Canceled) {
+		log.WithError(err).Debug(msg)
+		return
+	}
+	log.WithError(err).Error(msg)
 }
 
 // topicForPriority는 우선순위에 맞는 Kafka 토픽 이름을 반환합니다.
