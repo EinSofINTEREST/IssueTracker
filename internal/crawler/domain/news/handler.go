@@ -225,15 +225,16 @@ func NewBrowserFetchHandler(fetcher NewsFetcher, log *logger.Logger) *BrowserFet
 
 // Handle은 헤드리스 브라우저로 페이지를 가져옵니다.
 //
-// graceful shutdown 처리: ctx 가 취소된 상태에서 발생한 에러는 정상 종료 흐름의 일부이므로
-// DEBUG 로 강등하여 알림·대시보드에서 오탐을 만들지 않습니다.
+// graceful shutdown 처리: 호출자 ctx 가 취소된 상태에서 발생한 에러는 정상 종료 흐름의
+// 일부이므로 DEBUG 로 강등하여 알림·대시보드에서 오탐을 만들지 않습니다.
 //
-// 강등 조건 (둘 중 하나):
-//  1. ctx.Err() != nil — 호출자 컨텍스트가 이미 취소됨 (셧다운 발화)
-//  2. errors.Is(err, context.Canceled) — 에러 chain 에 cancel 포함
-//
-// chromedp CDP_006 의 errors.Join(deadline, canceled) 묶음에서도 errors.Is 가 chain 을
-// 따라 매칭됩니다. 한편 fetch 자체의 deadline timeout(셧다운과 무관) 은 정상 ERROR 로 유지.
+// 강등 조건은 ctx.Err() != nil 단독:
+//   - chromedp 는 정상 timeout 후 내부 cleanup 으로 errors.Join 에 context.Canceled 를
+//     포함시키는 경우가 있음 (CDP_006 의 captureErr=Canceled). 이 정상 케이스를 셧다운으로
+//     오인하지 않으려면 errors.Is(err, context.Canceled) 검사 사용 금지 — 호출자 ctx 의
+//     상태(ctx.Err) 만이 "셧다운에 의한 cancel 인지" 의 진실의 단일 소스(SoT).
+//   - kafka-go 등 다른 라이브러리는 부모 ctx cancel 시에만 context.Canceled 를 반환하지만,
+//     일관성·안전성을 위해 동일 정책 적용.
 func (h *BrowserFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
 	raw, err := h.fetcher.Fetch(ctx, job.Target)
 	if err != nil {
@@ -241,7 +242,7 @@ func (h *BrowserFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 			"handler": "browser",
 			"url":     job.Target.URL,
 		})
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		if ctx.Err() != nil {
 			fl.WithError(err).Debug("browser fetch canceled during shutdown")
 		} else {
 			fl.WithError(err).Error("browser fetch failed, all strategies exhausted")
