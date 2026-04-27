@@ -256,11 +256,11 @@ func (p *KafkaConsumerPool) pollMessages(ctx context.Context) {
 			// 발행 실패 시 commit을 건너뛰면 재소비 시 재시도되고,
 			// 발행 성공 시 commit을 수행해야 동일 메시지의 DLQ 중복 전송 루프를 방지할 수 있습니다.
 			if dlqErr := p.sendToDLQ(ctx, msg, err); dlqErr != nil {
-				logShutdownAware(log, dlqErr, "failed to send unmarshal-failed message to dlq, skipping commit to preserve message")
+				logShutdownAware(ctx, log, dlqErr, "failed to send unmarshal-failed message to dlq, skipping commit to preserve message")
 				continue
 			}
 			if commitErr := p.commitMessage(ctx, msg); commitErr != nil {
-				logShutdownAware(log, commitErr, "failed to commit message after unmarshal-failure dlq")
+				logShutdownAware(ctx, log, commitErr, "failed to commit message after unmarshal-failure dlq")
 			}
 			continue
 		}
@@ -292,7 +292,7 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 				"job_id":  item.job.ID,
 				"crawler": item.job.CrawlerName,
 			})
-			logShutdownAware(jobLog, err, "job processing failed")
+			logShutdownAware(ctx, jobLog, err, "job processing failed")
 		}
 	}
 }
@@ -398,12 +398,12 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 			"crawler": item.job.CrawlerName,
 		})
 		if publishErr := p.sendToDLQ(ctx, item.msg, cbErr); publishErr != nil {
-			logShutdownAware(jobLog, publishErr, "failed to send circuit-broken job to dlq, skipping commit to preserve message")
+			logShutdownAware(ctx, jobLog, publishErr, "failed to send circuit-broken job to dlq, skipping commit to preserve message")
 			return fmt.Errorf("circuit open dlq for job %s: %w", item.job.ID, publishErr)
 		}
 
 		if commitErr := p.commitMessage(ctx, item.msg); commitErr != nil {
-			logShutdownAware(jobLog, commitErr, "failed to commit message after circuit breaker dlq")
+			logShutdownAware(ctx, jobLog, commitErr, "failed to commit message after circuit breaker dlq")
 		}
 
 		return cbErr
@@ -427,12 +427,12 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 			"crawler": item.job.CrawlerName,
 		})
 		if publishErr != nil {
-			logShutdownAware(jobLog, publishErr, "failed to republish job, skipping commit to preserve message")
+			logShutdownAware(ctx, jobLog, publishErr, "failed to republish job, skipping commit to preserve message")
 			return fmt.Errorf("handle job %s: republish: %w", item.job.ID, publishErr)
 		}
 
 		if commitErr := p.commitMessage(ctx, item.msg); commitErr != nil {
-			logShutdownAware(jobLog, commitErr, "failed to commit message after error handling")
+			logShutdownAware(ctx, jobLog, commitErr, "failed to commit message after error handling")
 		}
 
 		return fmt.Errorf("handle job %s: %w", item.job.ID, err)
@@ -702,14 +702,21 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 	return nil
 }
 
-// logShutdownAware 는 graceful shutdown 으로 발생한 context.Canceled 에러를 DEBUG 로,
+// logShutdownAware 는 graceful shutdown 으로 발생한 컨텍스트성 에러를 DEBUG 로,
 // 그 외 에러는 ERROR 로 기록하는 공통 헬퍼입니다.
 //
 // shutdown 직후 in-flight Kafka 작업(DLQ publish, commit, requeue)이 ctx cancel 로
 // 실패하는 것은 정상 종료 흐름의 일부이므로 ERROR 알림에서 제외합니다.
-// drain context 까지 실패해 wrap 된 경우에도 errors.Is 가 chain 을 따라 매칭됩니다.
-func logShutdownAware(log *logger.Logger, err error, msg string) {
-	if errors.Is(err, context.Canceled) {
+//
+// 강등 조건 (둘 중 하나):
+//  1. ctx.Err() != nil — 부모 ctx 가 이미 cancel/deadline 인 상태에서의 후속 실패
+//  2. errors.Is(err, context.Canceled) — 에러 chain 에 cancel 이 포함됨
+//
+// drain context (context.WithoutCancel(ctx) + WithTimeout) 가 자체 타임아웃에 걸려
+// context.DeadlineExceeded 로 실패하는 경우에도 부모 ctx.Err() 검사로 셧다운 케이스를
+// 식별합니다 — 이 경우는 정상 종료 흐름이므로 함께 강등합니다.
+func logShutdownAware(ctx context.Context, log *logger.Logger, err error, msg string) {
+	if (ctx != nil && ctx.Err() != nil) || errors.Is(err, context.Canceled) {
 		log.WithError(err).Debug(msg)
 		return
 	}
