@@ -11,11 +11,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"issuetracker/internal/crawler/core"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
+	"issuetracker/pkg/urlguard"
 )
 
 // PriorityResolver는 CrawlJob의 우선순위를 결정하는 인터페이스입니다.
@@ -26,9 +28,16 @@ type PriorityResolver interface {
 
 // Publisher는 크롤된 페이지에서 발견된 URL을 새 CrawlJob으로 변환하여
 // 우선순위에 맞는 Kafka crawl 토픽에 발행합니다.
+//
+// URL 가드 (이슈 #119):
+//   - SetGate 로 urlguard.Gate 를 설정하면 PublishBatch 직전에 urls 슬라이스를 필터링
+//   - 차단된 URL 은 발행에서 제외 (Gate 가 자체 WARN 로그)
+//   - 미설정 시 가드 비활성 (기존 동작 유지)
+//   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — 워커 동시 실행 중 변경에도 race 없음
 type Publisher struct {
 	producer queue.Producer
 	resolver PriorityResolver
+	gate     atomic.Pointer[urlguard.Gate]
 	log      *logger.Logger
 }
 
@@ -39,6 +48,14 @@ func New(producer queue.Producer, resolver PriorityResolver, log *logger.Logger)
 		resolver: resolver,
 		log:      log,
 	}
+}
+
+// SetGate 는 Publish 시 urls 사전 필터링에 사용할 urlguard.Gate 를 설정합니다.
+// 미설정(nil) 시 가드 비활성 — 모든 urls 가 그대로 publish 됩니다.
+//
+// 동시성: atomic.Pointer 기반 lock-free 설정/조회 — Publish 동시 실행 중 변경에도 race-safe.
+func (p *Publisher) SetGate(g *urlguard.Gate) {
+	p.gate.Store(g)
 }
 
 // Publish는 발견된 URL 목록으로 CrawlJob을 생성하고 한 번의 배치 요청으로 Kafka에 발행합니다.
@@ -52,6 +69,18 @@ func (p *Publisher) Publish(
 ) error {
 	if len(urls) == 0 {
 		return nil
+	}
+
+	// URL 가드 (이슈 #119): 차단된 URL 을 사전 필터링
+	// Gate 가 자체 WARN 로그 + url/reason/crawler/stage 필드 자동 부착
+	if g := p.gate.Load(); g != nil {
+		urls = g.Filter(urls, map[string]interface{}{
+			"crawler": crawlerName,
+			"stage":   "publisher",
+		})
+		if len(urls) == 0 {
+			return nil
+		}
 	}
 
 	msgs := make([]queue.Message, 0, len(urls))

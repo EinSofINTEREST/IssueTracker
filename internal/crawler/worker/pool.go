@@ -18,6 +18,7 @@ import (
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
+	"issuetracker/pkg/urlguard"
 )
 
 // drainTimeout 은 graceful shutdown 으로 ctx 가 canceled 된 뒤 Kafka publish/commit 을
@@ -74,6 +75,11 @@ type KafkaConsumerPool struct {
 	// atomic.Pointer 를 사용하여 polling/worker goroutine 의 동시 Load 와
 	// SetNormalizer 의 Store 사이에 race 가 발생하지 않도록 보장합니다.
 	normalizer atomic.Pointer[links.Normalizer]
+	// gate 는 URL 가드 (이슈 #119) 입니다.
+	// 미설정(nil) 이면 가드 비활성 — 모든 job 이 처리됩니다.
+	// processJob 진입 직후 검사하여 차단된 URL 의 처리를 skip 하고 message 만 commit.
+	// atomic.Pointer 로 race-safe 한 lock-free 설정/조회.
+	gate atomic.Pointer[urlguard.Gate]
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -148,6 +154,17 @@ func NewKafkaConsumerPoolWithOptions(
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
 	}
+}
+
+// SetGate 는 processJob 진입 시 URL 검사에 사용할 urlguard.Gate 를 설정합니다 (이슈 #119).
+// 미설정(nil) 시 가드 비활성 — 모든 job 이 정상 처리됩니다.
+//
+// 차단 시 동작: handler.Handle 호출 없이 메시지만 commit (큐에서 제거).
+// → 누적된 stale URL 메시지가 retry 사이클에 다시 발행되는 것을 차단.
+//
+// 동시성: atomic.Pointer 기반 lock-free — Start 이후 변경에도 race-safe.
+func (p *KafkaConsumerPool) SetGate(g *urlguard.Gate) {
+	p.gate.Store(g)
 }
 
 // SetNormalizer는 URL 정규화기를 설정합니다.
@@ -299,6 +316,22 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 
 func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error {
 	log := logger.FromContext(ctx)
+
+	// URL 가드 (이슈 #119): processJob 진입 직후 차단 URL 을 즉시 거르고 commit
+	// → handler 호출·lock 획득·backoff 대기 등 모든 비용 회피
+	// → stale URL 메시지가 큐에서 즉시 제거되어 retry 사이클 차단
+	//
+	// item.job 은 pollMessages 에서 unmarshal 성공 후에만 jobs 채널로 전송되므로
+	// 본 시점에 nil 일 수 없음 (방어 검사 불필요).
+	if g := p.gate.Load(); g != nil {
+		if !g.Allow(item.job.Target.URL, map[string]interface{}{
+			"crawler": item.job.CrawlerName,
+			"job_id":  item.job.ID,
+			"stage":   "consumer",
+		}) {
+			return p.commitMessage(ctx, item.msg)
+		}
+	}
 
 	// 재큐잉 시 설정된 ScheduledAt이 미래면 해당 시점까지 대기합니다.
 	// JobLocker 획득 전에 대기하는 이유는 다음과 같습니다:
