@@ -588,7 +588,10 @@ func (p *KafkaConsumerPool) commitMessage(ctx context.Context, msg *queue.Messag
 		if retryErr := p.consumer.CommitMessages(drainCtx, msg); retryErr == nil {
 			return nil
 		} else {
-			return fmt.Errorf("commit offset (drain retry failed): %w", retryErr)
+			// errors.Join 으로 최초 cancel 과 retryErr 를 모두 보존 — 호출자의
+			// errors.Is(err, context.Canceled) 분기가 안정적으로 매칭되도록 보장.
+			// retryErr 가 DeadlineExceeded 인 경우에도 chain 의 cancel 이 살아있음.
+			return fmt.Errorf("commit offset (drain retry failed): %w", errors.Join(err, retryErr))
 		}
 	}
 
@@ -622,7 +625,13 @@ func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, r
 	if err != nil && errors.Is(err, context.Canceled) {
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 		defer cancel()
-		err = p.producer.Publish(drainCtx, dlqMsg)
+		// errors.Join 으로 최초 cancel 과 retryErr 를 모두 보존 — 호출자의
+		// errors.Is(err, context.Canceled) 분기가 안정적으로 매칭되도록 보장.
+		if retryErr := p.producer.Publish(drainCtx, dlqMsg); retryErr != nil {
+			err = errors.Join(err, retryErr)
+		} else {
+			err = nil
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("send to dlq: %w", err)
@@ -677,7 +686,12 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 		// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 		defer cancel()
-		err = p.producer.Publish(drainCtx, msg)
+		// errors.Join 으로 최초 cancel 과 retryErr 를 모두 보존
+		if retryErr := p.producer.Publish(drainCtx, msg); retryErr != nil {
+			err = errors.Join(err, retryErr)
+		} else {
+			err = nil
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("publish retry job: %w", err)
