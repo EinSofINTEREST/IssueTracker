@@ -13,6 +13,7 @@ import (
 
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/storage/service"
+	"issuetracker/pkg/links"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -58,6 +59,10 @@ type KafkaConsumerPool struct {
 	cbRegistry  *CircuitBreakerRegistry
 	jobLocker   JobLocker
 	urlCache    URLCache
+	// normalizer는 URL 정규화기입니다.
+	// nil 이면 정규화가 적용되지 않으며, 기존 동작이 유지됩니다.
+	// SetNormalizer 로 Start 호출 전에만 설정해야 합니다.
+	normalizer *links.Normalizer
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -132,6 +137,34 @@ func NewKafkaConsumerPoolWithOptions(
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
 	}
+}
+
+// SetNormalizer는 URL 정규화기를 설정합니다.
+// nil 이거나 미호출 시 정규화는 적용되지 않으며, 기존 동작이 유지됩니다.
+//
+// 적용 지점:
+//  1. Target.URL — pollMessages 에서 unmarshal 직후 (URLCache·JobLocker 키 일관성)
+//  2. Content.CanonicalURL — publishNormalized 에서 Store 직전 (DB 중복 탐지)
+//  3. Kafka 파티션 키 — publishNormalized 에서 CanonicalURL 사용 (파티션 ordering)
+//
+// 동시성: Start 호출 전에만 설정해야 합니다.
+// Start 이후 호출은 polling/worker goroutine 과의 race를 유발할 수 있습니다.
+func (p *KafkaConsumerPool) SetNormalizer(n *links.Normalizer) {
+	p.normalizer = n
+}
+
+// normalizeURL은 normalizer가 설정된 경우 URL을 정규화하여 반환합니다.
+// normalizer 미설정 / 빈 URL / 정규화 실패 시 원본을 그대로 반환하여
+// 정규화 도입이 기존 fetch/저장 경로를 깨지 않도록 보장합니다.
+func (p *KafkaConsumerPool) normalizeURL(rawURL string) string {
+	if p.normalizer == nil || rawURL == "" {
+		return rawURL
+	}
+	normalized, err := p.normalizer.Normalize(rawURL)
+	if err != nil || normalized == "" {
+		return rawURL
+	}
+	return normalized
 }
 
 // Start는 worker goroutine들과 message polling goroutine을 시작합니다.
@@ -219,6 +252,12 @@ func (p *KafkaConsumerPool) pollMessages(ctx context.Context) {
 			}
 			continue
 		}
+
+		// 적용 지점 ①: Target.URL 정규화
+		// 다운스트림 모든 키(URLCache, JobLocker, Kafka 파티션)가 동일한 정규형을
+		// 사용하도록 가장 이른 시점에 한 번만 적용합니다.
+		// normalizer 미설정 시 원본이 반환되어 기존 동작이 유지됩니다.
+		job.Target.URL = p.normalizeURL(job.Target.URL)
 
 		select {
 		case p.jobs <- jobItem{msg: msg, job: job}:
@@ -414,7 +453,21 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 // publishNormalized는 Content를 contents DB에 저장한 뒤 ContentRef를
 // issuetracker.normalized 토픽에 ProcessingMessage로 발행합니다.
 // 다운스트림 validator는 ref.ID로 DB에서 전체 데이터를 조회합니다.
+//
+// URL 정규화 (적용 지점 ②, ③):
+//   - CanonicalURL: content.URL 의 정규형으로 표준화 (DB 중복 탐지 정확도)
+//   - Kafka 파티션 키: CanonicalURL 사용 (동일 기사가 동일 파티션으로 라우팅)
+//
+// normalizer 미설정 시 CanonicalURL = content.URL 로 fallback 되어 기존 동작 유지.
 func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core.Content, job *core.CrawlJob) error {
+	// 적용 지점 ②: CanonicalURL 정규화 (Store 직전)
+	// 파서는 일반적으로 CanonicalURL = content.URL 로 단순 복사하므로
+	// 본 boundary 에서 정규형을 강제하여 DB content unique 비교의 일관성을 확보합니다.
+	canonicalURL := p.normalizeURL(content.URL)
+	if canonicalURL != "" {
+		content.CanonicalURL = canonicalURL
+	}
+
 	storedID, _, err := p.contentSvc.Store(ctx, content)
 	if err != nil {
 		return fmt.Errorf("store content for job %s: %w", job.ID, err)
@@ -454,9 +507,18 @@ func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core
 		return fmt.Errorf("marshal processing message: %w", err)
 	}
 
+	// 적용 지점 ③: Kafka 파티션 키 — CanonicalURL 사용
+	// 동일 기사의 추적 파라미터/스킴 변형이 동일 파티션으로 라우팅되어
+	// ordering·CB·중복 처리 일관성이 보장됩니다.
+	// CanonicalURL 이 비어있으면 안전하게 content.URL 로 fallback 합니다.
+	partitionKey := content.CanonicalURL
+	if partitionKey == "" {
+		partitionKey = content.URL
+	}
+
 	msg := queue.Message{
 		Topic: queue.TopicNormalized,
-		Key:   []byte(content.URL),
+		Key:   []byte(partitionKey),
 		Value: pmBytes,
 		Headers: map[string]string{
 			"source":  content.SourceID,
