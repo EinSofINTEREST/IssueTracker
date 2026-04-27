@@ -40,6 +40,8 @@ type NormalizeOption func(*normalizeConfig)
 
 // WithAllowedParams는 특정 호스트에 대해 보존할 query 파라미터 이름을 등록합니다.
 // 호스트 매칭은 case-insensitive 이며 "www." 접두사는 자동으로 정규화됩니다.
+// 파라미터 키 매칭도 case-insensitive — 등록 시·필터링 시 모두 소문자로 정규화하여
+// `Article_ID` / `article_id` / `ARTICLE_ID` 가 동일하게 처리됩니다.
 //
 // 예: 네이버 뉴스의 article_id, office_id는 컨텐츠 경로 분기에 필수이므로 보존:
 //
@@ -58,7 +60,7 @@ func WithAllowedParams(host string, params ...string) NormalizeOption {
 			c.hostAllowedParams[key] = set
 		}
 		for _, p := range params {
-			set[p] = struct{}{}
+			set[normalizeParamKey(p)] = struct{}{}
 		}
 	}
 }
@@ -140,14 +142,23 @@ func (n *Normalizer) Normalize(rawURL string) (string, error) {
 	}
 
 	// host 정규화: 소문자화 + 옵션에 따른 www. 제거
-	u.Host = strings.ToLower(u.Host)
+	// u.Host 는 포트를 포함하므로 (예: "Example.com:8080"),
+	// 호스트만 소문자화하고 포트는 보존하여 fetch 가능성을 깨지 않습니다.
+	hostname := strings.ToLower(u.Hostname())
 	if n.config.stripWWW {
-		u.Host = strings.TrimPrefix(u.Host, "www.")
+		hostname = strings.TrimPrefix(hostname, "www.")
+	}
+	if port := u.Port(); port != "" {
+		u.Host = hostname + ":" + port
+	} else {
+		u.Host = hostname
 	}
 
 	// query 정규화: 화이트리스트에 없는 파라미터 제거 + 키 정렬
+	// 화이트리스트 매칭은 hostname (포트 제외) 기준 — 포트는 fetch 라우팅 정보일 뿐
+	// 컨텐츠 정체성에는 영향 없음.
 	if u.RawQuery != "" {
-		u.RawQuery = n.filterQuery(u.Host, u.RawQuery)
+		u.RawQuery = n.filterQuery(hostname, u.RawQuery)
 	}
 
 	// trailing slash 제거 (루트 경로 "/"는 보존)
@@ -167,6 +178,11 @@ func (n *Normalizer) Normalize(rawURL string) (string, error) {
 // filterQuery는 호스트별 화이트리스트에 따라 query 파라미터를 필터링합니다.
 // url.Values.Encode 는 키 순으로 정렬된 결과를 반환하므로
 // 동일 컨텐츠는 항상 동일한 query 정규형을 갖습니다.
+//
+// 키 매칭은 case-insensitive — `Article_ID`/`article_id` 가 동일하게 처리됩니다.
+// ParseQuery 실패 시:
+//   - 화이트리스트 호스트: 원본 rawQuery 보존 (필수 파라미터 손실 방지)
+//   - 미등록 호스트: 빈 문자열 (전부 제거 정책 유지)
 func (n *Normalizer) filterQuery(host, rawQuery string) string {
 	allowed := n.allowedFor(host)
 	if len(allowed) == 0 {
@@ -176,12 +192,13 @@ func (n *Normalizer) filterQuery(host, rawQuery string) string {
 
 	values, err := url.ParseQuery(rawQuery)
 	if err != nil {
-		// 파싱 실패 시 안전하게 query 전체 제거
-		return ""
+		// 화이트리스트 호스트의 ParseQuery 실패 시 원본을 유지하여
+		// 잘못된 파싱으로 인한 필수 파라미터 손실/fetch 실패를 방지합니다.
+		return rawQuery
 	}
 
 	for k := range values {
-		if _, ok := allowed[k]; !ok {
+		if _, ok := allowed[normalizeParamKey(k)]; !ok {
 			values.Del(k)
 		}
 	}
@@ -207,6 +224,12 @@ func (n *Normalizer) allowedFor(host string) map[string]struct{} {
 func normalizeHostKey(host string) string {
 	h := strings.ToLower(host)
 	return strings.TrimPrefix(h, "www.")
+}
+
+// normalizeParamKey는 query 파라미터 키를 화이트리스트 매칭용으로 정규화합니다.
+// 단순 소문자화 — 등록·필터링 양쪽이 동일 규칙을 따라야 일관된 매칭이 보장됩니다.
+func normalizeParamKey(key string) string {
+	return strings.ToLower(key)
 }
 
 // defaultNormalizer는 NormalizeURL 패키지 헬퍼가 사용하는 기본 인스턴스입니다.
