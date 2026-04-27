@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -63,7 +65,11 @@ type RawContent struct {
 //   - statusCode : HTTP 상태 코드
 //   - headers    : HTTP 응답 헤더. nil 이면 빈 map 으로 보정.
 //
-// ID 형식: "<name>-<unix_nano>" — 단일 fetcher 내 호출 시점 고유성.
+// ID 형식: "<name>-<unix_nano>-<rand_hex>" — 시간순 정렬 가능 + 동시 호출 충돌 방지.
+//   - <unix_nano>: 시간 정렬·디버깅 추적성
+//   - <rand_hex>: 4바이트 (8자 hex) crypto/rand suffix
+//                 → 동일 ns 에 발생한 여러 호출도 충돌 확률 사실상 0 (1/2^32 per ns)
+//   - rand.Read 실패 시에도 시간 부분만으로 ID 가 생성되어 fetch 자체는 진행
 //
 // metadata 가공이 필요한 경우 (예: chromedp 의 partial_load 플래그) 호출자가
 // target.Metadata 를 미리 가공하거나 반환된 RawContent.Metadata 를 덮어써서 처리.
@@ -80,7 +86,7 @@ func NewRawContent(
 		headers = make(map[string]string)
 	}
 	return &RawContent{
-		ID:         fmt.Sprintf("%s-%d", name, time.Now().UnixNano()),
+		ID:         newRawContentID(name),
 		SourceInfo: source,
 		FetchedAt:  time.Now(),
 		URL:        target.URL,
@@ -89,6 +95,17 @@ func NewRawContent(
 		Headers:    headers,
 		Metadata:   target.Metadata,
 	}
+}
+
+// newRawContentID 는 "<name>-<unix_nano>-<rand_hex>" 형식의 RawContent ID 를 생성합니다.
+// crypto/rand 4바이트 suffix 로 동시 호출 충돌을 방지합니다 (1/2^32 per ns 충돌 확률).
+//
+// rand.Read 실패는 무시하고 0-suffix 로 fallback — fetch 자체를 멈추지 않으며,
+// 시간 부분만으로도 단일 fetcher 내 nano 정밀도 충돌은 매우 드뭄.
+func newRawContentID(name string) string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("%s-%d-%s", name, time.Now().UnixNano(), hex.EncodeToString(b[:]))
 }
 
 // RawContentRef는 Kafka raw 토픽에 발행되는 경량 참조 메시지입니다.

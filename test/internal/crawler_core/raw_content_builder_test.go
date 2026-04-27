@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,16 +79,51 @@ func TestNewRawContent_IDFormat_UsesNamePrefix(t *testing.T) {
 }
 
 // TestNewRawContent_ConsecutiveCalls_DistinctIDs:
-// 연속 호출 시 unix_nano 차이로 ID 가 달라야 함 (중복 방지).
+// 연속 호출 시 ID 가 모두 unique 해야 함.
+// 신규 ID 형식 '<name>-<unix_nano>-<rand_hex>' 의 random suffix 덕분에 sleep 없이도 통과.
 func TestNewRawContent_ConsecutiveCalls_DistinctIDs(t *testing.T) {
-	ids := make(map[string]bool)
-	for i := 0; i < 100; i++ {
+	ids := make(map[string]bool, 1000)
+	for i := 0; i < 1000; i++ {
 		raw := core.NewRawContent("cnn", newTestSource(), newTestTarget(), "x", 200, nil)
-		assert.False(t, ids[raw.ID], "중복 ID 발생: %s", raw.ID)
+		assert.False(t, ids[raw.ID], "중복 ID 발생 at i=%d: %s", i, raw.ID)
 		ids[raw.ID] = true
-		// time.Now().UnixNano() 가 같은 ns 를 반환할 가능성에 대비한 짧은 sleep
-		time.Sleep(1 * time.Microsecond)
 	}
+	assert.Len(t, ids, 1000, "1000회 연속 호출 모두 unique ID")
+}
+
+// TestNewRawContent_HighConcurrency_DistinctIDs:
+// 동시 호출 (50 goroutine × 100회 = 5000건) 모두 unique 해야 함.
+// random suffix 가 동일 nanosecond 충돌을 차단하는지 검증.
+func TestNewRawContent_HighConcurrency_DistinctIDs(t *testing.T) {
+	const goroutines = 50
+	const callsPerGoroutine = 100
+
+	idsCh := make(chan string, goroutines*callsPerGoroutine)
+	var wg sync.WaitGroup
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < callsPerGoroutine; j++ {
+				raw := core.NewRawContent("cnn", newTestSource(), newTestTarget(), "x", 200, nil)
+				idsCh <- raw.ID
+			}
+		}()
+	}
+	wg.Wait()
+	close(idsCh)
+
+	seen := make(map[string]bool, goroutines*callsPerGoroutine)
+	collisions := 0
+	for id := range idsCh {
+		if seen[id] {
+			collisions++
+		}
+		seen[id] = true
+	}
+	assert.Equal(t, 0, collisions, "동시 5000건 호출에서 ID 충돌 발생")
+	assert.Len(t, seen, goroutines*callsPerGoroutine, "모든 ID 가 unique")
 }
 
 // TestNewRawContent_NilMetadata_PreservedAsNil:
