@@ -70,9 +70,10 @@ jobs:
           # - prefix '[카테고리#이슈번호]' 필수
           #   - 카테고리: FEAT/FIX/REFAC/DOCS/CHORE 중 하나 (대문자)
           #   - 이슈번호: 1자 이상의 숫자 ('#' 직후)
-          # - 구분자: ']' 직후 옵셔널 ':' + 공백 (':' 는 있어도/없어도 됨)
-          # - 설명: 1자 이상 (공백만으로 통과 불가)
-          pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)#[0-9]+\]:? .+'
+          # - 구분자: ']' 직후 옵셔널 ':' + 1+ 공백 (':' 는 있어도/없어도 됨)
+          # - 설명: 1자 이상의 non-whitespace 시작 (공백만으로 통과 불가)
+          #   '[ ]+[^[:space:]]' 로 공백 only 케이스 ('[FEAT#1]:  ') 차단
+          pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)#[0-9]+\]:?[ ]+[^[:space:]].*$'
 
           if ! echo "$title" | grep -qE "$pattern"; then
             {
