@@ -1,6 +1,9 @@
 package core
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // SourceType은 데이터 소스의 타입을 나타냅니다.
 type SourceType string
@@ -47,6 +50,45 @@ type RawContent struct {
 	StatusCode int
 	Headers    map[string]string
 	Metadata   map[string]interface{}
+}
+
+// NewRawContent 는 fetcher 들이 공통으로 사용하는 RawContent 조립 패턴을
+// 일원화한 생성자입니다 (이슈 #75 — fetcher 공통 추출).
+//
+// 인자:
+//   - name       : crawler 이름 (ID prefix 로 사용)
+//   - source     : SourceInfo (도메인/언어 등 메타데이터)
+//   - target     : Target (URL/Metadata 추출원)
+//   - html       : fetched HTML
+//   - statusCode : HTTP 상태 코드
+//   - headers    : HTTP 응답 헤더. nil 이면 빈 map 으로 보정.
+//
+// ID 형식: "<name>-<unix_nano>" — 단일 fetcher 내 호출 시점 고유성.
+//
+// metadata 가공이 필요한 경우 (예: chromedp 의 partial_load 플래그) 호출자가
+// target.Metadata 를 미리 가공하거나 반환된 RawContent.Metadata 를 덮어써서 처리.
+// 본 생성자는 단순 대입만 수행 — 호출자별 변형 정책은 호출자가 책임.
+func NewRawContent(
+	name string,
+	source SourceInfo,
+	target Target,
+	html string,
+	statusCode int,
+	headers map[string]string,
+) *RawContent {
+	if headers == nil {
+		headers = make(map[string]string)
+	}
+	return &RawContent{
+		ID:         fmt.Sprintf("%s-%d", name, time.Now().UnixNano()),
+		SourceInfo: source,
+		FetchedAt:  time.Now(),
+		URL:        target.URL,
+		HTML:       html,
+		StatusCode: statusCode,
+		Headers:    headers,
+		Metadata:   target.Metadata,
+	}
 }
 
 // RawContentRef는 Kafka raw 토픽에 발행되는 경량 참조 메시지입니다.
