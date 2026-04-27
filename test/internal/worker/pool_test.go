@@ -651,8 +651,15 @@ func TestKafkaConsumerPool_CommitMessage_DrainRetry_BothFail_StillTwoCalls(t *te
 }
 
 // TestErrorsJoin_PreservesContextCanceled 는 errors.Join 으로 묶인 에러에서
-// errors.Is(err, context.Canceled) 가 chain 을 따라 매칭되는지 검증합니다.
-// pool.go 의 drain retry 실패 처리 경로가 이 invariant 에 의존합니다.
+// errors.Is 가 chain 을 따라 두 원인을 모두 매칭함을 검증합니다.
+//
+// 본 invariant 는 호출자가 에러 원인을 분류할 때 활용 가능한 표준 Go 시맨틱이며,
+// pool.go 의 drain retry 실패 처리 경로에서 errors.Join 으로 두 에러를 보존하는
+// 정책의 기반이 됩니다 (디버깅·로깅 시 두 원인 모두 노출).
+//
+// 주의: logShutdownAware 의 셧다운 분류는 errors.Is(canceled) 가 아닌 ctx.Err() 단독으로
+// 판정합니다. 외부 라이브러리(예: chromedp)가 정상 동작 중에도 cleanup cancel 을
+// 에러 chain 에 포함시키는 false positive 를 차단하기 위함입니다.
 func TestErrorsJoin_PreservesContextCanceled(t *testing.T) {
 	original := context.Canceled
 	retryErr := context.DeadlineExceeded
@@ -660,7 +667,7 @@ func TestErrorsJoin_PreservesContextCanceled(t *testing.T) {
 	joined := errors.Join(original, retryErr)
 
 	assert.True(t, errors.Is(joined, context.Canceled),
-		"errors.Join 으로 묶여도 logShutdownAware 가 셧다운으로 분류 가능해야 함")
+		"errors.Join 으로 묶인 첫 원인이 chain 에서 매칭되어야 함")
 	assert.True(t, errors.Is(joined, context.DeadlineExceeded),
-		"두 번째 에러도 chain 에서 매칭되어야 함")
+		"두 번째 원인도 chain 에서 매칭되어야 함")
 }
