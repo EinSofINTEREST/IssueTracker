@@ -455,17 +455,27 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 // 다운스트림 validator는 ref.ID로 DB에서 전체 데이터를 조회합니다.
 //
 // URL 정규화 (적용 지점 ②, ③):
-//   - CanonicalURL: content.URL 의 정규형으로 표준화 (DB 중복 탐지 정확도)
+//   - CanonicalURL: 파서가 채운 값(예: <link rel="canonical">)을 우선 정규화하고,
+//     비어있으면 content.URL 을 정규화하여 채움 (파서 결정 우선순위 보존)
 //   - Kafka 파티션 키: CanonicalURL 사용 (동일 기사가 동일 파티션으로 라우팅)
 //
-// normalizer 미설정 시 CanonicalURL = content.URL 로 fallback 되어 기존 동작 유지.
+// 주의: 현재 contents DB 의 unique 제약은 url 컬럼 (idx_contents_url) 이므로
+// CanonicalURL 정규화는 *DB 레벨* 중복 방지가 아닌 다운스트림 정규형 비교 및
+// 파티션 키 일관성에 기여합니다. DB 레벨 중복 방지는 별도 PR 에서 url 컬럼
+// 정규화 또는 unique 제약 변경으로 다뤄집니다.
+//
+// normalizer 미설정 시 normalizeURL 이 원본을 반환하여 기존 동작이 유지됩니다.
 func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core.Content, job *core.CrawlJob) error {
 	// 적용 지점 ②: CanonicalURL 정규화 (Store 직전)
-	// 파서는 일반적으로 CanonicalURL = content.URL 로 단순 복사하므로
-	// 본 boundary 에서 정규형을 강제하여 DB content unique 비교의 일관성을 확보합니다.
-	canonicalURL := p.normalizeURL(content.URL)
-	if canonicalURL != "" {
-		content.CanonicalURL = canonicalURL
+	// 우선순위: 파서가 채운 CanonicalURL > content.URL
+	// 파서가 <link rel="canonical"> 를 추출해 CanonicalURL 을 채운 경우 이를 보존하고,
+	// 비어있을 때만 content.URL 을 fallback 으로 사용합니다.
+	source := content.CanonicalURL
+	if source == "" {
+		source = content.URL
+	}
+	if normalized := p.normalizeURL(source); normalized != "" {
+		content.CanonicalURL = normalized
 	}
 
 	storedID, _, err := p.contentSvc.Store(ctx, content)
