@@ -149,6 +149,21 @@ func marshaledJobMsg(t *testing.T, job *core.CrawlJob) *queue.Message {
 	}
 }
 
+// setDrainPublishMocks 는 Publish drain 재시도 mock 을 설정합니다.
+// 첫 번째 호출은 firstErr, 두 번째 호출(drainCtx)은 secondErr 를 반환합니다.
+func setDrainPublishMocks(producer *mockProducer, topic string, firstErr, secondErr error) {
+	matcher := mock.MatchedBy(func(m queue.Message) bool { return m.Topic == topic })
+	producer.On("Publish", mock.Anything, matcher).Return(firstErr).Once()
+	producer.On("Publish", mock.Anything, matcher).Return(secondErr).Once()
+}
+
+// setDrainCommitMocks 는 CommitMessages drain 재시도 mock 을 설정합니다.
+// 첫 번째 호출은 firstErr, 두 번째 호출(drainCtx)은 secondErr 를 반환합니다.
+func setDrainCommitMocks(consumer *mockConsumer, firstErr, secondErr error) {
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(firstErr).Once()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(secondErr).Once()
+}
+
 // runPool은 pool을 구동하고 단일 메시지를 처리한 뒤 종료합니다.
 func runPool(t *testing.T, consumer *mockConsumer, pool *worker.KafkaConsumerPool, msg *queue.Message) {
 	t.Helper()
@@ -502,10 +517,8 @@ func TestKafkaConsumerPool_CommitMessage_DrainRetry_Succeeds(t *testing.T) {
 	// handler 가 빈 결과를 반환 → commitMessage 경로
 	handler.On("Handle", mock.Anything, job).Return(nil, nil)
 
-	// 첫 번째 CommitMessages: context.Canceled 반환 → drain 재시도 유도
-	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.Canceled).Once()
-	// 두 번째 CommitMessages(drainCtx): 성공
-	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Once()
+	// 첫 번째 CommitMessages: context.Canceled → drain 재시도, 두 번째: 성공
+	setDrainCommitMocks(consumer, context.Canceled, nil)
 
 	runPool(t, consumer, pool, msg)
 
@@ -529,10 +542,8 @@ func TestKafkaConsumerPool_CommitMessage_DrainRetry_Fails(t *testing.T) {
 
 	handler.On("Handle", mock.Anything, job).Return(nil, nil)
 
-	// 첫 번째 CommitMessages: context.Canceled 반환
-	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.Canceled).Once()
-	// 두 번째 CommitMessages(drainCtx): drain 타임아웃 시뮬레이션
-	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.DeadlineExceeded).Once()
+	// 첫 번째 CommitMessages: context.Canceled → drain 재시도, 두 번째: drain 타임아웃
+	setDrainCommitMocks(consumer, context.Canceled, context.DeadlineExceeded)
 
 	runPool(t, consumer, pool, msg)
 
@@ -557,14 +568,8 @@ func TestKafkaConsumerPool_SendToDLQ_DrainRetry_Succeeds(t *testing.T) {
 
 	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("fetch failed"))
 
-	// 첫 번째 DLQ publish: context.Canceled 반환 → drain 재시도 유도
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicDLQ
-	})).Return(context.Canceled).Once()
-	// 두 번째 DLQ publish(drainCtx): 성공
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicDLQ
-	})).Return(nil).Once()
+	// 첫 번째 DLQ publish: context.Canceled → drain 재시도, 두 번째: 성공
+	setDrainPublishMocks(producer, queue.TopicDLQ, context.Canceled, nil)
 
 	// DLQ publish 성공 후 원본 offset 이 commit 되어야 합니다.
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
@@ -593,14 +598,8 @@ func TestKafkaConsumerPool_SendToDLQ_DrainRetry_Fails(t *testing.T) {
 
 	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("fetch failed"))
 
-	// 첫 번째 DLQ publish: context.Canceled 반환
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicDLQ
-	})).Return(context.Canceled).Once()
-	// 두 번째 DLQ publish(drainCtx): drain 타임아웃 시뮬레이션
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicDLQ
-	})).Return(context.DeadlineExceeded).Once()
+	// 첫 번째 DLQ publish: context.Canceled → drain 재시도, 두 번째: drain 타임아웃
+	setDrainPublishMocks(producer, queue.TopicDLQ, context.Canceled, context.DeadlineExceeded)
 
 	runPool(t, consumer, pool, msg)
 
@@ -627,14 +626,8 @@ func TestKafkaConsumerPool_Requeue_DrainRetry_Succeeds(t *testing.T) {
 
 	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("temporary error"))
 
-	// 첫 번째 requeue publish: context.Canceled 반환 → drain 재시도 유도
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicCrawlNormal
-	})).Return(context.Canceled).Once()
-	// 두 번째 requeue publish(drainCtx): 성공
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicCrawlNormal
-	})).Return(nil).Once()
+	// 첫 번째 requeue publish: context.Canceled → drain 재시도, 두 번째: 성공
+	setDrainPublishMocks(producer, queue.TopicCrawlNormal, context.Canceled, nil)
 
 	// requeue 성공 후 원본 offset 이 commit 되어야 합니다.
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
@@ -663,14 +656,8 @@ func TestKafkaConsumerPool_Requeue_DrainRetry_Fails(t *testing.T) {
 
 	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("temporary error"))
 
-	// 첫 번째 requeue publish: context.Canceled 반환
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicCrawlNormal
-	})).Return(context.Canceled).Once()
-	// 두 번째 requeue publish(drainCtx): drain 타임아웃 시뮬레이션
-	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
-		return m.Topic == queue.TopicCrawlNormal
-	})).Return(context.DeadlineExceeded).Once()
+	// 첫 번째 requeue publish: context.Canceled → drain 재시도, 두 번째: drain 타임아웃
+	setDrainPublishMocks(producer, queue.TopicCrawlNormal, context.Canceled, context.DeadlineExceeded)
 
 	runPool(t, consumer, pool, msg)
 
