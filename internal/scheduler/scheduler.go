@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"issuetracker/internal/crawler/core"
@@ -21,10 +22,11 @@ import (
 //   - SetGate 로 urlguard.Gate 를 설정하면 publish 직전에 entry.URL 검사
 //   - 차단된 URL 은 Emit 호출 없이 silent drop + WARN 로그
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
+//   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — Start 이후 변경에도 race 없음
 type Scheduler struct {
 	entries    []ScheduleEntry
 	emitter    Emitter
-	gate       *urlguard.Gate
+	gate       atomic.Pointer[urlguard.Gate]
 	log        *logger.Logger
 	wg         sync.WaitGroup
 	maxRetries int
@@ -65,9 +67,9 @@ func (s *Scheduler) Stop() {
 // SetGate 는 publish 직전 URL 검사에 사용할 urlguard.Gate 를 설정합니다.
 // 미설정(nil) 시 가드 비활성 — 모든 entry.URL 이 그대로 emit 됩니다.
 //
-// 동시성: Start 호출 전에만 설정해야 합니다 (run goroutine 과의 race 방지).
+// 동시성: atomic.Pointer 기반 lock-free 설정/조회 — Start 이후 변경에도 race-safe.
 func (s *Scheduler) SetGate(g *urlguard.Gate) {
-	s.gate = g
+	s.gate.Store(g)
 }
 
 // run은 단일 ScheduleEntry에 대한 스케줄 루프입니다.
@@ -122,8 +124,8 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 
 	// URL 가드 (이슈 #119): job 생성 직전에 entry.URL 검사
 	// 차단 시 emit 호출 없이 silent drop (가드가 WARN 로그 자동 생성)
-	if s.gate != nil {
-		if !s.gate.Allow(entry.URL, map[string]interface{}{
+	if g := s.gate.Load(); g != nil {
+		if !g.Allow(entry.URL, map[string]interface{}{
 			"crawler": entry.CrawlerName,
 			"stage":   "scheduler",
 		}) {
