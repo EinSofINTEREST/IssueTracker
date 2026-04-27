@@ -224,13 +224,23 @@ func NewBrowserFetchHandler(fetcher NewsFetcher, log *logger.Logger) *BrowserFet
 }
 
 // Handle은 헤드리스 브라우저로 페이지를 가져옵니다.
+//
+// graceful shutdown 처리: ctx 가 취소된 상태에서 발생한 에러는 정상 종료 흐름의 일부이므로
+// DEBUG 로 강등하여 알림·대시보드에서 오탐을 만들지 않습니다. chromedp 의 timeout 에러는
+// CDP_006 ("...context deadline exceeded\ncontext canceled") 처럼 두 개를 errors.Join 으로
+// 묶어 반환하므로 errors.Is(err, context.Canceled) 가 셧다운 케이스를 정확히 식별합니다.
 func (h *BrowserFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
 	raw, err := h.fetcher.Fetch(ctx, job.Target)
 	if err != nil {
-		h.log.WithFields(map[string]interface{}{
+		fl := h.log.WithFields(map[string]interface{}{
 			"handler": "browser",
 			"url":     job.Target.URL,
-		}).WithError(err).Error("browser fetch failed, all strategies exhausted")
+		})
+		if errors.Is(err, context.Canceled) {
+			fl.WithError(err).Debug("browser fetch canceled during shutdown")
+		} else {
+			fl.WithError(err).Error("browser fetch failed, all strategies exhausted")
+		}
 
 		return nil, err
 	}
