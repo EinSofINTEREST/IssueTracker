@@ -516,3 +516,151 @@ func TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef(t *testing.
 	assert.Equal(t, content.URL, ref.URL)
 	assert.Equal(t, content.Country, ref.Country)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// graceful shutdown drain retry 회귀 테스트 (이슈 #72)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// drainCtx 패턴 검증: 첫 호출이 context.Canceled 로 실패하면 별도 drain context
+// (context.WithoutCancel(ctx) + WithTimeout) 로 한 번 더 시도하여 at-least-once
+// 시맨틱을 보장합니다. 셧다운 직전 in-flight 메시지의 DLQ 발행·재큐잉·offset
+// commit 이 부모 ctx cancel 로 즉시 실패하지 않도록 하는 핵심 매커니즘.
+
+// TestKafkaConsumerPool_CommitMessage_DrainRetry_OnCanceled_Succeeds 는
+// CommitMessages 첫 호출이 context.Canceled 를 반환하면 drain ctx 로 재시도하여
+// 두 번째 호출이 성공하는 경우를 검증합니다.
+func TestKafkaConsumerPool_CommitMessage_DrainRetry_OnCanceled_Succeeds(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	content := newTestContent()
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return([]*core.Content{content}, nil)
+	contentSvc.On("Store", mock.Anything, content).Return(content.ID, false, nil)
+	producer.On("Publish", mock.Anything, mock.Anything).Return(nil)
+
+	// 첫 commit 은 context.Canceled, 두 번째 (drain ctx) 는 성공
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.Canceled).Once()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Once()
+
+	runPool(t, consumer, pool, msg)
+
+	// 정확히 2회 호출 — 첫 시도 + drain retry
+	consumer.AssertNumberOfCalls(t, "CommitMessages", 2)
+	handler.AssertExpectations(t)
+}
+
+// TestKafkaConsumerPool_SendToDLQ_DrainRetry_OnCanceled_Succeeds 는
+// DLQ Publish 첫 호출이 context.Canceled 를 반환하면 drain ctx 로 재시도하여
+// 두 번째 호출이 성공하는 경우를 검증합니다.
+func TestKafkaConsumerPool_SendToDLQ_DrainRetry_OnCanceled_Succeeds(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = job.MaxRetries // DLQ 경로 강제
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("fetch failed"))
+
+	// DLQ Publish: 첫 호출 canceled, 두 번째 (drain) 성공
+	dlqMatcher := mock.MatchedBy(func(m queue.Message) bool { return m.Topic == queue.TopicDLQ })
+	producer.On("Publish", mock.Anything, dlqMatcher).Return(context.Canceled).Once()
+	producer.On("Publish", mock.Anything, dlqMatcher).Return(nil).Once()
+
+	// DLQ 성공 후 commit 도 정상 호출되어야 함
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runPool(t, consumer, pool, msg)
+
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// TestKafkaConsumerPool_RequeueWithRetry_DrainRetry_OnCanceled_Succeeds 는
+// requeue Publish 첫 호출이 context.Canceled 를 반환하면 drain ctx 로 재시도하여
+// 두 번째 호출이 성공하는 경우를 검증합니다.
+func TestKafkaConsumerPool_RequeueWithRetry_DrainRetry_OnCanceled_Succeeds(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = 1 // requeue 경로 (MaxRetries 미달)
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("temporary error"))
+
+	// requeue Publish: 첫 호출 canceled, 두 번째 (drain) 성공
+	requeueMatcher := mock.MatchedBy(func(m queue.Message) bool { return m.Topic == queue.TopicCrawlNormal })
+	producer.On("Publish", mock.Anything, requeueMatcher).Return(context.Canceled).Once()
+	producer.On("Publish", mock.Anything, requeueMatcher).Return(nil).Once()
+
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runPool(t, consumer, pool, msg)
+
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// TestKafkaConsumerPool_CommitMessage_DrainRetry_PreservesCancelInChain 는
+// drain retry 까지 실패한 경우 errors.Join 으로 최초 context.Canceled 가 에러
+// chain 에 보존되는지 검증합니다. logShutdownAware 의 errors.Is 분기가 안정적으로
+// 셧다운 케이스를 식별하기 위한 핵심 invariant.
+//
+// 실제 검증은 통합 테스트로 어려우므로, 이 테스트는 drain retry 실패 시에도
+// 두 호출이 모두 발생함을 확인합니다. 에러 chain 보존은 별도 단위 테스트(아래)에서.
+func TestKafkaConsumerPool_CommitMessage_DrainRetry_BothFail_StillTwoCalls(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	content := newTestContent()
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return([]*core.Content{content}, nil)
+	contentSvc.On("Store", mock.Anything, content).Return(content.ID, false, nil)
+	producer.On("Publish", mock.Anything, mock.Anything).Return(nil)
+
+	// 첫 commit canceled, drain retry 도 deadline exceeded 로 실패
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.Canceled).Once()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.DeadlineExceeded).Once()
+
+	runPool(t, consumer, pool, msg)
+
+	// drain retry 가 호출되었음을 확인 (실패해도 시도 보장)
+	consumer.AssertNumberOfCalls(t, "CommitMessages", 2)
+}
+
+// TestErrorsJoin_PreservesContextCanceled 는 errors.Join 으로 묶인 에러에서
+// errors.Is(err, context.Canceled) 가 chain 을 따라 매칭되는지 검증합니다.
+// pool.go 의 drain retry 실패 처리 경로가 이 invariant 에 의존합니다.
+func TestErrorsJoin_PreservesContextCanceled(t *testing.T) {
+	original := context.Canceled
+	retryErr := context.DeadlineExceeded
+
+	joined := errors.Join(original, retryErr)
+
+	assert.True(t, errors.Is(joined, context.Canceled),
+		"errors.Join 으로 묶여도 logShutdownAware 가 셧다운으로 분류 가능해야 함")
+	assert.True(t, errors.Is(joined, context.DeadlineExceeded),
+		"두 번째 에러도 chain 에서 매칭되어야 함")
+}
