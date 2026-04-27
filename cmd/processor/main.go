@@ -92,9 +92,14 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	<-sigChan
-	// 셧다운 시작 시점부터 logger 에 shutting_down=true 를 부여하여 이후 발생하는
-	// 로그(특히 in-flight 작업의 context.Canceled 흔적)를 모니터링에서 필터링할 수 있게 합니다.
-	// 이슈 #72 의 4번째 TODO 대응.
+	// 셧다운 시작 시점부터 logger 에 shutting_down=true 를 부여합니다 (이슈 #72 TODO #4).
+	//
+	// 적용 범위 (중요):
+	//   - 본 변수 'log' 와 shutdownCtx 를 통해 전달되는 로그에만 부착됩니다 (Stop 경로).
+	//   - Start(ctx) 로 이미 워커 goroutine 에 캡쳐된 ctx 의 logger 는 별개 포인터이므로
+	//     in-flight 작업이 남기는 로그에는 본 필드가 부착되지 않습니다.
+	//   - in-flight 로그까지 일관 필터링하려면 별도 atomic shutdownFlag 를 logger hook 으로
+	//     주입하는 후속 PR 이 필요합니다 (현재 범위 외).
 	log = log.WithField("shutting_down", true)
 	log.Warn("shutdown signal received, draining workers...")
 	cancel()
