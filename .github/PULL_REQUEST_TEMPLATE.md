@@ -2,7 +2,12 @@
 - Closes #
 
 <!--
-PR title 예시: [FEAT#issue번호]: 어쩌구저쩌
+PR title 형식 (CI 강제, 이슈 #121):
+  [카테고리#이슈번호] 제목     ← 예: [FEAT#15] Kafka consumer pool 구현
+  [카테고리#이슈번호]: 제목    ← 콜론 형태도 허용 (예: [FIX#72]: 셧다운 강등 단순화)
+
+카테고리: FEAT / FIX / REFAC / DOCS / CHORE
+거부 예시: [FEAT]: ... (#이슈번호 누락) / [FEAT 1]: ... (# 대신 공백) / [FEAT#1]설명 (] 또는 : 뒤 공백 누락) / feat#1: ... (소문자)
 
 Linked Issue Check 통과 조건 = "머지 시 close 될 이슈(closing reference) 가
 최소 1개 연결되어 있을 것". 다음 두 방법만 closing reference 로 인정됩니다:

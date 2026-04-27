@@ -66,18 +66,36 @@ jobs:
       - name: Validate PR title
         run: |
           title="${{ github.event.pull_request.title }}"
-          pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)'
+          # 엄격 패턴 (이슈 #121): [카테고리#이슈번호] 제목  또는  [카테고리#이슈번호]: 제목
+          # - prefix '[카테고리#이슈번호]' 필수
+          #   - 카테고리: FEAT/FIX/REFAC/DOCS/CHORE 중 하나 (대문자)
+          #   - 이슈번호: 1자 이상의 숫자 ('#' 직후)
+          # - 구분자: ']' 직후 옵셔널 ':' + 1+ 공백 (':' 는 있어도/없어도 됨)
+          # - 설명: 1자 이상의 non-whitespace 시작 (공백만으로 통과 불가)
+          #   '[ ]+[^[:space:]]' 로 공백 only 케이스 ('[FEAT#1]:  ') 차단
+          pattern='^\[(FEAT|FIX|REFAC|DOCS|CHORE)#[0-9]+\]:?[ ]+[^[:space:]].*$'
 
           if ! echo "$title" | grep -qE "$pattern"; then
             {
               echo "## ❌ PR Title Lint 실패"
-              echo "PR 타이틀이 \`[카테고리...]: 설명\` 형식을 따르지 않습니다."
+              echo "PR 타이틀이 \`[카테고리#이슈번호] 설명\` 엄격 형식을 따르지 않습니다."
               echo ""
               echo "현재 타이틀: \`$title\`"
               echo ""
               echo "허용 카테고리: \`FEAT\` \`FIX\` \`REFAC\` \`DOCS\` \`CHORE\`"
               echo ""
-              echo "예시: \`[FEAT#15]: Kafka consumer pool을 활용한 크롤러 워커 구현\`"
+              echo "**통과 예시:**"
+              echo "- \`[FEAT#15] Kafka consumer pool 구현\`"
+              echo "- \`[FEAT#15]: Kafka consumer pool 구현\` (콜론 형태도 허용)"
+              echo "- \`[FIX#72]: 셧다운 강등 조건 단순화\`"
+              echo ""
+              echo "**거부 예시:**"
+              echo "- \`[FEAT]: 이슈번호 누락\` (\`#이슈번호\` 필수)"
+              echo "- \`[FEAT 119]: # 대신 공백\` (\`#\` 사용)"
+              echo "- \`[FEAT#abc]: 숫자 아닌 이슈번호\` (숫자만 허용)"
+              echo "- \`[FEATXX#1]: 잘못된 카테고리\` (오타·확장 카테고리 차단)"
+              echo "- \`[FEAT#1]설명\` (구분자 공백 누락)"
+              echo "- \`feat#1: 소문자\` (대문자만 허용)"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi

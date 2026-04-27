@@ -83,6 +83,7 @@ docs/#2/api-documentation
 | `FIX` | 버그 수정 |
 | `REFAC` | 구조 변경, 리팩토링 |
 | `DOCS` | 문서 작업, 주석, 프롬프트 변경 |
+| `CHORE` | 빌드·CI·도구·의존성 등 잡무 (코드 외 부가 작업) |
 
 ### 작성 규칙
 
@@ -114,6 +115,13 @@ docs/#2/api-documentation
 
 - 불필요한 검증 단계 제거
 - 함수 복잡도 25줄에서 15줄로 감소
+```
+
+```
+[CHORE]: golangci-lint 버전 v1.64.8 로 업데이트
+
+- ci-quality.yml lint job 의 binary 버전 고정
+- 로컬 Makefile 의 lint 타겟에 동일 버전 명시
 ```
 
 ```
@@ -614,7 +622,7 @@ PR 라벨: feature
 | `FEATURE` | `feature/` | `FEAT` |
 | `BUG` | `fix/` | `FIX` |
 | `REFACTOR` | `refactor/` | `REFAC` |
-| `CHORE` | `docs/` 또는 `chore/` | `DOCS` 또는 `REFAC` |
+| `CHORE` | `chore/` 또는 `docs/` | `CHORE` (코드 외 잡무) 또는 `DOCS` (순수 문서 작업) |
 
 ---
 
@@ -622,8 +630,12 @@ PR 라벨: feature
 
 ### PR 타이틀 형식
 
+CI (`PR Title Lint`, 이슈 #121) 가 정규식으로 엄격 강제합니다:
+`^\[(FEAT|FIX|REFAC|DOCS|CHORE)#[0-9]+\]:? .+`
+
 ```
 [{CATEGORY}#{이슈번호}] PR 타이틀
+[{CATEGORY}#{이슈번호}]: PR 타이틀   (콜론 형태도 허용)
 ```
 
 | Category | 용도 |
@@ -632,14 +644,25 @@ PR 라벨: feature
 | `FIX` | 버그 수정 |
 | `REFAC` | 구조 변경, 리팩토링 |
 | `DOCS` | 문서 작업 |
+| `CHORE` | 빌드·CI·도구 등 잡무 |
 
-**예시:**
+**통과 예시:**
 ```
 [FEAT#15] CNN/Naver 크롤러 구현
+[FEAT#15]: CNN/Naver 크롤러 구현
 [FIX#7] rate limiter deadlock 수정
 [REFAC#4] Article 검증 로직 단순화
 [DOCS#2] 크롤러 API 문서 작성
+[CHORE#117] CI golangci-lint 버전 업데이트
 ```
+
+**거부 예시 (CI 실패):**
+- `[FEAT]: 이슈번호 누락` — `#이슈번호` 필수
+- `[FEAT 119]: # 대신 공백` — 반드시 `#` 사용
+- `[FEAT#abc]: 숫자 아닌 이슈번호` — 숫자만 허용
+- `[FEATXX#1]: 잘못된 카테고리` — 위 5개만 허용
+- `[FEAT#1]설명` — `]` 또는 `:` 뒤 공백 필수
+- `feat#1: 소문자` — 카테고리는 대문자만 허용
 
 ### PR 본문 — 템플릿 작성 규칙
 

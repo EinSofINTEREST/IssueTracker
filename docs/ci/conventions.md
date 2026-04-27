@@ -60,7 +60,7 @@ Branch Protection 대신 **Repository Ruleset**을 기본 수단으로 운영합
 | `Test` | `ci-quality.yml` | 유닛 테스트 + race 검출 | 로직 오류 또는 경쟁 조건 |
 | `Lint` | `ci-quality.yml` | 정적 분석 (golangci-lint) | 코드 품질/보안 이슈 |
 | `Commit Lint` | `ci-convention.yml` | 커밋 메시지 `[카테고리]:` 포맷 강제 | 컨벤션 위반 |
-| `PR Title Lint` | `ci-convention.yml` | PR 타이틀 `[카테고리]:` 포맷 강제 (PR only) | 컨벤션 위반 |
+| `PR Title Lint` | `ci-convention.yml` | PR 타이틀 `[카테고리#이슈번호] 제목` (또는 `[카테고리#이슈번호]: 제목`) 포맷 엄격 강제 (이슈 #121, PR only) | 컨벤션 위반 |
 | `Linked Issue Check` | `ci-convention.yml` | PR 에 머지 시 close 될 이슈(closing reference) 가 최소 1개 연결되어 있는지 검증 (PR only) | closing reference 누락 — `Closes #N` 키워드 또는 Development 링크 시 `Will close this issue when merged` 옵션 체크 필요 |
 
 ### 3.3 Job 추가/변경 시 규칙
