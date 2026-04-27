@@ -37,8 +37,16 @@ func NewHTTP2ErrorCounter() *HTTP2ErrorCounter {
 //
 // 빈 errType 도 키로 그대로 저장합니다 (http2 라이브러리가 빈 문자열을 보내는
 // 경우는 알려져 있지 않으나 방어적으로 데이터를 잃지 않도록 함).
+//
+// hot path 알로케이션 회피: LoadOrStore 의 인자(new(atomic.Uint64))는 호출 시점에
+// 매번 평가되어 errType 이 이미 존재해도 알로케이션이 발생합니다. 카운터는 read-mostly
+// 패턴(최초 1회 생성 후 반복 Add)이므로 Load 우선 시도로 hot path 의 GC 부담을 제거.
 func (c *HTTP2ErrorCounter) Increment(errType string) uint64 {
-	val, _ := c.counts.LoadOrStore(errType, new(atomic.Uint64))
+	val, ok := c.counts.Load(errType)
+	if !ok {
+		// 최초 등록 또는 동시 첫 등록 race — LoadOrStore 가 winner/loser 처리
+		val, _ = c.counts.LoadOrStore(errType, new(atomic.Uint64))
+	}
 	return val.(*atomic.Uint64).Add(1)
 }
 
