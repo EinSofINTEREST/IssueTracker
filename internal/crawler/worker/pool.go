@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"issuetracker/internal/crawler/core"
@@ -60,9 +61,10 @@ type KafkaConsumerPool struct {
 	jobLocker   JobLocker
 	urlCache    URLCache
 	// normalizer는 URL 정규화기입니다.
-	// nil 이면 정규화가 적용되지 않으며, 기존 동작이 유지됩니다.
-	// SetNormalizer 로 Start 호출 전에만 설정해야 합니다.
-	normalizer *links.Normalizer
+	// 미설정(nil) 이면 정규화가 적용되지 않으며, 기존 동작이 유지됩니다.
+	// atomic.Pointer 를 사용하여 polling/worker goroutine 의 동시 Load 와
+	// SetNormalizer 의 Store 사이에 race 가 발생하지 않도록 보장합니다.
+	normalizer atomic.Pointer[links.Normalizer]
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -147,20 +149,21 @@ func NewKafkaConsumerPoolWithOptions(
 //  2. Content.CanonicalURL — publishNormalized 에서 Store 직전 (DB 중복 탐지)
 //  3. Kafka 파티션 키 — publishNormalized 에서 CanonicalURL 사용 (파티션 ordering)
 //
-// 동시성: Start 호출 전에만 설정해야 합니다.
-// Start 이후 호출은 polling/worker goroutine 과의 race를 유발할 수 있습니다.
+// 동시성: atomic.Pointer 기반 lock-free 설정/조회로 race-safe 합니다.
+// Start 이후 변경 시에도 worker goroutine 의 Load 와 race 가 발생하지 않습니다.
 func (p *KafkaConsumerPool) SetNormalizer(n *links.Normalizer) {
-	p.normalizer = n
+	p.normalizer.Store(n)
 }
 
 // normalizeURL은 normalizer가 설정된 경우 URL을 정규화하여 반환합니다.
 // normalizer 미설정 / 빈 URL / 정규화 실패 시 원본을 그대로 반환하여
 // 정규화 도입이 기존 fetch/저장 경로를 깨지 않도록 보장합니다.
 func (p *KafkaConsumerPool) normalizeURL(rawURL string) string {
-	if p.normalizer == nil || rawURL == "" {
+	n := p.normalizer.Load()
+	if n == nil || rawURL == "" {
 		return rawURL
 	}
-	normalized, err := p.normalizer.Normalize(rawURL)
+	normalized, err := n.Normalize(rawURL)
 	if err != nil || normalized == "" {
 		return rawURL
 	}
