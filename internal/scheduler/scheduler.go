@@ -10,14 +10,21 @@ import (
 
 	"issuetracker/internal/crawler/core"
 	"issuetracker/pkg/logger"
+	"issuetracker/pkg/urlguard"
 )
 
 // Scheduler는 등록된 ScheduleEntry 목록을 기반으로 주기적으로 시드 CrawlJob을 생성하고
 // Emitter를 통해 Kafka crawl 토픽에 발행합니다.
 // 체이닝 Job(크롤된 페이지에서 발견된 URL)은 internal/publisher 패키지가 담당합니다.
+//
+// URL 가드 (이슈 #119):
+//   - SetGate 로 urlguard.Gate 를 설정하면 publish 직전에 entry.URL 검사
+//   - 차단된 URL 은 Emit 호출 없이 silent drop + WARN 로그
+//   - 미설정 시 가드 비활성 (기존 동작 유지)
 type Scheduler struct {
 	entries    []ScheduleEntry
 	emitter    Emitter
+	gate       *urlguard.Gate
 	log        *logger.Logger
 	wg         sync.WaitGroup
 	maxRetries int
@@ -53,6 +60,14 @@ func (s *Scheduler) Start(ctx context.Context) {
 func (s *Scheduler) Stop() {
 	s.wg.Wait()
 	s.log.Info("scheduler stopped")
+}
+
+// SetGate 는 publish 직전 URL 검사에 사용할 urlguard.Gate 를 설정합니다.
+// 미설정(nil) 시 가드 비활성 — 모든 entry.URL 이 그대로 emit 됩니다.
+//
+// 동시성: Start 호출 전에만 설정해야 합니다 (run goroutine 과의 race 방지).
+func (s *Scheduler) SetGate(g *urlguard.Gate) {
+	s.gate = g
 }
 
 // run은 단일 ScheduleEntry에 대한 스케줄 루프입니다.
@@ -103,6 +118,17 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 			"url":     entry.URL,
 		}).WithError(err).Error("failed to generate job id")
 		return
+	}
+
+	// URL 가드 (이슈 #119): job 생성 직전에 entry.URL 검사
+	// 차단 시 emit 호출 없이 silent drop (가드가 WARN 로그 자동 생성)
+	if s.gate != nil {
+		if !s.gate.Allow(entry.URL, map[string]interface{}{
+			"crawler": entry.CrawlerName,
+			"stage":   "scheduler",
+		}) {
+			return
+		}
 	}
 
 	job := &core.CrawlJob{
