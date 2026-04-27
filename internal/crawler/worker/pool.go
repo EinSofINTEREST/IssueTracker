@@ -320,7 +320,10 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 	// URL 가드 (이슈 #119): processJob 진입 직후 차단 URL 을 즉시 거르고 commit
 	// → handler 호출·lock 획득·backoff 대기 등 모든 비용 회피
 	// → stale URL 메시지가 큐에서 즉시 제거되어 retry 사이클 차단
-	if g := p.gate.Load(); g != nil && item.job != nil {
+	//
+	// item.job 은 pollMessages 에서 unmarshal 성공 후에만 jobs 채널로 전송되므로
+	// 본 시점에 nil 일 수 없음 (방어 검사 불필요).
+	if g := p.gate.Load(); g != nil {
 		if !g.Allow(item.job.Target.URL, map[string]interface{}{
 			"crawler": item.job.CrawlerName,
 			"job_id":  item.job.ID,
