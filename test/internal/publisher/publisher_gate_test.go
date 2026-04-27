@@ -38,23 +38,6 @@ func (m *gateMockProducer) PublishBatch(_ context.Context, msgs []queue.Message)
 
 func (m *gateMockProducer) Close() error { return nil }
 
-func (m *gateMockProducer) batchUrls() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.calls) == 0 {
-		return nil
-	}
-	out := make([]string, 0)
-	for _, msgs := range m.calls {
-		for _, msg := range msgs {
-			// Job 페이로드 파싱 없이 key 도 좋지만, 여기선 간단히 batch 길이 확인용
-			_ = msg
-		}
-		// 실제 URL 추출은 페이로드 파싱이 필요 — 길이만 검증
-	}
-	return out
-}
-
 func (m *gateMockProducer) batchSize() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -79,10 +62,10 @@ func TestPublisher_Gate_FiltersBlockedURLs(t *testing.T) {
 	pub.SetGate(urlguard.NewGate(urlguard.Default(), gateLog()))
 
 	urls := []string{
-		"https://edition.cnn.com/article/1",        // pass
-		"https://rss.cnn.com/rss/cnn_health.rss",   // block
-		"https://news.naver.com/main/read.naver",   // pass
-		"mailto:foo@example.com",                   // block
+		"https://edition.cnn.com/article/1",      // pass
+		"https://rss.cnn.com/rss/cnn_health.rss", // block
+		"https://news.naver.com/main/read.naver", // pass
+		"mailto:foo@example.com",                 // block
 	}
 	err := pub.Publish(context.Background(), "cnn", urls, core.TargetTypeArticle, 5*time.Second)
 	require.NoError(t, err)
