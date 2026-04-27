@@ -68,7 +68,7 @@ type RawContent struct {
 // ID 형식: "<name>-<unix_nano>-<rand_hex>" — 시간순 정렬 가능 + 동시 호출 충돌 방지.
 //   - <unix_nano>: 시간 정렬·디버깅 추적성
 //   - <rand_hex>: 4바이트 (8자 hex) crypto/rand suffix
-//                 → 동일 ns 에 발생한 여러 호출도 충돌 확률 사실상 0 (1/2^32 per ns)
+//     → 동일 ns 에 발생한 여러 호출도 충돌 확률 사실상 0 (1/2^32 per ns)
 //   - rand.Read 실패 시에도 시간 부분만으로 ID 가 생성되어 fetch 자체는 진행
 //
 // metadata 가공이 필요한 경우 (예: chromedp 의 partial_load 플래그) 호출자가
