@@ -50,9 +50,11 @@ func TestCrawlerError_Unwrap(t *testing.T) {
 }
 
 // TestCrawlerError_ErrorsIs_ContextCanceled_ChainUnwrap:
-// 이슈 #72 회귀 방지 — graceful shutdown 처리는 핸들러·풀 곳곳에서
-// errors.Is(err, context.Canceled) 로 cancel 케이스를 식별합니다.
-// CrawlerError 가 Unwrap() 을 통해 chain 을 보존해야 이 식별이 동작합니다.
+// CrawlerError 가 Unwrap 을 통해 wrap 된 sentinel 에러를 chain 에서 노출하는지 검증합니다.
+// 디버깅·로깅 목적으로 errors.Is 매칭이 chain 을 따라 동작해야 하는 일반 invariant.
+//
+// 주의: 셧다운 분류는 이 매칭이 아닌 ctx.Err() 단독으로 수행합니다 (handler.go,
+// pool.go logShutdownAware). 외부 라이브러리의 cleanup cancel false positive 차단.
 //
 // chromedp CDP_006 처럼 errors.Join(runErr, captureErr) 형태로 두 에러를
 // 묶은 경우에도 chain 을 따라 매칭되어야 합니다.

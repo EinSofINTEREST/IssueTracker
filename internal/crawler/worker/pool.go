@@ -706,15 +706,16 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 // shutdown 직후 in-flight Kafka 작업(DLQ publish, commit, requeue)이 ctx cancel 로
 // 실패하는 것은 정상 종료 흐름의 일부이므로 ERROR 알림에서 제외합니다.
 //
-// 강등 조건 (둘 중 하나):
-//  1. ctx.Err() != nil — 부모 ctx 가 이미 cancel/deadline 인 상태에서의 후속 실패
-//  2. errors.Is(err, context.Canceled) — 에러 chain 에 cancel 이 포함됨
-//
-// drain context (context.WithoutCancel(ctx) + WithTimeout) 가 자체 타임아웃에 걸려
-// context.DeadlineExceeded 로 실패하는 경우에도 부모 ctx.Err() 검사로 셧다운 케이스를
-// 식별합니다 — 이 경우는 정상 종료 흐름이므로 함께 강등합니다.
+// 강등 조건은 ctx.Err() != nil 단독:
+//   - "셧다운으로 인한 cancel 인지" 의 진실의 단일 소스(SoT)는 호출자 ctx 의 상태.
+//   - 일부 라이브러리(예: chromedp)는 정상 timeout 후 내부 cleanup 으로 errors chain 에
+//     context.Canceled 를 포함시키는 경우가 있음. errors.Is(err, context.Canceled) 로
+//     판별하면 이 정상 케이스가 셧다운으로 오인되어 운영 모니터링에서 누락됨 (false positive).
+//   - drain context (context.WithoutCancel(ctx) + WithTimeout) 가 자체 timeout 으로
+//     context.DeadlineExceeded 를 반환하는 경우에도, 그 시점에 부모 ctx 가 cancel 됐다면
+//     ctx.Err() 검사로 셧다운으로 분류됨.
 func logShutdownAware(ctx context.Context, log *logger.Logger, err error, msg string) {
-	if (ctx != nil && ctx.Err() != nil) || errors.Is(err, context.Canceled) {
+	if ctx != nil && ctx.Err() != nil {
 		log.WithError(err).Debug(msg)
 		return
 	}
