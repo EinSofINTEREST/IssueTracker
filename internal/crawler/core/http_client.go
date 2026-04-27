@@ -63,12 +63,23 @@ func defaultHTTPClient(config Config) *http.Client {
 //
 // 본 콜백은 http2 내부 goroutine 에서 호출되므로 ctx 를 받지 못합니다.
 // 따라서 logger.FromContext(context.Background()) 의 fallback 기본 logger 를 사용합니다.
+//
+// 로그 레벨 정책:
+//   - 첫 발생 (count == 1): WARN — 신규 errType 출현은 운영자가 알아야 할 신호
+//   - 이후 발생: DEBUG — 동일 errType 의 반복은 카운터에만 누적, 로그 폭주 방지
+//
+// 빈도 추이는 DefaultHTTP2ErrorCounter.Snapshot() 으로 일관 조회.
 func recordHTTP2Error(errType string) {
 	count := DefaultHTTP2ErrorCounter.Increment(errType)
-	logger.FromContext(context.Background()).WithFields(map[string]interface{}{
+	log := logger.FromContext(context.Background()).WithFields(map[string]interface{}{
 		"http2_error_type": errType,
 		"count":            count,
-	}).Warn("http2 protocol error observed")
+	})
+	if count == 1 {
+		log.Warn("http2 protocol error observed (first occurrence)")
+	} else {
+		log.Debug("http2 protocol error observed")
+	}
 }
 
 // StandardHTTPClient는 표준 HTTP 클라이언트 구현입니다.
