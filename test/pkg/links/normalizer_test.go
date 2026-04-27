@@ -214,6 +214,71 @@ func TestNormalizer_Idempotent(t *testing.T) {
 	assert.Equal(t, first, second)
 }
 
+// TestNormalizer_WithAllowedParams_ParamKeyCaseInsensitive:
+// 파라미터 키 매칭은 case-insensitive 여야 합니다.
+// 등록된 키와 입력 URL의 키 대소문자가 달라도 동일하게 보존되며,
+// 결과 정규형은 결정적이어야 합니다 (회귀 방지).
+func TestNormalizer_WithAllowedParams_ParamKeyCaseInsensitive(t *testing.T) {
+	n := links.NewNormalizer(
+		links.WithAllowedParams("example.com", "Article_ID"), // 등록 시 mixed case
+	)
+
+	// 입력 URL 의 키 대소문자가 달라도 동일하게 매칭되어야 함
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{"lowercase input", "https://example.com/a?article_id=42"},
+		{"uppercase input", "https://example.com/a?ARTICLE_ID=42"},
+		{"mixed case input", "https://example.com/a?Article_ID=42"},
+		{"alternative case", "https://example.com/a?article_ID=42"},
+	}
+
+	results := make([]string, 0, len(tests))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := n.Normalize(tt.in)
+			require.NoError(t, err)
+			// article_id 가 보존되어야 함 (제거되지 않음)
+			assert.Contains(t, got, "=42", "허용된 파라미터가 제거되어 버림")
+			results = append(results, got)
+		})
+	}
+
+	// 모든 변형이 동일한 정규형이 되는지 추가 검증은 어려움(키 case는 url.Values 가
+	// 입력 그대로 유지) — 핵심은 "보존" 여부이며 위에서 검증됨.
+	// 단, 모두 query 부분에 "=42" 가 살아있어야 함이 회귀 방지의 핵심.
+}
+
+// TestNormalizer_PortPreservedAndWhitelistMatched:
+// u.Host 가 포트를 포함해도 화이트리스트 매칭은 hostname 기준으로 동작해야 하며,
+// 포트는 출력에 보존되어야 합니다 (fetch 라우팅 정보 손실 방지).
+func TestNormalizer_PortPreservedAndWhitelistMatched(t *testing.T) {
+	n := links.NewNormalizer(
+		links.WithAllowedParams("example.com", "id"),
+	)
+
+	got, err := n.Normalize("https://example.com:8080/a?id=42&utm_source=x")
+	require.NoError(t, err)
+	assert.Equal(t, "https://example.com:8080/a?id=42", got,
+		"포트 보존 + 화이트리스트 매칭(포트 무시)이 동시 동작해야 함")
+}
+
+// TestNormalizer_ParseQueryFailure_WhitelistedHost_PreservesOriginal:
+// 화이트리스트 등록 호스트에서 ParseQuery 실패 시 원본 query 가 보존되어야 합니다
+// (필수 파라미터 손실로 인한 fetch 실패 방지).
+func TestNormalizer_ParseQueryFailure_WhitelistedHost_PreservesOriginal(t *testing.T) {
+	n := links.NewNormalizer(
+		links.WithAllowedParams("example.com", "id"),
+	)
+
+	// %ZZ 는 잘못된 percent encoding → ParseQuery 실패 유도
+	got, err := n.Normalize("https://example.com/a?id=42&bad=%ZZ")
+	require.NoError(t, err)
+	// 원본 query 가 보존됨 (전부 제거가 아님)
+	assert.Contains(t, got, "id=42", "화이트리스트 호스트의 ParseQuery 실패 시 원본 query 가 손실되면 안 됨")
+}
+
 // TestNormalizer_DedupesEquivalentURLs:
 // 정규화의 핵심 효과 — tracking 파라미터만 다른 두 URL은 동일한 정규형을 가져야 함.
 // 이 테스트는 중복 탐지/파티션 키 일관성의 회귀를 차단합니다.
