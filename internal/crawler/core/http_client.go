@@ -36,7 +36,17 @@ func defaultHTTPClient(config Config) *http.Client {
 		ForceAttemptHTTP2:   true,
 	}
 
-	if h2t, err := http2.ConfigureTransports(transport); err == nil && h2t != nil {
+	// fail-open: 실패해도 HTTP 동작은 정상 유지하되, 운영자가 원인 파악할 수 있도록
+	// 실패 사실과 사유를 WARN 로그로 1회 가시화 (transport 생성 시점이므로 1회 호출).
+	h2t, err := http2.ConfigureTransports(transport)
+	switch {
+	case err != nil:
+		logger.FromContext(context.Background()).WithError(err).
+			Warn("http2 monitoring disabled: failed to configure http2 transport")
+	case h2t == nil:
+		logger.FromContext(context.Background()).
+			Warn("http2 monitoring disabled: configured http2 transport is nil")
+	default:
 		h2t.CountError = recordHTTP2Error
 	}
 
