@@ -85,10 +85,14 @@ func NewRawContent(
 	if headers == nil {
 		headers = make(map[string]string)
 	}
+	// time.Now() 1회 호출로 ID 의 unix_nano 와 FetchedAt 을 정확히 일치시킵니다 —
+	// 디버깅 시 ID 의 시간 부분과 FetchedAt 이 동일하므로 추적이 일관됩니다.
+	// (이전: 2회 호출로 미세 불일치 + 불필요한 syscall)
+	now := time.Now()
 	return &RawContent{
-		ID:         newRawContentID(name),
+		ID:         newRawContentID(name, now),
 		SourceInfo: source,
-		FetchedAt:  time.Now(),
+		FetchedAt:  now,
 		URL:        target.URL,
 		HTML:       html,
 		StatusCode: statusCode,
@@ -100,12 +104,13 @@ func NewRawContent(
 // newRawContentID 는 "<name>-<unix_nano>-<rand_hex>" 형식의 RawContent ID 를 생성합니다.
 // crypto/rand 4바이트 suffix 로 동시 호출 충돌을 방지합니다 (1/2^32 per ns 충돌 확률).
 //
+// 호출자가 time.Time 을 인자로 전달함으로써 동일 시점을 ID/FetchedAt 양쪽에 사용 가능.
 // rand.Read 실패는 무시하고 0-suffix 로 fallback — fetch 자체를 멈추지 않으며,
 // 시간 부분만으로도 단일 fetcher 내 nano 정밀도 충돌은 매우 드뭄.
-func newRawContentID(name string) string {
+func newRawContentID(name string, t time.Time) string {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
-	return fmt.Sprintf("%s-%d-%s", name, time.Now().UnixNano(), hex.EncodeToString(b[:]))
+	return fmt.Sprintf("%s-%d-%s", name, t.UnixNano(), hex.EncodeToString(b[:]))
 }
 
 // RawContentRef는 Kafka raw 토픽에 발행되는 경량 참조 메시지입니다.
