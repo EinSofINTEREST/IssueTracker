@@ -24,9 +24,9 @@ const (
 // HTTP/2 stream/connection error 모니터링 (이슈 #71/#117):
 //   - http2.ConfigureTransports 로 base transport 에 http2 transport 를 명시 구성
 //   - http2.Transport.CountError hook 으로 에러 유형별 카운트 (DefaultHTTP2ErrorCounter 누적)
-//   - 에러 발생 시 WARN 로그로 즉시 가시화 — 운영 모니터링/알림에서 빈도 추적 가능
-//   - ConfigureTransports 가 실패하면 (예: ForceAttemptHTTP2=false 일 때) 모니터링만 비활성화되고
-//     HTTP 클라이언트는 정상 동작 — fail-open 정책
+//   - 에러 발생 시 로그로 가시화 — 운영 모니터링/알림에서 빈도 추적 가능
+//   - ConfigureTransports 가 실패하면 모니터링만 비활성화되고 HTTP 클라이언트는 정상 동작
+//     (fail-open 정책). 실패 사실은 WARN 로그로 가시화하여 운영자가 원인 파악 가능.
 func defaultHTTPClient(config Config) *http.Client {
 	transport := &http.Transport{
 		MaxIdleConns:        config.MaxIdleConns,
