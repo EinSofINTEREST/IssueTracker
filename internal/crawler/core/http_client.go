@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"issuetracker/pkg/logger"
 )
 
@@ -18,6 +20,13 @@ const (
 
 // defaultHTTPClient는 기본 HTTP 클라이언트를 생성합니다.
 // Connection pooling과 timeout을 적용합니다.
+//
+// HTTP/2 stream/connection error 모니터링 (이슈 #71/#117):
+//   - http2.ConfigureTransports 로 base transport 에 http2 transport 를 명시 구성
+//   - http2.Transport.CountError hook 으로 에러 유형별 카운트 (DefaultHTTP2ErrorCounter 누적)
+//   - 에러 발생 시 WARN 로그로 즉시 가시화 — 운영 모니터링/알림에서 빈도 추적 가능
+//   - ConfigureTransports 가 실패하면 (예: ForceAttemptHTTP2=false 일 때) 모니터링만 비활성화되고
+//     HTTP 클라이언트는 정상 동작 — fail-open 정책
 func defaultHTTPClient(config Config) *http.Client {
 	transport := &http.Transport{
 		MaxIdleConns:        config.MaxIdleConns,
@@ -27,11 +36,29 @@ func defaultHTTPClient(config Config) *http.Client {
 		ForceAttemptHTTP2:   true,
 	}
 
+	if h2t, err := http2.ConfigureTransports(transport); err == nil && h2t != nil {
+		h2t.CountError = recordHTTP2Error
+	}
+
 	return &http.Client{
 		Transport: transport,
 		// timeout은 request level에서 적용
 		Timeout: 0,
 	}
+}
+
+// recordHTTP2Error 는 http2.Transport.CountError 콜백입니다.
+// errType 은 http2 라이브러리가 정의한 안정적 식별자 (예: "stream_error_protocol",
+// "conn_error_received_data_after_end_stream") 로 모니터링 라벨로 그대로 사용 가능합니다.
+//
+// 본 콜백은 http2 내부 goroutine 에서 호출되므로 ctx 를 받지 못합니다.
+// 따라서 logger.FromContext(context.Background()) 의 fallback 기본 logger 를 사용합니다.
+func recordHTTP2Error(errType string) {
+	count := DefaultHTTP2ErrorCounter.Increment(errType)
+	logger.FromContext(context.Background()).WithFields(map[string]interface{}{
+		"http2_error_type": errType,
+		"count":            count,
+	}).Warn("http2 protocol error observed")
 }
 
 // StandardHTTPClient는 표준 HTTP 클라이언트 구현입니다.
