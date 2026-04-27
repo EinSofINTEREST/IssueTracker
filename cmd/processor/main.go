@@ -92,11 +92,16 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	<-sigChan
+	// 셧다운 시작 시점부터 logger 에 shutting_down=true 를 부여하여 이후 발생하는
+	// 로그(특히 in-flight 작업의 context.Canceled 흔적)를 모니터링에서 필터링할 수 있게 합니다.
+	// 이슈 #72 의 4번째 TODO 대응.
+	log = log.WithField("shutting_down", true)
 	log.Warn("shutdown signal received, draining workers...")
 	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+	shutdownCtx = log.ToContext(shutdownCtx)
 
 	if err := worker.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during validate worker shutdown")
