@@ -83,6 +83,7 @@ docs/#2/api-documentation
 | `FIX` | 버그 수정 |
 | `REFAC` | 구조 변경, 리팩토링 |
 | `DOCS` | 문서 작업, 주석, 프롬프트 변경 |
+| `CHORE` | 빌드·CI·도구·의존성 등 잡무 (코드 외 부가 작업) |
 
 ### 작성 규칙
 
@@ -114,6 +115,13 @@ docs/#2/api-documentation
 
 - 불필요한 검증 단계 제거
 - 함수 복잡도 25줄에서 15줄로 감소
+```
+
+```
+[CHORE]: golangci-lint 버전 v1.64.8 로 업데이트
+
+- ci-quality.yml lint job 의 binary 버전 고정
+- 로컬 Makefile 의 lint 타겟에 동일 버전 명시
 ```
 
 ```
@@ -614,7 +622,7 @@ PR 라벨: feature
 | `FEATURE` | `feature/` | `FEAT` |
 | `BUG` | `fix/` | `FIX` |
 | `REFACTOR` | `refactor/` | `REFAC` |
-| `CHORE` | `docs/` 또는 `chore/` | `DOCS` 또는 `REFAC` |
+| `CHORE` | `chore/` 또는 `docs/` | `CHORE` (코드 외 잡무) 또는 `DOCS` (순수 문서 작업) |
 
 ---
 
