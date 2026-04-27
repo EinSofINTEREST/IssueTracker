@@ -598,9 +598,11 @@ func (p *KafkaConsumerPool) commitMessage(ctx context.Context, msg *queue.Messag
 // sendToDLQ 는 메시지를 DLQ 토픽에 발행합니다.
 // graceful shutdown 으로 ctx 가 canceled 된 경우 drain context 로 한 번 더 시도하여
 // 데이터 무결성 작업(원본 메시지 보존)이 셧다운 직전에도 완료될 수 있도록 보장합니다.
+//
+// 로깅 정책: 본 함수는 로그를 직접 남기지 않고 에러만 반환합니다.
+// 호출자(pollMessages, processJob)가 logShutdownAware 로 통일된 강등 정책에 따라
+// 로깅하므로 이중 로깅을 방지합니다.
 func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, reason error) error {
-	log := logger.FromContext(ctx)
-
 	headers := make(map[string]string, len(msg.Headers)+2)
 	for k, v := range msg.Headers {
 		headers[k] = v
@@ -623,14 +625,6 @@ func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, r
 		err = p.producer.Publish(drainCtx, dlqMsg)
 	}
 	if err != nil {
-		// graceful shutdown 으로 인한 cancellation 은 운영 장애가 아니므로 DEBUG 로 강등.
-		// drain 재시도까지 실패한 경우에도 동일하게 강등 — 메시지 유실은 아니며
-		// (원본 offset 미커밋 → 재기동 시 재소비) 정상 종료 흐름의 일부.
-		if errors.Is(err, context.Canceled) {
-			log.WithError(err).Debug("dlq publish canceled during shutdown")
-		} else {
-			log.WithError(err).Error("failed to send message to dlq")
-		}
 		return fmt.Errorf("send to dlq: %w", err)
 	}
 
@@ -676,6 +670,8 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 		"topic":    topic,
 	}).Warn("requeuing job with backoff delay")
 
+	// 로깅 정책: 본 함수는 publish 실패 로그를 직접 남기지 않고 에러만 반환합니다.
+	// 호출자(processJob)가 logShutdownAware 로 통일된 강등 정책에 따라 로깅합니다.
 	err = p.producer.Publish(ctx, msg)
 	if err != nil && errors.Is(err, context.Canceled) {
 		// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도
@@ -684,18 +680,6 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 		err = p.producer.Publish(drainCtx, msg)
 	}
 	if err != nil {
-		fields := map[string]interface{}{
-			"job_id":   job.ID,
-			"crawler":  job.CrawlerName,
-			"topic":    topic,
-			"priority": job.Priority,
-		}
-		// shutdown cancellation 은 정상 종료 흐름이므로 DEBUG 로 강등
-		if errors.Is(err, context.Canceled) {
-			log.WithFields(fields).WithError(err).Debug("requeue canceled during shutdown")
-		} else {
-			log.WithFields(fields).WithError(err).Error("failed to requeue job for retry")
-		}
 		return fmt.Errorf("publish retry job: %w", err)
 	}
 
