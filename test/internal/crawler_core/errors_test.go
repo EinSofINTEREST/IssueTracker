@@ -1,6 +1,7 @@
 package core_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -46,6 +47,51 @@ func TestCrawlerError_Unwrap(t *testing.T) {
 	}
 
 	assert.Equal(t, underlyingErr, err.Unwrap())
+}
+
+// TestCrawlerError_ErrorsIs_ContextCanceled_ChainUnwrap:
+// 이슈 #72 회귀 방지 — graceful shutdown 처리는 핸들러·풀 곳곳에서
+// errors.Is(err, context.Canceled) 로 cancel 케이스를 식별합니다.
+// CrawlerError 가 Unwrap() 을 통해 chain 을 보존해야 이 식별이 동작합니다.
+//
+// chromedp CDP_006 처럼 errors.Join(runErr, captureErr) 형태로 두 에러를
+// 묶은 경우에도 chain 을 따라 매칭되어야 합니다.
+func TestCrawlerError_ErrorsIs_ContextCanceled_ChainUnwrap(t *testing.T) {
+	t.Run("direct context.Canceled wrap", func(t *testing.T) {
+		err := &core.CrawlerError{
+			Category: core.ErrCategoryNetwork,
+			Code:     "CDP_002",
+			Message:  "failed to render page",
+			Err:      context.Canceled,
+		}
+		assert.True(t, errors.Is(err, context.Canceled),
+			"CrawlerError 는 errors.Is 가 context.Canceled 까지 chain 을 따라가야 함")
+	})
+
+	t.Run("errors.Join(deadline, canceled) — CDP_006 패턴", func(t *testing.T) {
+		joined := errors.Join(context.DeadlineExceeded, context.Canceled)
+		err := &core.CrawlerError{
+			Category: core.ErrCategoryTimeout,
+			Code:     "CDP_006",
+			Message:  "render timeout and graceful capture failed",
+			Err:      joined,
+		}
+		assert.True(t, errors.Is(err, context.Canceled),
+			"errors.Join 으로 묶인 cancel 도 chain 을 따라 매칭되어야 함")
+		assert.True(t, errors.Is(err, context.DeadlineExceeded),
+			"동시에 deadline 도 매칭되어야 함")
+	})
+
+	t.Run("non-canceled error does not match", func(t *testing.T) {
+		err := &core.CrawlerError{
+			Category: core.ErrCategoryNetwork,
+			Code:     "NET_001",
+			Message:  "connection refused",
+			Err:      errors.New("dial tcp: connection refused"),
+		}
+		assert.False(t, errors.Is(err, context.Canceled),
+			"실제 네트워크 에러는 context.Canceled 와 매칭되면 안 됨")
+	})
 }
 
 func TestCrawlerError_Is(t *testing.T) {
