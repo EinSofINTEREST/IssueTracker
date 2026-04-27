@@ -50,7 +50,7 @@ func (g *PatternGuard) Allow(url string) (bool, string) {
 	return true, ""
 }
 
-// DefaultPatterns 는 도메인 디폴트 차단 패턴입니다.
+// defaultPatterns 는 도메인 디폴트 차단 패턴입니다 (unexported — 외부 변경 차단).
 //
 // 정책 근거:
 //   - "/rss" : RSS 피드 URL 일괄 차단 (이슈 #119 의 CNN RSS 잔존 사고 대응).
@@ -59,14 +59,28 @@ func (g *PatternGuard) Allow(url string) (bool, string) {
 //   - "javascript:" : 클라이언트 사이드 코드 — fetch 의미 없음.
 //
 // 운영 환경에서 추가 패턴이 필요한 경우 NewPatternGuard 로 별도 인스턴스 구성.
-var DefaultPatterns = []string{
+var defaultPatterns = []string{
 	"/rss",
 	"mailto:",
 	"tel:",
 	"javascript:",
 }
 
-// Default 는 DefaultPatterns 로 구성한 Guard 인스턴스를 반환합니다.
+// DefaultPatterns 는 디폴트 차단 패턴 목록의 복사본을 반환합니다.
+// 외부에서 수정해도 내부 상태와 다른 호출자의 결과에 영향을 주지 않습니다.
+//
+// 운영 진단/문서화 목적으로 패턴 목록을 조회하거나, 커스텀 PatternGuard 를
+// 구성할 때 base 로 사용하기 위함:
+//
+//	patterns := append(urlguard.DefaultPatterns(), "/extra-block")
+//	guard := urlguard.NewPatternGuard(patterns...)
+func DefaultPatterns() []string {
+	out := make([]string, len(defaultPatterns))
+	copy(out, defaultPatterns)
+	return out
+}
+
+// Default 는 디폴트 패턴으로 구성한 Guard 인스턴스를 반환합니다.
 func Default() Guard {
-	return NewPatternGuard(DefaultPatterns...)
+	return NewPatternGuard(defaultPatterns...)
 }
