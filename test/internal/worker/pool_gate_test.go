@@ -3,7 +3,6 @@ package worker_test
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"issuetracker/internal/crawler/core"
@@ -119,7 +118,6 @@ func TestKafkaConsumerPool_Gate_AllowAllGuard_DelegatesAll(t *testing.T) {
 	runPool(t, consumer, pool, msg)
 
 	handler.AssertCalled(t, "Handle", mock.Anything, job)
-	assert.True(t, true) // sentinel
 }
 
 // TestKafkaConsumerPool_Gate_RaceFreeUpdate:
