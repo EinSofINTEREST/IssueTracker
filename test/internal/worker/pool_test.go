@@ -479,6 +479,207 @@ func TestKafkaConsumerPool_ProcessJob_RequeuePublishFails_SkipsCommit(t *testing
 	contentSvc.AssertNotCalled(t, "Store", mock.Anything, mock.Anything)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// drainCtx 재시도 회귀 테스트
+// graceful shutdown 시 ctx cancel → drain context 로 1회 재시도하는 경로를
+// mock 으로 잠가 두어 회귀를 방지합니다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestKafkaConsumerPool_CommitMessage_DrainRetry_Succeeds는
+// CommitMessages 첫 호출이 context.Canceled 를 반환할 때
+// drainCtx 로 한 번 더 시도하여 성공하는지 검증합니다.
+func TestKafkaConsumerPool_CommitMessage_DrainRetry_Succeeds(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	msg := marshaledJobMsg(t, job)
+
+	// handler 가 빈 결과를 반환 → commitMessage 경로
+	handler.On("Handle", mock.Anything, job).Return(nil, nil)
+
+	// 첫 번째 CommitMessages: context.Canceled 반환 → drain 재시도 유도
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.Canceled).Once()
+	// 두 번째 CommitMessages(drainCtx): 성공
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Once()
+
+	runPool(t, consumer, pool, msg)
+
+	// drain 재시도가 수행되어 CommitMessages 가 정확히 두 번 호출되어야 합니다.
+	consumer.AssertNumberOfCalls(t, "CommitMessages", 2)
+}
+
+// TestKafkaConsumerPool_CommitMessage_DrainRetry_Fails는
+// CommitMessages 첫 호출이 context.Canceled 이고 drain 재시도도 실패할 때
+// 두 에러를 모두 보존하여 반환하는지 검증합니다.
+func TestKafkaConsumerPool_CommitMessage_DrainRetry_Fails(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, nil)
+
+	// 첫 번째 CommitMessages: context.Canceled 반환
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.Canceled).Once()
+	// 두 번째 CommitMessages(drainCtx): drain 타임아웃 시뮬레이션
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(context.DeadlineExceeded).Once()
+
+	runPool(t, consumer, pool, msg)
+
+	// drain 재시도까지 수행되어 CommitMessages 가 정확히 두 번 호출되어야 합니다.
+	consumer.AssertNumberOfCalls(t, "CommitMessages", 2)
+}
+
+// TestKafkaConsumerPool_SendToDLQ_DrainRetry_Succeeds는
+// DLQ publish 첫 호출이 context.Canceled 를 반환할 때
+// drainCtx 로 한 번 더 시도하여 성공 후 원본 offset 을 commit 하는지 검증합니다.
+func TestKafkaConsumerPool_SendToDLQ_DrainRetry_Succeeds(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = job.MaxRetries // DLQ 경로
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("fetch failed"))
+
+	// 첫 번째 DLQ publish: context.Canceled 반환 → drain 재시도 유도
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(context.Canceled).Once()
+	// 두 번째 DLQ publish(drainCtx): 성공
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil).Once()
+
+	// DLQ publish 성공 후 원본 offset 이 commit 되어야 합니다.
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runPool(t, consumer, pool, msg)
+
+	// drain 재시도가 수행되어 Publish 가 정확히 두 번 호출되어야 합니다.
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// TestKafkaConsumerPool_SendToDLQ_DrainRetry_Fails는
+// DLQ publish 첫 호출이 context.Canceled 이고 drain 재시도도 실패할 때
+// commit 을 건너뛰어 메시지를 보존하는지 검증합니다.
+func TestKafkaConsumerPool_SendToDLQ_DrainRetry_Fails(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = job.MaxRetries // DLQ 경로
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("fetch failed"))
+
+	// 첫 번째 DLQ publish: context.Canceled 반환
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(context.Canceled).Once()
+	// 두 번째 DLQ publish(drainCtx): drain 타임아웃 시뮬레이션
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(context.DeadlineExceeded).Once()
+
+	runPool(t, consumer, pool, msg)
+
+	// DLQ publish 최종 실패 시 commit 을 호출하지 않아야 합니다.
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+	// drain 재시도 포함 Publish 가 정확히 두 번 호출되어야 합니다.
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+}
+
+// TestKafkaConsumerPool_Requeue_DrainRetry_Succeeds는
+// requeue publish 첫 호출이 context.Canceled 를 반환할 때
+// drainCtx 로 한 번 더 시도하여 성공 후 원본 offset 을 commit 하는지 검증합니다.
+func TestKafkaConsumerPool_Requeue_DrainRetry_Succeeds(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = 1 // MaxRetries(3) 미달 → requeue 경로
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("temporary error"))
+
+	// 첫 번째 requeue publish: context.Canceled 반환 → drain 재시도 유도
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicCrawlNormal
+	})).Return(context.Canceled).Once()
+	// 두 번째 requeue publish(drainCtx): 성공
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicCrawlNormal
+	})).Return(nil).Once()
+
+	// requeue 성공 후 원본 offset 이 commit 되어야 합니다.
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runPool(t, consumer, pool, msg)
+
+	// drain 재시도가 수행되어 Publish 가 정확히 두 번 호출되어야 합니다.
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// TestKafkaConsumerPool_Requeue_DrainRetry_Fails는
+// requeue publish 첫 호출이 context.Canceled 이고 drain 재시도도 실패할 때
+// commit 을 건너뛰어 메시지를 보존하는지 검증합니다.
+func TestKafkaConsumerPool_Requeue_DrainRetry_Fails(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	job := newTestJob()
+	job.RetryCount = 1 // MaxRetries(3) 미달 → requeue 경로
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("temporary error"))
+
+	// 첫 번째 requeue publish: context.Canceled 반환
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicCrawlNormal
+	})).Return(context.Canceled).Once()
+	// 두 번째 requeue publish(drainCtx): drain 타임아웃 시뮬레이션
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicCrawlNormal
+	})).Return(context.DeadlineExceeded).Once()
+
+	runPool(t, consumer, pool, msg)
+
+	// requeue 최종 실패 시 commit 을 호출하지 않아야 합니다.
+	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+	// drain 재시도 포함 Publish 가 정확히 두 번 호출되어야 합니다.
+	producer.AssertNumberOfCalls(t, "Publish", 2)
+}
+
 // TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef는
 // 발행된 ProcessingMessage의 Data 필드에 ContentRef가 담기는지 검증합니다.
 func TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef(t *testing.T) {
