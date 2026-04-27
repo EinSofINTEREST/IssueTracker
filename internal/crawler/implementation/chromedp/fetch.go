@@ -167,35 +167,19 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		capturedStatus = 200
 	}
 
-	// HTTP 상태코드 검사
-	if capturedStatus == 404 {
-		return nil, core.NewNotFoundError(target.URL)
-	}
-	if capturedStatus == 429 {
-		return nil, core.NewRateLimitError("HTTP_429", "rate limited", target.URL, capturedStatus)
-	}
-	if capturedStatus >= 500 {
-		return nil, core.NewHTTPServerError(target.URL, capturedStatus)
-	}
-	if capturedStatus >= 400 {
-		return nil, core.NewHTTPClientError(target.URL, capturedStatus)
+	// HTTP 상태코드 검사 (이슈 #75: core 공통 분기)
+	if err := core.CheckHTTPStatus(target.URL, capturedStatus); err != nil {
+		return nil, err
 	}
 
-	// metadata: 부분 로드인 경우 호출자 원본을 보존하기 위해 복사 후 플래그 추가
-	metadata := target.Metadata
+	// RawContent 조립 (이슈 #75: core 공통 생성자)
+	// chromedp 는 raw HTTP header 에 접근하지 않으므로 nil 전달 → 빈 map 으로 보정됨.
+	rawContent := core.NewRawContent(c.name, c.sourceInfo, target, html, capturedStatus, nil)
+
+	// 부분 로드인 경우 metadata 를 변형 적용 (호출자 원본 보존을 위한 복사 + 플래그)
+	// NewRawContent 의 단순 대입 (target.Metadata 그대로) 이후 덮어쓰기.
 	if partialLoad {
-		metadata = metadataWithPartialLoad(target.Metadata)
-	}
-
-	rawContent := &core.RawContent{
-		ID:         fmt.Sprintf("%s-%d", c.name, time.Now().UnixNano()),
-		SourceInfo: c.sourceInfo,
-		FetchedAt:  time.Now(),
-		URL:        target.URL,
-		HTML:       html,
-		StatusCode: capturedStatus,
-		Headers:    make(map[string]string),
-		Metadata:   metadata,
+		rawContent.Metadata = metadataWithPartialLoad(target.Metadata)
 	}
 
 	log.WithFields(map[string]interface{}{
