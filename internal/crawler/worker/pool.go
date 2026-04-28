@@ -385,11 +385,18 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
-		}).Debug("job already being processed by another worker, skipping")
+		}).Debug("job lock already held by another worker, skipping")
 		// 다른 워커가 처리 중이므로 commit 없이 종료합니다.
 		// 처리 담당 워커의 commit에 의존하여, 해당 워커 장애 시 재처리가 보장되도록 합니다.
 		return nil
 	} else {
+		// 이슈 #137 — 운영자가 lock 획득 흐름을 추적할 수 있도록 DEBUG 로 success 기록.
+		log.WithFields(map[string]interface{}{
+			"job_id":  item.job.ID,
+			"crawler": item.job.CrawlerName,
+			"ttl_ms":  DefaultJobLockTTL.Milliseconds(),
+		}).Debug("job lock acquired")
+
 		defer func() {
 			// 셧다운 시 ctx가 취소되어도 락 해제는 반드시 수행되어야 합니다.
 			// 작업 ctx를 그대로 사용하면 Redis 호출이 즉시 실패해 락이 TTL(10분) 동안 점유됩니다.
@@ -400,7 +407,13 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 					"job_id":  item.job.ID,
 					"crawler": item.job.CrawlerName,
 				}).WithError(releaseErr).Warn("failed to release job lock")
+				return
 			}
+			// 이슈 #137 — release 성공도 DEBUG 로 짝을 맞춰 lifecycle 완성.
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+			}).Debug("job lock released")
 		}()
 	}
 
