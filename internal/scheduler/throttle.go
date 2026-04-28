@@ -43,7 +43,8 @@ type BacklogThrottler struct {
 //   - checker    : lag 조회기 (보통 queue.NewBacklogChecker 결과)
 //   - groupID    : crawl 토픽을 소비하는 consumer group (queue.GroupCrawlerWorkers)
 //   - maxBacklog : 차단 임계값. 0 이하면 throttle 비활성
-//   - timeout    : 단일 lag 조회 RPC 의 deadline (0 이면 ctx 만 사용)
+//   - timeout    : Backlog() 호출 전체의 deadline — 내부 Metadata/ListOffsets/
+//     OffsetFetch 3개 RPC 합산에 적용. 0 이면 ctx 만 사용 (deadline 없음)
 //   - log        : 차단/조회실패 WARN 로그를 남길 logger
 func NewBacklogThrottler(
 	checker queue.BacklogChecker,
