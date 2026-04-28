@@ -389,3 +389,73 @@ func TestLoadRedis_InvalidTimeouts(t *testing.T) {
 		}
 	}
 }
+
+// unsetSchedulerEnvVars는 테스트 격리를 위해 SCHEDULER_* 환경변수를 초기화합니다.
+func unsetSchedulerEnvVars(t *testing.T) {
+	t.Helper()
+	vars := []string{
+		"SCHEDULER_CATEGORY_INTERVAL",
+		"SCHEDULER_JOB_TIMEOUT",
+		"SCHEDULER_MAX_RETRIES",
+		"SCHEDULER_MAX_BACKLOG",
+		"SCHEDULER_BACKLOG_CHECK_TIMEOUT",
+	}
+	for _, v := range vars {
+		t.Setenv(v, "")
+	}
+}
+
+func TestLoadScheduler_DefaultValues(t *testing.T) {
+	unsetSchedulerEnvVars(t)
+
+	cfg, err := config.LoadScheduler("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("기본값 로드 실패: %v", err)
+	}
+
+	def := config.DefaultSchedulerConfig()
+	if cfg.MaxBacklog != def.MaxBacklog {
+		t.Errorf("MaxBacklog: got %d, want %d (disabled)", cfg.MaxBacklog, def.MaxBacklog)
+	}
+	if cfg.BacklogCheckTimeout != def.BacklogCheckTimeout {
+		t.Errorf("BacklogCheckTimeout: got %v, want %v", cfg.BacklogCheckTimeout, def.BacklogCheckTimeout)
+	}
+}
+
+func TestLoadScheduler_BacklogEnvOverride(t *testing.T) {
+	unsetSchedulerEnvVars(t)
+	t.Setenv("SCHEDULER_MAX_BACKLOG", "10000")
+	t.Setenv("SCHEDULER_BACKLOG_CHECK_TIMEOUT", "2s")
+
+	cfg, err := config.LoadScheduler("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("환경변수 로드 실패: %v", err)
+	}
+
+	if cfg.MaxBacklog != 10000 {
+		t.Errorf("MaxBacklog: got %d, want 10000", cfg.MaxBacklog)
+	}
+	if cfg.BacklogCheckTimeout != 2*time.Second {
+		t.Errorf("BacklogCheckTimeout: got %v, want 2s", cfg.BacklogCheckTimeout)
+	}
+}
+
+func TestLoadScheduler_InvalidMaxBacklog(t *testing.T) {
+	unsetSchedulerEnvVars(t)
+	t.Setenv("SCHEDULER_MAX_BACKLOG", "not-a-number")
+
+	_, err := config.LoadScheduler("/tmp/nonexistent-env-file.env")
+	if err == nil {
+		t.Fatal("SCHEDULER_MAX_BACKLOG 가 정수가 아니면 에러가 반환되어야 합니다")
+	}
+}
+
+func TestLoadScheduler_InvalidBacklogCheckTimeout(t *testing.T) {
+	unsetSchedulerEnvVars(t)
+	t.Setenv("SCHEDULER_BACKLOG_CHECK_TIMEOUT", "not-a-duration")
+
+	_, err := config.LoadScheduler("/tmp/nonexistent-env-file.env")
+	if err == nil {
+		t.Fatal("SCHEDULER_BACKLOG_CHECK_TIMEOUT 가 duration 형식이 아니면 에러가 반환되어야 합니다")
+	}
+}
