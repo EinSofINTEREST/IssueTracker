@@ -28,12 +28,15 @@ type PoolConfig struct {
 // ManagerConfig aggregates the three per-priority pool configs.
 // JobLocker가 nil이면 NoopJobLocker가 사용되어 중복 처리 방지가 비활성화됩니다.
 // URLCache가 nil이면 NoopURLCache가 사용되어 URL 캐싱이 비활성화됩니다.
+// RetryScheduler가 nil이면 각 Pool 이 lazy 로 KafkaImmediateRetryScheduler 를 생성하여
+// 기존 동작 (즉시 Kafka publish + worker sleep) 을 유지합니다 (이슈 #82).
 type ManagerConfig struct {
-	High      PoolConfig
-	Normal    PoolConfig
-	Low       PoolConfig
-	JobLocker JobLocker
-	URLCache  URLCache
+	High           PoolConfig
+	Normal         PoolConfig
+	Low            PoolConfig
+	JobLocker      JobLocker
+	URLCache       URLCache
+	RetryScheduler RetryScheduler
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -84,10 +87,16 @@ func NewPoolManager(
 	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig)
 
 	newPool := func(pc PoolConfig) *KafkaConsumerPool {
-		return NewKafkaConsumerPoolWithOptions(
+		pool := NewKafkaConsumerPoolWithOptions(
 			pc.Consumer, producer, handler, contentSvc, pc.WorkerCount,
 			cbRegistry, jobLocker, urlCache,
 		)
+		// 단일 RetryScheduler 인스턴스를 세 우선순위 Pool 이 공유합니다 (이슈 #82) —
+		// Redis 기반 구현에서 ZSET/연결 풀이 통일되도록.
+		if cfg.RetryScheduler != nil {
+			pool.SetRetryScheduler(cfg.RetryScheduler)
+		}
+		return pool
 	}
 
 	return &PoolManager{
