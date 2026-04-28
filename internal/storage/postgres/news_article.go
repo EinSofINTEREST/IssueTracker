@@ -66,7 +66,8 @@ const sqlGetByURL = `
 SELECT
   id, source_name, source_type, country, language,
   url, title, body, summary, author,
-  category, tags, image_urls, published_at, fetched_at, created_at
+  category, tags, image_urls, published_at, fetched_at, created_at,
+  validation_status, reject_code, reject_detail
 FROM news_articles
 WHERE url = $1
 `
@@ -97,7 +98,8 @@ func (r *pgNewsArticleRepository) List(ctx context.Context, f storage.NewsArticl
 SELECT
   id, source_name, source_type, country, language,
   url, title, body, summary, author,
-  category, tags, image_urls, published_at, fetched_at, created_at
+  category, tags, image_urls, published_at, fetched_at, created_at,
+  validation_status, reject_code, reject_detail
 FROM news_articles
 WHERE 1=1`
 
@@ -156,10 +158,48 @@ func scanNewsArticle(s scanner) (*storage.NewsArticleRecord, error) {
 		&a.ID, &a.SourceName, &a.SourceType, &a.Country, &a.Language,
 		&a.URL, &a.Title, &a.Body, &a.Summary, &a.Author,
 		&a.Category, &a.Tags, &a.ImageURLs, &a.PublishedAt, &a.FetchedAt, &a.CreatedAt,
+		&a.ValidationStatus, &a.RejectCode, &a.RejectDetail,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	return a, nil
+}
+
+const sqlUpdateValidationStatus = `
+UPDATE news_articles
+SET
+  validation_status = $2,
+  reject_code       = $3,
+  reject_detail     = $4
+WHERE url = $1
+`
+
+// UpdateValidationStatus 는 URL 기준으로 validator 결과 메타데이터를 갱신합니다 (이슈 #135).
+//
+// status 가 storage.ValidationStatusRejected 가 아니면 code/detail 인자는 무시되고 NULL 로 저장됩니다.
+// URL 이 존재하지 않으면 storage.ErrNotFound 를 반환합니다.
+func (r *pgNewsArticleRepository) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
+	var (
+		codeArg   any
+		detailArg any
+	)
+	if status == storage.ValidationStatusRejected {
+		if code != "" {
+			codeArg = code
+		}
+		if detail != "" {
+			detailArg = detail
+		}
+	}
+
+	tag, err := r.pool.Exec(ctx, sqlUpdateValidationStatus, url, status, codeArg, detailArg)
+	if err != nil {
+		return fmt.Errorf("update validation status %s: %w", url, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
 }
