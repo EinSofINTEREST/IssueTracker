@@ -319,6 +319,9 @@ func (w *Worker) recordValidationRejected(ctx context.Context, url string, reaso
 	var crawlerErr *core.CrawlerError
 	if errors.As(reason, &crawlerErr) {
 		code = crawlerErr.Code
+		// CrawlerError.Error() 는 "[<cat>:<code>] <msg>" 포맷이라 reject_code 와 중복.
+		// reject_detail 에는 message 본문만 저장한다 (Gemini code review 피드백).
+		detail = crawlerErr.Message
 	}
 
 	if err := w.newsArticleRepo.UpdateValidationStatus(
