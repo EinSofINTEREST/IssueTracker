@@ -109,6 +109,14 @@ func main() {
 		}
 	}
 
+	// URL dedup (이슈 #126): Publisher 가 Kafka enqueue 직전에 cache hit URL 을
+	// 사전 필터링 — consumer-side dedup 과 동일한 RedisURLCache 인스턴스를 공유.
+	// urlCache 가 nil (Redis 부재) 인 경우 Publisher 의 dedup 도 자동 비활성.
+	if urlCache != nil {
+		jobPublisher.SetURLCache(urlCache)
+		log.Info("publisher url dedup enabled (sharing redis url cache with workers)")
+	}
+
 	managerCfg := crawlerWorker.ManagerConfig{
 		High:      crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
 		Normal:    crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
