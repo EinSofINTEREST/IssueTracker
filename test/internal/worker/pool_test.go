@@ -401,7 +401,7 @@ func TestKafkaConsumerPool_ProcessJob_CircuitOpen_SendsToDLQ(t *testing.T) {
 	cbRegistry := worker.NewCircuitBreakerRegistry(worker.CircuitBreakerConfig{
 		MaxFailures: 1,
 		OpenTimeout: time.Minute,
-	})
+	}, nil)
 	// 첫 번째 실패로 circuit을 미리 open 상태로 만듭니다.
 	cbRegistry.Get("test-crawler").RecordFailure()
 

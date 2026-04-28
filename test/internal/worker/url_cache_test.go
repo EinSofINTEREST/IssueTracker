@@ -65,7 +65,7 @@ func TestKafkaConsumerPool_URLCache_Hit_SkipsWithCommit(t *testing.T) {
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig),
+		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		worker.NoopJobLocker{},
 		urlCache,
 	)
@@ -97,7 +97,7 @@ func TestKafkaConsumerPool_URLCache_Miss_ProceedsAndSets(t *testing.T) {
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig),
+		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		worker.NoopJobLocker{},
 		urlCache,
 	)
@@ -135,7 +135,7 @@ func TestKafkaConsumerPool_URLCache_ExistsError_ProceedsWithFetch(t *testing.T) 
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig),
+		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		worker.NoopJobLocker{},
 		urlCache,
 	)
@@ -172,7 +172,7 @@ func TestKafkaConsumerPool_URLCache_CategoryPage_SkipsCache(t *testing.T) {
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig),
+		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		worker.NoopJobLocker{},
 		urlCache,
 	)

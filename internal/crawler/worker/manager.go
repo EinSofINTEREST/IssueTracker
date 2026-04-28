@@ -84,7 +84,8 @@ func NewPoolManager(
 
 	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여
 	// 소스별 실패 카운팅이 우선순위 경계 없이 누적됩니다.
-	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig)
+	// log 주입 (이슈 #137) — CB state 전이마다 INFO/WARN 로그.
+	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, log)
 
 	newPool := func(pc PoolConfig) *KafkaConsumerPool {
 		pool := NewKafkaConsumerPoolWithOptions(

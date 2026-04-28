@@ -108,9 +108,11 @@ func NewKafkaConsumerPool(
 	contentSvc service.ContentService,
 	workerCount int,
 ) *KafkaConsumerPool {
+	// CircuitBreakerRegistry log 주입은 NewPoolManager 가 PoolManager 단위에서 처리.
+	// 본 헬퍼는 단순 호출용 (테스트/예제) 이라 logger 주입 안 함 — nil 이면 state 전이 로그 skip.
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
-		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig),
+		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, nil),
 		NoopJobLocker{},
 		NoopURLCache{},
 	)

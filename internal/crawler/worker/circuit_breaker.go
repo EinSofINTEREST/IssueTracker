@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"issuetracker/pkg/logger"
 )
 
 // cbState는 circuit breaker 상태를 나타냅니다.
@@ -61,6 +63,7 @@ var DefaultCircuitBreakerConfig = CircuitBreakerConfig{
 type CircuitBreaker struct {
 	config CircuitBreakerConfig
 	source string
+	log    *logger.Logger // 이슈 #137 — state 전이 가시성용 (nil 허용 — 미주입 시 로그 skip)
 
 	mu          sync.Mutex
 	state       cbState
@@ -69,10 +72,11 @@ type CircuitBreaker struct {
 	probeActive bool      // HalfOpen probe 진행 중 여부
 }
 
-func newCircuitBreaker(source string, config CircuitBreakerConfig) *CircuitBreaker {
+func newCircuitBreaker(source string, config CircuitBreakerConfig, log *logger.Logger) *CircuitBreaker {
 	return &CircuitBreaker{
 		config: config,
 		source: source,
+		log:    log,
 		state:  cbStateClosed,
 	}
 }
@@ -90,8 +94,12 @@ func (cb *CircuitBreaker) Allow() bool {
 	case cbStateOpen:
 		// OpenTimeout 경과 시 HalfOpen으로 전환하여 probe 허용
 		if time.Since(cb.openedAt) >= cb.config.OpenTimeout {
+			openFor := time.Since(cb.openedAt)
 			cb.state = cbStateHalfOpen
 			cb.probeActive = true
+			cb.logTransition("open", "half_open", map[string]interface{}{
+				"open_for_ms": openFor.Milliseconds(),
+			}, false)
 			return true
 		}
 		return false
@@ -119,6 +127,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 	if cb.state == cbStateHalfOpen {
 		cb.state = cbStateClosed
 		cb.probeActive = false
+		cb.logTransition("half_open", "closed", nil, false)
 	}
 }
 
@@ -135,6 +144,10 @@ func (cb *CircuitBreaker) RecordFailure() {
 		if cb.failures >= cb.config.MaxFailures {
 			cb.state = cbStateOpen
 			cb.openedAt = time.Now()
+			cb.logTransition("closed", "open", map[string]interface{}{
+				"failures":     cb.failures,
+				"max_failures": cb.config.MaxFailures,
+			}, true)
 		}
 
 	case cbStateHalfOpen:
@@ -142,6 +155,33 @@ func (cb *CircuitBreaker) RecordFailure() {
 		cb.state = cbStateOpen
 		cb.openedAt = time.Now()
 		cb.probeActive = false
+		cb.logTransition("half_open", "open", nil, true)
+	}
+}
+
+// logTransition 은 state 전이를 구조화 로그로 출력합니다 (이슈 #137).
+//
+// asWarn=true 면 WARN, false 면 INFO 레벨로 출력합니다 — open 으로 들어가는 전이는
+// 운영 알림 가치가 있어 WARN, 그 외 (probing/recovered) 는 INFO. logger 미주입 시 no-op.
+//
+// 호출자는 cb.mu 를 이미 보유하고 있어야 합니다 — 이 메소드는 추가 lock 을 잡지 않습니다.
+func (cb *CircuitBreaker) logTransition(from, to string, extra map[string]interface{}, asWarn bool) {
+	if cb.log == nil {
+		return
+	}
+	fields := map[string]interface{}{
+		"source":     cb.source,
+		"from_state": from,
+		"to_state":   to,
+	}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	entry := cb.log.WithFields(fields)
+	if asWarn {
+		entry.Warn("circuit breaker state transition")
+	} else {
+		entry.Info("circuit breaker state transition")
 	}
 }
 
@@ -163,14 +203,17 @@ func (cb *CircuitBreaker) Failures() int {
 // goroutine-safe합니다.
 type CircuitBreakerRegistry struct {
 	config CircuitBreakerConfig
+	log    *logger.Logger // 이슈 #137 — 신규 CB 생성 시 주입 (nil 허용)
 	mu     sync.RWMutex
 	cbs    map[string]*CircuitBreaker
 }
 
 // NewCircuitBreakerRegistry는 CircuitBreakerRegistry를 생성합니다.
-func NewCircuitBreakerRegistry(config CircuitBreakerConfig) *CircuitBreakerRegistry {
+// log 가 nil 이 아니면 각 CB 의 state 전이 로그가 출력됩니다 (이슈 #137).
+func NewCircuitBreakerRegistry(config CircuitBreakerConfig, log *logger.Logger) *CircuitBreakerRegistry {
 	return &CircuitBreakerRegistry{
 		config: config,
+		log:    log,
 		cbs:    make(map[string]*CircuitBreaker),
 	}
 }
@@ -191,7 +234,7 @@ func (r *CircuitBreakerRegistry) Get(source string) *CircuitBreaker {
 	if cb, ok = r.cbs[source]; ok {
 		return cb
 	}
-	cb = newCircuitBreaker(source, r.config)
+	cb = newCircuitBreaker(source, r.config, r.log)
 	r.cbs[source] = cb
 	return cb
 }
