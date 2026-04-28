@@ -17,14 +17,9 @@ const RetryQueueZSetKey = "retry:queue"
 const retryEntryKeyPrefix = "retry:entry:"
 
 // retryEntryTTL 은 retry payload 의 안전 보관 TTL 입니다.
-// ZSET 에서 score 가 이 시점을 지나도 PopDue 가 호출되지 않으면 entry 가 자동 만료되어
+// ZSET 에서 score 가 이 시점을 지나도 PeekDue 가 호출되지 않으면 entry 가 자동 만료되어
 // stale data 가 영구히 남지 않도록 합니다 (운영 안전망).
 const retryEntryTTL = 24 * time.Hour
-
-// ErrRetryEntryGone 은 ZSET 에는 jobID 가 있지만 entry payload 가 만료/삭제되어
-// 더 이상 존재하지 않는 상태를 나타냅니다. 폴러는 이 케이스를 silent skip + WARN 으로
-// 처리하고 ZSET 에서도 ZREM 하여 일관성을 회복해야 합니다.
-var ErrRetryEntryGone = errors.New("retry entry payload missing")
 
 // retryEntryKey 는 jobID 에 대응하는 entry 키를 반환합니다.
 func retryEntryKey(jobID string) string {
@@ -54,7 +49,7 @@ func (c *Client) EnqueueRetry(ctx context.Context, jobID string, payload []byte,
 	score := float64(scheduledAt.UnixMilli())
 
 	// pipeline 으로 ZADD + SET 을 1 RTT 에 전송 — 두 명령 사이의 race window 를 최소화.
-	// (완전 atomic 은 아니지만 폴러가 ErrRetryEntryGone 으로 자체 복구하므로 충분.)
+	// (완전 atomic 은 아니지만 PeekDueRetries 가 GET=nil 인 stale jobID 를 자동 정리하므로 충분.)
 	pipe := c.rdb.Pipeline()
 	pipe.ZAdd(ctx, RetryQueueZSetKey, goredis.Z{Score: score, Member: jobID})
 	pipe.Set(ctx, retryEntryKey(jobID), payload, retryEntryTTL)
@@ -163,6 +158,11 @@ func (c *Client) PendingRetryCount(ctx context.Context) (int64, error) {
 
 // DeleteRetryEntryForTest 는 entry STRING 만 직접 삭제하여 stale 시나리오 (entry 만료 +
 // ZSET 잔존) 를 인위적으로 재현하기 위한 테스트 전용 헬퍼입니다. 운영 코드 사용 금지.
+//
+// 운영 빌드에서 노출되지만 `ForTest` 접미어로 의도를 명시. 본 프로젝트 컨벤션상
+// 테스트 파일이 `test/pkg/redis/` 별도 디렉토리에 위치하므로 (`package redis_test`),
+// 동일 패키지 내 `_test.go` helper 는 외부 테스트에서 접근 불가 — 부득이 exported
+// API 로 노출합니다.
 func (c *Client) DeleteRetryEntryForTest(ctx context.Context, jobID string) error {
 	if _, err := c.rdb.Del(ctx, retryEntryKey(jobID)).Result(); err != nil {
 		return fmt.Errorf("delete retry entry %s: %w", jobID, err)
