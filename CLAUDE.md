@@ -59,3 +59,19 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 - [ ] 관련 규칙 문서를 **목차에서 찾아** 읽었는가? (전체 읽기 금지)
 - [ ] 커밋 메시지가 `[카테고리]: 한국어 설명` 형식인가?
 - [ ] `make fmt && make lint && make test` 를 로컬에서 통과했는가?
+
+## PR 생성 후 자동 동작 (이슈 #129)
+
+`gh pr create` 가 성공한 직후 사용자가 별도 지시하지 않아도 다음을 자동 수행한다:
+
+1. **`@.claude/loop.md` 를 3분 주기 cron 으로 등록** — `CronCreate` 호출
+   - cron 표현식: `*/3 * * * *`
+   - prompt: `@.claude/loop.md 절차에 따라 PR #N 의 CI 와 코멘트를 점검하고 처리해줘.` (N = 방금 생성한 PR 번호)
+   - recurring: `true`
+2. 사용자에게 한 줄 보고 — cron job ID 와 본 PR url 포함
+
+자동 등록 예외:
+- 사용자가 명시적으로 "loop 등록하지 마" 라고 지시하면 생략
+- draft PR 등 후속 polling 이 무의미한 케이스가 명백하면 사용자에게 묻고 진행
+
+자동 종료는 `.claude/loop.md` 의 "자동 중단 (4회 연속 무동작 시)" 섹션이 처리한다 — 12분간 의미 있는 변화가 없으면 cron 본인이 자체 정리.
