@@ -45,9 +45,10 @@ func NewBacklogChecker(brokers []string, timeout time.Duration) *KafkaBacklogChe
 // 토픽이 존재하지 않거나 partition 수가 0 이면 0 을 반환 — Kafka 에 아직 토픽이
 // 만들어지지 않은 초기 부트스트랩 단계에서도 throttle 이 publish 를 막지 않도록.
 //
-// committed offset 이 음수 (-1: 아직 commit 없음) 인 partition 은 0 으로 보정.
-// 그래야 신규 consumer group 이 등록 직후 publish 가 갑자기 차단되지 않습니다 —
-// "이미 쌓인 메시지" 는 backlog 이지만 정의상 lag = latest - 0 으로 산정.
+// committed offset 이 음수 (-1: 아직 commit 없음) 인 partition 은 lag 산정에서
+// 제외 (해당 partition 의 lag = 0). 신규 consumer group 이 등록 직후 잔여 backlog
+// 전체를 "미처리 메시지" 로 잘못 인식하여 publish 가 갑자기 차단되는 것을 방지 —
+// 한 사이클 후 commit 이 시작되면 정상 lag 산정으로 복귀.
 //
 // 음수 lag (committed > latest 인 비정상 케이스) 도 0 으로 보정하여 합산 안정성 보장.
 func (c *KafkaBacklogChecker) Backlog(ctx context.Context, topic, group string) (int64, error) {
@@ -126,11 +127,13 @@ func (c *KafkaBacklogChecker) Backlog(ctx context.Context, topic, group string) 
 		if !ok {
 			continue
 		}
-		committed := op.CommittedOffset
-		if committed < 0 {
-			committed = 0
+		// 신규 consumer group: commit 이력 없는 partition 은 lag 산정에서 제외 —
+		// 잔여 backlog 가 throttle 임계값을 초과하더라도 신규 그룹의 publish 가
+		// 즉시 차단되지 않도록 (한 사이클 후 commit 시작되면 자연 복귀).
+		if op.CommittedOffset < 0 {
+			continue
 		}
-		lag := latest - committed
+		lag := latest - op.CommittedOffset
 		if lag < 0 {
 			lag = 0
 		}
