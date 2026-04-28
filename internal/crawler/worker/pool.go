@@ -332,8 +332,25 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 	}
 }
 
-func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error {
+func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err error) {
 	log := logger.FromContext(ctx)
+
+	// 이슈 #137 — processJob 의 모든 return path 를 defer 로 wrap 하여 duration 측정.
+	// outcome 은 err 여부로 분기 (정상 종료/error). 세부 outcome 은 기존 path 별 로그가 표현.
+	start := time.Now()
+	defer func() {
+		fields := map[string]interface{}{
+			"job_id":      item.job.ID,
+			"crawler":     item.job.CrawlerName,
+			"duration_ms": time.Since(start).Milliseconds(),
+		}
+		if err != nil {
+			fields["outcome"] = "error"
+		} else {
+			fields["outcome"] = "ok"
+		}
+		log.WithFields(fields).Debug("job processed")
+	}()
 
 	// URL 가드 (이슈 #119): processJob 진입 직후 차단 URL 을 즉시 거르고 commit
 	// → handler 호출·lock 획득·backoff 대기 등 모든 비용 회피
