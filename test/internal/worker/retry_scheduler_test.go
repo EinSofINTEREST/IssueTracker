@@ -110,14 +110,19 @@ func TestKafkaImmediateRetryScheduler_NilLastErr_OmitsHeader(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // fakeRetryQueue 는 retryQueueClient 인터페이스를 만족하는 in-memory 더블입니다.
-// 진짜 Redis 가 없어도 Run 루프와 Enqueue/Pop 흐름을 결정적으로 검증합니다.
+// 진짜 Redis 가 없어도 Run 루프와 Enqueue/Peek/Ack 흐름을 결정적으로 검증합니다.
+//
+// peek-publish-ack 패턴 (PR #128 피드백): PeekDueRetries 는 항목을 ZSET 에 남겨두고
+// AckRetry 호출 시에만 제거합니다 — 진짜 Redis 와 동일 시맨틱.
 type fakeRetryQueue struct {
 	mu               sync.Mutex
 	items            []fakeRetryItem // ScheduledAt 정렬 유지
 	enqueueErr       error
-	popErr           error
+	peekErr          error
+	ackErr           error
 	enqueueCallCount atomic.Int32
-	popCallCount     atomic.Int32
+	peekCallCount    atomic.Int32
+	ackCallCount     atomic.Int32
 }
 
 type fakeRetryItem struct {
@@ -148,25 +153,41 @@ func (f *fakeRetryQueue) EnqueueRetry(_ context.Context, jobID string, payload [
 	return nil
 }
 
-func (f *fakeRetryQueue) PopDueRetries(_ context.Context, now time.Time, limit int) ([]pkgredis.DueRetry, error) {
-	f.popCallCount.Add(1)
-	if f.popErr != nil {
-		return nil, f.popErr
+func (f *fakeRetryQueue) PeekDueRetries(_ context.Context, now time.Time, limit int) ([]pkgredis.DueRetry, error) {
+	f.peekCallCount.Add(1)
+	if f.peekErr != nil {
+		return nil, f.peekErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	out := make([]pkgredis.DueRetry, 0)
-	remaining := make([]fakeRetryItem, 0, len(f.items))
 	for _, it := range f.items {
-		if !it.scheduledAt.After(now) && len(out) < limit {
-			out = append(out, pkgredis.DueRetry{JobID: it.jobID, Payload: it.payload})
+		if it.scheduledAt.After(now) {
 			continue
 		}
-		remaining = append(remaining, it)
+		if len(out) >= limit {
+			break
+		}
+		out = append(out, pkgredis.DueRetry{JobID: it.jobID, Payload: it.payload})
 	}
-	f.items = remaining
 	return out, nil
+}
+
+func (f *fakeRetryQueue) AckRetry(_ context.Context, jobID string) error {
+	f.ackCallCount.Add(1)
+	if f.ackErr != nil {
+		return f.ackErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, it := range f.items {
+		if it.jobID == jobID {
+			f.items = append(f.items[:i], f.items[i+1:]...)
+			return nil
+		}
+	}
+	return nil // idempotent: 이미 제거된 항목도 에러 없이
 }
 
 func (f *fakeRetryQueue) sortLocked() {
@@ -272,6 +293,77 @@ func TestRedisDelayedRetryScheduler_Run_FutureItemsNotPublished(t *testing.T) {
 	prod.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
 }
 
+// TestRedisDelayedRetryScheduler_AckOnlyAfterSuccessfulPublish 는 peek-publish-ack
+// 패턴의 핵심 보증을 검증: publish 성공 시에만 AckRetry 호출, 실패 시 ack 없이
+// 항목이 큐에 남아 다음 폴 사이클에 재peek 가능 (at-least-once, PR #128 피드백 #1).
+func TestRedisDelayedRetryScheduler_AckOnlyAfterSuccessfulPublish(t *testing.T) {
+	q := newFakeRetryQueue()
+	prod := new(mockProducer)
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+	cfg.RepublishFailureBackoff = time.Hour // re-enqueue 가 즉시 재peek 되지 않도록
+	sched := worker.NewRedisDelayedRetryScheduler(q, prod, cfg, retrySchedTestLogger())
+
+	job := retryTestJob(core.PriorityNormal)
+	job.ScheduledAt = time.Now().Add(-time.Second)
+	require.NoError(t, sched.Enqueue(context.Background(), job, errors.New("e")))
+
+	// publish 가 처음에는 실패 → 두 번째에는 성공
+	publishCalls := atomic.Int32{}
+	prod.On("Publish", mock.Anything, mock.Anything).Return(errors.New("kafka transient")).Once().Run(func(_ mock.Arguments) {
+		publishCalls.Add(1)
+	})
+	prod.On("Publish", mock.Anything, mock.Anything).Return(nil).Run(func(_ mock.Arguments) {
+		publishCalls.Add(1)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sched.Run(ctx); close(done) }()
+
+	// 두 번째 publish 가 성공할 때까지 대기 — RepublishFailureBackoff=1h 이므로 score 가
+	// 미래로 옮겨져 있을 텐데, 동일 jobID 에 대한 재 enqueue 가 어떻게 동작하는지 확인:
+	// 첫 publish 실패 후 fakeRetryQueue 에 score=now+1h 로 overwrite → peek 안 됨.
+	// 따라서 본 테스트는 첫 publish 실패 시 ack 가 호출되지 않았음을 검증하는 데 집중.
+	require.Eventually(t, func() bool {
+		return publishCalls.Load() >= 1
+	}, time.Second, 5*time.Millisecond, "최소 1회 publish 시도")
+
+	// 첫 publish 실패 시점에서 ack 호출 0회여야 함
+	cancel()
+	<-done
+
+	assert.Equal(t, int32(0), q.ackCallCount.Load(),
+		"publish 실패 시 ack 호출되지 않음 — 항목이 ZSET 에 남아 at-least-once 보장")
+}
+
+// TestRedisDelayedRetryScheduler_AckCalledAfterPublishSuccess 는 publish 성공 시
+// AckRetry 가 1회 호출되어 ZSET 에서 제거됨을 검증.
+func TestRedisDelayedRetryScheduler_AckCalledAfterPublishSuccess(t *testing.T) {
+	q := newFakeRetryQueue()
+	prod := new(mockProducer)
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+	sched := worker.NewRedisDelayedRetryScheduler(q, prod, cfg, retrySchedTestLogger())
+
+	job := retryTestJob(core.PriorityNormal)
+	job.ScheduledAt = time.Now().Add(-time.Second)
+	require.NoError(t, sched.Enqueue(context.Background(), job, errors.New("e")))
+
+	prod.On("Publish", mock.Anything, mock.Anything).Return(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sched.Run(ctx); close(done) }()
+
+	require.Eventually(t, func() bool {
+		return q.ackCallCount.Load() >= 1 && len(q.snapshot()) == 0
+	}, time.Second, 5*time.Millisecond, "publish 성공 후 ack 1회 + 큐에서 제거")
+
+	cancel()
+	<-done
+}
+
 // TestRedisDelayedRetryScheduler_Run_PublishFailure_ReEnqueues 는 Kafka publish 실패 시
 // 항목이 짧은 backoff 로 재 enqueue 됨을 검증.
 func TestRedisDelayedRetryScheduler_Run_PublishFailure_ReEnqueues(t *testing.T) {
@@ -305,11 +397,11 @@ func TestRedisDelayedRetryScheduler_Run_PublishFailure_ReEnqueues(t *testing.T) 
 	assert.True(t, snap[0].scheduledAt.After(time.Now()), "재 enqueue 의 ScheduledAt 이 미래로 설정")
 }
 
-// TestRedisDelayedRetryScheduler_Run_PopError_LogsAndContinues 는 Pop 실패 시 다음
+// TestRedisDelayedRetryScheduler_Run_PeekError_LogsAndContinues 는 Peek 실패 시 다음
 // 폴 사이클로 계속 진행됨을 검증 (panic 없이 회복).
-func TestRedisDelayedRetryScheduler_Run_PopError_LogsAndContinues(t *testing.T) {
+func TestRedisDelayedRetryScheduler_Run_PeekError_LogsAndContinues(t *testing.T) {
 	q := newFakeRetryQueue()
-	q.popErr = errors.New("redis transient")
+	q.peekErr = errors.New("redis transient")
 	prod := new(mockProducer)
 	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
@@ -320,7 +412,7 @@ func TestRedisDelayedRetryScheduler_Run_PopError_LogsAndContinues(t *testing.T) 
 	go func() { sched.Run(ctx); close(done) }()
 
 	require.Eventually(t, func() bool {
-		return q.popCallCount.Load() >= 3 // 여러 폴 사이클 진행 = 패닉/조기 종료 없음
+		return q.peekCallCount.Load() >= 3 // 여러 폴 사이클 진행 = 패닉/조기 종료 없음
 	}, time.Second, 5*time.Millisecond)
 
 	cancel()

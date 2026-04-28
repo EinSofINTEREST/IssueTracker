@@ -91,9 +91,15 @@ func retryHeaders(job *core.CrawlJob, lastErr error) map[string]string {
 
 // retryQueueClient 는 RedisDelayedRetryScheduler 가 사용하는 Redis 연산을 추상화합니다.
 // pkg/redis.Client 가 구조적으로 만족하며, 테스트는 mock 으로 교체합니다.
+//
+// peek-publish-ack 패턴 (이슈 #82, PR #128 피드백):
+//   - PeekDueRetries 는 due 항목을 조회만 하고 ZSET 에서 제거하지 않음
+//   - publish 성공 후 AckRetry 로 명시적 제거 → at-least-once 보장
+//   - publish 실패 시 backoff 적용한 재 EnqueueRetry (또는 무처리 후 다음 polling)
 type retryQueueClient interface {
 	EnqueueRetry(ctx context.Context, jobID string, payload []byte, scheduledAt time.Time) error
-	PopDueRetries(ctx context.Context, now time.Time, limit int) ([]pkgredis.DueRetry, error)
+	PeekDueRetries(ctx context.Context, now time.Time, limit int) ([]pkgredis.DueRetry, error)
+	AckRetry(ctx context.Context, jobID string) error
 }
 
 // RedisRetrySchedulerConfig 는 RedisDelayedRetryScheduler 의 polling 동작을 제어합니다.
@@ -213,16 +219,18 @@ func (s *RedisDelayedRetryScheduler) Stop() {
 	s.wg.Wait()
 }
 
-// pollOnce 는 due 항목을 한 batch 만큼 가져와 Kafka 에 발행합니다.
+// pollOnce 는 due 항목을 한 batch 만큼 peek 하여 Kafka 에 발행합니다.
+// peek 단계에서는 ZSET 에서 제거하지 않으며, publish 성공 후에만 AckRetry 로 제거 —
+// at-least-once 보장 (peek-publish-ack 패턴, PR #128 피드백).
 func (s *RedisDelayedRetryScheduler) pollOnce(ctx context.Context) {
-	due, err := s.client.PopDueRetries(ctx, time.Now(), s.cfg.BatchSize)
+	due, err := s.client.PeekDueRetries(ctx, time.Now(), s.cfg.BatchSize)
 	if err != nil {
 		// ctx cancel 로 인한 에러는 정상 종료 흐름 — DEBUG 로 강등
 		if ctx.Err() != nil {
-			s.log.WithError(err).Debug("retry pop interrupted by shutdown")
+			s.log.WithError(err).Debug("retry peek interrupted by shutdown")
 			return
 		}
-		s.log.WithError(err).Warn("failed to pop due retries from redis")
+		s.log.WithError(err).Warn("failed to peek due retries from redis")
 		return
 	}
 
@@ -231,15 +239,24 @@ func (s *RedisDelayedRetryScheduler) pollOnce(ctx context.Context) {
 	}
 }
 
-// republish 는 단일 due 항목을 Kafka 에 발행합니다. 실패 시 item 을 짧은 backoff 로
-// 재 enqueue — Kafka 일시 장애 흡수.
+// republish 는 단일 due 항목을 Kafka 에 발행합니다.
+//
+//   - publish 성공  → AckRetry 로 ZSET/entry 제거 (정상 종료)
+//   - publish 실패  → 짧은 backoff 로 EnqueueRetry 재호출 (ScheduledAt overwrite) →
+//     다음 폴 사이클에 재시도. EnqueueRetry 도 실패하면 ZSET 에 원본 ScheduledAt 으로
+//     항목이 남아 즉시 재peek 되며, JobLocker 가 Kafka 중복을 흡수
+//   - payload 손상 → AckRetry 로 제거 (drop) + ERROR (운영 이상 신호)
+//
+// 프로세스 crash 안전성: republish 어느 시점에 crash 가 일어나도 ZSET 에 원본 항목이
+// 남아있으므로 다음 instance / 재기동 시 재peek 됩니다.
 func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredis.DueRetry) {
 	var entry redisRetryEntry
 	if err := json.Unmarshal(item.Payload, &entry); err != nil {
-		// payload 손상 — 복구 불가, drop + ERROR (운영 이상 신호)
+		// payload 손상 — 복구 불가. ack 로 제거하여 무한 재peek 회피.
 		s.log.WithFields(map[string]interface{}{
 			"job_id": item.JobID,
 		}).WithError(err).Error("malformed retry payload, dropping")
+		s.ackOrLog(ctx, item.JobID, "drop on malformed payload")
 		return
 	}
 
@@ -248,6 +265,7 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 		s.log.WithFields(map[string]interface{}{
 			"job_id": item.JobID,
 		}).WithError(err).Error("malformed retry job bytes, dropping")
+		s.ackOrLog(ctx, item.JobID, "drop on malformed job bytes")
 		return
 	}
 
@@ -264,29 +282,44 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 	}
 
 	if err := s.producer.Publish(ctx, msg); err != nil {
-		// Kafka publish 실패 — Redis 에 짧은 backoff 로 재 enqueue 하여 다음 폴 사이클에 재시도
+		// Kafka publish 실패 — backoff 적용한 ScheduledAt 으로 EnqueueRetry 재호출하여
+		// 같은 jobID 의 score 를 미래로 overwrite (즉시 재peek 회피).
+		// EnqueueRetry 가 실패해도 ZSET 의 원본 항목이 남아있어 다음 폴에 재peek + 재시도.
 		s.log.WithFields(map[string]interface{}{
 			"job_id":     item.JobID,
 			"crawler":    job.CrawlerName,
 			"backoff_ms": s.cfg.RepublishFailureBackoff.Milliseconds(),
-		}).WithError(err).Warn("retry republish failed, re-enqueuing to redis")
+		}).WithError(err).Warn("retry republish failed, rescheduling in redis")
 
 		retryAt := time.Now().Add(s.cfg.RepublishFailureBackoff)
 		if reErr := s.client.EnqueueRetry(ctx, item.JobID, item.Payload, retryAt); reErr != nil {
-			// Redis 도 안 되는 상황 — 데이터 손실. ERROR 로 운영자가 인지하도록.
 			s.log.WithFields(map[string]interface{}{
 				"job_id":  item.JobID,
 				"crawler": job.CrawlerName,
-			}).WithError(reErr).Error("redis re-enqueue failed after publish error, retry job lost")
+			}).WithError(reErr).Warn("redis reschedule failed, item retains original score for immediate re-peek")
 		}
 		return
 	}
+
+	// publish 성공 → ZSET/entry 제거. ack 실패는 다음 폴 사이클에서 중복 publish 로 이어짐 —
+	// JobLocker 가 흡수하므로 정합성 문제 없으나 운영 가시성을 위해 WARN.
+	s.ackOrLog(ctx, item.JobID, "after successful publish")
 
 	s.log.WithFields(map[string]interface{}{
 		"job_id":  item.JobID,
 		"crawler": job.CrawlerName,
 		"topic":   msg.Topic,
 	}).Debug("retry job republished from redis to kafka")
+}
+
+// ackOrLog 는 AckRetry 호출 후 실패 시 WARN 로그만 남깁니다 (정합성은 JobLocker 가 흡수).
+func (s *RedisDelayedRetryScheduler) ackOrLog(ctx context.Context, jobID, reason string) {
+	if err := s.client.AckRetry(ctx, jobID); err != nil {
+		s.log.WithFields(map[string]interface{}{
+			"job_id": jobID,
+			"reason": reason,
+		}).WithError(err).Warn("retry ack failed, item may be re-peeked on next poll")
+	}
 }
 
 // redisRetryEntry 는 Redis 에 저장되는 retry payload 의 JSON 스키마입니다.

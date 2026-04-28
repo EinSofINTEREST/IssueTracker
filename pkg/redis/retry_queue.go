@@ -64,26 +64,34 @@ func (c *Client) EnqueueRetry(ctx context.Context, jobID string, payload []byte,
 	return nil
 }
 
-// DueRetry 는 PopDueRetries 의 단일 결과 항목입니다.
+// DueRetry 는 PeekDueRetries 의 단일 결과 항목입니다.
 type DueRetry struct {
 	JobID   string
 	Payload []byte
 }
 
-// PopDueRetries 는 score (scheduledAt) 가 now 이하인 retry job 을 최대 limit 개 꺼내고
-// ZSET / entry STRING 모두에서 제거합니다.
+// PeekDueRetries 는 score (scheduledAt) 가 now 이하인 retry job 을 최대 limit 개 조회합니다.
+// **항목을 ZSET 에서 제거하지 않습니다** — at-least-once 보장: Kafka publish 성공 후
+// 호출자가 AckRetry 를 호출해 명시적으로 제거해야 합니다 (peek-publish-ack 패턴).
 //
 // 절차 (per item):
-//  1. ZRANGEBYSCORE -inf~now LIMIT 0 limit  → 후보 jobID 목록
-//  2. 각 jobID 에 대해: GET payload → ZREM + DEL (pipeline)
-//     - GET 결과가 nil 이면 ErrRetryEntryGone 으로 분류, ZREM 만 수행하여 정합성 회복
+//  1. ZRANGEBYSCORE -inf~now LIMIT 0 limit  → 후보 jobID 목록 (ZSET 유지)
+//  2. 각 jobID 에 대해 GET payload
+//     - GET 결과가 nil 인 stale jobID 는 ZSET 에서 자동 정리하고 결과에 포함하지 않음
 //
-// 다중 인스턴스 환경에서 동일 항목을 두 instance 가 동시에 ZRANGEBYSCORE 하는 race 가
-// 가능하지만, 다운스트림 worker 의 JobLocker 가 중복 처리를 차단하므로 정합성에는 문제 없음.
-// (Kafka publish 1~2회 발생 — 중복 처리는 JobLocker 가 silent skip)
+// 호출자 책임:
+//   - publish 성공 → AckRetry(ctx, jobID) 로 ZSET/entry 제거
+//   - publish 실패 → 아무것도 하지 않으면 다음 폴 사이클에 자동 재peek + 재시도
+//     (또는 EnqueueRetry 재호출로 ScheduledAt 을 미래로 옮겨 backoff 적용)
+//
+// 프로세스 crash 안전성: peek 후 ack 전에 crash 가 발생해도 항목이 ZSET 에 남아 있으므로
+// 다른 인스턴스 / 재기동 시 다시 peek 됩니다 — at-least-once 보장.
+//
+// 다중 인스턴스 race: 동시에 같은 jobID 를 peek + publish 가능 → Kafka 에 1~2회 중복
+// publish 발생 → 다운스트림 JobLocker 가 흡수 (정합성 문제 없음).
 //
 // limit <= 0 이면 빈 슬라이스를 반환합니다.
-func (c *Client) PopDueRetries(ctx context.Context, now time.Time, limit int) ([]DueRetry, error) {
+func (c *Client) PeekDueRetries(ctx context.Context, now time.Time, limit int) ([]DueRetry, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -109,8 +117,8 @@ func (c *Client) PopDueRetries(ctx context.Context, now time.Time, limit int) ([
 		key := retryEntryKey(jobID)
 		payload, getErr := c.rdb.Get(ctx, key).Bytes()
 		if errors.Is(getErr, goredis.Nil) {
-			// payload 가 만료/삭제된 stale jobID 는 ZSET 에서도 정리.
-			// 호출자에게는 silent skip — 별도 시그널 없이 다음 jobID 로 진행.
+			// payload 가 만료/삭제된 stale jobID 는 ZSET 에서 자동 정리 (정합성 회복).
+			// 호출자에게는 노출하지 않음 — 다음 jobID 로 진행.
 			if _, remErr := c.rdb.ZRem(ctx, RetryQueueZSetKey, jobID).Result(); remErr != nil {
 				return out, fmt.Errorf("zrem stale retry %s: %w", jobID, remErr)
 			}
@@ -120,18 +128,28 @@ func (c *Client) PopDueRetries(ctx context.Context, now time.Time, limit int) ([
 			return out, fmt.Errorf("get retry entry %s: %w", jobID, getErr)
 		}
 
-		// 정상 케이스: payload 확보 후 ZREM + DEL 을 pipeline 으로 한번에.
-		pipe := c.rdb.Pipeline()
-		pipe.ZRem(ctx, RetryQueueZSetKey, jobID)
-		pipe.Del(ctx, key)
-		if _, execErr := pipe.Exec(ctx); execErr != nil {
-			return out, fmt.Errorf("zrem+del retry %s: %w", jobID, execErr)
-		}
-
 		out = append(out, DueRetry{JobID: jobID, Payload: payload})
 	}
 
 	return out, nil
+}
+
+// AckRetry 는 publish 성공한 retry job 을 ZSET 과 entry STRING 에서 제거합니다.
+// PeekDueRetries 후 publish 성공 시 반드시 호출해야 합니다 — 미호출 시 다음 폴 사이클에
+// 동일 jobID 가 재peek 되어 중복 publish 발생 (JobLocker 가 흡수).
+//
+// idempotent: 이미 제거된 항목에 대한 호출도 에러 없이 통과합니다.
+func (c *Client) AckRetry(ctx context.Context, jobID string) error {
+	if jobID == "" {
+		return fmt.Errorf("ack retry: empty jobID")
+	}
+	pipe := c.rdb.Pipeline()
+	pipe.ZRem(ctx, RetryQueueZSetKey, jobID)
+	pipe.Del(ctx, retryEntryKey(jobID))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("ack retry %s: %w", jobID, err)
+	}
+	return nil
 }
 
 // PendingRetryCount 는 retry 큐에 보관된 항목 수를 반환합니다 (모니터링/디버깅용).
