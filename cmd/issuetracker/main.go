@@ -208,7 +208,7 @@ func main() {
 	validateProducer := queue.NewProducer(validateKafkaCfg)
 	defer validateProducer.Close()
 
-	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, validateWorkerCount, validateCfg)
+	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, newsRepo, validateWorkerCount, validateCfg)
 	validateWorker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{
