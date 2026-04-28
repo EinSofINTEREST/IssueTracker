@@ -135,6 +135,26 @@ func main() {
 	emitter := scheduler.NewJobEmitter(crawlerProducer, log)
 	entries := scheduler.DefaultEntries(schedulerCfg)
 	sched := scheduler.New(entries, emitter, log, schedulerCfg.MaxRetries)
+
+	// Backlog throttle (이슈 #124): SCHEDULER_MAX_BACKLOG > 0 일 때만 활성.
+	// crawl 토픽의 consumer-group lag 가 임계값 초과 시 publish 차단.
+	if schedulerCfg.MaxBacklog > 0 {
+		backlogChecker := queue.NewBacklogChecker(crawlerKafkaCfg.Brokers, schedulerCfg.BacklogCheckTimeout)
+		throttler := scheduler.NewBacklogThrottler(
+			backlogChecker,
+			queue.GroupCrawlerWorkers,
+			schedulerCfg.MaxBacklog,
+			schedulerCfg.BacklogCheckTimeout,
+			log,
+		)
+		sched.SetThrottler(throttler)
+		log.WithFields(map[string]interface{}{
+			"max_backlog":   schedulerCfg.MaxBacklog,
+			"check_timeout": schedulerCfg.BacklogCheckTimeout.String(),
+			"group":         queue.GroupCrawlerWorkers,
+		}).Info("scheduler backlog throttle enabled")
+	}
+
 	sched.Start(ctx)
 
 	log.WithField("entry_count", len(entries)).Info("scheduler started")
