@@ -107,23 +107,50 @@ func (c *Client) PeekDueRetries(ctx context.Context, now time.Time, limit int) (
 		return nil, nil
 	}
 
-	out := make([]DueRetry, 0, len(jobIDs))
+	// payload 들을 1 RTT 로 GET — 항목 N 개에 대해 round-trip N 번 → 1 번으로 압축
+	// (Copilot 피드백: 폴러 부하 / Redis latency 영향 완화).
+	type getResult struct {
+		jobID string
+		cmd   *goredis.StringCmd
+	}
+	getPipe := c.rdb.Pipeline()
+	results := make([]getResult, 0, len(jobIDs))
 	for _, jobID := range jobIDs {
-		key := retryEntryKey(jobID)
-		payload, getErr := c.rdb.Get(ctx, key).Bytes()
+		results = append(results, getResult{
+			jobID: jobID,
+			cmd:   getPipe.Get(ctx, retryEntryKey(jobID)),
+		})
+	}
+	// pipeline Exec 자체는 성공해도 개별 cmd 가 goredis.Nil 일 수 있으므로 그 에러는 무시.
+	// (개별 결과 검사에서 errors.Is(_, goredis.Nil) 로 stale 판정)
+	if _, execErr := getPipe.Exec(ctx); execErr != nil && !errors.Is(execErr, goredis.Nil) {
+		return nil, fmt.Errorf("pipeline get retry entries: %w", execErr)
+	}
+
+	out := make([]DueRetry, 0, len(jobIDs))
+	staleIDs := make([]string, 0)
+	for _, r := range results {
+		payload, getErr := r.cmd.Bytes()
 		if errors.Is(getErr, goredis.Nil) {
-			// payload 가 만료/삭제된 stale jobID 는 ZSET 에서 자동 정리 (정합성 회복).
-			// 호출자에게는 노출하지 않음 — 다음 jobID 로 진행.
-			if _, remErr := c.rdb.ZRem(ctx, RetryQueueZSetKey, jobID).Result(); remErr != nil {
-				return out, fmt.Errorf("zrem stale retry %s: %w", jobID, remErr)
-			}
+			// payload 가 만료/삭제된 stale jobID — 마지막에 batch ZREM 으로 일괄 정리.
+			staleIDs = append(staleIDs, r.jobID)
 			continue
 		}
 		if getErr != nil {
-			return out, fmt.Errorf("get retry entry %s: %w", jobID, getErr)
+			return out, fmt.Errorf("get retry entry %s: %w", r.jobID, getErr)
 		}
+		out = append(out, DueRetry{JobID: r.jobID, Payload: payload})
+	}
 
-		out = append(out, DueRetry{JobID: jobID, Payload: payload})
+	// stale jobID 들을 1 RTT 로 일괄 ZREM (정합성 회복).
+	if len(staleIDs) > 0 {
+		members := make([]interface{}, 0, len(staleIDs))
+		for _, id := range staleIDs {
+			members = append(members, id)
+		}
+		if _, remErr := c.rdb.ZRem(ctx, RetryQueueZSetKey, members...).Result(); remErr != nil {
+			return out, fmt.Errorf("batch zrem stale retries: %w", remErr)
+		}
 	}
 
 	return out, nil
