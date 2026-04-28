@@ -328,6 +328,41 @@ func TestRedisDelayedRetryScheduler_Run_PopError_LogsAndContinues(t *testing.T) 
 	prod.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
 }
 
+// TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish 는 SetRetryScheduler 로
+// 주입한 구현체가 호출되어 producer.Publish 가 우회됨을 검증.
+// 기존 fallback 경로 (SetRetryScheduler 미설정) 와의 회귀 분리.
+func TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	handler := new(mockJobHandler)
+	contentSvc := new(mockContentService)
+
+	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+
+	q := newFakeRetryQueue()
+	customScheduler := worker.NewRedisDelayedRetryScheduler(q, producer, worker.RedisRetrySchedulerConfig{
+		PollInterval:            time.Hour, // 폴링이 일어나지 않도록 충분히 길게
+		BatchSize:               1,
+		RepublishFailureBackoff: time.Hour,
+	}, retrySchedTestLogger())
+	pool.SetRetryScheduler(customScheduler)
+
+	job := newTestJob()
+	job.RetryCount = 1 // requeue 경로 (MaxRetries 미달)
+	msg := marshaledJobMsg(t, job)
+
+	handler.On("Handle", mock.Anything, job).Return(nil, errors.New("transient"))
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runPool(t, consumer, pool, msg)
+
+	// inline producer.Publish 는 호출되지 않아야 함 — 모든 retry 가 Redis 경로로
+	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
+	// 대신 Redis 큐에 등록되었는지 확인
+	assert.Len(t, q.snapshot(), 1, "주입된 RedisDelayedRetryScheduler 가 enqueue 받았음")
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
 // TestRedisDelayedRetryScheduler_DefaultConfigBoundary 는 cfg 의 0/음수 값이 default 로
 // 보정됨을 검증 (NewRedisDelayedRetryScheduler 의 fail-safe).
 func TestRedisDelayedRetryScheduler_DefaultConfigBoundary(t *testing.T) {

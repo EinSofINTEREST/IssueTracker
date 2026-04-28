@@ -14,6 +14,12 @@ import (
 	pkgredis "issuetracker/pkg/redis"
 )
 
+// retrySchedulerHolder 는 atomic.Pointer 가 인터페이스를 직접 저장하지 못하므로
+// RetryScheduler 인터페이스 값을 감싸 atomic 교체를 지원하는 wrapper 입니다.
+type retrySchedulerHolder struct {
+	s RetryScheduler
+}
+
 // RetryScheduler 는 처리 실패한 CrawlJob 의 재시도 발행 시점을 관리하는 인터페이스입니다
 // (이슈 #82).
 //

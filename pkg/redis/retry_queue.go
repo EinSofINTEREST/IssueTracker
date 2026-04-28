@@ -86,14 +86,16 @@ func (c *Client) PopDueRetries(ctx context.Context, now time.Time, limit int) ([
 	}
 
 	maxScore := fmt.Sprintf("%d", now.UnixNano())
-	jobIDs, err := c.rdb.ZRangeByScore(ctx, RetryQueueZSetKey, &goredis.ZRangeBy{
-		Min:    "-inf",
-		Max:    maxScore,
-		Offset: 0,
-		Count:  int64(limit),
+	jobIDs, err := c.rdb.ZRangeArgs(ctx, goredis.ZRangeArgs{
+		Key:     RetryQueueZSetKey,
+		Start:   "-inf",
+		Stop:    maxScore,
+		ByScore: true,
+		Offset:  0,
+		Count:   int64(limit),
 	}).Result()
 	if err != nil {
-		return nil, fmt.Errorf("zrangebyscore retry queue: %w", err)
+		return nil, fmt.Errorf("zrange byscore retry queue: %w", err)
 	}
 	if len(jobIDs) == 0 {
 		return nil, nil

@@ -80,6 +80,11 @@ type KafkaConsumerPool struct {
 	// processJob 진입 직후 검사하여 차단된 URL 의 처리를 skip 하고 message 만 commit.
 	// atomic.Pointer 로 race-safe 한 lock-free 설정/조회.
 	gate atomic.Pointer[urlguard.Gate]
+	// retryScheduler 는 재시도 발행 시점을 관리하는 RetryScheduler 입니다 (이슈 #82).
+	// 미설정(nil) 이면 lazy 로 KafkaImmediateRetryScheduler 가 사용되어 기존 동작 유지 —
+	// 즉시 priority 토픽에 publish + worker 가 ScheduledAt 까지 sleep.
+	// atomic.Pointer 로 race-safe 설정 — Start 이후 SetRetryScheduler 호출에도 안전.
+	retryScheduler atomic.Pointer[retrySchedulerHolder]
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -154,6 +159,17 @@ func NewKafkaConsumerPoolWithOptions(
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
 	}
+}
+
+// SetRetryScheduler 는 requeueWithRetry 시 사용할 RetryScheduler 를 설정합니다 (이슈 #82).
+// nil 전달 시 fallback 인 KafkaImmediateRetryScheduler (lazy 생성) 가 사용됩니다 —
+// 기존 동작 보존. atomic 교체로 Start 이후에도 race-safe.
+func (p *KafkaConsumerPool) SetRetryScheduler(rs RetryScheduler) {
+	if rs == nil {
+		p.retryScheduler.Store(nil)
+		return
+	}
+	p.retryScheduler.Store(&retrySchedulerHolder{s: rs})
 }
 
 // SetGate 는 processJob 진입 시 URL 검사에 사용할 urlguard.Gate 를 설정합니다 (이슈 #119).
@@ -679,30 +695,14 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 	job.RetryCount++
 
 	// RetryCount 기반 exponential backoff 계산 후 ScheduledAt에 저장합니다.
-	// worker는 메시지를 소비한 뒤 processJob에서 ScheduledAt까지 대기하여 backoff를 적용합니다.
+	// 실제 지연 적용은 RetryScheduler 구현체가 책임집니다 (이슈 #82):
+	//   - KafkaImmediateRetryScheduler (fallback): 즉시 publish — worker 가 sleep
+	//   - RedisDelayedRetryScheduler: Redis ZSET 보관 — worker 슬롯 점유 없음
 	backoffDelay := core.CalculateBackoff(kafkaRequeuePolicy, job.RetryCount)
 	job.ScheduledAt = time.Now().Add(backoffDelay)
 
-	data, err := job.Marshal()
-	if err != nil {
-		log.WithFields(map[string]interface{}{
-			"job_id":  job.ID,
-			"crawler": job.CrawlerName,
-		}).WithError(err).Error("failed to marshal job for retry")
-		return fmt.Errorf("marshal job for retry: %w", err)
-	}
-
+	scheduler := p.resolveRetryScheduler()
 	topic := topicForPriority(job.Priority)
-
-	msg := queue.Message{
-		Topic: topic,
-		Key:   []byte(job.ID),
-		Value: data,
-		Headers: map[string]string{
-			"retry-count": fmt.Sprintf("%d", job.RetryCount),
-			"last-error":  reason.Error(),
-		},
-	}
 
 	log.WithFields(map[string]interface{}{
 		"job_id":   job.ID,
@@ -714,13 +714,13 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 
 	// 로깅 정책: 본 함수는 publish 실패 로그를 직접 남기지 않고 에러만 반환합니다.
 	// 호출자(processJob)가 logShutdownAware 로 통일된 강등 정책에 따라 로깅합니다.
-	err = p.producer.Publish(ctx, msg)
+	err := scheduler.Enqueue(ctx, job, reason)
 	if err != nil && errors.Is(err, context.Canceled) {
 		// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 		defer cancel()
 		// errors.Join 으로 최초 cancel 과 retryErr 를 모두 보존
-		if retryErr := p.producer.Publish(drainCtx, msg); retryErr != nil {
+		if retryErr := scheduler.Enqueue(drainCtx, job, reason); retryErr != nil {
 			err = errors.Join(err, retryErr)
 		} else {
 			err = nil
@@ -731,6 +731,16 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 	}
 
 	return nil
+}
+
+// resolveRetryScheduler 는 SetRetryScheduler 로 주입된 구현체를 반환하고, 미설정 시
+// 기존 동작 (즉시 Kafka publish + worker sleep) 을 보존하는 KafkaImmediateRetryScheduler
+// 를 lazy 생성합니다. 매 호출마다 새 인스턴스이지만 stateless 이므로 비용 무시 가능.
+func (p *KafkaConsumerPool) resolveRetryScheduler() RetryScheduler {
+	if h := p.retryScheduler.Load(); h != nil {
+		return h.s
+	}
+	return NewKafkaImmediateRetryScheduler(p.producer)
 }
 
 // logShutdownAware 는 graceful shutdown 으로 발생한 컨텍스트성 에러를 DEBUG 로,
