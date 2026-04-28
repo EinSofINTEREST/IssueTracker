@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -64,6 +65,12 @@ func (c *KafkaBacklogChecker) Backlog(ctx context.Context, topic, group string) 
 			continue
 		}
 		if t.Error != nil {
+			// 토픽 미생성/초기 부트스트랩 구간은 fail-open 으로 backlog 0 처리 —
+			// throttle 이 publish 를 막지 않도록 (주석 정책과 일관). 다른 broker 에러는
+			// 명시적으로 반환하여 상위 fail-open 정책이 WARN 으로 노출되도록.
+			if errors.Is(t.Error, kafka.UnknownTopicOrPartition) {
+				return 0, nil
+			}
 			return 0, fmt.Errorf("topic %s metadata error: %w", topic, t.Error)
 		}
 		for _, p := range t.Partitions {
