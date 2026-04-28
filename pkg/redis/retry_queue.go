@@ -39,7 +39,10 @@ func retryEntryKey(jobID string) string {
 // 동일 jobID 로 재호출 시 ZSET score 와 payload 모두 덮어씁니다 — 같은 job 이 여러 번
 // 재시도 큐에 들어가면 가장 최근 호출 기준으로 정렬됩니다.
 //
-// scheduledAt 은 절대 시각 (time.Time) — UnixNano 로 ZSET score 에 저장됩니다.
+// scheduledAt 은 절대 시각 (time.Time) — UnixMilli 로 ZSET score 에 저장됩니다.
+// (Redis ZSET score 는 float64. UnixNano (≈1.78e18, 2026 기준) 는 float64 mantissa 한계
+// 2^53 (≈9e15) 를 초과해 정밀도 손실. UnixMilli (≈1.78e12) 는 안전 범위이며 retry 큐의
+// ms 단위 정렬은 실무 충분.)
 func (c *Client) EnqueueRetry(ctx context.Context, jobID string, payload []byte, scheduledAt time.Time) error {
 	if jobID == "" {
 		return fmt.Errorf("enqueue retry: empty jobID")
@@ -48,7 +51,7 @@ func (c *Client) EnqueueRetry(ctx context.Context, jobID string, payload []byte,
 		return fmt.Errorf("enqueue retry %s: empty payload", jobID)
 	}
 
-	score := float64(scheduledAt.UnixNano())
+	score := float64(scheduledAt.UnixMilli())
 
 	// pipeline 으로 ZADD + SET 을 1 RTT 에 전송 — 두 명령 사이의 race window 를 최소화.
 	// (완전 atomic 은 아니지만 폴러가 ErrRetryEntryGone 으로 자체 복구하므로 충분.)
@@ -85,7 +88,7 @@ func (c *Client) PopDueRetries(ctx context.Context, now time.Time, limit int) ([
 		return nil, nil
 	}
 
-	maxScore := fmt.Sprintf("%d", now.UnixNano())
+	maxScore := fmt.Sprintf("%d", now.UnixMilli()) // EnqueueRetry 의 score 단위와 일치
 	jobIDs, err := c.rdb.ZRangeArgs(ctx, goredis.ZRangeArgs{
 		Key:     RetryQueueZSetKey,
 		Start:   "-inf",
