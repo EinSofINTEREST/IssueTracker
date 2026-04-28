@@ -91,6 +91,8 @@ func main() {
 	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade합니다.
 	var jobLocker crawlerWorker.JobLocker
 	var urlCache crawlerWorker.URLCache
+	var retryScheduler crawlerWorker.RetryScheduler
+	var retrySchedulerStop func()
 	redisCfg, err := config.LoadRedis()
 	if err != nil {
 		log.WithError(err).Warn("failed to load redis config, falling back to noop job locker and url cache")
@@ -106,7 +108,27 @@ func main() {
 			}).Info("redis connected for job locker and url cache")
 			jobLocker = crawlerWorker.NewRedisJobLocker(redisClient, crawlerWorker.DefaultJobLockTTL)
 			urlCache = crawlerWorker.NewRedisURLCache(redisClient, redisCfg.URLCacheTTL)
+
+			// Delayed retry queue (이슈 #82): retry 를 Redis ZSET 에 보관하고 별도
+			// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
+			// Redis 부재 시 worker 가 lazy 로 KafkaImmediateRetryScheduler 를 사용 (기존 동작).
+			redisRetry := crawlerWorker.NewRedisDelayedRetryScheduler(
+				redisClient, crawlerProducer,
+				crawlerWorker.DefaultRedisRetrySchedulerConfig(),
+				log,
+			)
+			runCtx, cancelRun := context.WithCancel(ctx)
+			go redisRetry.Run(runCtx)
+			retryScheduler = redisRetry
+			retrySchedulerStop = func() {
+				cancelRun()
+				redisRetry.Stop()
+			}
+			log.Info("redis delayed retry queue enabled (worker slot occupancy on retry resolved)")
 		}
+	}
+	if retrySchedulerStop != nil {
+		defer retrySchedulerStop()
 	}
 
 	// URL dedup (이슈 #126): Publisher 가 Kafka enqueue 직전에 cache hit URL 을
@@ -118,11 +140,12 @@ func main() {
 	}
 
 	managerCfg := crawlerWorker.ManagerConfig{
-		High:      crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
-		Normal:    crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
-		Low:       crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
-		JobLocker: jobLocker,
-		URLCache:  urlCache,
+		High:           crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
+		Normal:         crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
+		Low:            crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
+		JobLocker:      jobLocker,
+		URLCache:       urlCache,
+		RetryScheduler: retryScheduler,
 	}
 
 	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, contentSvc, resolver, log)
