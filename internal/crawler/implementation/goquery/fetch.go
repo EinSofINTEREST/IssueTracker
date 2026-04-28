@@ -2,9 +2,7 @@ package goquery
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
 
@@ -46,18 +44,9 @@ func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.R
 	}
 	defer resp.Body.Close()
 
-	// HTTP 상태코드 검사: 4xx/5xx는 에러로 처리
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, core.NewNotFoundError(target.URL)
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, core.NewRateLimitError("HTTP_429", "rate limited", target.URL, resp.StatusCode)
-	}
-	if resp.StatusCode >= 500 {
-		return nil, core.NewHTTPServerError(target.URL, resp.StatusCode)
-	}
-	if resp.StatusCode >= 400 {
-		return nil, core.NewHTTPClientError(target.URL, resp.StatusCode)
+	// HTTP 상태코드 검사: 4xx/5xx는 에러로 처리 (이슈 #75: core 공통 분기)
+	if err := core.CheckHTTPStatus(target.URL, resp.StatusCode); err != nil {
+		return nil, err
 	}
 
 	// goquery Document 생성
@@ -86,23 +75,16 @@ func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.R
 		}
 	}
 
-	rawContent := &core.RawContent{
-		ID:         fmt.Sprintf("%s-%d", c.name, time.Now().UnixNano()),
-		SourceInfo: c.sourceInfo,
-		FetchedAt:  time.Now(),
-		URL:        target.URL,
-		HTML:       html,
-		StatusCode: resp.StatusCode,
-		Headers:    make(map[string]string),
-		Metadata:   target.Metadata,
-	}
-
-	// Headers 저장
+	// Headers 추출: HTTP response.Header → map[string]string (다중값은 첫 항목만)
+	headers := make(map[string]string, len(resp.Header))
 	for key, values := range resp.Header {
 		if len(values) > 0 {
-			rawContent.Headers[key] = values[0]
+			headers[key] = values[0]
 		}
 	}
+
+	// RawContent 조립 (이슈 #75: core 공통 생성자)
+	rawContent := core.NewRawContent(c.name, c.sourceInfo, target, html, resp.StatusCode, headers)
 
 	log.WithFields(map[string]interface{}{
 		"url":         target.URL,
