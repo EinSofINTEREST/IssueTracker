@@ -100,6 +100,33 @@ func (m *mockContentService) Delete(ctx context.Context, id string) error {
 	return args.Error(0)
 }
 
+// mockNewsArticleRepository 는 이슈 #135 — Worker 가 reject/passed 결과를 news_articles 에
+// 기록하는지 검증하기 위한 mock 입니다.
+type mockNewsArticleRepository struct{ mock.Mock }
+
+func (m *mockNewsArticleRepository) Insert(ctx context.Context, a *storage.NewsArticleRecord) error {
+	args := m.Called(ctx, a)
+	return args.Error(0)
+}
+
+func (m *mockNewsArticleRepository) GetByURL(ctx context.Context, url string) (*storage.NewsArticleRecord, error) {
+	args := m.Called(ctx, url)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.NewsArticleRecord), args.Error(1)
+}
+
+func (m *mockNewsArticleRepository) List(ctx context.Context, f storage.NewsArticleFilter) ([]*storage.NewsArticleRecord, error) {
+	args := m.Called(ctx, f)
+	return args.Get(0).([]*storage.NewsArticleRecord), args.Error(1)
+}
+
+func (m *mockNewsArticleRepository) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
+	args := m.Called(ctx, url, status, code, detail)
+	return args.Error(0)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 헬퍼
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +165,11 @@ func newWorker(consumer queue.Consumer, producer queue.Producer, contentSvc serv
 	// 이슈 #135 — newsArticleRepo nil 전달 시 worker 가 update 단계를 skip 하므로 기존 테스트
 	// 시나리오를 그대로 보존. 별도 테스트가 newsArticleRepo 호출 동작을 검증.
 	return validate.NewWorker(consumer, producer, contentSvc, nil, 1, config.DefaultValidateConfig())
+}
+
+// newWorkerWithRepo 는 이슈 #135 의 reject/passed 추적 동작을 테스트할 때 사용합니다.
+func newWorkerWithRepo(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService, repo storage.NewsArticleRepository) *validate.Worker {
+	return validate.NewWorker(consumer, producer, contentSvc, repo, 1, config.DefaultValidateConfig())
 }
 
 func runWorker(t *testing.T, consumer *mockConsumer, w *validate.Worker, msg *queue.Message) {
@@ -657,4 +689,109 @@ func TestValidateWorker_DLQDrainsOnContextCanceled(t *testing.T) {
 
 	producer.AssertNumberOfCalls(t, "Publish", 2)
 	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 이슈 #135 — news_articles validation_status 추적 동작 테스트
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestValidateWorker_InvalidContent_RecordsRejectedInNewsArticles(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+	repo := new(mockNewsArticleRepository)
+
+	w := newWorkerWithRepo(consumer, producer, contentSvc, repo)
+
+	content := newNewsContent()
+	content.Title = "x"
+	content.Body = "short body"
+	content.PublishedAt = time.Time{}
+	msg := makeProcessingMessage(content, 3) // maxRetries 도달 → deleting 경로
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	contentSvc.On("Delete", mock.Anything, content.ID).Return(nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	// reject 메타데이터가 url 기준으로 update 되어야 함. code 는 VAL_xxx, detail 은 비어있지 않음.
+	repo.On("UpdateValidationStatus",
+		mock.Anything,
+		content.URL,
+		storage.ValidationStatusRejected,
+		mock.MatchedBy(func(code string) bool { return strings.HasPrefix(code, "VAL_") }),
+		mock.MatchedBy(func(detail string) bool { return detail != "" }),
+	).Return(nil).Once()
+
+	runWorker(t, consumer, w, msg)
+
+	repo.AssertExpectations(t)
+}
+
+func TestValidateWorker_ValidContent_RecordsPassedInNewsArticles(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+	repo := new(mockNewsArticleRepository)
+
+	w := newWorkerWithRepo(consumer, producer, contentSvc, repo)
+
+	content := newNewsContent()
+	msg := makeProcessingMessage(content, 0)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	// passed 시에는 code/detail 모두 빈 문자열로 호출 (UpdateValidationStatus 가 NULL 로 저장)
+	repo.On("UpdateValidationStatus",
+		mock.Anything,
+		content.URL,
+		storage.ValidationStatusPassed,
+		"",
+		"",
+	).Return(nil).Once()
+
+	runWorker(t, consumer, w, msg)
+
+	repo.AssertExpectations(t)
+}
+
+func TestValidateWorker_RecordRejectedFailure_DoesNotBlockMainFlow(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+	repo := new(mockNewsArticleRepository)
+
+	w := newWorkerWithRepo(consumer, producer, contentSvc, repo)
+
+	content := newNewsContent()
+	content.Title = "x"
+	content.Body = "short body"
+	content.PublishedAt = time.Time{}
+	msg := makeProcessingMessage(content, 3)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	contentSvc.On("Delete", mock.Anything, content.ID).Return(nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	// repo update 실패 — best-effort 정책상 worker 메인 흐름 (Delete + DLQ) 은 그대로 진행되어야 함
+	repo.On("UpdateValidationStatus",
+		mock.Anything, content.URL, storage.ValidationStatusRejected,
+		mock.Anything, mock.Anything,
+	).Return(errors.New("simulated db error")).Once()
+
+	runWorker(t, consumer, w, msg)
+
+	contentSvc.AssertCalled(t, "Delete", mock.Anything, content.ID)
+	producer.AssertCalled(t, "Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	}))
 }
