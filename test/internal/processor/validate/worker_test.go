@@ -135,7 +135,9 @@ func makeProcessingMessage(content *core.Content, retryCount int) *queue.Message
 }
 
 func newWorker(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService) *validate.Worker {
-	return validate.NewWorker(consumer, producer, contentSvc, 1, config.DefaultValidateConfig())
+	// 이슈 #135 — newsArticleRepo nil 전달 시 worker 가 update 단계를 skip 하므로 기존 테스트
+	// 시나리오를 그대로 보존. 별도 테스트가 newsArticleRepo 호출 동작을 검증.
+	return validate.NewWorker(consumer, producer, contentSvc, nil, 1, config.DefaultValidateConfig())
 }
 
 func runWorker(t *testing.T, consumer *mockConsumer, w *validate.Worker, msg *queue.Message) {
