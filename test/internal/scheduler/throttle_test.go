@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -128,7 +129,7 @@ func TestBacklogThrottler_CheckerError_FailsOpen(t *testing.T) {
 // maxBacklog <= 0 이면 lag 와 무관하게 항상 false. checker 호출도 생략 (불필요한 RPC 회피).
 func TestBacklogThrottler_Disabled_AlwaysAllows(t *testing.T) {
 	for _, max := range []int64{0, -1, -1000} {
-		t.Run("", func(t *testing.T) {
+		t.Run(fmt.Sprintf("max=%d", max), func(t *testing.T) {
 			checker := &mockBacklogChecker{lag: 1_000_000} // 임계값 무관 통과 검증
 			throttler := scheduler.NewBacklogThrottler(checker, queue.GroupCrawlerWorkers, max, 0, throttleTestLogger())
 
