@@ -46,6 +46,21 @@ func (s *stubURLCache) Exists(_ context.Context, url string) (bool, error) {
 	return s.hits[url], nil
 }
 
+// cancelTriggerCache 는 첫 Exists 호출 시점에 ctx 를 cancel 하여 후속 iteration 의
+// ctx 검사 분기를 유도하기 위한 더블입니다.
+type cancelTriggerCache struct {
+	cancel context.CancelFunc
+	called atomic.Int32
+}
+
+func (c *cancelTriggerCache) Exists(_ context.Context, _ string) (bool, error) {
+	c.called.Add(1)
+	if c.cancel != nil {
+		c.cancel()
+	}
+	return false, nil
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 테스트
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,6 +196,33 @@ func TestPublisher_SetURLCache_NilUnsetsPrevious(t *testing.T) {
 
 	assert.Equal(t, 2, prod.batchSize(), "SetURLCache(nil) 후 모든 URL publish")
 	assert.Equal(t, int32(0), cache.called.Load(), "해제된 cache 는 호출되지 않음")
+}
+
+// TestPublisher_URLCache_CtxCancelled_AllowsRemaining:
+// cache 조회 도중 ctx 가 취소되면 즉시 종료하고 남은 URL 은 fail-open 으로 통과
+// (후속 PublishBatch 가 ctx 에러로 자연 실패하므로 publish 시도까지만 보존).
+// blockingCache 가 첫 호출 후 ctx 를 취소하여 두 번째 호출 직전 분기 진입을 유도.
+func TestPublisher_URLCache_CtxCancelled_AllowsRemaining(t *testing.T) {
+	prod := &gateMockProducer{}
+	pub := publisher.New(prod, noopResolver{}, gateLog())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cache := &cancelTriggerCache{cancel: cancel}
+	pub.SetURLCache(cache)
+
+	urls := []string{
+		"https://edition.cnn.com/article/1", // 첫 호출 — 캐시 호출 후 ctx 취소
+		"https://edition.cnn.com/article/2", // 두 번째 — ctx 검사에서 즉시 fail-open
+		"https://edition.cnn.com/article/3", // 세 번째 — 동일하게 fail-open
+	}
+	// PublishBatch 가 ctx.Err 로 실패하더라도 본 테스트의 관심사는 filter 결과뿐이므로
+	// gateMockProducer 는 ctx 무시 — 입력 메시지 그대로 기록.
+	_ = pub.Publish(ctx, "cnn", urls, core.TargetTypeArticle, 5*time.Second)
+
+	assert.Equal(t, 3, prod.batchSize(),
+		"ctx 취소 후 남은 URL 은 fail-open 으로 모두 batch 에 포함")
+	assert.Equal(t, int32(1), cache.called.Load(),
+		"ctx 취소 후 cache 호출 중단 — 1회만 호출")
 }
 
 // TestPublisher_URLCache_AppliedAfterGate:

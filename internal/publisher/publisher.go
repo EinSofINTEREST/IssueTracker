@@ -177,27 +177,34 @@ func (p *Publisher) Publish(
 //   - cache miss : 결과 슬라이스에 포함
 //   - 조회 실패  : fail-open (결과 슬라이스에 포함) + WARN 로그 — Redis 일시 장애가
 //     publish 를 영구 차단하지 않도록
+//   - ctx 취소   : 즉시 종료하고 남은 URL 은 fail-open 으로 그대로 통과 — 셧다운 중
+//     무의미한 cache 호출/WARN 누적 회피. 후속 PublishBatch 가 ctx 에러로 자연 실패.
 //
 // 결과 슬라이스는 입력과 다른 underlying array 로 새로 할당됩니다 (입력 mutate 없음).
+//
+// 성능: crawler/stage 필드를 갖는 sub-logger 를 루프 외부에서 1회 생성하여 재사용 —
+// per-URL map 할당 회피.
 func (p *Publisher) filterCachedURLs(ctx context.Context, urls []string, crawlerName string, cache URLCache) []string {
 	out := make([]string, 0, len(urls))
-	for _, url := range urls {
+	l := p.log.WithFields(map[string]interface{}{
+		"crawler": crawlerName,
+		"stage":   "publisher",
+	})
+
+	for i, url := range urls {
+		if err := ctx.Err(); err != nil {
+			l.WithError(err).Warn("context cancelled during cache check, allowing remaining URLs")
+			return append(out, urls[i:]...)
+		}
+
 		cached, err := cache.Exists(ctx, url)
 		if err != nil {
-			p.log.WithFields(map[string]interface{}{
-				"crawler": crawlerName,
-				"stage":   "publisher",
-				"url":     url,
-			}).WithError(err).Warn("url cache check failed, allowing publish")
+			l.WithField("url", url).WithError(err).Warn("url cache check failed, allowing publish")
 			out = append(out, url)
 			continue
 		}
 		if cached {
-			p.log.WithFields(map[string]interface{}{
-				"crawler": crawlerName,
-				"stage":   "publisher",
-				"url":     url,
-			}).Debug("url already cached, skipping publish")
+			l.WithField("url", url).Debug("url already cached, skipping publish")
 			continue
 		}
 		out = append(out, url)
