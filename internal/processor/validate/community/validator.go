@@ -37,7 +37,24 @@ func (v *Validator) Validate(_ context.Context, content *core.Content) processor
 	errs = append(errs, v.detectFlood(content)...)
 
 	score := v.qualityScore(content)
-	isValid := len(errs) == 0 && score >= float32(v.cfg.CommunityQualityThreshold)
+	threshold := float32(v.cfg.CommunityQualityThreshold)
+
+	// 이슈 #135 — 품질 점수 임계 미달이고 다른 reject 사유 없는 경우, quality_low 에러를
+	// breakdown 과 함께 명시적으로 추가하여 reject 사유의 사후 추적을 가능하게 한다.
+	if score < threshold && len(errs) == 0 {
+		bodyScore := v.scoreBody(content.Body)
+		metaScore := scoreMeta(content)
+		errs = append(errs, processor.ValidationError{
+			Field: "QualityScore",
+			Rule:  "quality_low",
+			Message: fmt.Sprintf(
+				"quality score %.3f below threshold %.3f (body=%.3f, meta=%.3f)",
+				score, threshold, bodyScore, metaScore,
+			),
+		})
+	}
+
+	isValid := len(errs) == 0 && score >= threshold
 
 	return processor.ValidationResult{
 		IsValid:      isValid,

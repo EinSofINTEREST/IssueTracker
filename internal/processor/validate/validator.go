@@ -63,7 +63,8 @@ func (p *validatorProcessor) Process(ctx context.Context, content *core.Content)
 }
 
 // codeForValidationResult는 ValidationResult.Errors 에서 첫 번째 룰을 참조하여
-// 가장 적절한 에러 코드를 결정합니다. errors 가 비어있으면 임계 미달로 간주합니다.
+// 가장 적절한 에러 코드를 결정합니다. errors 가 비어있으면 임계 미달로 간주합니다 (legacy 안전망 —
+// 이슈 #135 이후 validator 들은 임계 미달 시 명시적으로 quality_low 룰을 errors 에 추가합니다).
 func codeForValidationResult(result processor.ValidationResult) string {
 	if len(result.Errors) == 0 {
 		return core.CodeValQualityLow
@@ -78,6 +79,8 @@ func codeForValidationResult(result processor.ValidationResult) string {
 		return core.CodeValMissingField
 	case "spam_caps", "spam_punct", "spam_flood":
 		return core.CodeValSpam
+	case "quality_low":
+		return core.CodeValQualityLow
 	default:
 		return core.CodeValInvalidFormat
 	}

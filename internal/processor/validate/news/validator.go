@@ -40,7 +40,25 @@ func (v *Validator) Validate(_ context.Context, content *core.Content) processor
 	errs = append(errs, v.detectSpam(content)...)
 
 	score := v.qualityScore(content)
-	isValid := len(errs) == 0 && score >= float32(v.cfg.NewsQualityThreshold)
+	threshold := float32(v.cfg.NewsQualityThreshold)
+
+	// 이슈 #135 — 품질 점수 임계 미달이고 다른 reject 사유 없는 경우, quality_low 에러를
+	// breakdown 과 함께 명시적으로 추가. 이전에는 errs=[] 인 채로 reject 되어 사후 추적 불가.
+	if score < threshold && len(errs) == 0 {
+		wordScore := v.scoreWordCount(content.WordCount)
+		metaScore := scoreMetadata(content)
+		structScore := scoreStructure(content)
+		errs = append(errs, processor.ValidationError{
+			Field: "QualityScore",
+			Rule:  "quality_low",
+			Message: fmt.Sprintf(
+				"quality score %.3f below threshold %.3f (word=%.3f, meta=%.3f, struct=%.3f)",
+				score, threshold, wordScore, metaScore, structScore,
+			),
+		})
+	}
+
+	isValid := len(errs) == 0 && score >= threshold
 
 	return processor.ValidationResult{
 		IsValid:      isValid,
