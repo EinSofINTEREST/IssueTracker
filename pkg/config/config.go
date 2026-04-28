@@ -423,14 +423,22 @@ type SchedulerConfig struct {
 	CategoryInterval time.Duration // 카테고리 목록 폴링 주기 — SCHEDULER_CATEGORY_INTERVAL (default: 2h)
 	JobTimeout       time.Duration // 개별 Job 최대 실행 시간 — SCHEDULER_JOB_TIMEOUT (default: 30s)
 	MaxRetries       int           // Job 최대 재시도 횟수 — SCHEDULER_MAX_RETRIES (default: 3)
+
+	// Backlog throttle (이슈 #124): publish 직전 Kafka crawl 토픽의
+	// consumer-group lag 가 임계값 초과 시 발행 차단.
+	// MaxBacklog <= 0 → throttle 비활성 (기본).
+	MaxBacklog          int64         // SCHEDULER_MAX_BACKLOG (default: 0 — disabled)
+	BacklogCheckTimeout time.Duration // SCHEDULER_BACKLOG_CHECK_TIMEOUT (default: 5s)
 }
 
 // DefaultSchedulerConfig는 기본 SchedulerConfig를 반환합니다.
 func DefaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
-		CategoryInterval: 2 * time.Hour,
-		JobTimeout:       30 * time.Second,
-		MaxRetries:       3,
+		CategoryInterval:    2 * time.Hour,
+		JobTimeout:          30 * time.Second,
+		MaxRetries:          3,
+		MaxBacklog:          0, // disabled by default — opt-in via env
+		BacklogCheckTimeout: 5 * time.Second,
 	}
 }
 
@@ -468,10 +476,23 @@ func LoadScheduler(envFiles ...string) (SchedulerConfig, error) {
 		return nil
 	}
 
+	parseInt64 := func(key string, dest *int64) error {
+		if v := os.Getenv(key); v != "" {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return fmt.Errorf("parse %s %q: %w", key, v, err)
+			}
+			*dest = n
+		}
+		return nil
+	}
+
 	for _, op := range []error{
 		parseDuration("SCHEDULER_CATEGORY_INTERVAL", &cfg.CategoryInterval),
 		parseDuration("SCHEDULER_JOB_TIMEOUT", &cfg.JobTimeout),
 		parseInt("SCHEDULER_MAX_RETRIES", &cfg.MaxRetries),
+		parseInt64("SCHEDULER_MAX_BACKLOG", &cfg.MaxBacklog),
+		parseDuration("SCHEDULER_BACKLOG_CHECK_TIMEOUT", &cfg.BacklogCheckTimeout),
 	} {
 		if op != nil {
 			return SchedulerConfig{}, op

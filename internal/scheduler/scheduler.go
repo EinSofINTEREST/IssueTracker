@@ -23,13 +23,26 @@ import (
 //   - 차단된 URL 은 Emit 호출 없이 silent drop + WARN 로그
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
 //   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — Start 이후 변경에도 race 없음
+//
+// Backlog throttle (이슈 #124):
+//   - SetThrottler 로 Throttler 를 설정하면 emit 직전에 ShouldThrottle 검사
+//   - throttle 결정 시 emit 호출 없이 silent drop (구현체가 WARN 로그 책임)
+//   - 미설정 시 throttle 비활성 (기존 동작 유지)
+//   - URL 가드와 직렬 적용: gate(질적 차단) → throttle(양적 차단) → emit
 type Scheduler struct {
 	entries    []ScheduleEntry
 	emitter    Emitter
 	gate       atomic.Pointer[urlguard.Gate]
+	throttler  atomic.Pointer[throttlerRef]
 	log        *logger.Logger
 	wg         sync.WaitGroup
 	maxRetries int
+}
+
+// throttlerRef 는 atomic.Pointer 가 인터페이스 값을 직접 저장하지 못하므로
+// Throttler 인터페이스를 감싸 atomic 교체를 지원하는 wrapper 입니다.
+type throttlerRef struct {
+	t Throttler
 }
 
 // New는 새 Scheduler를 생성합니다.
@@ -70,6 +83,17 @@ func (s *Scheduler) Stop() {
 // 동시성: atomic.Pointer 기반 lock-free 설정/조회 — Start 이후 변경에도 race-safe.
 func (s *Scheduler) SetGate(g *urlguard.Gate) {
 	s.gate.Store(g)
+}
+
+// SetThrottler 는 publish 직전 throttle 결정에 사용할 Throttler 를 설정합니다.
+// nil 전달 시 throttle 비활성 (기존 동작 유지). atomic 으로 race-safe 한 swap 보장 —
+// Start 이후 throttler 를 교체해도 publish 와 race 없음.
+func (s *Scheduler) SetThrottler(t Throttler) {
+	if t == nil {
+		s.throttler.Store(nil)
+		return
+	}
+	s.throttler.Store(&throttlerRef{t: t})
 }
 
 // run은 단일 ScheduleEntry에 대한 스케줄 루프입니다.
@@ -144,6 +168,12 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 		ScheduledAt: time.Now(),
 		Timeout:     entry.Timeout,
 		MaxRetries:  s.maxRetries,
+	}
+
+	// Backlog throttle (이슈 #124): job.Priority 에 대응하는 crawl 토픽의
+	// consumer-group lag 가 임계값 초과 시 silent drop. 구현체가 WARN 로그 책임.
+	if r := s.throttler.Load(); r != nil && r.t.ShouldThrottle(ctx, job) {
+		return
 	}
 
 	if err := s.emitter.Emit(ctx, job); err != nil {
