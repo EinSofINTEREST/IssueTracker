@@ -306,7 +306,17 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 		}).WithError(err).Warn("retry republish failed, rescheduling in redis")
 
 		retryAt := time.Now().Add(s.cfg.RepublishFailureBackoff)
-		if reErr := s.client.EnqueueRetry(ctx, item.JobID, item.Payload, retryAt); reErr != nil {
+		// 셧다운 중 (ctx canceled) 에는 reschedule 까지 ctx 에러로 실패 → 다음 인스턴스가
+		// 원본 score 로 즉시 재peek (정합성 보존). 그래도 의도된 backoff 를 유지하려면
+		// drain context 로 한 번 더 시도 (Copilot #5 — 셧다운 윈도우 안전성).
+		// 원본 ctx 가 canceled 가 아니면 그대로 사용.
+		enqueueCtx := ctx
+		var cancelDrain context.CancelFunc
+		if ctx.Err() != nil {
+			enqueueCtx, cancelDrain = context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+			defer cancelDrain()
+		}
+		if reErr := s.client.EnqueueRetry(enqueueCtx, item.JobID, item.Payload, retryAt); reErr != nil {
 			s.log.WithFields(map[string]interface{}{
 				"job_id":  item.JobID,
 				"crawler": job.CrawlerName,

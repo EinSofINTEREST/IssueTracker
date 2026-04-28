@@ -174,6 +174,36 @@ func (f *fakeRetryQueue) PeekDueRetries(_ context.Context, now time.Time, limit 
 	return out, nil
 }
 
+// fakeRetryQueueCapturingCtx 는 fakeRetryQueue 에 EnqueueRetry 호출 시 ctx.Err() 를
+// 캡처하는 기능을 추가한 변형입니다. drain context 적용 여부 검증 전용.
+//
+// 호출 시점의 ctx.Err() 를 보존 — ctx 자체를 보존하면 호출자의 defer cancelDrain 이후
+// 캡처값이 canceled 로 변할 수 있음 (테스트 false negative 방지).
+type fakeRetryQueueCapturingCtx struct {
+	*fakeRetryQueue
+	mu               sync.Mutex
+	lastCtxErrAtCall error
+	captured         bool
+}
+
+func newFakeRetryQueueCapturingCtx() *fakeRetryQueueCapturingCtx {
+	return &fakeRetryQueueCapturingCtx{fakeRetryQueue: newFakeRetryQueue()}
+}
+
+func (f *fakeRetryQueueCapturingCtx) EnqueueRetry(ctx context.Context, jobID string, payload []byte, scheduledAt time.Time) error {
+	f.mu.Lock()
+	f.lastCtxErrAtCall = ctx.Err()
+	f.captured = true
+	f.mu.Unlock()
+	return f.fakeRetryQueue.EnqueueRetry(ctx, jobID, payload, scheduledAt)
+}
+
+func (f *fakeRetryQueueCapturingCtx) lastEnqueueCtxErr() (error, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastCtxErrAtCall, f.captured
+}
+
 func (f *fakeRetryQueue) AckRetry(_ context.Context, jobID string) error {
 	f.ackCallCount.Add(1)
 	if f.ackErr != nil {
@@ -453,6 +483,46 @@ func TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish(t *testing.T)
 	// 대신 Redis 큐에 등록되었는지 확인
 	assert.Len(t, q.snapshot(), 1, "주입된 RedisDelayedRetryScheduler 가 enqueue 받았음")
 	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// TestRedisDelayedRetryScheduler_RepublishOnShutdown_UsesDrainCtx 는 ctx 가 canceled
+// 인 상태에서 publish 실패 → reschedule 경로가 drain context 로 EnqueueRetry 를
+// 한 번 더 시도해 backoff 를 보존함을 검증 (Copilot #5).
+//
+// 시나리오: producer.Publish 가 호출되는 순간 parent ctx 를 cancel + ctx.Canceled
+// 반환하여 셧다운 윈도우를 시뮬레이션. 이후 republish 가 EnqueueRetry 를 호출할 때
+// drain context 로 ctx.Err()=nil 인 상태여야 함.
+func TestRedisDelayedRetryScheduler_RepublishOnShutdown_UsesDrainCtx(t *testing.T) {
+	q := newFakeRetryQueueCapturingCtx()
+	prod := new(mockProducer)
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+	cfg.RepublishFailureBackoff = 5 * time.Second
+	sched := worker.NewRedisDelayedRetryScheduler(q, prod, cfg, retrySchedTestLogger())
+
+	job := retryTestJob(core.PriorityNormal)
+	job.ScheduledAt = time.Now().Add(-time.Second)
+	require.NoError(t, sched.Enqueue(context.Background(), job, errors.New("e")))
+	require.Equal(t, int32(1), q.enqueueCallCount.Load(), "초기 enqueue 1회 — ctx 정상")
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// publish 가 호출되는 순간 parent ctx 를 cancel + ctx.Canceled 반환 → 셧다운 윈도우 시뮬
+	prod.On("Publish", mock.Anything, mock.Anything).Run(func(_ mock.Arguments) {
+		cancel()
+	}).Return(context.Canceled)
+
+	sched.Start(ctx)
+	require.Eventually(t, func() bool {
+		return q.enqueueCallCount.Load() >= 2 // 초기 + 재 enqueue
+	}, time.Second, 5*time.Millisecond, "shutdown 윈도우에서도 reschedule 시도")
+	sched.Stop()
+
+	// 마지막 enqueue 호출 시점의 ctx.Err() 가 nil 이어야 함 (drain context 적용)
+	ctxErr, captured := q.lastEnqueueCtxErr()
+	require.True(t, captured, "EnqueueRetry 가 최소 1회 호출됨")
+	assert.NoError(t, ctxErr,
+		"shutdown 중 reschedule 은 drain context 로 호출되어 호출 시점 ctx.Err()=nil")
 }
 
 // TestRedisDelayedRetryScheduler_StartStop_NoWaitGroupPanic 는 Start → ctx cancel → Stop
