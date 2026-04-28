@@ -455,6 +455,39 @@ func TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish(t *testing.T)
 	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
 }
 
+// TestRedisDelayedRetryScheduler_StartStop_NoWaitGroupPanic 는 Start → ctx cancel → Stop
+// 흐름이 race-free 하고 panic 없음을 검증 (Copilot #4 — wg.Add/Wait 패턴 안전성).
+//
+// "Add called concurrently with Wait" 패닉을 재현하려면 Start 직후 즉시 Stop 호출이
+// 필요하므로 0 sleep 으로 즉시 cancel + Stop. wg.Add 가 goroutine 시작 전에 일어나면
+// Stop 의 wg.Wait() 이 정확히 join 후 반환.
+func TestRedisDelayedRetryScheduler_StartStop_NoWaitGroupPanic(t *testing.T) {
+	q := newFakeRetryQueue()
+	prod := new(mockProducer)
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+	sched := worker.NewRedisDelayedRetryScheduler(q, prod, cfg, retrySchedTestLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sched.Start(ctx)
+
+	// 즉시 종료 — Start 와 Stop 의 race window 가 wg 패닉을 유발하지 않아야 함
+	cancel()
+
+	stopped := make(chan struct{})
+	go func() {
+		sched.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		// 정상 종료
+	case <-time.After(time.Second):
+		t.Fatal("Stop 이 1초 내 반환해야 함 — wg.Wait deadlock 의심")
+	}
+}
+
 // TestRedisDelayedRetryScheduler_DefaultConfigBoundary 는 cfg 의 0/음수 값이 default 로
 // 보정됨을 검증 (NewRedisDelayedRetryScheduler 의 fail-safe).
 func TestRedisDelayedRetryScheduler_DefaultConfigBoundary(t *testing.T) {

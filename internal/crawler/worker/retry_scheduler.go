@@ -189,12 +189,26 @@ func (s *RedisDelayedRetryScheduler) Enqueue(ctx context.Context, job *core.Craw
 	return nil
 }
 
-// Run 은 ctx 가 cancel 될 때까지 polling 을 반복합니다. Stop 이 wg 를 join 하므로
-// 별도 goroutine 으로 호출하세요.
-func (s *RedisDelayedRetryScheduler) Run(ctx context.Context) {
+// Start 는 polling 루프를 별도 goroutine 으로 시작합니다.
+//
+// WaitGroup 안전성: wg.Add(1) 을 goroutine 시작 전에 호출하여 "Add called concurrently
+// with Wait" 패닉을 방지합니다 (Copilot 피드백 — 코드베이스의 internal/scheduler 와
+// 동일 패턴). Stop 이 wg.Wait() 으로 join 합니다.
+func (s *RedisDelayedRetryScheduler) Start(ctx context.Context) {
 	s.wg.Add(1)
-	defer s.wg.Done()
+	go func() {
+		defer s.wg.Done()
+		s.Run(ctx)
+	}()
+}
 
+// Run 은 ctx 가 cancel 될 때까지 polling 을 반복합니다. **동기 실행 루프** 만 담당하며
+// goroutine / WaitGroup 등록은 Start 또는 호출자가 책임집니다.
+//
+// 호출 패턴:
+//   - 권장: Start(ctx) 사용 (자동 wg 등록)
+//   - 직접 호출: 호출자가 wg.Add 를 미리 한 뒤 별도 goroutine 으로 호출 (Stop 이 wait)
+func (s *RedisDelayedRetryScheduler) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.PollInterval)
 	defer ticker.Stop()
 
@@ -214,7 +228,7 @@ func (s *RedisDelayedRetryScheduler) Run(ctx context.Context) {
 	}
 }
 
-// Stop 은 Run goroutine 이 종료될 때까지 대기합니다 (ctx cancel 후 호출).
+// Stop 은 Start 로 시작된 goroutine 이 종료될 때까지 대기합니다 (ctx cancel 후 호출).
 func (s *RedisDelayedRetryScheduler) Stop() {
 	s.wg.Wait()
 }

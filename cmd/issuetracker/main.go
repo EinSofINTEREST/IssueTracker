@@ -118,7 +118,7 @@ func main() {
 				log,
 			)
 			runCtx, cancelRun := context.WithCancel(ctx)
-			go redisRetry.Run(runCtx)
+			redisRetry.Start(runCtx) // 내부에서 wg.Add 후 go Run — 패닉 안전
 			retryScheduler = redisRetry
 			retrySchedulerStop = func() {
 				cancelRun()
