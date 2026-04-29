@@ -54,11 +54,27 @@ func (e *Error) Error() string {
 // Unwrap 은 errors.As / errors.Is 가 wrap chain 을 따라가도록 합니다.
 func (e *Error) Unwrap() error { return e.Err }
 
-// Is 는 errors.Is 호환 비교 — Code 가 같으면 true (다른 필드 무시).
+// Is 는 errors.Is 호환 비교입니다 (Gemini code review 피드백 반영).
+//
+// target 의 비어있지 않은 모든 필드에 대해 AND 비교를 수행 — 호출자가 부분 매칭으로
+// 분기 가능 ("Code=='no_rule' 인 모든 Error" / "Host=='naver.com' 인 ErrParseFailure" 등).
+// target 의 모든 식별 필드가 비어있으면 모든 Error 와 매칭됨 (errors.Is 의 일반적 의미).
 func (e *Error) Is(target error) bool {
 	t, ok := target.(*Error)
 	if !ok {
 		return false
 	}
-	return t.Code == "" || e.Code == t.Code
+	if t.Code != "" && e.Code != t.Code {
+		return false
+	}
+	if t.Host != "" && e.Host != t.Host {
+		return false
+	}
+	if t.URL != "" && e.URL != t.URL {
+		return false
+	}
+	if t.TargetType != "" && e.TargetType != t.TargetType {
+		return false
+	}
+	return true
 }

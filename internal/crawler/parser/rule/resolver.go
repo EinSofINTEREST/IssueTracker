@@ -175,8 +175,11 @@ func extractHost(rawURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse url: %w", err)
 	}
-	if u.Host == "" {
+	// u.Hostname() — 포트 부분 ":8080" 을 제거 (Gemini code review 피드백).
+	// DB 의 host_pattern 이 순수 호스트네임이라 포트 포함 매칭 실패 회피.
+	host := u.Hostname()
+	if host == "" {
 		return "", fmt.Errorf("empty host in url %q", rawURL)
 	}
-	return strings.ToLower(u.Host), nil
+	return strings.ToLower(host), nil
 }

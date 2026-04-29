@@ -14,6 +14,11 @@ import (
 	"issuetracker/internal/storage"
 )
 
+// resolveTimeout 은 ContentParser/LinkListParser 인터페이스가 ctx 인자를 받지 못해
+// background ctx 를 사용해야 하는 경우의 안전망입니다 (Gemini code review #1, #2 피드백).
+// Resolver 의 Redis/cache 핫패스가 막혀도 호출 worker 가 영원히 block 되지 않도록 5초.
+const resolveTimeout = 5 * time.Second
+
 // Parser 는 DB 기반 파싱 규칙으로 동작하는 단일 page parser engine 입니다 (이슈 #100).
 //
 // Parser implements both parser.ContentParser and parser.LinkListParser, driven by
@@ -65,11 +70,13 @@ func defaultDateLayouts() []string {
 //  3. Title selector 누락 → ErrEmptySelector (필수 필드)
 //  4. MainContent 매칭 0건 → ErrParseFailure (selector 는 있지만 매칭 0건 = stale rule 진단)
 func (p *Parser) ParsePage(raw *core.RawContent) (*parser.Page, error) {
-	if raw == nil || raw.HTML == "" {
-		return nil, &Error{Code: ErrParseFailure, Message: "raw content empty"}
+	if err := validateRaw(raw); err != nil {
+		return nil, err
 	}
 
-	rule, err := p.resolver.ResolveByURL(context.Background(), raw.URL, storage.TargetTypePage)
+	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
+	defer cancel()
+	rule, err := p.resolver.ResolveByURL(ctx, raw.URL, storage.TargetTypePage)
 	if err != nil {
 		return nil, err
 	}
@@ -100,10 +107,11 @@ func (p *Parser) ParsePage(raw *core.RawContent) (*parser.Page, error) {
 		PublishedAt: p.extractDate(doc, rule.Selectors.PublishedAt),
 	}
 
-	if page.MainContent == "" {
+	// Title 도 MainContent 와 동등한 필수 — selector 는 있지만 추출 결과 빈 경우도 stale 진단 (Gemini #5).
+	if page.Title == "" || page.MainContent == "" {
 		return nil, &Error{
 			Code:       ErrParseFailure,
-			Message:    "MainContent selector matched 0 elements (rule may be stale)",
+			Message:    "Title or MainContent selector matched 0 elements (rule may be stale)",
 			URL:        raw.URL,
 			TargetType: string(storage.TargetTypePage),
 		}
@@ -120,11 +128,13 @@ func (p *Parser) ParsePage(raw *core.RawContent) (*parser.Page, error) {
 //  3. 각 item 안에서 ItemLink (href) / ItemTitle / ItemSnippet 추출
 //  4. 상대 URL 은 raw.URL base 로 절대 URL 화
 func (p *Parser) ParseLinks(raw *core.RawContent) ([]parser.LinkItem, error) {
-	if raw == nil || raw.HTML == "" {
-		return nil, &Error{Code: ErrParseFailure, Message: "raw content empty"}
+	if err := validateRaw(raw); err != nil {
+		return nil, err
 	}
 
-	rule, err := p.resolver.ResolveByURL(context.Background(), raw.URL, storage.TargetTypeList)
+	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
+	defer cancel()
+	rule, err := p.resolver.ResolveByURL(ctx, raw.URL, storage.TargetTypeList)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +177,30 @@ func (p *Parser) ParseLinks(raw *core.RawContent) ([]parser.LinkItem, error) {
 			Snippet: extractFieldFromSelection(container, rule.Selectors.ItemSnippet),
 		})
 	})
+
+	// 결과 0건 → ItemContainer 가 사이트 구조 변경으로 매칭 실패 (stale rule 진단, Gemini #7).
+	if len(items) == 0 {
+		return nil, &Error{
+			Code:       ErrParseFailure,
+			Message:    "ItemContainer selector matched 0 elements (rule may be stale)",
+			URL:        raw.URL,
+			TargetType: string(storage.TargetTypeList),
+		}
+	}
 	return items, nil
+}
+
+// validateRaw 는 ParsePage / ParseLinks 의 공통 raw 검증입니다 (Gemini #4, #6).
+// raw 가 nil 이거나 HTML 이 비어있으면 진단 친화적으로 raw.URL 을 포함한 Error 반환.
+func validateRaw(raw *core.RawContent) error {
+	if raw != nil && raw.HTML != "" {
+		return nil
+	}
+	var u string
+	if raw != nil {
+		u = raw.URL
+	}
+	return &Error{Code: ErrParseFailure, Message: "raw content empty", URL: u}
 }
 
 // extractField 는 단일 필드를 추출합니다 (selector 가 nil 이면 빈 문자열).
