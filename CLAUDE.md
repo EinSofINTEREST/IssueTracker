@@ -19,6 +19,7 @@
 | 에러 처리 | `.claude/rules/04-error-handling.md` | 에러 타입, 재시도, 로깅 필드 |
 | 테스트 작성 | `.claude/rules/05-testing.md` | test/ 디렉토리 구조, 커버리지 70% |
 | 아키텍처 이해 | `.claude/rules/01-architecture.md` | 레이어, 디렉토리, 데이터 흐름 |
+| **AI 작업 진행** | `.claude/rules/07-workflow.md` | **자율 진행 / commit-per-TODO / PR 자동 / 권한 최소화** |
 | CI/머지 게이트 | `docs/ci/conventions.md` | Required checks, CODEOWNERS, Ruleset |
 | Status check 이름 | `docs/ci/status-checks.md` | 단일 소스, 변경 절차 |
 
@@ -27,7 +28,7 @@
 이 규칙을 어기면 CI가 실패하여 머지가 차단됩니다. "하지 마"가 아니라 **못 합니다.**
 
 1. **커밋 메시지**: `[FEAT]:` / `[FIX]:` / `[REFAC]:` / `[DOCS]:` / `[CHORE]:` 로 시작. 한국어.
-2. **PR 타이틀**: `[카테고리#이슈번호] 제목` 또는 `[카테고리#이슈번호]: 제목` (CI 정규식 강제, 이슈 #121). 카테고리는 위 5종, 이슈번호 누락이나 카테고리 오타 시 머지 차단.
+2. **PR 타이틀**: `[카테고리#이슈번호] 제목` (CI 정규식 강제, 이슈 #121). 카테고리는 위 5종, 이슈번호 누락이나 카테고리 오타 시 머지 차단.
 3. **gofmt**: `gofmt -w .` 로 포맷 정리 후 커밋.
 4. **빌드**: `go build ./...` 통과.
 5. **테스트**: `go test -race ./...` 통과. 커버리지 70% 이상.
@@ -59,6 +60,15 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 - [ ] 관련 규칙 문서를 **목차에서 찾아** 읽었는가? (전체 읽기 금지)
 - [ ] 커밋 메시지가 `[카테고리]: 한국어 설명` 형식인가?
 - [ ] `make fmt && make lint && make test` 를 로컬에서 통과했는가?
+
+## AI 작업 진행 규약 (이슈 #152)
+
+상세는 [`.claude/rules/07-workflow.md`](.claude/rules/07-workflow.md). 핵심 4 규약:
+
+1. **자율 진행** — 시스템 변경 / destructive 권한 / 외부 영향 / 모호 영역만 사용자 확인. 그 외는 쿼리 의도 기반 자율 진행.
+2. **Commit-per-TODO** — 별 언급 없으면 논리적 변경 단위마다 commit (메시지 컨벤션 준수).
+3. **PR 자동 생성** — 작업 완료 직후 컨벤션 + 템플릿 준수해서 PR 자동 생성.
+4. **권한 사용 최소화** — 새 permission / 외부 도구 / 의존성은 작업 완수에 불가피한 경우에만.
 
 ## PR 생성 후 자동 동작 (이슈 #129)
 

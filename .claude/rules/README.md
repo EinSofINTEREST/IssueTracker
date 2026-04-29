@@ -125,6 +125,21 @@ Essential for:
 - Team collaboration
 - Code review efficiency
 
+### [07-workflow.md](07-workflow.md)
+**AI Workflow Conventions** (이슈 #152)
+
+Covers:
+- Autonomous progression policy — when AI proceeds without user approval
+- Exception zones (system changes / destructive perms / external impact / ambiguous scope)
+- Commit-per-TODO policy
+- PR auto-creation policy with template + closing reference
+- Least-privilege permission usage
+
+Essential for:
+- AI-assisted development efficiency
+- Reducing user-approval friction during routine work
+- Safe boundary enforcement on destructive / external operations
+
 ## Quick Start Guide
 
 ### For New Developers

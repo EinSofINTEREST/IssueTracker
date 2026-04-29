@@ -30,6 +30,12 @@
 - 의도가 불명확한 피드백 → PR에 질문 코멘트를 남김
   - 질문 시, 질문 주체를 "@"를 통해 언급해주어야 함
 - 처리 완료한 코멘트에 👀 리액션 추가, Resolve conversation
+  - **일괄 처리는 헬퍼 스크립트 사용** — 1회 호출로 reaction + resolve 모두 수행:
+    ```bash
+    scripts/pr-resolve-comments.sh <PR번호> <comment_id1> [<comment_id2> ...]
+    ```
+    예: `scripts/pr-resolve-comments.sh 153 3160753464 3160753479 3160762665`
+    각 회차에서 처리한 모든 comment_id 를 한 번에 전달 — 개별 `gh api` 호출 회피.
 
 ## 커밋 규칙
 - 메시지 형식
@@ -43,7 +49,12 @@
 회차의 마지막 단계로 항상 수행합니다.
 
 ### 1. 상태 파일
-경로: `.claude/loop-state.json` (gitignore 대상 — 세션/체크아웃 로컬 상태)
+경로: `/tmp/issuetracker-loop-state.json` (세션/체크아웃 로컬 상태)
+
+`/tmp` 경로 사용 이유:
+- `.claude/` 아래에 두면 매 회차 Edit/Write 마다 권한 prompt 발생 — loop 자율성 훼손
+- `/tmp` 는 `additionalDirectories` 에 이미 등록 — 권한 추가 없이 자유롭게 read/write
+- 시스템 재기동 시 자동 정리 — 별도 cleanup 불필요 (loop 자체가 idle_streak 초기화)
 
 스키마:
 ```json
