@@ -35,3 +35,11 @@ go.work.sum
 
 # Claude session state (loop auto-stop counter — local only)
 .claude/loop-state.json
+
+# Debug logs (local-only)
+debug.log
+debug_ext.log
+debug_*.log
+
+# Claude scheduler lock (session-local)
+.claude/scheduled_tasks.lock
