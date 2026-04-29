@@ -156,6 +156,10 @@ func (s *mockContentService) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (s *mockContentService) UpdateValidationStatus(_ context.Context, _, _, _, _ string) error {
+	return nil
+}
+
 // =========================================================
 // 테스트용 크롤러 핸들러
 // =========================================================

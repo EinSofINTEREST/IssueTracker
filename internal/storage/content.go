@@ -52,4 +52,17 @@ type ContentRepository interface {
 
 	// ExistsByURL은 해당 URL의 content가 존재하는지 확인합니다.
 	ExistsByURL(ctx context.Context, url string) (bool, error)
+
+	// UpdateValidationStatus updates validator result metadata for the content with the given id.
+	// If status != ValidationStatusRejected, code/detail are ignored and persisted as NULL.
+	// Returns ErrNotFound if the id does not exist.
+	// Also refreshes updated_at to NOW() for audit trail consistency.
+	//
+	// id 기준으로 validator 결과 메타데이터를 갱신합니다 (이슈 #135 / #161).
+	// status 가 ValidationStatusRejected 가 아니면 code/detail 은 NULL 로 저장됩니다.
+	// 호출은 validator worker 가 contentSvc.Delete 직전에 수행합니다.
+	//
+	// id 사용 이유 (PR #163 gemini 피드백): url unique 인덱스보다 primary key 가 효율적이고,
+	// URL 정규화 정책 (whitelist 기반 query 파라미터 strip) 과 무관하게 매칭이 보장됩니다.
+	UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error
 }

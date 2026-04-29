@@ -108,6 +108,11 @@ func (m *mockContentService) Delete(ctx context.Context, id string) error {
 	return args.Error(0)
 }
 
+func (m *mockContentService) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
+	args := m.Called(ctx, url, status, code, detail)
+	return args.Error(0)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 헬퍼
 // ─────────────────────────────────────────────────────────────────────────────

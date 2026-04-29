@@ -47,6 +47,10 @@ type ContentService interface {
 	// ON DELETE CASCADE로 content_bodies, content_meta도 함께 삭제됩니다.
 	// 존재하지 않아도 에러를 반환하지 않습니다.
 	Delete(ctx context.Context, id string) error
+
+	// UpdateValidationStatus updates validator result metadata for the given content id (이슈 #135 / #161).
+	// 자세한 내용은 storage.ContentRepository.UpdateValidationStatus 참조.
+	UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error
 }
 
 // contentService는 ContentService의 구현체입니다.
@@ -151,6 +155,12 @@ func (s *contentService) Search(ctx context.Context, filter storage.ContentFilte
 // Delete는 ID로 content를 삭제합니다.
 func (s *contentService) Delete(ctx context.Context, id string) error {
 	return s.repo.Delete(ctx, id)
+}
+
+// UpdateValidationStatus updates validator result metadata for the given content id.
+// repo 의 동일 메소드를 그대로 위임합니다 (현재 추가 비즈니스 로직 없음).
+func (s *contentService) UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error {
+	return s.repo.UpdateValidationStatus(ctx, id, status, code, detail)
 }
 
 // CountByCountry는 최근 N일간 국가별 content 수를 반환합니다.
