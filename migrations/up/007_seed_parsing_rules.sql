@@ -105,7 +105,7 @@ INSERT INTO parsing_rules (source_name, host_pattern, target_type, version, enab
 VALUES
 ('cnn', 'edition.cnn.com', 'list', 1, TRUE, $${
   "link_discovery": {
-    "article_url_pattern": "^https?://(?:edition|www|amp)\\.cnn\\.com/\\d{4}/\\d{2}/\\d{2}/",
+    "article_url_pattern": "^https?://edition\\.cnn\\.com/\\d{4}/\\d{2}/\\d{2}/",
     "same_origin_only":    false,
     "max_links_per_page":  200,
     "exclude_patterns":    ["/videos/", "/gallery/", "/live-news/"]

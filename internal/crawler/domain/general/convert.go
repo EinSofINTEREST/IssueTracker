@@ -46,13 +46,21 @@ func ConvertPage(page *parser.Page, raw *core.RawContent) *core.Content {
 
 // PageToRecord 는 parser.Page + RawContent 를 storage.NewsArticleRecord 로 변환합니다.
 // 모든 사이트가 news_articles 테이블에 기록 — 본 함수 호출은 옵셔널 (chain handler 에서 repo nil 검사).
+//
+// URL 우선순위는 ConvertPage 와 동일 — page.URL → raw.URL. 파서가 canonical URL 을
+// 채운 경우 두 출력 (Content + Record) 이 같은 URL 을 보유해 dedup 정합성 유지
+// (Coderabbit / Gemini 피드백 — 일관성 강화).
 func PageToRecord(page *parser.Page, raw *core.RawContent) *storage.NewsArticleRecord {
+	url := page.URL
+	if url == "" {
+		url = raw.URL
+	}
 	record := &storage.NewsArticleRecord{
 		SourceName: raw.SourceInfo.Name,
 		SourceType: string(raw.SourceInfo.Type),
 		Country:    raw.SourceInfo.Country,
 		Language:   raw.SourceInfo.Language,
-		URL:        raw.URL,
+		URL:        url,
 		Title:      page.Title,
 		Body:       page.MainContent,
 		Summary:    page.Summary,
@@ -99,7 +107,11 @@ func rssItemToContent(item map[string]interface{}, raw *core.RawContent) *core.C
 
 	var publishedAt time.Time
 	if s, ok := item["published_at"].(string); ok && s != "" {
-		publishedAt, _ = time.Parse(time.RFC3339, s)
+		// 파싱 실패는 zero value 유지 (validator 가 zero 검사로 분기) — 비표준 RSS 형식 흡수.
+		// 명시적 if 분기는 errcheck (golangci-lint) 통과 + 의도 가시화 (Gemini 피드백).
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			publishedAt = t
+		}
 	}
 
 	return &core.Content{
