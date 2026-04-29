@@ -71,7 +71,9 @@ func (m *MockContentRepository) ExistsByURL(ctx context.Context, url string) (bo
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *MockContentRepository) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
-	args := m.Called(ctx, url, status, code, detail)
+// UpdateValidationStatus records a mock invocation matching the ContentRepository contract.
+// 호출 인자를 testify mock 에 그대로 위임하며, 사전 등록된 expectation 의 반환값을 사용합니다.
+func (m *MockContentRepository) UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error {
+	args := m.Called(ctx, id, status, code, detail)
 	return args.Error(0)
 }
