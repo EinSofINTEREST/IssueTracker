@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/publisher"
 	"issuetracker/internal/scheduler"
+	"issuetracker/internal/storage"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -88,8 +90,19 @@ func main() {
 	ruleResolver := rule.NewResolver(parsingRuleRepo)
 	ruleParser := rule.NewParser(ruleResolver)
 
-	kr.Register(registry, core.DefaultConfig(), ruleParser, newsRepo, jobPublisher, log)
-	us.Register(registry, core.DefaultConfig(), ruleParser, newsRepo, jobPublisher, log)
+	// Readiness check: 사이트 등록 전 parsing_rules 가 seed 됐는지 검증 (Coderabbit 피드백).
+	// 부재 시 fail-fast — 실행 중 모든 ParsePage/ParseLinks 가 ErrNoRule 로 죽는 것보다 즉시 종료.
+	// migration 007 (또는 동등한 운영자 seed) 가 적용되어야 통과.
+	if err := verifyParsingRulesSeeded(ctx, ruleResolver); err != nil {
+		log.WithError(err).Fatal("parsing_rules seed missing — apply migration 007 before deploy")
+	}
+
+	if err := kr.Register(registry, core.DefaultConfig(), ruleParser, newsRepo, jobPublisher, log); err != nil {
+		log.WithError(err).Fatal("failed to register kr crawlers")
+	}
+	if err := us.Register(registry, core.DefaultConfig(), ruleParser, newsRepo, jobPublisher, log); err != nil {
+		log.WithError(err).Fatal("failed to register us crawlers")
+	}
 
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
@@ -263,4 +276,31 @@ func main() {
 	}
 
 	log.Info("shutdown completed")
+}
+
+// verifyParsingRulesSeeded 는 본 PR 이 등록할 모든 사이트의 (host, target_type) 페어가
+// parsing_rules 테이블에 활성 row 로 존재하는지 확인합니다.
+//
+// 부재 시 ErrNoRule 등 진단 에러를 그대로 반환 — 호출자가 Fatal 로 부팅 차단.
+// migration 007 이 적용되어야 통과 (또는 운영자가 동등한 row 를 직접 입력).
+func verifyParsingRulesSeeded(ctx context.Context, resolver *rule.Resolver) error {
+	required := []struct {
+		host string
+		typ  storage.TargetType
+	}{
+		{"n.news.naver.com", storage.TargetTypePage},
+		{"news.naver.com", storage.TargetTypeList},
+		{"v.daum.net", storage.TargetTypePage},
+		{"news.daum.net", storage.TargetTypeList},
+		{"www.yna.co.kr", storage.TargetTypePage},
+		{"www.yna.co.kr", storage.TargetTypeList},
+		{"edition.cnn.com", storage.TargetTypePage},
+		{"edition.cnn.com", storage.TargetTypeList},
+	}
+	for _, r := range required {
+		if _, err := resolver.Resolve(ctx, r.host, r.typ); err != nil {
+			return fmt.Errorf("missing rule for (%s, %s): %w", r.host, r.typ, err)
+		}
+	}
+	return nil
 }

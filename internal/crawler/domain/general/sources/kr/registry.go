@@ -5,6 +5,8 @@
 package kr
 
 import (
+	"fmt"
+
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/crawler/domain/general"
 	"issuetracker/internal/crawler/domain/general/fetcher"
@@ -22,6 +24,8 @@ import (
 // Register 는 모든 한국 사이트 크롤러를 registry 에 등록합니다.
 // repo 가 nil 이면 DB 저장 건너뜀, publisher 가 nil 이면 카테고리 체이닝 건너뜀.
 // parser 는 rule 기반 단일 인스턴스 — 모든 사이트가 공유 (parsing_rules row 가 사이트 동작 결정).
+//
+// 등록 중 wiring 실패 (BuildChain misconfig 등) 시 error 반환 — 호출자가 fail-fast 결정.
 func Register(
 	registry *handler.Registry,
 	config core.Config,
@@ -29,10 +33,17 @@ func Register(
 	repo storage.NewsArticleRepository,
 	publisher general.JobPublisher,
 	log *logger.Logger,
-) {
-	registerNaver(registry, config, parser, repo, publisher, log)
-	registerYonhap(registry, config, parser, repo, publisher, log)
-	registerDaum(registry, config, parser, repo, publisher, log)
+) error {
+	if err := registerNaver(registry, config, parser, repo, publisher, log); err != nil {
+		return err
+	}
+	if err := registerYonhap(registry, config, parser, repo, publisher, log); err != nil {
+		return err
+	}
+	if err := registerDaum(registry, config, parser, repo, publisher, log); err != nil {
+		return err
+	}
+	return nil
 }
 
 // 사이트별 등록의 공통 패턴:
@@ -42,7 +53,7 @@ func Register(
 //
 // 호출자가 넘긴 config 의 의미: 향후 전역 default 가 필요할 때를 위한 시그니처 보존 — 현재는 무시.
 
-func registerNaver(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
+func registerNaver(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) error {
 	cfg := naver.Default()
 
 	gqCrawler := goquery.NewGoqueryCrawler("naver-goquery", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig)
@@ -53,28 +64,36 @@ func registerNaver(registry *handler.Registry, _ core.Config, parser *rule.Parse
 	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
 	crawler := general.NewGenericCrawler("naver", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	chain := general.BuildChain(nil, gqFetcher, brFetcher, log,
+	chain, err := general.BuildChain(nil, gqFetcher, brFetcher, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
+	if err != nil {
+		return fmt.Errorf("naver chain wiring: %w", err)
+	}
 
 	registry.Register("naver", general.NewChainHandler(crawler, chain, parser, publisher, repo, log))
 	log.WithField("crawler", "naver").Info("naver crawler registered")
+	return nil
 }
 
-func registerYonhap(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
+func registerYonhap(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) error {
 	cfg := yonhap.Default()
 
 	gqCrawler := goquery.NewGoqueryCrawler("yonhap-goquery", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
 	crawler := general.NewGenericCrawler("yonhap", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	chain := general.BuildChain(nil, gqFetcher, nil, log)
+	chain, err := general.BuildChain(nil, gqFetcher, nil, log)
+	if err != nil {
+		return fmt.Errorf("yonhap chain wiring: %w", err)
+	}
 
 	registry.Register("yonhap", general.NewChainHandler(crawler, chain, parser, publisher, repo, log))
 	log.WithField("crawler", "yonhap").Info("yonhap crawler registered")
+	return nil
 }
 
-func registerDaum(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
+func registerDaum(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) error {
 	cfg := daum.Default()
 
 	gqCrawler := goquery.NewGoqueryCrawler("daum-goquery", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig)
@@ -84,10 +103,14 @@ func registerDaum(registry *handler.Registry, _ core.Config, parser *rule.Parser
 	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
 	crawler := general.NewGenericCrawler("daum", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	chain := general.BuildChain(nil, gqFetcher, brFetcher, log,
+	chain, err := general.BuildChain(nil, gqFetcher, brFetcher, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
+	if err != nil {
+		return fmt.Errorf("daum chain wiring: %w", err)
+	}
 
 	registry.Register("daum", general.NewChainHandler(crawler, chain, parser, publisher, repo, log))
 	log.WithField("crawler", "daum").Info("daum crawler registered")
+	return nil
 }

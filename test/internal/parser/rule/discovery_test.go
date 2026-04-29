@@ -228,6 +228,22 @@ func TestPageLinkDiscovery_EmptyRaw_ReturnsParseFailure(t *testing.T) {
 	assert.Equal(t, rule.ErrParseFailure, rerr.Code)
 }
 
+// TestPageLinkDiscovery_ExtractorFailure_ReturnsParseFailure 는 pkg/links.Extractor.Extract
+// 가 내부적으로 실패하는 케이스를 다룹니다 (Coderabbit 피드백 — 에러 경로 100% 커버).
+//
+// Extract 는 url.Parse(raw.URL) 가 실패할 때 에러 반환 — invalid base URL 로 트리거.
+func TestPageLinkDiscovery_ExtractorFailure_ReturnsParseFailure(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{ArticleURLPattern: `/article/`}
+
+	// raw.URL 이 control character 포함 → url.Parse 실패 → extractor 의 resolveBase 실패
+	_, err := d.Discover(makeRaw("http://example.com/\x7f", fullPageHTML), cfg)
+	require.Error(t, err)
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrParseFailure, rerr.Code, "extractor 내부 실패는 ErrParseFailure 로 전파")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // rule.Parser.ParseLinks 분기 — LinkDiscovery vs ItemContainer
 // ─────────────────────────────────────────────────────────────────────────────

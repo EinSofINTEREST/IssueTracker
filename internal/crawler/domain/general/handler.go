@@ -209,7 +209,11 @@ func (h *BrowserFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 
 // BuildChain 은 RSS → GoQuery → Browser 순서의 체인을 조립합니다.
 // nil fetcher 는 체인에서 제외 — 사이트별 지원 전략만 포함.
-func BuildChain(rss RSSFetcher, gq Fetcher, br Fetcher, log *logger.Logger, lazyKeywords ...string) Handler {
+//
+// 호출자 (registry) 는 wiring 단계에서 fetcher 를 누락한 설정 오류를 검출하기 위해
+// (Handler, error) 를 받음. panic 대신 error 반환으로 전환 — production code 가 부팅
+// 단계 misconfig 로 crash 하지 않도록 (Coderabbit 피드백).
+func BuildChain(rss RSSFetcher, gq Fetcher, br Fetcher, log *logger.Logger, lazyKeywords ...string) (Handler, error) {
 	var handlers []Handler
 	if rss != nil {
 		handlers = append(handlers, NewRSSFetchHandler(rss, log))
@@ -221,10 +225,10 @@ func BuildChain(rss RSSFetcher, gq Fetcher, br Fetcher, log *logger.Logger, lazy
 		handlers = append(handlers, NewBrowserFetchHandler(br, log))
 	}
 	if len(handlers) == 0 {
-		panic("BuildChain: at least one fetcher must be non-nil")
+		return nil, fmt.Errorf("BuildChain: at least one fetcher (rss / goquery / browser) must be non-nil")
 	}
 	for i := 0; i < len(handlers)-1; i++ {
 		handlers[i].SetNext(handlers[i+1])
 	}
-	return handlers[0]
+	return handlers[0], nil
 }
