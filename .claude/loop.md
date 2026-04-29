@@ -56,7 +56,7 @@
 이유:
 - CI 가 PENDING 인 동안에는 곧 처리할 일이 발생할 가능성이 있으므로 카운터를 올리지 않음 (이슈 #160).
 - CodeRabbit / gemini 등 review bot 의 PENDING 도 동일하게 흡수 — 응답 전 첫 리뷰 기다림이 자동 보호됨.
-- 그래서 \`responded\` 필드 기반 분기 (응답 후 2 / 응답 전 3) 가 불필요해져 단일 임계값 2 로 통일.
+- 그래서 `responded` 필드 기반 분기 (응답 후 2 / 응답 전 3) 가 불필요해져 단일 임계값 2 로 통일.
 
 ### 1. 상태 파일
 경로: `/tmp/issuetracker-loop-state.json` (세션/체크아웃 로컬 상태)
@@ -87,7 +87,7 @@ PR 번호는 1단계의 gh pr view 결과에서 얻은 number를 사용합니다
 - CI 실패 복구로 commit + push
 - 리뷰 피드백 반영으로 commit + push
 - 새 질문 코멘트 작성
-- 신규 코멘트에 👀 reaction + thread resolve
+- 신규 코멘트에 👀 reaction + thread resolve **— 단순 동의/확인 답변뿐인 케이스는 idle 로 분류**
 
 **pending (CI 진행 중 — 카운터 동결)**
 - `statusCheckRollup` 에 IN_PROGRESS / QUEUED / PENDING 인 항목이 하나라도 있고 FAILURE 가 없는 상태
