@@ -14,6 +14,7 @@ import (
 	"issuetracker/internal/crawler/handler"
 	"issuetracker/internal/crawler/parser/rule"
 	crawlerWorker "issuetracker/internal/crawler/worker"
+	parserWorker "issuetracker/internal/parser/worker"
 	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/publisher"
 	"issuetracker/internal/scheduler"
@@ -26,7 +27,12 @@ import (
 	"issuetracker/pkg/redis"
 )
 
-const validateWorkerCount = 8
+const (
+	validateWorkerCount = 8
+	// parserWorkerCount: TopicFetched consumer group (issuetracker-parsers) 의 worker 수.
+	// fetcher worker 와 독립 — chromedp/LLM 등으로 parser 가 무거워질 때 별도 스케일 (이슈 #134).
+	parserWorkerCount = 6
+)
 
 func main() {
 	log := logger.New(logger.DefaultConfig())
@@ -90,22 +96,27 @@ func main() {
 	ruleResolver := rule.NewResolver(parsingRuleRepo)
 	ruleParser := rule.NewParser(ruleResolver)
 
-	// Readiness check: 사이트 등록 전 parsing_rules 가 seed 됐는지 검증 (Coderabbit 피드백).
+	// Readiness check: 사이트 등록 전 parsing_rules 가 seed 됐는지 검증.
 	// 부재 시 fail-fast — 실행 중 모든 ParsePage/ParseLinks 가 ErrNoRule 로 죽는 것보다 즉시 종료.
 	// migration 007 (또는 동등한 운영자 seed) 가 적용되어야 통과.
 	if err := verifyParsingRulesSeeded(ctx, ruleResolver); err != nil {
 		log.WithError(err).Fatal("parsing_rules seed missing — apply migration 007 before deploy")
 	}
 
-	if err := kr.Register(registry, core.DefaultConfig(), ruleParser, newsRepo, jobPublisher, log); err != nil {
-		log.WithError(err).Fatal("failed to register kr crawlers")
-	}
-	if err := us.Register(registry, core.DefaultConfig(), ruleParser, newsRepo, jobPublisher, log); err != nil {
-		log.WithError(err).Fatal("failed to register us crawlers")
-	}
+	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제 (이슈 #134).
+	rawRepo := pgstore.NewRawContentRepository(pool, log)
+	rawSvc := service.NewRawContentService(rawRepo, log)
 
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
+
+	// fetcher 측 등록 (이슈 #134 분리 후): chain handler 가 raw_contents 저장 + RawContentRef 발행만 수행.
+	if err := kr.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, log); err != nil {
+		log.WithError(err).Fatal("failed to register kr crawlers")
+	}
+	if err := us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, log); err != nil {
+		log.WithError(err).Fatal("failed to register us crawlers")
+	}
 
 	// Redis 기반 JobLocker: 동일 job_id가 여러 worker/인스턴스에서 중복 처리되는 것을 방지합니다.
 	// worker/manager가 JobLocker nil을 NoopJobLocker로 fallback 처리하는 설계와 일관되게,
@@ -177,6 +188,26 @@ func main() {
 		"normal_workers": managerCfg.Normal.WorkerCount,
 		"low_workers":    managerCfg.Low.WorkerCount,
 	}).Info("crawler pool manager started")
+
+	// ── Parser worker (이슈 #134) ──────────────────────────────────────────────
+	// fetcher 와 분리된 별도 consumer group (issuetracker-parsers) 으로 동작 — 인스턴스 수 독립 스케일.
+	// TopicFetched 의 RawContentRef 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제.
+	// 파싱 실패 (rule.Error) 시 raw 잔존 → LLM 재처리 윈도우 (이슈 #149).
+	parserKafkaCfg := queue.DefaultConfig()
+	parserKafkaCfg.GroupID = queue.GroupParsers
+	parserConsumer := queue.NewConsumer(parserKafkaCfg, queue.TopicFetched)
+	pw := parserWorker.NewParserWorker(
+		parserConsumer,
+		crawlerProducer, // normalized 토픽 발행 + chained article jobs 발행 시 publisher 가 동일 producer 사용
+		rawSvc,
+		contentSvc,
+		newsRepo,
+		jobPublisher,
+		ruleParser,
+		parserWorkerCount,
+		log,
+	)
+	pw.Start(ctx)
 
 	// ── Scheduler (시드 Job 발행) ─────────────────────────────────────────────
 	schedulerCfg, err := config.LoadScheduler()
@@ -270,6 +301,9 @@ func main() {
 
 	if err := manager.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during crawler shutdown")
+	}
+	if err := pw.Stop(shutdownCtx); err != nil {
+		log.WithError(err).Error("error during parser worker shutdown")
 	}
 	if err := validateWorker.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during validate worker shutdown")
