@@ -153,8 +153,10 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 		return nil, err
 	}
 
-	// LinkDiscovery 모드 (이슈 #139) — opt-in. ArticleURLPattern 비어있으면 ItemContainer fallback.
-	if cfg := rule.Selectors.LinkDiscovery; cfg != nil && cfg.ArticleURLPattern != "" {
+	// LinkDiscovery 모드 (이슈 #139, #148) — opt-in.
+	// LinkDiscovery 객체 자체가 채워져 있으면 discovery 경로 (ArticleURLPattern 빈 문자열도 허용 — all-pass).
+	// LinkDiscovery 가 nil 일 때만 ItemContainer fallback.
+	if cfg := rule.Selectors.LinkDiscovery; cfg != nil {
 		return p.discovery.Discover(raw, cfg)
 	}
 
