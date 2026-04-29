@@ -43,7 +43,12 @@
 회차의 마지막 단계로 항상 수행합니다.
 
 ### 1. 상태 파일
-경로: `.claude/loop-state.json` (gitignore 대상 — 세션/체크아웃 로컬 상태)
+경로: `/tmp/issuetracker-loop-state.json` (세션/체크아웃 로컬 상태)
+
+`/tmp` 경로 사용 이유:
+- `.claude/` 아래에 두면 매 회차 Edit/Write 마다 권한 prompt 발생 — loop 자율성 훼손
+- `/tmp` 는 `additionalDirectories` 에 이미 등록 — 권한 추가 없이 자유롭게 read/write
+- 시스템 재기동 시 자동 정리 — 별도 cleanup 불필요 (loop 자체가 idle_streak 초기화)
 
 스키마:
 ```json
