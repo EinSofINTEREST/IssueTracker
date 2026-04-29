@@ -41,7 +41,7 @@ func registerCNN(registry *handler.Registry, _ core.Config, rawSvc service.RawCo
 	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
 	crawler := general.NewGenericCrawler("cnn", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	chain, err := general.BuildChain(nil, gqFetcher, brFetcher, log,
+	chain, err := general.BuildChain(gqFetcher, brFetcher, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
 	if err != nil {

@@ -61,7 +61,7 @@ func registerNaver(registry *handler.Registry, _ core.Config, rawSvc service.Raw
 	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
 	crawler := general.NewGenericCrawler("naver", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	chain, err := general.BuildChain(nil, gqFetcher, brFetcher, log,
+	chain, err := general.BuildChain(gqFetcher, brFetcher, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
 	if err != nil {
@@ -80,7 +80,7 @@ func registerYonhap(registry *handler.Registry, _ core.Config, rawSvc service.Ra
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
 	crawler := general.NewGenericCrawler("yonhap", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	chain, err := general.BuildChain(nil, gqFetcher, nil, log)
+	chain, err := general.BuildChain(gqFetcher, nil, log)
 	if err != nil {
 		return fmt.Errorf("yonhap chain wiring: %w", err)
 	}
@@ -100,7 +100,7 @@ func registerDaum(registry *handler.Registry, _ core.Config, rawSvc service.RawC
 	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
 	crawler := general.NewGenericCrawler("daum", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	chain, err := general.BuildChain(nil, gqFetcher, brFetcher, log,
+	chain, err := general.BuildChain(gqFetcher, brFetcher, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
 	if err != nil {
