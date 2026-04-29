@@ -38,8 +38,13 @@ CREATE TABLE IF NOT EXISTS parsing_rules (
     CHECK (target_type IN ('page', 'list')),
   CONSTRAINT parsing_rules_version_positive
     CHECK (version > 0),
-  CONSTRAINT parsing_rules_natural_key_unique
-    UNIQUE (source_name, host_pattern, target_type, version)
+  -- Lookup 키 (host_pattern, target_type, version) 와 동일하게 UNIQUE.
+  -- source_name 은 metadata (어느 source 가 등록했는지) 로만 보존 — 동일 host 에는
+  -- 한 source 만 매핑되는 가정. 동일 (host, type, version) 으로 두 row 를 의도적으로
+  -- 두는 시나리오는 nondeterministic FindActive 를 유발하므로 schema 단계에서 차단.
+  -- (Coderabbit code review 피드백 — natural key ↔ lookup key 정렬)
+  CONSTRAINT parsing_rules_lookup_key_unique
+    UNIQUE (host_pattern, target_type, version)
 );
 
 -- URL host 기반 lookup — host_pattern + target_type + enabled 가 핫패스

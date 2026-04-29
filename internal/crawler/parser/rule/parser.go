@@ -83,10 +83,12 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.P
 		return nil, err
 	}
 
-	if rule.Selectors.Title == nil {
+	// Title + MainContent 둘 다 필수 — nil 또는 CSS 빈 문자열 모두 ErrEmptySelector 로 분류
+	// (Coderabbit 피드백: nil 만 검사하면 zero-value selector 가 ErrParseFailure 로 잘못 분류됨)
+	if !hasRequiredSelector(rule.Selectors.Title) || !hasRequiredSelector(rule.Selectors.MainContent) {
 		return nil, &Error{
 			Code:       ErrEmptySelector,
-			Message:    "page rule missing required Title selector",
+			Message:    "page rule missing required Title or MainContent selector",
 			URL:        raw.URL,
 			TargetType: string(storage.TargetTypePage),
 		}
@@ -142,7 +144,8 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 		return nil, err
 	}
 
-	if rule.Selectors.ItemContainer == nil || rule.Selectors.ItemLink == nil {
+	// ItemContainer + ItemLink 둘 다 필수 — nil 또는 CSS 빈 문자열 모두 ErrEmptySelector
+	if !hasRequiredSelector(rule.Selectors.ItemContainer) || !hasRequiredSelector(rule.Selectors.ItemLink) {
 		return nil, &Error{
 			Code:       ErrEmptySelector,
 			Message:    "list rule missing required ItemContainer or ItemLink selector",
@@ -191,6 +194,12 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 		}
 	}
 	return items, nil
+}
+
+// hasRequiredSelector 는 selector 가 lookup 가능한지 검사합니다 (Coderabbit 피드백).
+// nil 이거나 CSS 가 trim 후 빈 문자열이면 false — DB 의 zero-value row 도 명확히 reject.
+func hasRequiredSelector(fs *storage.FieldSelector) bool {
+	return fs != nil && strings.TrimSpace(fs.CSS) != ""
 }
 
 // validateRaw 는 ParsePage / ParseLinks 의 공통 raw 검증입니다 (Gemini #4, #6).

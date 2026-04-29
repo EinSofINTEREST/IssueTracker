@@ -80,7 +80,7 @@ type ParsingRuleRecord struct {
 	ID          int64
 	SourceName  string     // "naver" / "cnn"
 	HostPattern string     // URL host 매칭 (예: "n.news.naver.com")
-	TargetType  TargetType // "article" | "list"
+	TargetType  TargetType // "page" | "list"
 	Version     int        // 활성 row 안에서 같은 (source, host, type) 의 최신 버전
 	Enabled     bool
 	Selectors   SelectorMap // JSONB — application 측 struct 로 직렬화

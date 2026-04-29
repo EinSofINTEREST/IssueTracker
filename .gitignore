@@ -31,7 +31,7 @@ go.work.sum
 
 # Editor/IDE
 # .idea/
-# .vscode/
+.vscode/
 
 # Claude session state (loop auto-stop counter — local only)
 .claude/loop-state.json

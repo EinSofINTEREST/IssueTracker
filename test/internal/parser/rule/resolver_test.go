@@ -142,13 +142,16 @@ func TestResolver_Invalidate_ForcesRepoCall(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
 	r := rule.NewResolver(repo)
 
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
+	_, err = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
 	assert.Equal(t, 1, repo.calls())
 
 	r.Invalidate("news.example.com", storage.TargetTypePage)
 
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
 	assert.Equal(t, 2, repo.calls(), "Invalidate 후 다음 호출은 repo 다시 도달")
 }
 
@@ -159,14 +162,18 @@ func TestResolver_InvalidateAll_ClearsAllEntries(t *testing.T) {
 	}}
 	r := rule.NewResolver(repo)
 
-	_, _ = r.Resolve(context.Background(), "a.example.com", storage.TargetTypePage)
-	_, _ = r.Resolve(context.Background(), "b.example.com", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "a.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
+	_, err = r.Resolve(context.Background(), "b.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
 	assert.Equal(t, 2, repo.calls())
 
 	r.InvalidateAll()
 
-	_, _ = r.Resolve(context.Background(), "a.example.com", storage.TargetTypePage)
-	_, _ = r.Resolve(context.Background(), "b.example.com", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "a.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
+	_, err = r.Resolve(context.Background(), "b.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
 	assert.Equal(t, 4, repo.calls())
 }
 
@@ -175,12 +182,14 @@ func TestResolver_CacheTTL_ExpiresAfterDuration(t *testing.T) {
 	// TTL 50ms — 테스트 친화적 짧은 시간
 	r := rule.NewResolver(repo, rule.WithCacheTTL(50*time.Millisecond))
 
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
 	assert.Equal(t, 1, repo.calls())
 
 	time.Sleep(80 * time.Millisecond)
 
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	require.NoError(t, err)
 	assert.Equal(t, 2, repo.calls(), "TTL 만료 후 repo 다시 호출")
 }
 
