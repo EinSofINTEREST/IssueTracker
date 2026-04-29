@@ -209,6 +209,11 @@ func main() {
 	)
 	pw.Start(ctx)
 
+	// Cleanup cron — parser worker 가 처리하지 못한 채 잔존한 raw_contents row 정리.
+	// 정상 흐름에서는 거의 동작 안 함. crash / rule.Error 잔존 / LLM 재처리 윈도우 만료된 row 만 대상.
+	cleaner := parserWorker.NewRawContentCleaner(rawSvc, parserWorker.CleanupConfig{}, log)
+	cleaner.Start(ctx)
+
 	// ── Scheduler (시드 Job 발행) ─────────────────────────────────────────────
 	schedulerCfg, err := config.LoadScheduler()
 	if err != nil {
@@ -305,6 +310,7 @@ func main() {
 	if err := pw.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during parser worker shutdown")
 	}
+	cleaner.Stop()
 	if err := validateWorker.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during validate worker shutdown")
 	}
