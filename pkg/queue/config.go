@@ -13,6 +13,11 @@ const (
 	TopicRawUS = "issuetracker.raw.us"
 	TopicRawKR = "issuetracker.raw.kr"
 
+	// TopicFetched: fetcher worker 가 RawContent 저장 후 RawContentRef 발행하는 토픽 (이슈 #134).
+	// payload 는 raw_id + url + source_info 만 포함 (HTML 본문 미포함, < 1KB).
+	// parser worker (GroupParsers) 가 consume 하여 raw_contents 에서 본문 로드 + 파싱.
+	TopicFetched = "issuetracker.fetched"
+
 	// 처리 파이프라인 토픽
 	TopicNormalized = "issuetracker.normalized"
 	TopicValidated  = "issuetracker.validated"
@@ -27,11 +32,13 @@ const (
 // Consumer group 상수
 const (
 	GroupCrawlerWorkers = "issuetracker-crawler-workers"
-	GroupNormalizers    = "issuetracker-normalizers"
-	GroupValidators     = "issuetracker-validators"
-	GroupEnrichers      = "issuetracker-enrichers"
-	GroupEmbedders      = "issuetracker-embedders"
-	GroupClusterers     = "issuetracker-clusterers"
+	// GroupParsers: TopicFetched 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제 (이슈 #134).
+	GroupParsers     = "issuetracker-parsers"
+	GroupNormalizers = "issuetracker-normalizers"
+	GroupValidators  = "issuetracker-validators"
+	GroupEnrichers   = "issuetracker-enrichers"
+	GroupEmbedders   = "issuetracker-embedders"
+	GroupClusterers  = "issuetracker-clusterers"
 )
 
 // Config는 Kafka 연결 설정을 나타냅니다.

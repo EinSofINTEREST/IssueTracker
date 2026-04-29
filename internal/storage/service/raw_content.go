@@ -22,6 +22,10 @@ type RawContentService interface {
 	// GetByID는 ID로 RawContent를 조회합니다.
 	GetByID(ctx context.Context, id string) (*core.RawContent, error)
 
+	// Delete는 ID로 RawContent를 삭제합니다 (idempotent — 미존재여도 nil).
+	// parser worker (이슈 #134) 가 파싱 완료된 raw_contents row 를 즉시 정리할 때 사용 (Claim Check 패턴).
+	Delete(ctx context.Context, id string) error
+
 	// List는 필터 조건에 맞는 RawContent 목록을 반환합니다.
 	List(ctx context.Context, filter storage.RawContentFilter) ([]*core.RawContent, error)
 
@@ -80,6 +84,14 @@ func (s *rawContentService) GetByID(ctx context.Context, id string) (*core.RawCo
 	}
 
 	return raw, nil
+}
+
+// Delete는 ID로 RawContent를 삭제합니다 (idempotent — 미존재여도 nil).
+func (s *rawContentService) Delete(ctx context.Context, id string) error {
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return core.NewStorageError(core.CodeStorageDelete, "delete raw content", true, err)
+	}
+	return nil
 }
 
 // List는 RawContentFilter 조건으로 RawContent를 조회합니다.
