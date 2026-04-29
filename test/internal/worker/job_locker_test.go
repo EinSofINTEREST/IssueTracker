@@ -91,7 +91,7 @@ func TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsWithoutCommit(t *testi
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig),
+		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		locker,
 		worker.NoopURLCache{},
 	)
@@ -122,7 +122,7 @@ func TestKafkaConsumerPool_JobLocker_Acquired_ReleasedAfterProcessing(t *testing
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig),
+		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		locker,
 		worker.NoopURLCache{},
 	)
@@ -158,7 +158,7 @@ func TestKafkaConsumerPool_JobLocker_AcquireError_ProceedsWithoutLock(t *testing
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig),
+		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		locker,
 		worker.NoopURLCache{},
 	)

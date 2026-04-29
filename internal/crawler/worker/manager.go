@@ -84,13 +84,16 @@ func NewPoolManager(
 
 	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여
 	// 소스별 실패 카운팅이 우선순위 경계 없이 누적됩니다.
-	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig)
+	// log 주입 (이슈 #137) — CB state 전이마다 INFO/WARN 로그.
+	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, log)
 
-	newPool := func(pc PoolConfig) *KafkaConsumerPool {
+	newPool := func(pc PoolConfig, priorityName string) *KafkaConsumerPool {
 		pool := NewKafkaConsumerPoolWithOptions(
 			pc.Consumer, producer, handler, contentSvc, pc.WorkerCount,
 			cbRegistry, jobLocker, urlCache,
 		)
+		// 이슈 #137 — heartbeat 식별자 주입 (DEBUG 레벨에서 worker pool status 출력 활성)
+		pool.SetPriority(priorityName)
 		// 단일 RetryScheduler 인스턴스를 세 우선순위 Pool 이 공유합니다 (이슈 #82) —
 		// Redis 기반 구현에서 ZSET/연결 풀이 통일되도록.
 		if cfg.RetryScheduler != nil {
@@ -101,9 +104,9 @@ func NewPoolManager(
 
 	return &PoolManager{
 		pools: map[core.Priority]*KafkaConsumerPool{
-			core.PriorityHigh:   newPool(cfg.High),
-			core.PriorityNormal: newPool(cfg.Normal),
-			core.PriorityLow:    newPool(cfg.Low),
+			core.PriorityHigh:   newPool(cfg.High, "high"),
+			core.PriorityNormal: newPool(cfg.Normal, "normal"),
+			core.PriorityLow:    newPool(cfg.Low, "low"),
 		},
 		producer: producer,
 		resolver: resolver,

@@ -88,6 +88,13 @@ type KafkaConsumerPool struct {
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
+
+	// 이슈 #137 — heartbeat 가시성. processJob 진입 시 inc, defer 시 dec.
+	// 운영자가 "silent vs hang" 을 즉답하기 위한 단일 source of truth.
+	busyCount atomic.Int32
+	// priority 는 heartbeat 로그에 포함될 pool 식별자 ("high"/"normal"/"low").
+	// 빈 문자열이면 heartbeat goroutine 자체가 시작되지 않음 (테스트 호환).
+	priority string
 }
 
 type jobItem struct {
@@ -108,9 +115,11 @@ func NewKafkaConsumerPool(
 	contentSvc service.ContentService,
 	workerCount int,
 ) *KafkaConsumerPool {
+	// CircuitBreakerRegistry log 주입은 NewPoolManager 가 PoolManager 단위에서 처리.
+	// 본 헬퍼는 단순 호출용 (테스트/예제) 이라 logger 주입 안 함 — nil 이면 state 전이 로그 skip.
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
-		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig),
+		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, nil),
 		NoopJobLocker{},
 		NoopURLCache{},
 	)
@@ -212,6 +221,13 @@ func (p *KafkaConsumerPool) normalizeURL(rawURL string) string {
 	return normalized
 }
 
+// SetPriority 는 heartbeat 로그에 사용할 pool 식별자를 설정합니다 (이슈 #137).
+// 빈 문자열이면 heartbeat goroutine 이 시작되지 않아 기존 동작이 유지됩니다.
+// Start 호출 전에 설정해야 효과가 있습니다.
+func (p *KafkaConsumerPool) SetPriority(name string) {
+	p.priority = name
+}
+
 // Start는 worker goroutine들과 message polling goroutine을 시작합니다.
 // context가 cancel되면 polling이 중단되고 진행 중인 작업이 완료됩니다.
 func (p *KafkaConsumerPool) Start(ctx context.Context) {
@@ -226,6 +242,41 @@ func (p *KafkaConsumerPool) Start(ctx context.Context) {
 		defer close(p.pollDone)
 		p.pollMessages(ctx)
 	}()
+
+	// 이슈 #137 — heartbeat goroutine. priority 가 설정된 경우만 시작 (테스트 호환).
+	// silent vs hang 즉답을 위해 30초마다 worker pool status 를 DEBUG 로 출력.
+	// ctx cancel 시 자체 종료 — wg 등록 안 함 (관찰용 goroutine).
+	if p.priority != "" {
+		go p.heartbeatLoop(ctx)
+	}
+}
+
+// heartbeatLoop 는 30초마다 worker pool 의 현재 상태 (busy/total/buffered) 를 DEBUG 로
+// 출력합니다 (이슈 #137). 운영자가 LOG_LEVEL=debug 로 토글 시 silent 구간이 정상 idle
+// 인지 (busy=0, buffer=0) 또는 long-running 처리 중인지 (busy>0) 즉답할 수 있습니다.
+//
+// ctx cancel 시 자체 종료 — wg 미등록 (관찰용이라 셧다운을 차단할 책임 없음).
+func (p *KafkaConsumerPool) heartbeatLoop(ctx context.Context) {
+	const interval = 30 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	log := logger.FromContext(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			busy := int(p.busyCount.Load())
+			log.WithFields(map[string]interface{}{
+				"priority":      p.priority,
+				"busy_workers":  busy,
+				"total_workers": p.workerCount,
+				"jobs_buffered": len(p.jobs),
+			}).Debug("worker pool status")
+		}
+	}
 }
 
 // Stop은 pool을 정상 종료합니다.
@@ -330,8 +381,27 @@ func (p *KafkaConsumerPool) worker(ctx context.Context) {
 	}
 }
 
-func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error {
+func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err error) {
 	log := logger.FromContext(ctx)
+
+	// 이슈 #137 — processJob 의 모든 return path 를 defer 로 wrap 하여 duration 측정 +
+	// busyCount 증감 (heartbeat 가시성). outcome 은 err 여부로 분기.
+	p.busyCount.Add(1)
+	start := time.Now()
+	defer func() {
+		p.busyCount.Add(-1)
+		fields := map[string]interface{}{
+			"job_id":      item.job.ID,
+			"crawler":     item.job.CrawlerName,
+			"duration_ms": time.Since(start).Milliseconds(),
+		}
+		if err != nil {
+			fields["outcome"] = "error"
+		} else {
+			fields["outcome"] = "ok"
+		}
+		log.WithFields(fields).Debug("job processed")
+	}()
 
 	// URL 가드 (이슈 #119): processJob 진입 직후 차단 URL 을 즉시 거르고 commit
 	// → handler 호출·lock 획득·backoff 대기 등 모든 비용 회피
@@ -385,11 +455,18 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
-		}).Debug("job already being processed by another worker, skipping")
+		}).Debug("job lock already held by another worker, skipping")
 		// 다른 워커가 처리 중이므로 commit 없이 종료합니다.
 		// 처리 담당 워커의 commit에 의존하여, 해당 워커 장애 시 재처리가 보장되도록 합니다.
 		return nil
 	} else {
+		// 이슈 #137 — 운영자가 lock 획득 흐름을 추적할 수 있도록 DEBUG 로 success 기록.
+		log.WithFields(map[string]interface{}{
+			"job_id":  item.job.ID,
+			"crawler": item.job.CrawlerName,
+			"ttl_ms":  DefaultJobLockTTL.Milliseconds(),
+		}).Debug("job lock acquired")
+
 		defer func() {
 			// 셧다운 시 ctx가 취소되어도 락 해제는 반드시 수행되어야 합니다.
 			// 작업 ctx를 그대로 사용하면 Redis 호출이 즉시 실패해 락이 TTL(10분) 동안 점유됩니다.
@@ -400,7 +477,13 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) error 
 					"job_id":  item.job.ID,
 					"crawler": item.job.CrawlerName,
 				}).WithError(releaseErr).Warn("failed to release job lock")
+				return
 			}
+			// 이슈 #137 — release 성공도 DEBUG 로 짝을 맞춰 lifecycle 완성.
+			log.WithFields(map[string]interface{}{
+				"job_id":  item.job.ID,
+				"crawler": item.job.CrawlerName,
+			}).Debug("job lock released")
 		}()
 	}
 

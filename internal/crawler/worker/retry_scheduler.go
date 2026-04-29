@@ -237,6 +237,7 @@ func (s *RedisDelayedRetryScheduler) Stop() {
 // peek 단계에서는 ZSET 에서 제거하지 않으며, publish 성공 후에만 AckRetry 로 제거 —
 // at-least-once 보장 (peek-publish-ack 패턴, PR #128 피드백).
 func (s *RedisDelayedRetryScheduler) pollOnce(ctx context.Context) {
+	peekStart := time.Now()
 	due, err := s.client.PeekDueRetries(ctx, time.Now(), s.cfg.BatchSize)
 	if err != nil {
 		// ctx cancel 로 인한 에러는 정상 종료 흐름 — DEBUG 로 강등
@@ -246,6 +247,20 @@ func (s *RedisDelayedRetryScheduler) pollOnce(ctx context.Context) {
 		}
 		s.log.WithError(err).Warn("failed to peek due retries from redis")
 		return
+	}
+
+	// 이슈 #137 — peek 결과를 항상 DEBUG 로 노출 (count=0 이어도 한 줄).
+	// 운영자가 retry pipeline 이 살아있고 polling 중인지 즉답 가능.
+	if len(due) > 0 {
+		s.log.WithFields(map[string]interface{}{
+			"due_count":  len(due),
+			"peek_ms":    time.Since(peekStart).Milliseconds(),
+			"batch_size": s.cfg.BatchSize,
+		}).Debug("retry peek returned due items")
+	} else {
+		s.log.WithFields(map[string]interface{}{
+			"peek_ms": time.Since(peekStart).Milliseconds(),
+		}).Debug("retry peek returned no due items")
 	}
 
 	for _, item := range due {
