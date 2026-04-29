@@ -8,7 +8,7 @@
 --
 --   - article_url_pattern: \"\" (빈 문자열) → all-pass discovery
 --   - exclude_patterns: 사이트별 광고/네비/공유/미디어 등 노이즈 패턴
---   - same_origin_only: true (외부 도메인 차단)
+--   - same_origin_only: site profile 유지 (yonhap=true / naver/daum/cnn=false — 기존 설정값 보존)
 --   - max_links_per_page: 200 유지 (publish 폭증 방지)
 --
 -- 후속 노이즈 컷 정밀화는 운영자가 라이브 모니터링 후 ExcludePatterns 를 점진 추가.
