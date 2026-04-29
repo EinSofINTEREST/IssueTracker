@@ -28,22 +28,17 @@ func Register(
 	registerCNN(registry, config, parser, repo, publisher, log)
 }
 
-func registerCNN(registry *handler.Registry, config core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
+// 사이트별 등록 패턴은 kr/registry.go 와 동일 — cfg.CrawlerConfig 보존, 호출자 config 무시.
+func registerCNN(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
 	cfg := cnn.Default()
-	cfg.CrawlerConfig = config
-	cfg.CrawlerConfig.SourceInfo = core.SourceInfo{
-		Country: "US", Type: core.SourceTypeNews, Name: "cnn",
-		BaseURL: "https://www.cnn.com", Language: "en",
-	}
 
-	gqCrawler := goquery.NewGoqueryCrawler("cnn-goquery", cfg.CrawlerConfig.SourceInfo, config)
+	gqCrawler := goquery.NewGoqueryCrawler("cnn-goquery", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
-	cdpSource := cfg.CrawlerConfig.SourceInfo
-	cdpCrawler := cdp.NewChromedpCrawlerWithOptions("cnn-browser", cdpSource, config, cdp.DefaultRemoteOptions())
-	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, config)
+	cdpCrawler := cdp.NewChromedpCrawlerWithOptions("cnn-browser", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig, cdp.DefaultRemoteOptions())
+	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
-	crawler := general.NewGenericCrawler("cnn", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, config)
+	crawler := general.NewGenericCrawler("cnn", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
 	chain := general.BuildChain(nil, gqFetcher, brFetcher, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)

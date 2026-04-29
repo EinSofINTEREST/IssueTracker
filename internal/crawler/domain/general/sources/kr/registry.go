@@ -35,23 +35,24 @@ func Register(
 	registerDaum(registry, config, parser, repo, publisher, log)
 }
 
-func registerNaver(registry *handler.Registry, config core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
-	cfg := naver.Default()
-	cfg.CrawlerConfig = config
-	cfg.CrawlerConfig.SourceInfo = core.SourceInfo{
-		Country: "KR", Type: core.SourceTypeNews, Name: "naver",
-		BaseURL: "https://news.naver.com", Language: "ko",
-	}
+// 사이트별 등록의 공통 패턴:
+//   - cfg := xxx.Default() 로 사이트 기본값 (RequestsPerHour 등) 보유
+//   - 호출자가 넘긴 config 는 사용하지 않음 (사이트별 디테일을 덮어쓰는 버그 회피 — Gemini 피드백)
+//   - chromedp/goquery 등 모든 컴포넌트가 cfg.CrawlerConfig 를 참조하여 사이트별 설정 일관 적용
+//
+// 호출자가 넘긴 config 의 의미: 향후 전역 default 가 필요할 때를 위한 시그니처 보존 — 현재는 무시.
 
-	gqCrawler := goquery.NewGoqueryCrawler("naver-goquery", cfg.CrawlerConfig.SourceInfo, config)
+func registerNaver(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
+	cfg := naver.Default()
+
+	gqCrawler := goquery.NewGoqueryCrawler("naver-goquery", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
-	cdpSource := cfg.CrawlerConfig.SourceInfo
-	cdpSource.Name = "naver-browser"
-	cdpCrawler := cdp.NewChromedpCrawlerWithOptions("naver-browser", cdpSource, config, cdp.DefaultRemoteOptions())
-	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, config)
+	// chromedp 인스턴스 식별자만 "naver-browser" — SourceInfo.Name 은 "naver" 그대로 (source_name 일관성, Coderabbit 피드백)
+	cdpCrawler := cdp.NewChromedpCrawlerWithOptions("naver-browser", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig, cdp.DefaultRemoteOptions())
+	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
-	crawler := general.NewGenericCrawler("naver", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, config)
+	crawler := general.NewGenericCrawler("naver", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
 	chain := general.BuildChain(nil, gqFetcher, brFetcher, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
@@ -60,40 +61,29 @@ func registerNaver(registry *handler.Registry, config core.Config, parser *rule.
 	log.WithField("crawler", "naver").Info("naver crawler registered")
 }
 
-func registerYonhap(registry *handler.Registry, config core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
+func registerYonhap(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
 	cfg := yonhap.Default()
-	cfg.CrawlerConfig = config
-	cfg.CrawlerConfig.SourceInfo = core.SourceInfo{
-		Country: "KR", Type: core.SourceTypeNews, Name: "yonhap",
-		BaseURL: "https://www.yna.co.kr", Language: "ko",
-	}
 
-	gqCrawler := goquery.NewGoqueryCrawler("yonhap-goquery", cfg.CrawlerConfig.SourceInfo, config)
+	gqCrawler := goquery.NewGoqueryCrawler("yonhap-goquery", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
-	crawler := general.NewGenericCrawler("yonhap", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, config)
+	crawler := general.NewGenericCrawler("yonhap", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
 	chain := general.BuildChain(nil, gqFetcher, nil, log)
 
 	registry.Register("yonhap", general.NewChainHandler(crawler, chain, parser, publisher, repo, log))
 	log.WithField("crawler", "yonhap").Info("yonhap crawler registered")
 }
 
-func registerDaum(registry *handler.Registry, config core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
+func registerDaum(registry *handler.Registry, _ core.Config, parser *rule.Parser, repo storage.NewsArticleRepository, publisher general.JobPublisher, log *logger.Logger) {
 	cfg := daum.Default()
-	cfg.CrawlerConfig = config
-	cfg.CrawlerConfig.SourceInfo = core.SourceInfo{
-		Country: "KR", Type: core.SourceTypeNews, Name: "daum",
-		BaseURL: "https://news.daum.net", Language: "ko",
-	}
 
-	gqCrawler := goquery.NewGoqueryCrawler("daum-goquery", cfg.CrawlerConfig.SourceInfo, config)
+	gqCrawler := goquery.NewGoqueryCrawler("daum-goquery", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
-	cdpSource := cfg.CrawlerConfig.SourceInfo
-	cdpCrawler := cdp.NewChromedpCrawlerWithOptions("daum-browser", cdpSource, config, cdp.DefaultRemoteOptions())
-	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, config)
+	cdpCrawler := cdp.NewChromedpCrawlerWithOptions("daum-browser", cfg.CrawlerConfig.SourceInfo, cfg.CrawlerConfig, cdp.DefaultRemoteOptions())
+	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
-	crawler := general.NewGenericCrawler("daum", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, config)
+	crawler := general.NewGenericCrawler("daum", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
 	chain := general.BuildChain(nil, gqFetcher, brFetcher, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
