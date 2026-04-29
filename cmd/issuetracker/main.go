@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/domain/news/kr"
-	"issuetracker/internal/crawler/domain/news/us"
+	"issuetracker/internal/crawler/domain/general/sources/kr"
+	"issuetracker/internal/crawler/domain/general/sources/us"
 	"issuetracker/internal/crawler/handler"
+	"issuetracker/internal/crawler/parser/rule"
 	crawlerWorker "issuetracker/internal/crawler/worker"
 	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/publisher"
@@ -80,8 +81,15 @@ func main() {
 
 	newsRepo := pgstore.NewNewsArticleRepository(pool, log)
 	jobPublisher := publisher.New(crawlerProducer, resolver, log)
-	kr.Register(registry, core.DefaultConfig(), newsRepo, jobPublisher, log)
-	us.Register(registry, core.DefaultConfig(), newsRepo, jobPublisher, log)
+
+	// rule.Parser: parsing_rules 테이블 기반 단일 파서 엔진 (이슈 #100 / #139).
+	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
+	parsingRuleRepo := pgstore.NewParsingRuleRepository(pool, log)
+	ruleResolver := rule.NewResolver(parsingRuleRepo)
+	ruleParser := rule.NewParser(ruleResolver)
+
+	kr.Register(registry, core.DefaultConfig(), ruleParser, newsRepo, jobPublisher, log)
+	us.Register(registry, core.DefaultConfig(), ruleParser, newsRepo, jobPublisher, log)
 
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
