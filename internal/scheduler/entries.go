@@ -2,10 +2,10 @@ package scheduler
 
 import (
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/domain/news/kr/daum"
-	"issuetracker/internal/crawler/domain/news/kr/naver"
-	"issuetracker/internal/crawler/domain/news/kr/yonhap"
-	"issuetracker/internal/crawler/domain/news/us/cnn"
+	"issuetracker/internal/crawler/domain/general/sources/kr/daum"
+	"issuetracker/internal/crawler/domain/general/sources/kr/naver"
+	"issuetracker/internal/crawler/domain/general/sources/kr/yonhap"
+	"issuetracker/internal/crawler/domain/general/sources/us/cnn"
 	"issuetracker/pkg/config"
 )
 
@@ -25,7 +25,7 @@ func DefaultEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 // cnnEntries는 CNN 카테고리 페이지 기반 스케줄 항목을 반환합니다.
 // CNN RSS 피드가 지원 중단되어 HTML 카테고리 페이지를 직접 크롤링합니다.
 func cnnEntries(cfg config.SchedulerConfig) []ScheduleEntry {
-	cnnCfg := cnn.DefaultCNNConfig()
+	cnnCfg := cnn.Default()
 	entries := make([]ScheduleEntry, 0, len(cnnCfg.CategoryURLs))
 
 	for _, url := range cnnCfg.CategoryURLs {
@@ -43,7 +43,7 @@ func cnnEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 
 // naverEntries는 네이버 뉴스 카테고리 페이지 기반 스케줄 항목을 반환합니다.
 func naverEntries(cfg config.SchedulerConfig) []ScheduleEntry {
-	naverCfg := naver.DefaultNaverConfig()
+	naverCfg := naver.Default()
 	entries := make([]ScheduleEntry, 0, len(naverCfg.CategoryURLs))
 
 	for _, url := range naverCfg.CategoryURLs {
@@ -62,19 +62,10 @@ func naverEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 // yonhapEntries는 연합뉴스 기반 스케줄 항목을 반환합니다.
 // 연합뉴스는 RSS 미지원, 카테고리 URL을 직접 사용합니다.
 func yonhapEntries(cfg config.SchedulerConfig) []ScheduleEntry {
-	_ = yonhap.DefaultYonhapConfig()
+	yonhapCfg := yonhap.Default()
+	entries := make([]ScheduleEntry, 0, len(yonhapCfg.CategoryURLs))
 
-	// 연합뉴스 카테고리 URL (config에 별도 필드 없으므로 직접 정의)
-	categoryURLs := map[string]string{
-		"politics": "https://www.yna.co.kr/politics/all",
-		"economy":  "https://www.yna.co.kr/economy/all",
-		"society":  "https://www.yna.co.kr/society-culture/all",
-		"world":    "https://www.yna.co.kr/international/all",
-		"IT":       "https://www.yna.co.kr/it-science/all",
-	}
-
-	entries := make([]ScheduleEntry, 0, len(categoryURLs))
-	for _, url := range categoryURLs {
+	for _, url := range yonhapCfg.CategoryURLs {
 		entries = append(entries, ScheduleEntry{
 			CrawlerName: "yonhap",
 			URL:         url,
@@ -89,7 +80,7 @@ func yonhapEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 
 // daumEntries는 다음 뉴스 카테고리 페이지 기반 스케줄 항목을 반환합니다.
 func daumEntries(cfg config.SchedulerConfig) []ScheduleEntry {
-	daumCfg := daum.DefaultDaumConfig()
+	daumCfg := daum.Default()
 	entries := make([]ScheduleEntry, 0, len(daumCfg.CategoryURLs))
 
 	for _, url := range daumCfg.CategoryURLs {
