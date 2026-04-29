@@ -700,10 +700,10 @@ func TestValidateWorker_InvalidContent_RecordsRejectedInContents(t *testing.T) {
 	})).Return(nil)
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
-	// reject 메타데이터가 url 기준으로 update 되어야 함. code 는 VAL_xxx, detail 은 비어있지 않음.
+	// reject 메타데이터가 id 기준으로 update 되어야 함. code 는 VAL_xxx, detail 은 비어있지 않음.
 	contentSvc.On("UpdateValidationStatus",
 		mock.Anything,
-		content.URL,
+		content.ID,
 		storage.ValidationStatusRejected,
 		mock.MatchedBy(func(code string) bool { return strings.HasPrefix(code, "VAL_") }),
 		mock.MatchedBy(func(detail string) bool { return detail != "" }),
@@ -733,7 +733,7 @@ func TestValidateWorker_ValidContent_RecordsPassedInContents(t *testing.T) {
 	// passed 시에는 code/detail 모두 빈 문자열로 호출 (UpdateValidationStatus 가 NULL 로 저장)
 	contentSvc.On("UpdateValidationStatus",
 		mock.Anything,
-		content.URL,
+		content.ID,
 		storage.ValidationStatusPassed,
 		"",
 		"",
@@ -766,7 +766,7 @@ func TestValidateWorker_RecordRejectedFailure_DoesNotBlockMainFlow(t *testing.T)
 
 	// contentSvc update 실패 — best-effort 정책상 worker 메인 흐름 (Delete + DLQ) 은 그대로 진행되어야 함
 	contentSvc.On("UpdateValidationStatus",
-		mock.Anything, content.URL, storage.ValidationStatusRejected,
+		mock.Anything, content.ID, storage.ValidationStatusRejected,
 		mock.Anything, mock.Anything,
 	).Return(errors.New("simulated db error")).Once()
 

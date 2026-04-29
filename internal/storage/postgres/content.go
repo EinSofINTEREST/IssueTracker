@@ -176,15 +176,17 @@ UPDATE contents
 SET
   validation_status = $2,
   reject_code       = $3,
-  reject_detail     = $4
-WHERE url = $1
+  reject_detail     = $4,
+  updated_at        = NOW()
+WHERE id = $1
 `
 
-// UpdateValidationStatus 는 URL 기준으로 validator 결과 메타데이터를 갱신합니다 (이슈 #135 / #161).
+// UpdateValidationStatus updates validator result metadata for the content with the given id.
+// status==Rejected 가 아닐 때 code/detail 은 NULL 로 저장됩니다. 미존재 시 storage.ErrNotFound.
 //
-// status 가 storage.ValidationStatusRejected 가 아니면 code/detail 인자는 무시되고 NULL 로 저장됩니다.
-// URL 이 존재하지 않으면 storage.ErrNotFound 를 반환합니다.
-func (r *pgContentRepository) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
+// id 사용 이유 (PR #163 피드백): primary key 가 url unique 인덱스 lookup 보다 효율적이고,
+// URL 정규화 정책 변동에 영향받지 않습니다. updated_at 도 함께 갱신하여 audit trail 보장.
+func (r *pgContentRepository) UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error {
 	var (
 		codeArg   any
 		detailArg any
@@ -198,9 +200,9 @@ func (r *pgContentRepository) UpdateValidationStatus(ctx context.Context, url, s
 		}
 	}
 
-	tag, err := r.pool.Exec(ctx, sqlUpdateContentValidationStatus, url, status, codeArg, detailArg)
+	tag, err := r.pool.Exec(ctx, sqlUpdateContentValidationStatus, id, status, codeArg, detailArg)
 	if err != nil {
-		return fmt.Errorf("update validation status %s: %w", url, err)
+		return fmt.Errorf("update validation status %s: %w", id, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return storage.ErrNotFound

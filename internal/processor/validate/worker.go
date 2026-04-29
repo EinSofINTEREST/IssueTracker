@@ -206,9 +206,9 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 				"country": content.Country,
 			}).WithError(err).Info("content validation failed, deleting content and sending to dlq")
 
-			// 이슈 #135 — contents.Delete 직전에 news_articles 에 reject 사유 기록.
-			// 순서가 중요: Delete 후엔 ref.URL 확보 어렵고, 사후 추적 단일 source 가 깨진다.
-			w.recordValidationRejected(ctx, content.URL, err)
+			// 이슈 #135 / #161 — contents.Delete 직전에 reject 사유를 contents 컬럼에 기록.
+			// 순서가 중요: Delete 후엔 사후 추적 단일 source 가 깨진다.
+			w.recordValidationRejected(ctx, ref.ID, err)
 
 			if delErr := w.contentSvc.Delete(ctx, ref.ID); delErr != nil {
 				log.WithFields(map[string]interface{}{
@@ -233,9 +233,9 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		return w.commit(ctx, msg)
 	}
 
-	// 이슈 #135 — 검증 통과: news_articles 에 passed 기록 (publish 전에 호출하여 publish 실패 시
+	// 이슈 #135 / #161 — 검증 통과: contents 의 passed 기록 (publish 전에 호출하여 publish 실패 시
 	// 재처리되더라도 status 는 이미 정확. UpdateValidationStatus 는 idempotent 라 재호출 안전).
-	w.recordValidationPassed(ctx, content.URL)
+	w.recordValidationPassed(ctx, ref.ID)
 
 	if err := w.publishValidatedRef(ctx, &ref, &pm, msg); err != nil {
 		// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 publish-then-commit 재시도.
@@ -296,15 +296,15 @@ func (w *Worker) publishValidatedRef(ctx context.Context, ref *core.ContentRef, 
 // recordValidationRejected 는 validator 영구 실패 시 news_articles 에 reject 메타데이터를
 // 기록합니다 (이슈 #135 / #161). 호출은 contentSvc.Delete 직전에 이루어져야 합니다.
 //
-// 본 메소드는 모든 실패를 best-effort 로 처리합니다 — URL 미존재(ErrNotFound), DB 일시 장애 등
+// 본 메소드는 모든 실패를 best-effort 로 처리합니다 — id 미존재(ErrNotFound), DB 일시 장애 등
 // 어떤 실패도 메인 처리 흐름을 차단하지 않습니다. 추적이 끊겨도 contents.Delete 와 DLQ 라우팅은
 // 그대로 진행되어야 하기 때문입니다.
 //
 // reject_code 는 errors.As 로 *core.CrawlerError 를 추출하여 .Code (VAL_xxx) 를 사용합니다.
 // reject_detail 은 err.Error() 의 message 부분 — VAL_005 의 quality breakdown 보강은
 // 별도 단계 (이슈 #135 P0-4) 에서 진행됩니다.
-func (w *Worker) recordValidationRejected(ctx context.Context, url string, reason error) {
-	if url == "" {
+func (w *Worker) recordValidationRejected(ctx context.Context, id string, reason error) {
+	if id == "" {
 		return
 	}
 	log := logger.FromContext(ctx)
@@ -322,10 +322,10 @@ func (w *Worker) recordValidationRejected(ctx context.Context, url string, reaso
 	}
 
 	if err := w.contentSvc.UpdateValidationStatus(
-		ctx, url, storage.ValidationStatusRejected, code, detail,
+		ctx, id, storage.ValidationStatusRejected, code, detail,
 	); err != nil {
 		log.WithFields(map[string]interface{}{
-			"url":         url,
+			"content_id":  id,
 			"reject_code": code,
 		}).WithError(err).Warn("failed to record validation rejection in contents")
 	}
@@ -333,17 +333,17 @@ func (w *Worker) recordValidationRejected(ctx context.Context, url string, reaso
 
 // recordValidationPassed 는 validator 통과 시 contents.validation_status 를
 // 'passed' 로 갱신합니다 (이슈 #135 / #161). best-effort — 실패가 메인 흐름을 차단하지 않습니다.
-func (w *Worker) recordValidationPassed(ctx context.Context, url string) {
-	if url == "" {
+func (w *Worker) recordValidationPassed(ctx context.Context, id string) {
+	if id == "" {
 		return
 	}
 	log := logger.FromContext(ctx)
 
 	if err := w.contentSvc.UpdateValidationStatus(
-		ctx, url, storage.ValidationStatusPassed, "", "",
+		ctx, id, storage.ValidationStatusPassed, "", "",
 	); err != nil {
 		log.WithFields(map[string]interface{}{
-			"url": url,
+			"content_id": id,
 		}).WithError(err).Warn("failed to record validation pass in contents")
 	}
 }
