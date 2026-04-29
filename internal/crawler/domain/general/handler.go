@@ -136,6 +136,9 @@ func (h *BrowserFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 // (Handler, error) 를 받음. panic 대신 error 반환으로 전환 — production code 가 부팅
 // 단계 misconfig 로 crash 하지 않도록 (Coderabbit 피드백).
 func BuildChain(gq Fetcher, br Fetcher, log *logger.Logger, lazyKeywords ...string) (Handler, error) {
+	if log == nil {
+		return nil, fmt.Errorf("BuildChain: logger must be non-nil")
+	}
 	var handlers []Handler
 	if gq != nil {
 		handlers = append(handlers, NewGoQueryFetchHandler(gq, log, lazyKeywords...))
