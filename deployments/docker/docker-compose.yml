@@ -128,6 +128,9 @@ services:
         $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.raw.us       --partitions 8 --replication-factor 1
         $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.raw.kr       --partitions 8 --replication-factor 1
 
+        echo '[fetched topics]'
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.fetched     --partitions 8 --replication-factor 1
+
         echo '[pipeline topics]'
         $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.normalized   --partitions 8 --replication-factor 1
         $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.validated    --partitions 8 --replication-factor 1
