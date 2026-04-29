@@ -165,8 +165,20 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 		base = nil
 	}
 
+	containers := doc.Find(rule.Selectors.ItemContainer.CSS)
+	// ItemContainer 자체가 매칭 0건 — 사이트 구조 변경으로 selector stale.
+	// (Coderabbit 피드백: ItemLink 모두 빈 case 와 분리하여 정확한 진단 메시지 제공)
+	if containers.Length() == 0 {
+		return nil, &Error{
+			Code:       ErrParseFailure,
+			Message:    "ItemContainer selector matched 0 elements (rule may be stale)",
+			URL:        raw.URL,
+			TargetType: string(storage.TargetTypeList),
+		}
+	}
+
 	var items []parser.LinkItem
-	doc.Find(rule.Selectors.ItemContainer.CSS).Each(func(_ int, container *goquery.Selection) {
+	containers.Each(func(_ int, container *goquery.Selection) {
 		link := extractFieldFromSelection(container, rule.Selectors.ItemLink)
 		if link == "" {
 			return
@@ -184,11 +196,11 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 		})
 	})
 
-	// 결과 0건 → ItemContainer 가 사이트 구조 변경으로 매칭 실패 (stale rule 진단, Gemini #7).
+	// ItemContainer 는 매칭됐지만 모든 ItemLink 가 빈 결과 — ItemLink selector stale.
 	if len(items) == 0 {
 		return nil, &Error{
 			Code:       ErrParseFailure,
-			Message:    "ItemContainer selector matched 0 elements (rule may be stale)",
+			Message:    "ItemContainer matched but no valid ItemLink found (ItemLink selector may be stale)",
 			URL:        raw.URL,
 			TargetType: string(storage.TargetTypeList),
 		}
@@ -202,10 +214,11 @@ func hasRequiredSelector(fs *storage.FieldSelector) bool {
 	return fs != nil && strings.TrimSpace(fs.CSS) != ""
 }
 
-// validateRaw 는 ParsePage / ParseLinks 의 공통 raw 검증입니다 (Gemini #4, #6).
-// raw 가 nil 이거나 HTML 이 비어있으면 진단 친화적으로 raw.URL 을 포함한 Error 반환.
+// validateRaw 는 ParsePage / ParseLinks 의 공통 raw 검증입니다.
+// raw 가 nil 이거나 HTML 이 비어있으면 (whitespace-only 도 빈 것으로 간주) raw.URL 진단 정보 포함 Error 반환.
+// (Coderabbit 피드백: "   \n" 같은 whitespace-only 가 통과해 stale-rule 오인 회피)
 func validateRaw(raw *core.RawContent) error {
-	if raw != nil && raw.HTML != "" {
+	if raw != nil && strings.TrimSpace(raw.HTML) != "" {
 		return nil
 	}
 	var u string
