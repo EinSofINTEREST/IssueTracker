@@ -65,7 +65,7 @@ func testEntry(url string, interval time.Duration) scheduler.ScheduleEntry {
 	return scheduler.ScheduleEntry{
 		CrawlerName: "test-crawler",
 		URL:         url,
-		TargetType:  core.TargetTypeFeed,
+		TargetType:  core.TargetTypeCategory,
 		Interval:    interval,
 		Priority:    core.PriorityNormal,
 		Timeout:     30 * time.Second,
@@ -176,7 +176,7 @@ func TestScheduler_JobFieldsAreCorrect(t *testing.T) {
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
 		URL:         "https://rss.cnn.com/rss/cnn_topstories.rss",
-		TargetType:  core.TargetTypeFeed,
+		TargetType:  core.TargetTypeCategory,
 		Interval:    10 * time.Minute,
 		Priority:    core.PriorityHigh,
 		Timeout:     45 * time.Second,
@@ -197,7 +197,7 @@ func TestScheduler_JobFieldsAreCorrect(t *testing.T) {
 	assert.NotEmpty(t, job.ID)
 	assert.Equal(t, "cnn", job.CrawlerName)
 	assert.Equal(t, entry.URL, job.Target.URL)
-	assert.Equal(t, core.TargetTypeFeed, job.Target.Type)
+	assert.Equal(t, core.TargetTypeCategory, job.Target.Type)
 	assert.Equal(t, core.PriorityHigh, job.Priority)
 	assert.Equal(t, 45*time.Second, job.Timeout)
 	assert.Equal(t, 3, job.MaxRetries)

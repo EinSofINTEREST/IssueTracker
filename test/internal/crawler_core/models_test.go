@@ -29,7 +29,6 @@ func TestSourceType_Constants(t *testing.T) {
 }
 
 func TestTargetType_Constants(t *testing.T) {
-	assert.Equal(t, core.TargetType("feed"), core.TargetTypeFeed)
 	assert.Equal(t, core.TargetType("sitemap"), core.TargetTypeSitemap)
 	assert.Equal(t, core.TargetType("article"), core.TargetTypeArticle)
 	assert.Equal(t, core.TargetType("category"), core.TargetTypeCategory)

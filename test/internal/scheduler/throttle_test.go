@@ -69,7 +69,7 @@ func throttleTestJob(priority core.Priority) *core.CrawlJob {
 		CrawlerName: "test-crawler",
 		Target: core.Target{
 			URL:  "https://example.com/feed",
-			Type: core.TargetTypeFeed,
+			Type: core.TargetTypeCategory,
 		},
 		Priority: priority,
 	}
