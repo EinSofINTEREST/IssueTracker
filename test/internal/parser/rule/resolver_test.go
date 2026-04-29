@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/crawler/domain/news/rule"
+	"issuetracker/internal/crawler/parser/rule"
 	"issuetracker/internal/storage"
 )
 
@@ -47,17 +47,17 @@ func (r *fakeRepo) FindActive(_ context.Context, host string, t storage.TargetTy
 
 func (r *fakeRepo) calls() int { return int(atomic.LoadInt64(&r.findActiveCalls)) }
 
-func sampleArticleRule(host string) *storage.ParsingRuleRecord {
+func samplePageRule(host string) *storage.ParsingRuleRecord {
 	return &storage.ParsingRuleRecord{
 		ID:          1,
 		SourceName:  "test",
 		HostPattern: host,
-		TargetType:  storage.TargetTypeArticle,
+		TargetType:  storage.TargetTypePage,
 		Version:     1,
 		Enabled:     true,
 		Selectors: storage.SelectorMap{
-			Title: &storage.FieldSelector{CSS: "h1"},
-			Body:  &storage.FieldSelector{CSS: "article p", Multi: true},
+			Title:       &storage.FieldSelector{CSS: "h1"},
+			MainContent: &storage.FieldSelector{CSS: "article p", Multi: true},
 		},
 	}
 }
@@ -67,21 +67,21 @@ func sampleArticleRule(host string) *storage.ParsingRuleRecord {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestResolver_ResolveByURL_Success(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{sampleArticleRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
 	r := rule.NewResolver(repo)
 
-	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/1", storage.TargetTypeArticle)
+	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/1", storage.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "news.example.com", got.HostPattern)
 	assert.Equal(t, 1, repo.calls())
 }
 
 func TestResolver_ResolveByURL_HostUppercaseNormalized(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{sampleArticleRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
 	r := rule.NewResolver(repo)
 
 	// URL host 가 대문자여도 lookup 은 lowercase 로 정규화되어 매칭
-	_, err := r.ResolveByURL(context.Background(), "https://NEWS.EXAMPLE.COM/x", storage.TargetTypeArticle)
+	_, err := r.ResolveByURL(context.Background(), "https://NEWS.EXAMPLE.COM/x", storage.TargetTypePage)
 	require.NoError(t, err)
 }
 
@@ -89,7 +89,7 @@ func TestResolver_ResolveByURL_InvalidURL_ReturnsError(t *testing.T) {
 	repo := &fakeRepo{}
 	r := rule.NewResolver(repo)
 
-	_, err := r.ResolveByURL(context.Background(), "://no-scheme", storage.TargetTypeArticle)
+	_, err := r.ResolveByURL(context.Background(), "://no-scheme", storage.TargetTypePage)
 	require.Error(t, err)
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
@@ -101,7 +101,7 @@ func TestResolver_NoMatch_ReturnsErrNoRule(t *testing.T) {
 	repo := &fakeRepo{notFound: true}
 	r := rule.NewResolver(repo)
 
-	_, err := r.Resolve(context.Background(), "no-rule.example.com", storage.TargetTypeArticle)
+	_, err := r.Resolve(context.Background(), "no-rule.example.com", storage.TargetTypePage)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, &rule.Error{Code: rule.ErrNoRule}))
 }
@@ -111,17 +111,17 @@ func TestResolver_NoMatch_ReturnsErrNoRule(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestResolver_Cache_HitsAvoidRepoCall(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{sampleArticleRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
 	r := rule.NewResolver(repo)
 
 	// 첫 호출 → repo 1
-	_, err := r.Resolve(context.Background(), "news.example.com", storage.TargetTypeArticle)
+	_, err := r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 1, repo.calls())
 
 	// 후속 호출 → cache hit, repo 호출 X
 	for i := 0; i < 5; i++ {
-		_, err := r.Resolve(context.Background(), "news.example.com", storage.TargetTypeArticle)
+		_, err := r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 1, repo.calls(), "양성 cache hit — 추가 repo 호출 없어야 함")
@@ -132,55 +132,55 @@ func TestResolver_NegativeCache_AvoidRepoCallForMissingHost(t *testing.T) {
 	r := rule.NewResolver(repo)
 
 	for i := 0; i < 5; i++ {
-		_, err := r.Resolve(context.Background(), "missing.example.com", storage.TargetTypeArticle)
+		_, err := r.Resolve(context.Background(), "missing.example.com", storage.TargetTypePage)
 		require.Error(t, err)
 	}
 	assert.Equal(t, 1, repo.calls(), "negative cache 도 repo 폭주 회피")
 }
 
 func TestResolver_Invalidate_ForcesRepoCall(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{sampleArticleRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
 	r := rule.NewResolver(repo)
 
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypeArticle)
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypeArticle)
+	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
+	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
 	assert.Equal(t, 1, repo.calls())
 
-	r.Invalidate("news.example.com", storage.TargetTypeArticle)
+	r.Invalidate("news.example.com", storage.TargetTypePage)
 
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypeArticle)
+	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
 	assert.Equal(t, 2, repo.calls(), "Invalidate 후 다음 호출은 repo 다시 도달")
 }
 
 func TestResolver_InvalidateAll_ClearsAllEntries(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{
-		sampleArticleRule("a.example.com"),
-		sampleArticleRule("b.example.com"),
+		samplePageRule("a.example.com"),
+		samplePageRule("b.example.com"),
 	}}
 	r := rule.NewResolver(repo)
 
-	_, _ = r.Resolve(context.Background(), "a.example.com", storage.TargetTypeArticle)
-	_, _ = r.Resolve(context.Background(), "b.example.com", storage.TargetTypeArticle)
+	_, _ = r.Resolve(context.Background(), "a.example.com", storage.TargetTypePage)
+	_, _ = r.Resolve(context.Background(), "b.example.com", storage.TargetTypePage)
 	assert.Equal(t, 2, repo.calls())
 
 	r.InvalidateAll()
 
-	_, _ = r.Resolve(context.Background(), "a.example.com", storage.TargetTypeArticle)
-	_, _ = r.Resolve(context.Background(), "b.example.com", storage.TargetTypeArticle)
+	_, _ = r.Resolve(context.Background(), "a.example.com", storage.TargetTypePage)
+	_, _ = r.Resolve(context.Background(), "b.example.com", storage.TargetTypePage)
 	assert.Equal(t, 4, repo.calls())
 }
 
 func TestResolver_CacheTTL_ExpiresAfterDuration(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{sampleArticleRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
 	// TTL 50ms — 테스트 친화적 짧은 시간
 	r := rule.NewResolver(repo, rule.WithCacheTTL(50*time.Millisecond))
 
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypeArticle)
+	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
 	assert.Equal(t, 1, repo.calls())
 
 	time.Sleep(80 * time.Millisecond)
 
-	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypeArticle)
+	_, _ = r.Resolve(context.Background(), "news.example.com", storage.TargetTypePage)
 	assert.Equal(t, 2, repo.calls(), "TTL 만료 후 repo 다시 호출")
 }
 

@@ -10,25 +10,23 @@ import (
 	"github.com/PuerkitoBio/goquery"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/domain/news"
+	"issuetracker/internal/crawler/parser"
 	"issuetracker/internal/storage"
 )
 
-// Parser 는 DB 기반 파싱 규칙으로 동작하는 단일 parser engine 입니다 (이슈 #100).
+// Parser 는 DB 기반 파싱 규칙으로 동작하는 단일 page parser engine 입니다 (이슈 #100).
 //
-// Parser implements both news.NewsArticleParser and news.NewsListParser interfaces,
-// driven by storage.ParsingRuleRecord resolved per request via Resolver.
+// Parser implements both parser.ContentParser and parser.LinkListParser, driven by
+// storage.ParsingRuleRecord resolved per request via Resolver. 사이트별 hardcode 파서
+// (NaverParser/DaumParser/...) 를 대체 — 새 사이트 지원 = parsing_rules row 추가.
 //
-// 사이트별 hardcode 파서 (NaverParser/DaumParser/...) 를 대체:
-//   - 새 사이트 지원 = parsing_rules row 추가 (코드 변경 없음)
-//   - 미지원 page 진단 = ErrNoRule 반환 (LLM 자동 생성 fallback 진입점)
-//   - selector 진화 = parsing_rules version 새 row + enabled flip
+// 도메인 중립 — 뉴스 / 블로그 / 제품 페이지 / 일반 문서 모두 동일 engine 으로 처리.
+// 호출자가 도메인-specific 모델로 변환 (예: Page → news.NewsArticle) 하면 됨.
 //
-// 본 Parser 는 stateless (resolver / dateLayouts 만 보유) 라 단일 인스턴스를 모든
-// worker 가 공유 가능 — goroutine-safe.
+// stateless / goroutine-safe — 모든 worker 가 단일 인스턴스 공유 가능.
 type Parser struct {
 	resolver    *Resolver
-	dateLayouts []string // ParseArticle 의 Date 필드 try-list (앞쪽 우선)
+	dateLayouts []string // PublishedAt try-list (앞쪽 우선)
 }
 
 // NewParser 는 Resolver 를 사용하는 Parser 를 생성합니다.
@@ -43,9 +41,8 @@ func NewParser(resolver *Resolver) *Parser {
 	}
 }
 
-// defaultDateLayouts 는 ParseArticle 이 Date 추출 시 시도할 layout 목록입니다.
-// 사이트별 차이 (RFC3339 / Korean / ISO 8601 etc) 를 일반화. 운영 중 새 형식이
-// 발견되면 본 목록 확장으로 대응.
+// defaultDateLayouts 는 PublishedAt 추출 시 시도할 layout 목록입니다.
+// 사이트별 차이 (RFC3339 / Korean / ISO 8601 etc) 를 일반화. 운영 중 새 형식 발견 시 확장.
 func defaultDateLayouts() []string {
 	return []string{
 		time.RFC3339,
@@ -60,19 +57,19 @@ func defaultDateLayouts() []string {
 	}
 }
 
-// ParseArticle 은 RawContent 를 DB rule 기반으로 NewsArticle 로 파싱합니다.
+// ParsePage 는 RawContent 를 DB rule 기반으로 Page 로 파싱합니다 (parser.ContentParser 구현).
 //
-// ParseArticle implements news.NewsArticleParser. 흐름:
-//  1. raw.URL 의 host 로 active article rule lookup (Resolver — cache hit 핫패스)
-//  2. rule 의 selectors 에 따라 각 필드 (Title/Body/Author/Date/...) 추출
-//  3. Title 등 필수 필드 selector 누락 시 ErrEmptySelector
-//  4. Body 가 빈 결과면 ErrParseFailure (selector 는 있지만 매칭 0건 → 실질 무의미)
-func (p *Parser) ParseArticle(raw *core.RawContent) (*news.NewsArticle, error) {
+// 흐름:
+//  1. raw.URL 의 host 로 active page rule lookup (Resolver — cache hit 핫패스)
+//  2. rule.Selectors 에 따라 각 필드 (Title/MainContent/Author/PublishedAt/...) 추출
+//  3. Title selector 누락 → ErrEmptySelector (필수 필드)
+//  4. MainContent 매칭 0건 → ErrParseFailure (selector 는 있지만 매칭 0건 = stale rule 진단)
+func (p *Parser) ParsePage(raw *core.RawContent) (*parser.Page, error) {
 	if raw == nil || raw.HTML == "" {
-		return nil, &Error{Code: ErrParseFailure, Message: "raw content empty", URL: ""}
+		return nil, &Error{Code: ErrParseFailure, Message: "raw content empty"}
 	}
 
-	rule, err := p.resolver.ResolveByURL(context.Background(), raw.URL, storage.TargetTypeArticle)
+	rule, err := p.resolver.ResolveByURL(context.Background(), raw.URL, storage.TargetTypePage)
 	if err != nil {
 		return nil, err
 	}
@@ -80,9 +77,9 @@ func (p *Parser) ParseArticle(raw *core.RawContent) (*news.NewsArticle, error) {
 	if rule.Selectors.Title == nil {
 		return nil, &Error{
 			Code:       ErrEmptySelector,
-			Message:    "article rule missing required Title selector",
+			Message:    "page rule missing required Title selector",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeArticle),
+			TargetType: string(storage.TargetTypePage),
 		}
 	}
 
@@ -91,37 +88,38 @@ func (p *Parser) ParseArticle(raw *core.RawContent) (*news.NewsArticle, error) {
 		return nil, &Error{Code: ErrParseFailure, Message: "goquery parse failed", URL: raw.URL, Err: err}
 	}
 
-	article := &news.NewsArticle{
+	page := &parser.Page{
 		URL:         raw.URL,
 		Title:       extractField(doc, rule.Selectors.Title),
+		MainContent: extractField(doc, rule.Selectors.MainContent),
 		Summary:     extractField(doc, rule.Selectors.Summary),
-		Body:        extractField(doc, rule.Selectors.Body),
 		Author:      extractField(doc, rule.Selectors.Author),
 		Category:    extractField(doc, rule.Selectors.Category),
 		Tags:        extractFieldMulti(doc, rule.Selectors.Tags),
-		ImageURLs:   extractFieldMulti(doc, rule.Selectors.ImageURLs),
-		PublishedAt: p.extractDate(doc, rule.Selectors.Date),
+		Images:      extractFieldMulti(doc, rule.Selectors.Images),
+		PublishedAt: p.extractDate(doc, rule.Selectors.PublishedAt),
 	}
 
-	if article.Body == "" {
+	if page.MainContent == "" {
 		return nil, &Error{
 			Code:       ErrParseFailure,
-			Message:    "Body selector matched 0 elements (rule may be stale)",
+			Message:    "MainContent selector matched 0 elements (rule may be stale)",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeArticle),
+			TargetType: string(storage.TargetTypePage),
 		}
 	}
-	return article, nil
+	return page, nil
 }
 
-// ParseList 는 RawContent 의 카테고리/목록 페이지를 NewsItem 슬라이스로 파싱합니다.
+// ParseLinks 는 RawContent 의 링크-허브 페이지를 LinkItem 슬라이스로 파싱합니다
+// (parser.LinkListParser 구현).
 //
-// ParseList implements news.NewsListParser. 흐름:
+// 흐름:
 //  1. raw.URL 의 host 로 active list rule lookup
 //  2. rule.ItemContainer selector 로 각 item element 순회
-//  3. 각 item 안에서 ItemLink (href) / ItemTitle / ItemSummary 추출
-//  4. URL 은 raw.URL 기준으로 절대 URL 로 정규화 (상대 경로 처리)
-func (p *Parser) ParseList(raw *core.RawContent) ([]news.NewsItem, error) {
+//  3. 각 item 안에서 ItemLink (href) / ItemTitle / ItemSnippet 추출
+//  4. 상대 URL 은 raw.URL base 로 절대 URL 화
+func (p *Parser) ParseLinks(raw *core.RawContent) ([]parser.LinkItem, error) {
 	if raw == nil || raw.HTML == "" {
 		return nil, &Error{Code: ErrParseFailure, Message: "raw content empty"}
 	}
@@ -147,11 +145,11 @@ func (p *Parser) ParseList(raw *core.RawContent) ([]news.NewsItem, error) {
 
 	base, baseErr := url.Parse(raw.URL)
 	if baseErr != nil {
-		// raw.URL 이 잘못된 경우 — 절대 URL 화 못 하면 link skip
+		// raw.URL 이 잘못된 경우 — 상대 URL 절대화 못 하면 link 그대로 유지
 		base = nil
 	}
 
-	var items []news.NewsItem
+	var items []parser.LinkItem
 	doc.Find(rule.Selectors.ItemContainer.CSS).Each(func(_ int, container *goquery.Selection) {
 		link := extractFieldFromSelection(container, rule.Selectors.ItemLink)
 		if link == "" {
@@ -163,10 +161,10 @@ func (p *Parser) ParseList(raw *core.RawContent) ([]news.NewsItem, error) {
 				absURL = abs
 			}
 		}
-		items = append(items, news.NewsItem{
+		items = append(items, parser.LinkItem{
 			URL:     absURL,
 			Title:   extractFieldFromSelection(container, rule.Selectors.ItemTitle),
-			Summary: extractFieldFromSelection(container, rule.Selectors.ItemSummary),
+			Snippet: extractFieldFromSelection(container, rule.Selectors.ItemSnippet),
 		})
 	})
 	return items, nil
@@ -175,7 +173,7 @@ func (p *Parser) ParseList(raw *core.RawContent) ([]news.NewsItem, error) {
 // extractField 는 단일 필드를 추출합니다 (selector 가 nil 이면 빈 문자열).
 //
 // Multi=false (기본): 첫 매칭 element 의 값 반환.
-// Multi=true: 모든 매칭 element 의 값을 줄바꿈으로 합쳐 반환 (Body 의 다중 단락 등).
+// Multi=true: 모든 매칭 element 의 값을 줄바꿈으로 합쳐 반환 (MainContent 다중 단락 등).
 func extractField(doc *goquery.Document, fs *storage.FieldSelector) string {
 	if fs == nil || fs.CSS == "" {
 		return ""
@@ -210,7 +208,7 @@ func extractFromSelection(scope *goquery.Selection, fs *storage.FieldSelector) s
 	return strings.Join(parts, "\n")
 }
 
-// extractFieldMulti 는 multi 결과를 string 슬라이스로 반환합니다 (Tags / ImageURLs 용).
+// extractFieldMulti 는 multi 결과를 string 슬라이스로 반환합니다 (Tags / Images 용).
 //
 // extractField 의 multi 모드는 줄바꿈으로 합치지만, 본 함수는 각 element 를 별도 항목으로 보존.
 func extractFieldMulti(doc *goquery.Document, fs *storage.FieldSelector) []string {
@@ -243,8 +241,8 @@ func extractValue(sel *goquery.Selection, attribute string) string {
 	return v
 }
 
-// extractDate 는 Date 필드를 추출하고 dateLayouts 를 순회 시도합니다.
-// 추출 실패 시 zero time 반환 — 호출자 (validator) 가 zero 검사로 분기.
+// extractDate 는 PublishedAt 필드를 추출하고 dateLayouts 를 순회 시도합니다.
+// 추출 실패 시 zero time 반환 — 호출자 (validator 등) 가 zero 검사로 분기.
 func (p *Parser) extractDate(doc *goquery.Document, fs *storage.FieldSelector) time.Time {
 	raw := extractField(doc, fs)
 	if raw == "" {
@@ -269,6 +267,6 @@ func absoluteURL(base *url.URL, link string) (string, error) {
 
 // 컴파일 시 인터페이스 구현 검증 — 두 인터페이스 모두 만족해야 함.
 var (
-	_ news.NewsArticleParser = (*Parser)(nil)
-	_ news.NewsListParser    = (*Parser)(nil)
+	_ parser.ContentParser  = (*Parser)(nil)
+	_ parser.LinkListParser = (*Parser)(nil)
 )

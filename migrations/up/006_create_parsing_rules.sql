@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS parsing_rules (
   id           BIGSERIAL    PRIMARY KEY,
 
   -- 자연키 — application 에서 (source_name, host_pattern, target_type, version) 4-tuple 로 lookup
-  source_name  VARCHAR(100) NOT NULL,    -- "naver" / "cnn" / "yonhap" 등
+  source_name  VARCHAR(100) NOT NULL,    -- "naver" / "cnn" / "yonhap" / "blog.example.com" 등
   host_pattern VARCHAR(255) NOT NULL,    -- "n.news.naver.com" / "edition.cnn.com" — URL host 매칭
-  target_type  VARCHAR(20)  NOT NULL,    -- "article" / "list"
+  target_type  VARCHAR(20)  NOT NULL,    -- "page" (단일 컨텐츠) / "list" (링크-허브)
   version      INT          NOT NULL DEFAULT 1,
 
   -- 활성화 플래그
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS parsing_rules (
   updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
   CONSTRAINT parsing_rules_target_type_check
-    CHECK (target_type IN ('article', 'list')),
+    CHECK (target_type IN ('page', 'list')),
   CONSTRAINT parsing_rules_version_positive
     CHECK (version > 0),
   CONSTRAINT parsing_rules_natural_key_unique

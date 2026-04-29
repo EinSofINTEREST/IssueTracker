@@ -11,11 +11,16 @@ import (
 type TargetType string
 
 const (
-	// TargetTypeArticle: 단일 기사 페이지 — Title/Body/Author 등 추출
-	TargetTypeArticle TargetType = "article"
-	// TargetTypeList: 카테고리/목록 페이지 — article URL 들 추출
+	// TargetTypePage: 단일 컨텐츠 페이지 — Title/MainContent/Author 등 추출.
+	// 뉴스 기사 / 블로그 포스트 / 제품 페이지 / 일반 문서 모두 포함.
+	TargetTypePage TargetType = "page"
+	// TargetTypeList: 링크-허브 페이지 — 카테고리/목록/sitemap 등 LinkItem 들 추출.
 	TargetTypeList TargetType = "list"
 )
+
+// 호환성 — 기존 TargetTypeArticle 명칭이 코드/DB 에 잔존할 수 있어 별칭 유지.
+// Deprecated: TargetTypePage 사용 권장 (도메인 일반화).
+const TargetTypeArticle = TargetTypePage
 
 // FieldSelector 는 단일 필드의 추출 규칙입니다.
 //
@@ -33,29 +38,39 @@ type FieldSelector struct {
 	Multi     bool   `json:"multi,omitempty"`
 }
 
-// SelectorMap 은 article/list 페이지에서 추출할 모든 필드의 selector 모음입니다.
+// SelectorMap 은 page/list 페이지에서 추출할 모든 필드의 selector 모음입니다.
 //
 // SelectorMap holds selectors for every extractable field. Nil entries mean
 // "field not configured" — parser 는 해당 필드를 빈 값으로 두고 계속 진행합니다.
 //
-// article 페이지용 필드와 list 페이지용 필드가 한 struct 에 함께 정의되지만,
-// target_type 에 따라 사용되는 부분만 채워집니다 (DB 의 selectors JSONB 가 nil 친화).
+// page (단일 컨텐츠 페이지) 용 필드와 list (링크-허브 페이지) 용 필드가 한 struct 에
+// 함께 정의되지만, target_type 에 따라 사용되는 부분만 채워집니다 (JSONB nil 친화).
+//
+// 뉴스 / 블로그 / 제품 페이지 등 임의 웹페이지의 핵심 내용 추출에 일반화 (이슈 #100):
+//   - Title       : 페이지 제목 (h1 등)
+//   - MainContent : 핵심 본문 (article body / blog post / product description ...)
+//   - Summary     : meta description 또는 별도 요약 영역
+//   - Author      : 게시자/저자 (있을 때)
+//   - PublishedAt : 게시 시각 selector (datetime attribute 권장)
+//   - Category    : 섹션/카테고리 (뉴스 섹션 / 블로그 카테고리 / 제품 카테고리 등)
+//   - Tags        : 태그 슬라이스
+//   - Images      : 핵심 이미지 URL 슬라이스 (이전 ImageURLs)
 type SelectorMap struct {
-	// article 페이지용
-	Title     *FieldSelector `json:"title,omitempty"`
-	Body      *FieldSelector `json:"body,omitempty"`
-	Summary   *FieldSelector `json:"summary,omitempty"`
-	Author    *FieldSelector `json:"author,omitempty"`
-	Date      *FieldSelector `json:"date,omitempty"`
-	Category  *FieldSelector `json:"category,omitempty"`
-	Tags      *FieldSelector `json:"tags,omitempty"`
-	ImageURLs *FieldSelector `json:"image_urls,omitempty"`
+	// page (단일 컨텐츠 페이지) 용
+	Title       *FieldSelector `json:"title,omitempty"`
+	MainContent *FieldSelector `json:"main_content,omitempty"` // 핵심 본문 (article body / post / description 등)
+	Summary     *FieldSelector `json:"summary,omitempty"`
+	Author      *FieldSelector `json:"author,omitempty"`
+	PublishedAt *FieldSelector `json:"published_at,omitempty"`
+	Category    *FieldSelector `json:"category,omitempty"`
+	Tags        *FieldSelector `json:"tags,omitempty"`
+	Images      *FieldSelector `json:"images,omitempty"`
 
-	// list 페이지용 — 각 item 의 link/title/summary 추출
+	// list (링크-허브 페이지) 용 — 각 item 의 link/title/snippet 추출
 	ItemContainer *FieldSelector `json:"item_container,omitempty"` // 각 item 의 root element selector
-	ItemLink      *FieldSelector `json:"item_link,omitempty"`      // ItemContainer 내 link selector (또는 attribute=href 인 element)
+	ItemLink      *FieldSelector `json:"item_link,omitempty"`      // ItemContainer 내 link selector (attribute=href 권장)
 	ItemTitle     *FieldSelector `json:"item_title,omitempty"`
-	ItemSummary   *FieldSelector `json:"item_summary,omitempty"`
+	ItemSnippet   *FieldSelector `json:"item_snippet,omitempty"` // 짧은 요약/설명 (있을 때)
 }
 
 // ParsingRuleRecord 는 parsing_rules 테이블의 단일 행입니다.
