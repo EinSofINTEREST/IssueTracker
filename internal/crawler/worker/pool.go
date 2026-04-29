@@ -32,8 +32,8 @@ const drainTimeout = 5 * time.Second
 // JobHandler는 CrawlJob을 처리하는 인터페이스입니다.
 // 구현체는 여러 goroutine에서 동시에 호출되므로 goroutine-safe해야 합니다.
 // Handle은 크롤링 및 파싱 결과를 []*core.Content로 반환합니다.
-// RSS처럼 다수의 기사를 반환하는 경우 슬라이스에 여러 항목이 담깁니다.
-// 처리할 내용이 없으면 nil, nil을 반환합니다.
+// 처리할 내용이 없으면 nil, nil을 반환합니다 — 이슈 #134 분리 후 fetcher 측
+// ChainHandler 는 raw_contents 저장 + RawContentRef 발행 만 수행하므로 항상 nil 반환.
 type JobHandler interface {
 	Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error)
 }

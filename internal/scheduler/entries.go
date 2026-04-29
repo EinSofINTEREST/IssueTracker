@@ -23,7 +23,6 @@ func DefaultEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 }
 
 // cnnEntries는 CNN 카테고리 페이지 기반 스케줄 항목을 반환합니다.
-// CNN RSS 피드가 지원 중단되어 HTML 카테고리 페이지를 직접 크롤링합니다.
 func cnnEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 	cnnCfg := cnn.Default()
 	entries := make([]ScheduleEntry, 0, len(cnnCfg.CategoryURLs))
@@ -59,8 +58,7 @@ func naverEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 	return entries
 }
 
-// yonhapEntries는 연합뉴스 기반 스케줄 항목을 반환합니다.
-// 연합뉴스는 RSS 미지원, 카테고리 URL을 직접 사용합니다.
+// yonhapEntries는 연합뉴스 카테고리 페이지 기반 스케줄 항목을 반환합니다.
 func yonhapEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 	yonhapCfg := yonhap.Default()
 	entries := make([]ScheduleEntry, 0, len(yonhapCfg.CategoryURLs))

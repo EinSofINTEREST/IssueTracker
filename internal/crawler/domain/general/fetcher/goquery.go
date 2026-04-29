@@ -1,6 +1,6 @@
-// Package fetcher 는 general.Fetcher / general.RSSFetcher 구현체들을 제공합니다.
+// Package fetcher 는 general.Fetcher 구현체들을 제공합니다.
 //
-// Package fetcher provides concrete general.Fetcher / general.RSSFetcher adapters.
+// Package fetcher provides concrete general.Fetcher adapters.
 // chain handlers depend only on the interfaces defined in the general package.
 package fetcher
 

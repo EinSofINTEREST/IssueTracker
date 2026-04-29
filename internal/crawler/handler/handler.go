@@ -19,7 +19,8 @@ import (
 //
 // Handler processes a single CrawlJob, fetches and parses the content,
 // and returns normalized Content(s) ready for the processing pipeline.
-// RSS feeds may return multiple Content items; HTML articles return one.
+// 시그니처상 다수 Content 반환을 허용하나, 현 fetcher/parser 분리 (이슈 #134) 이후
+// fetcher 측 ChainHandler 는 항상 nil 을 반환하고 실제 Content 발행은 parser worker 가 담당합니다.
 // Implementations must be safe for concurrent use by multiple goroutines.
 type Handler interface {
 	Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error)
