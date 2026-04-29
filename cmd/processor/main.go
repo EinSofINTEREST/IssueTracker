@@ -68,9 +68,6 @@ func main() {
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
 
-	// 이슈 #135 — validator 결과 (passed/rejected) 를 news_articles 에 기록하여 사후 추적 가능.
-	newsRepo := pgstore.NewNewsArticleRepository(pool, log)
-
 	// ── 4. Consumer / Producer 생성 ───────────────────────────────────────────
 	// Consumer: issuetracker.normalized 구독
 	// Producer: issuetracker.validated, issuetracker.dlq 발행
@@ -81,7 +78,8 @@ func main() {
 	defer producer.Close()
 
 	// ── 5. Validate Worker 시작 ───────────────────────────────────────────────
-	worker := validate.NewWorker(consumer, producer, contentSvc, newsRepo, validateWorkerCount, validateCfg)
+	// validator 결과 (passed/rejected) 는 contentSvc.UpdateValidationStatus 로 contents 에 기록 (이슈 #135 / #161).
+	worker := validate.NewWorker(consumer, producer, contentSvc, validateWorkerCount, validateCfg)
 	worker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{

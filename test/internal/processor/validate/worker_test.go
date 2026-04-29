@@ -100,31 +100,23 @@ func (m *mockContentService) Delete(ctx context.Context, id string) error {
 	return args.Error(0)
 }
 
-// mockNewsArticleRepository 는 이슈 #135 — Worker 가 reject/passed 결과를 news_articles 에
-// 기록하는지 검증하기 위한 mock 입니다.
-type mockNewsArticleRepository struct{ mock.Mock }
-
-func (m *mockNewsArticleRepository) Insert(ctx context.Context, a *storage.NewsArticleRecord) error {
-	args := m.Called(ctx, a)
-	return args.Error(0)
-}
-
-func (m *mockNewsArticleRepository) GetByURL(ctx context.Context, url string) (*storage.NewsArticleRecord, error) {
-	args := m.Called(ctx, url)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*storage.NewsArticleRecord), args.Error(1)
-}
-
-func (m *mockNewsArticleRepository) List(ctx context.Context, f storage.NewsArticleFilter) ([]*storage.NewsArticleRecord, error) {
-	args := m.Called(ctx, f)
-	return args.Get(0).([]*storage.NewsArticleRecord), args.Error(1)
-}
-
-func (m *mockNewsArticleRepository) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
+func (m *mockContentService) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
 	args := m.Called(ctx, url, status, code, detail)
 	return args.Error(0)
+}
+
+// newMockContentService 는 mockContentService 를 생성하면서 UpdateValidationStatus 에 대한
+// catch-all expectation 을 등록합니다.
+//
+// 이슈 #161 이후 Worker 는 거의 모든 흐름에서 UpdateValidationStatus 를 호출합니다 (passed/rejected
+// 추적이 contents 단일 테이블로 일원화됨). 본 호출을 명시적으로 검증하지 않는 테스트도 panic 없이
+// 통과해야 하므로 .Maybe() 로 catch-all 등록 — 명시적 .On 이 있는 테스트는 그것이 우선 매치됩니다.
+func newMockContentService() *mockContentService {
+	m := &mockContentService{}
+	m.On("UpdateValidationStatus",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return(nil).Maybe()
+	return m
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,14 +154,7 @@ func makeProcessingMessage(content *core.Content, retryCount int) *queue.Message
 }
 
 func newWorker(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService) *validate.Worker {
-	// 이슈 #135 — newsArticleRepo nil 전달 시 worker 가 update 단계를 skip 하므로 기존 테스트
-	// 시나리오를 그대로 보존. 별도 테스트가 newsArticleRepo 호출 동작을 검증.
-	return validate.NewWorker(consumer, producer, contentSvc, nil, 1, config.DefaultValidateConfig())
-}
-
-// newWorkerWithRepo 는 이슈 #135 의 reject/passed 추적 동작을 테스트할 때 사용합니다.
-func newWorkerWithRepo(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService, repo storage.NewsArticleRepository) *validate.Worker {
-	return validate.NewWorker(consumer, producer, contentSvc, repo, 1, config.DefaultValidateConfig())
+	return validate.NewWorker(consumer, producer, contentSvc, 1, config.DefaultValidateConfig())
 }
 
 func runWorker(t *testing.T, consumer *mockConsumer, w *validate.Worker, msg *queue.Message) {
@@ -198,7 +183,7 @@ func runWorker(t *testing.T, consumer *mockConsumer, w *validate.Worker, msg *qu
 func TestValidateWorker_ValidNewsContent_PublishesToValidatedTopic(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -221,7 +206,7 @@ func TestValidateWorker_ValidNewsContent_PublishesToValidatedTopic(t *testing.T)
 func TestValidateWorker_ValidCommunityContent_PublishesToValidatedTopic(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -244,7 +229,7 @@ func TestValidateWorker_ValidCommunityContent_PublishesToValidatedTopic(t *testi
 func TestValidateWorker_InvalidContent_SendsToDLQ(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -273,7 +258,7 @@ func TestValidateWorker_InvalidContent_SendsToDLQ(t *testing.T) {
 func TestValidateWorker_InvalidContent_RetriesBeforeDLQ(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -300,7 +285,7 @@ func TestValidateWorker_InvalidContent_RetriesBeforeDLQ(t *testing.T) {
 func TestValidateWorker_MalformedMessage_SendsToDLQ(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -326,7 +311,7 @@ func TestValidateWorker_MalformedMessage_SendsToDLQ(t *testing.T) {
 func TestValidateWorker_ValidatedMessageContainsContentRef(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -377,7 +362,7 @@ func TestValidateWorker_NewValidator_DispatchesBySourceType(t *testing.T) {
 func TestValidateWorker_Stop_ReturnsConsumerError(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -402,7 +387,7 @@ func TestValidateWorker_Stop_ReturnsConsumerError(t *testing.T) {
 func TestValidateWorker_ValidatedMessage_HasCorrectStage(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -429,7 +414,7 @@ func TestValidateWorker_ValidatedMessage_HasCorrectStage(t *testing.T) {
 func TestValidateWorker_LargeBody_ValidatesCorrectly(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -459,7 +444,7 @@ func TestValidateWorker_LargeBody_ValidatesCorrectly(t *testing.T) {
 func TestValidateWorker_CommitDrainsOnContextCanceled(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -489,7 +474,7 @@ func TestValidateWorker_CommitDrainsOnContextCanceled(t *testing.T) {
 func TestValidateWorker_CommitDoesNotDrainOnNonCancelError(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -515,7 +500,7 @@ func TestValidateWorker_CommitDoesNotDrainOnNonCancelError(t *testing.T) {
 func TestValidateWorker_PublishDrainsOnContextCanceled(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -547,7 +532,7 @@ func TestValidateWorker_PublishDrainsOnContextCanceled(t *testing.T) {
 func TestValidateWorker_PublishDrainFails_DoesNotCommit(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -576,7 +561,7 @@ func TestValidateWorker_PublishDrainFails_DoesNotCommit(t *testing.T) {
 func TestValidateWorker_PublishDoesNotDrainOnNonCancelError(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -605,7 +590,7 @@ func TestValidateWorker_PublishDoesNotDrainOnNonCancelError(t *testing.T) {
 func TestValidateWorker_DLQFailureSkipsCommit_PreventsMessageLoss(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -635,7 +620,7 @@ func TestValidateWorker_DLQFailureSkipsCommit_PreventsMessageLoss(t *testing.T) 
 func TestValidateWorker_RequeueFailureSkipsCommit_PreservesRetryChance(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -665,7 +650,7 @@ func TestValidateWorker_RequeueFailureSkipsCommit_PreservesRetryChance(t *testin
 func TestValidateWorker_DLQDrainsOnContextCanceled(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
-	contentSvc := new(mockContentService)
+	contentSvc := newMockContentService()
 
 	w := newWorker(consumer, producer, contentSvc)
 
@@ -692,16 +677,15 @@ func TestValidateWorker_DLQDrainsOnContextCanceled(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 이슈 #135 — news_articles validation_status 추적 동작 테스트
+// 이슈 #135 / #161 — contents validation_status 추적 동작 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestValidateWorker_InvalidContent_RecordsRejectedInNewsArticles(t *testing.T) {
+func TestValidateWorker_InvalidContent_RecordsRejectedInContents(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	contentSvc := new(mockContentService)
-	repo := new(mockNewsArticleRepository)
 
-	w := newWorkerWithRepo(consumer, producer, contentSvc, repo)
+	w := newWorker(consumer, producer, contentSvc)
 
 	content := newNewsContent()
 	content.Title = "x"
@@ -717,7 +701,7 @@ func TestValidateWorker_InvalidContent_RecordsRejectedInNewsArticles(t *testing.
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
 	// reject 메타데이터가 url 기준으로 update 되어야 함. code 는 VAL_xxx, detail 은 비어있지 않음.
-	repo.On("UpdateValidationStatus",
+	contentSvc.On("UpdateValidationStatus",
 		mock.Anything,
 		content.URL,
 		storage.ValidationStatusRejected,
@@ -727,16 +711,15 @@ func TestValidateWorker_InvalidContent_RecordsRejectedInNewsArticles(t *testing.
 
 	runWorker(t, consumer, w, msg)
 
-	repo.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
 }
 
-func TestValidateWorker_ValidContent_RecordsPassedInNewsArticles(t *testing.T) {
+func TestValidateWorker_ValidContent_RecordsPassedInContents(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	contentSvc := new(mockContentService)
-	repo := new(mockNewsArticleRepository)
 
-	w := newWorkerWithRepo(consumer, producer, contentSvc, repo)
+	w := newWorker(consumer, producer, contentSvc)
 
 	content := newNewsContent()
 	msg := makeProcessingMessage(content, 0)
@@ -748,7 +731,7 @@ func TestValidateWorker_ValidContent_RecordsPassedInNewsArticles(t *testing.T) {
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
 	// passed 시에는 code/detail 모두 빈 문자열로 호출 (UpdateValidationStatus 가 NULL 로 저장)
-	repo.On("UpdateValidationStatus",
+	contentSvc.On("UpdateValidationStatus",
 		mock.Anything,
 		content.URL,
 		storage.ValidationStatusPassed,
@@ -758,16 +741,15 @@ func TestValidateWorker_ValidContent_RecordsPassedInNewsArticles(t *testing.T) {
 
 	runWorker(t, consumer, w, msg)
 
-	repo.AssertExpectations(t)
+	contentSvc.AssertExpectations(t)
 }
 
 func TestValidateWorker_RecordRejectedFailure_DoesNotBlockMainFlow(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	contentSvc := new(mockContentService)
-	repo := new(mockNewsArticleRepository)
 
-	w := newWorkerWithRepo(consumer, producer, contentSvc, repo)
+	w := newWorker(consumer, producer, contentSvc)
 
 	content := newNewsContent()
 	content.Title = "x"
@@ -782,8 +764,8 @@ func TestValidateWorker_RecordRejectedFailure_DoesNotBlockMainFlow(t *testing.T)
 	})).Return(nil)
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
-	// repo update 실패 — best-effort 정책상 worker 메인 흐름 (Delete + DLQ) 은 그대로 진행되어야 함
-	repo.On("UpdateValidationStatus",
+	// contentSvc update 실패 — best-effort 정책상 worker 메인 흐름 (Delete + DLQ) 은 그대로 진행되어야 함
+	contentSvc.On("UpdateValidationStatus",
 		mock.Anything, content.URL, storage.ValidationStatusRejected,
 		mock.Anything, mock.Anything,
 	).Return(errors.New("simulated db error")).Once()
