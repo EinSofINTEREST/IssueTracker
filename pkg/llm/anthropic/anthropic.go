@@ -22,6 +22,27 @@ const (
 	apiVersion       = "2023-06-01"
 )
 
+// init 은 factory (llm.New) 에서 본 provider 를 사용할 수 있게 등록합니다 (이슈 #140).
+//
+// "anthropic" 외 별칭 "claude" 도 함께 등록 — 사용자가 모델 이름으로 자연스럽게 호출 가능.
+func init() {
+	builder := func(cfg llm.Config) (llm.Provider, error) {
+		opts := []Option{}
+		if cfg.Model != "" {
+			opts = append(opts, WithModel(cfg.Model))
+		}
+		if cfg.BaseURL != "" {
+			opts = append(opts, WithBaseURL(cfg.BaseURL))
+		}
+		if cfg.Timeout > 0 {
+			opts = append(opts, WithTimeout(cfg.Timeout))
+		}
+		return New(cfg.APIKey, opts...), nil
+	}
+	llm.RegisterProvider(providerName, builder)
+	llm.RegisterProvider("claude", builder)
+}
+
 // Provider 는 llm.Provider 의 Anthropic 구현입니다.
 type Provider struct {
 	apiKey  string

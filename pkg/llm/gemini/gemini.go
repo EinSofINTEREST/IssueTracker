@@ -27,6 +27,25 @@ const (
 	defaultModel = "gemini-2.5-flash"
 )
 
+// init 은 factory (llm.New) 에서 본 provider 를 사용할 수 있게 등록합니다 (이슈 #140).
+//
+// 사용자는 llm.Config{Provider: "gemini", APIKey: "...", Model: "..."} 으로 생성 가능.
+func init() {
+	llm.RegisterProvider(providerName, func(cfg llm.Config) (llm.Provider, error) {
+		opts := []Option{}
+		if cfg.Model != "" {
+			opts = append(opts, WithModel(cfg.Model))
+		}
+		if cfg.BaseURL != "" {
+			opts = append(opts, WithBaseURL(cfg.BaseURL))
+		}
+		if cfg.Timeout > 0 {
+			opts = append(opts, WithTimeout(cfg.Timeout))
+		}
+		return New(cfg.APIKey, opts...), nil
+	})
+}
+
 // Provider 는 llm.Provider 의 Gemini 구현입니다.
 type Provider struct {
 	apiKey  string
