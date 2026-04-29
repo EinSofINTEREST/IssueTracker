@@ -183,15 +183,49 @@ func TestPageLinkDiscovery_NoMatch_ReturnsParseFailure(t *testing.T) {
 	assert.Equal(t, rule.ErrParseFailure, rerr.Code, "0건 매칭 = pattern stale 진단")
 }
 
-func TestPageLinkDiscovery_EmptyPattern_ReturnsEmptySelector(t *testing.T) {
+// TestPageLinkDiscovery_EmptyPattern_AllPass 는 빈 ArticleURLPattern 이 all-pass 모드로
+// 동작함을 검증합니다 (이슈 #148). pkg/links.Extractor 의 기본 제외 패턴 (javascript:/mailto:/tel:/login 등)
+// 만 적용되고 그 외 모든 (a href) 가 통과.
+func TestPageLinkDiscovery_EmptyPattern_AllPass(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{ArticleURLPattern: ""}
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: "",
+		SameOriginOnly:    true,
+	}
 
-	_, err := d.Discover(makeRaw("https://news.example.com/x", fullPageHTML), cfg)
-	require.Error(t, err)
-	var rerr *rule.Error
-	require.ErrorAs(t, err, &rerr)
-	assert.Equal(t, rule.ErrEmptySelector, rerr.Code)
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err, "all-pass 모드는 정상 통과")
+
+	// nav, /category/politics, main article × 2, sidebar × 2 = 6 (footer/external/login/mailto/javascript 제외)
+	require.GreaterOrEqual(t, len(items), 6, "fullPageHTML 의 same-origin 통과 가능 링크 모두 포함")
+
+	// 명시적으로 article 만 외 nav/category 도 포함됐는지 확인
+	urls := make(map[string]bool)
+	for _, it := range items {
+		urls[it.URL] = true
+	}
+	assert.True(t, urls["https://news.example.com/category/politics"], "category 링크 포함")
+	assert.True(t, urls["https://news.example.com/article/2026/04/29/headline-one"], "article 링크 포함")
+	assert.False(t, urls["https://news.example.com/login"], "기본 제외 패턴 (/login) 은 차단")
+}
+
+// TestPageLinkDiscovery_EmptyPattern_ExcludeStillApplies 는 all-pass 모드에서도
+// ExcludePatterns 가 정상 동작함을 검증합니다.
+func TestPageLinkDiscovery_EmptyPattern_ExcludeStillApplies(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: "",
+		SameOriginOnly:    true,
+		ExcludePatterns:   []string{"/category/", "/about"},
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+
+	for _, it := range items {
+		assert.NotContains(t, it.URL, "/category/", "all-pass 모드에서도 ExcludePatterns 적용")
+		assert.NotContains(t, it.URL, "/about", "운영자 정의 제외 패턴 적용")
+	}
 }
 
 func TestPageLinkDiscovery_NilConfig_ReturnsEmptySelector(t *testing.T) {
@@ -271,14 +305,20 @@ func TestParser_ParseLinks_FallsBackToItemContainerWhenPatternEmpty(t *testing.T
 	assert.Len(t, items, 3, "ItemContainer 경로로 3개 추출 (기존 동작 회귀 없음)")
 }
 
-func TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_FallsBackToItemContainer(t *testing.T) {
-	// LinkDiscovery 객체는 있지만 pattern 비어있음 → ItemContainer fallback
+// TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery 는 이슈 #148 변경 검증:
+// LinkDiscovery 객체가 채워져 있으면 ArticleURLPattern 이 빈 문자열이어도 discovery 모드 진입.
+// ItemContainer fallback 은 LinkDiscovery 자체가 nil 일 때만.
+func TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery(t *testing.T) {
+	// LinkDiscovery 객체는 있지만 pattern 비어있음 → all-pass discovery (ItemContainer 사용 안 함)
 	r := listRule()
-	r.Selectors.LinkDiscovery = &storage.LinkDiscoveryConfig{ArticleURLPattern: ""}
+	r.Selectors.LinkDiscovery = &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: "",
+		SameOriginOnly:    true,
+	}
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
 	items, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category", listHTML))
 	require.NoError(t, err)
-	assert.Len(t, items, 3, "빈 pattern 은 disabled 와 동일 — ItemContainer fallback")
+	require.Len(t, items, 3, "all-pass 모드 — listHTML 의 a href 3개 모두 통과")
 }
