@@ -112,27 +112,29 @@ func TestChain_BadRequest_TerminatesImmediately(t *testing.T) {
 	assert.Equal(t, 0, h2.calls(), "BadRequest 는 위임 무의미 — 후속 handler 호출되면 안 됨")
 }
 
-func TestChain_ContextLimit_TerminatesImmediately(t *testing.T) {
+func TestChain_ContextLimit_Delegates(t *testing.T) {
+	// ContextLimit 은 provider/모델 별 context window 차이로 위임 가치 있음
+	// (예: gpt-4o-mini 128k → claude-opus-4-7 200k → gemini-1.5-pro 2M).
+	// 현재 정책: 다음 handler 가 더 큰 window 를 가질 수 있어 시도.
 	h1 := &fakeProvider{name: "h1", err: &llm.Error{Code: llm.ErrCodeContextLimit, Provider: "h1"}}
-	h2 := &fakeProvider{name: "h2", resp: &llm.Response{Content: "x"}}
+	h2 := &fakeProvider{name: "h2", resp: &llm.Response{Content: "recovered-with-larger-window"}}
 
 	p := chain.New(h1, h2)
-	_, err := p.Generate(context.Background(), sampleRequest())
+	resp, err := p.Generate(context.Background(), sampleRequest())
 
-	require.Error(t, err)
-	var lerr *llm.Error
-	require.ErrorAs(t, err, &lerr)
-	assert.Equal(t, llm.ErrCodeContextLimit, lerr.Code)
-	assert.Equal(t, 0, h2.calls(), "ContextLimit 는 모든 provider 동일 → 즉시 종결")
+	require.NoError(t, err)
+	assert.Equal(t, "recovered-with-larger-window", resp.Content)
+	assert.Equal(t, 1, h2.calls(), "ContextLimit 는 다음 handler 위임 — 더 큰 context window 가능성")
 }
 
-func TestChain_DelegateOnAuthRateLimitServerNetworkUnknown(t *testing.T) {
+func TestChain_DelegateOnAllExceptBadRequest(t *testing.T) {
 	delegatable := []llm.ErrorCode{
 		llm.ErrCodeAuth,
 		llm.ErrCodeRateLimit,
 		llm.ErrCodeServer,
 		llm.ErrCodeNetwork,
 		llm.ErrCodeUnknown,
+		llm.ErrCodeContextLimit, // 다른 모델의 더 큰 context window 가능성
 	}
 	for _, code := range delegatable {
 		t.Run(string(code), func(t *testing.T) {
@@ -191,7 +193,7 @@ func TestChain_PrecanceledContext_FailsBeforeAnyHandler(t *testing.T) {
 	assert.Equal(t, 0, h1.calls(), "ctx 이미 cancel 이면 첫 handler 도 호출 안 함")
 }
 
-func TestChain_ContextCanceledMidway_StopsBeforeNextHandler(t *testing.T) {
+func TestChain_ContextCanceledMidway_ReturnsExplicitNetworkError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// h1 이 호출되는 동안 ctx 를 cancel — 그 후 h2 는 호출되면 안 됨
@@ -210,8 +212,10 @@ func TestChain_ContextCanceledMidway_StopsBeforeNextHandler(t *testing.T) {
 	require.Error(t, err)
 	var lerr *llm.Error
 	require.ErrorAs(t, err, &lerr)
-	// ctx cancel 감지 후 lastErr (h1 의 server) 반환
-	assert.Equal(t, "h1", lerr.Provider)
+	// ctx cancel 감지 시 명시적 chain 의 ErrCodeNetwork — 호출자가 "취소" 즉답 가능
+	// (이전 handler 의 server 에러로 가리지 않음, Gemini code review #2)
+	assert.Equal(t, "chain", lerr.Provider)
+	assert.Equal(t, llm.ErrCodeNetwork, lerr.Code)
 	assert.Equal(t, 1, h1.calls())
 	assert.Equal(t, 0, h2.calls(), "h1 이후 ctx cancel 감지 → h2 호출 안 함")
 }

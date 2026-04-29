@@ -74,8 +74,10 @@ func (p *Provider) Name() string { return providerName }
 //  2. ctx 가 이미 cancel → ErrCodeNetwork (transport-like) 즉시 반환
 //  3. handler 별 순회:
 //     - 성공     → 즉시 반환
-//     - !delegatable (BadRequest/ContextLimit) → 즉시 반환 (다른 handler 도 동일 실패)
-//     - delegatable → 다음 handler 시도 (마지막 에러 보존)
+//     - !delegatable (BadRequest) → 즉시 반환 (다른 handler 도 동일 실패)
+//     - delegatable → 다음 handler 시도 전 ctx 취소 검사 →
+//     취소면 명시적 ErrCodeNetwork 반환 (이전 handler 의 lastErr 로 가리지 않음),
+//     아니면 위임 로그 후 다음 handler 시도 (lastErr 보존)
 //  4. 모든 handler 실패 → 마지막 에러 반환
 func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response, error) {
 	if len(p.handlers) == 0 {
@@ -105,13 +107,19 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 			p.logTermination(h.Name(), i, err, "non-delegatable")
 			return nil, err
 		}
+		// ctx 취소가 handler 내부에서 일어났을 수 있음 — 다음 handler 호출 전에 즉시 검사.
+		// 명시적 ErrCodeNetwork 로 반환하여 호출자가 "취소" 를 즉답 가능 (Gemini code review #2).
+		// 위임 로그 호출 전에 검사하여 취소된 상황에서 불필요한 위임 로그 회피.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, &llm.Error{
+				Code:     llm.ErrCodeNetwork,
+				Provider: providerName,
+				Message:  "context canceled during chain execution",
+				Err:      ctxErr,
+			}
+		}
 		p.logDelegation(h.Name(), i, err)
 		lastErr = err
-
-		// ctx 취소가 handler 내부에서 일어났을 수 있음 — 다음 handler 호출 전 빠른 종결.
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, lastErr
-		}
 	}
 
 	// 모든 handler 실패 — 마지막 에러를 그대로 반환 (래핑 없이 ErrorCode 정보 보존).
@@ -122,23 +130,26 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 // shouldDelegate 는 에러를 다음 handler 에 위임할 가치가 있는지 판단합니다.
 //
 //   - *llm.Error 가 아닌 경우 → 다음 handler 시도 (보수적 — 정상 가능성 남김)
-//   - BadRequest / ContextLimit → 즉시 종결 (입력 자체 문제, 다른 handler 도 동일 실패)
-//   - 그 외 (Auth/RateLimit/Server/Network/Unknown) → 다음 handler 시도
+//   - BadRequest → 즉시 종결 (입력 형식/파라미터 자체 문제, 다른 provider 도 동일 reject)
+//   - 그 외 (Auth/RateLimit/Server/Network/Unknown/ContextLimit) → 다음 handler 시도
 //
 // 정책 근거:
 //   - Auth: 잘못된 API key — 다른 provider 의 key 는 유효할 수 있음
 //   - RateLimit: 이 provider 의 한도 초과 — 다른 provider 는 별도 한도
 //   - Server: 이 provider 측 일시 장애 — 다른 provider 는 정상 가능성
 //   - Network: 일반적인 transport 문제. 다음 handler 시도가 합리적.
-//   - BadRequest: 형식 / 파라미터 자체 문제 — 다른 provider 도 동일 reject
-//   - ContextLimit: 입력 토큰 초과 — 모델 제한이라기보다 입력 자체가 큰 경우라 모든 provider 동일
+//   - ContextLimit: provider/모델 마다 context window 가 크게 다름 — 예:
+//     gpt-4o-mini ≈128k, claude-opus-4-7 ≈200k, gemini-1.5-pro ≈2M.
+//     한 모델에서 ContextLimit 이라도 더 큰 window 를 가진 다른 모델은 처리 가능.
+//     Gemini code review #1 피드백 — 위임 대상으로 포함.
+//   - BadRequest: 형식 / 파라미터 자체 문제 — 다른 provider 도 동일 reject 가 합리적 가정.
 func shouldDelegate(err error) bool {
 	var lerr *llm.Error
 	if !errors.As(err, &lerr) {
 		return true
 	}
 	switch lerr.Code {
-	case llm.ErrCodeBadRequest, llm.ErrCodeContextLimit:
+	case llm.ErrCodeBadRequest:
 		return false
 	default:
 		return true
