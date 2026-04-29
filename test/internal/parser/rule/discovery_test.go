@@ -156,7 +156,72 @@ func TestPageLinkDiscovery_ExcludePatterns(t *testing.T) {
 	}
 }
 
-func TestPageLinkDiscovery_MaxLinksPerPage(t *testing.T) {
+// MaxLinksPerPage 정책 (이슈 #148 후속):
+//   - same-origin 링크는 cap 무시하고 모두 통과
+//   - cross-origin 링크는 잔여 슬롯 (maxOut - len(same)) 만큼 무작위 sample
+//   - maxOut == 0 (무제한) 이면 cross 도 모두 통과
+
+// fullPageHTML 매칭 분석 (raw.URL = https://news.example.com/category/politics):
+//   - same-origin (news.example.com): /article/2026/04/29/headline-one, .../headline-two,
+//     .../related-one, .../related-two, https://news.example.com/article/2026/04/27/cross = 5건
+//   - cross-origin: https://other.example.com/article/2026/04/27/external = 1건
+
+// SameOriginOnly=false, maxOut=2 — same-origin 5건은 cap 무시 통과, cross 0건 (이미 cap 초과).
+func TestPageLinkDiscovery_MaxLinksPerPage_SameOriginUnlimited(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: `/article/`,
+		SameOriginOnly:    false,
+		MaxLinksPerPage:   2,
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+	assert.Len(t, items, 5, "same-origin 5건은 maxOut=2 무시하고 모두 통과")
+
+	for _, it := range items {
+		assert.NotContains(t, it.URL, "other.example.com", "cap 초과로 cross-origin 0건")
+	}
+}
+
+// maxOut 이 same-origin 보다 크면 잔여 슬롯에 cross 가 채워짐.
+func TestPageLinkDiscovery_MaxLinksPerPage_CrossOriginFillsRemaining(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: `/article/`,
+		SameOriginOnly:    false,
+		MaxLinksPerPage:   10, // same 5 + cross 1 = 6 ≤ 10 → 모두 통과
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+	assert.Len(t, items, 6, "same 5 + cross 1 모두 통과 (cap 여유 있음)")
+
+	hasExternal := false
+	for _, it := range items {
+		if it.URL == "https://other.example.com/article/2026/04/27/external" {
+			hasExternal = true
+		}
+	}
+	assert.True(t, hasExternal, "잔여 슬롯에 cross-origin 채워짐")
+}
+
+// maxOut == 0 (무제한) — same + cross 모두 통과.
+func TestPageLinkDiscovery_MaxLinksPerPage_Unlimited(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: `/article/`,
+		SameOriginOnly:    false,
+		MaxLinksPerPage:   0,
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+	assert.Len(t, items, 6, "maxOut=0 무제한 — same + cross 모두 통과")
+}
+
+// SameOriginOnly=true 일 때 cross 자체가 candidates 에 안 들어옴 — same-origin 모두 통과.
+func TestPageLinkDiscovery_MaxLinksPerPage_SameOriginOnlyMode(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
 	cfg := &storage.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/`,
@@ -166,7 +231,54 @@ func TestPageLinkDiscovery_MaxLinksPerPage(t *testing.T) {
 
 	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
 	require.NoError(t, err)
-	assert.Len(t, items, 2, "MaxLinksPerPage cap 적용")
+	assert.Len(t, items, 5, "SameOriginOnly=true 면 cross 사전 제거 + same 5건 모두 통과 (cap 무시)")
+}
+
+// cross-origin 풀이 잔여 슬롯보다 클 때 무작위 sample 검증.
+// 다수의 cross-origin 링크가 들어있는 별도 HTML 사용.
+func TestPageLinkDiscovery_MaxLinksPerPage_CrossOriginRandomSample(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+
+	// same-origin 1개 + cross-origin 5개. maxOut=3 이면 same 1 + cross 무작위 2.
+	html := `
+<html><body>
+  <a href="/article/local">Local</a>
+  <a href="https://ext1.example.com/article/a">Ext A</a>
+  <a href="https://ext2.example.com/article/b">Ext B</a>
+  <a href="https://ext3.example.com/article/c">Ext C</a>
+  <a href="https://ext4.example.com/article/d">Ext D</a>
+  <a href="https://ext5.example.com/article/e">Ext E</a>
+</body></html>
+`
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: `/article/`,
+		SameOriginOnly:    false,
+		MaxLinksPerPage:   3,
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/", html), cfg)
+	require.NoError(t, err)
+	require.Len(t, items, 3, "same 1 + cross random 2 = 3")
+
+	// 첫 항목은 same-origin 이어야 함 (정책상 same 우선)
+	assert.Contains(t, items[0].URL, "news.example.com", "same-origin 우선 추가")
+
+	crossCount := 0
+	for _, it := range items {
+		if !contains(it.URL, "news.example.com") {
+			crossCount++
+		}
+	}
+	assert.Equal(t, 2, crossCount, "cross-origin 잔여 슬롯 2건만 sample")
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPageLinkDiscovery_NoMatch_ReturnsParseFailure(t *testing.T) {
@@ -183,15 +295,68 @@ func TestPageLinkDiscovery_NoMatch_ReturnsParseFailure(t *testing.T) {
 	assert.Equal(t, rule.ErrParseFailure, rerr.Code, "0건 매칭 = pattern stale 진단")
 }
 
-func TestPageLinkDiscovery_EmptyPattern_ReturnsEmptySelector(t *testing.T) {
+// TestPageLinkDiscovery_EmptyPattern_AllPass 는 빈 ArticleURLPattern 이 all-pass 모드로
+// 동작함을 검증합니다 (이슈 #148). pkg/links.Extractor 의 기본 제외 패턴 (javascript:/mailto:/tel:/login 등)
+// 만 적용되고 그 외 모든 (a href) 가 통과.
+func TestPageLinkDiscovery_EmptyPattern_AllPass(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{ArticleURLPattern: ""}
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: "",
+		SameOriginOnly:    true,
+	}
 
-	_, err := d.Discover(makeRaw("https://news.example.com/x", fullPageHTML), cfg)
-	require.Error(t, err)
-	var rerr *rule.Error
-	require.ErrorAs(t, err, &rerr)
-	assert.Equal(t, rule.ErrEmptySelector, rerr.Code)
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err, "all-pass 모드는 정상 통과")
+
+	// nav, /category/politics, main article × 2, sidebar × 2 = 6 (footer/external/login/mailto/javascript 제외)
+	require.GreaterOrEqual(t, len(items), 6, "fullPageHTML 의 same-origin 통과 가능 링크 모두 포함")
+
+	// 명시적으로 article 만 외 nav/category 도 포함됐는지 확인
+	urls := make(map[string]bool)
+	for _, it := range items {
+		urls[it.URL] = true
+	}
+	assert.True(t, urls["https://news.example.com/category/politics"], "category 링크 포함")
+	assert.True(t, urls["https://news.example.com/article/2026/04/29/headline-one"], "article 링크 포함")
+	assert.False(t, urls["https://news.example.com/login"], "기본 제외 패턴 (/login) 은 차단")
+}
+
+// TestPageLinkDiscovery_EmptyPattern_ExcludeStillApplies 는 all-pass 모드에서도
+// ExcludePatterns 가 정상 동작함을 검증합니다.
+func TestPageLinkDiscovery_EmptyPattern_ExcludeStillApplies(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: "",
+		SameOriginOnly:    true,
+		ExcludePatterns:   []string{"/category/", "/about"},
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+
+	for _, it := range items {
+		assert.NotContains(t, it.URL, "/category/", "all-pass 모드에서도 ExcludePatterns 적용")
+		assert.NotContains(t, it.URL, "/about", "운영자 정의 제외 패턴 적용")
+	}
+}
+
+// TestPageLinkDiscovery_EmptyPattern_PathPrefixesStillApply 는 all-pass 모드에서도
+// PathPrefixes 가 path 기반 cutoff 로 동작함을 검증합니다 (Coderabbit 피드백).
+func TestPageLinkDiscovery_EmptyPattern_PathPrefixesStillApply(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: "",
+		SameOriginOnly:    true,
+		PathPrefixes:      []string{"/article/"}, // /, /category/, /about, /login 모두 차단
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+	require.NotEmpty(t, items, "/article/ prefix 매칭은 통과")
+
+	for _, it := range items {
+		assert.Contains(t, it.URL, "/article/", "all-pass 모드에서도 PathPrefixes 1차 cutoff 적용")
+	}
 }
 
 func TestPageLinkDiscovery_NilConfig_ReturnsEmptySelector(t *testing.T) {
@@ -271,14 +436,25 @@ func TestParser_ParseLinks_FallsBackToItemContainerWhenPatternEmpty(t *testing.T
 	assert.Len(t, items, 3, "ItemContainer 경로로 3개 추출 (기존 동작 회귀 없음)")
 }
 
-func TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_FallsBackToItemContainer(t *testing.T) {
-	// LinkDiscovery 객체는 있지만 pattern 비어있음 → ItemContainer fallback
+// TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery 는 이슈 #148 변경 검증:
+// LinkDiscovery 객체가 채워져 있으면 ArticleURLPattern 이 빈 문자열이어도 discovery 모드 진입.
+// ItemContainer fallback 은 LinkDiscovery 자체가 nil 일 때만.
+//
+// discovery vs fallback 명확 구분 (Coderabbit 피드백):
+//   - ItemContainer 를 매칭 0건 selector 로 설정 — fallback 경로 진입 시 ErrParseFailure
+//   - 그래도 3건 반환 → discovery 경로가 동작했다는 명백한 증거
+func TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery(t *testing.T) {
 	r := listRule()
-	r.Selectors.LinkDiscovery = &storage.LinkDiscoveryConfig{ArticleURLPattern: ""}
+	r.Selectors.LinkDiscovery = &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: "",
+		SameOriginOnly:    true,
+	}
+	// ItemContainer 를 매칭 0건 selector 로 변경 — fallback 진입 시 ErrParseFailure 보장
+	r.Selectors.ItemContainer = &storage.FieldSelector{CSS: "div.no-such-class-anywhere"}
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
 	items, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category", listHTML))
-	require.NoError(t, err)
-	assert.Len(t, items, 3, "빈 pattern 은 disabled 와 동일 — ItemContainer fallback")
+	require.NoError(t, err, "discovery 경로가 동작 — fallback 진입 시 stale selector 로 에러였을 것")
+	require.Len(t, items, 3, "all-pass discovery — listHTML 의 a href 3개 모두 통과")
 }

@@ -72,28 +72,29 @@ type SelectorMap struct {
 	ItemTitle     *FieldSelector `json:"item_title,omitempty"`
 	ItemSnippet   *FieldSelector `json:"item_snippet,omitempty"` // 짧은 요약/설명 (있을 때)
 
-	// LinkDiscovery (이슈 #139): 페이지 전체 <a href> 스캔 + URL 패턴 필터 모드.
+	// LinkDiscovery (이슈 #139, #148): 페이지 전체 <a href> 스캔 + 정책 기반 필터 모드.
 	//
 	// 설정 시 ParseLinks 가 ItemContainer 경로 대신 full-page discovery 로 동작합니다 —
 	// 사이드바 / 추천 / 관련 기사 / 카테고리 메뉴 등 ItemContainer 가 놓치는 영역까지
-	// 같은 fetch 비용으로 발견. nil 또는 비어있으면 기존 ItemContainer 경로 사용 (opt-in).
+	// 같은 fetch 비용으로 발견. **nil 일 때만** 기존 ItemContainer 경로로 fallback —
+	// 객체가 채워져 있으면 ArticleURLPattern 이 빈 문자열이어도 discovery 모드 (all-pass).
 	//
-	// 권장 활용: 사이트 전체 article URL 이 일관된 path 패턴을 가질 때
-	//   (예: cnn = "^/\d{4}/\d{2}/\d{2}/", naver-news = "^/article/\d+/\d+").
+	// 권장 활용: 사이트 전체에서 모든 의미 있는 글을 발견하고자 할 때 (이슈 #100 도메인 일반화).
 	// noise 는 ExcludePatterns + MaxLinksPerPage + 다운스트림 URL dedup / rate limiter 가 흡수.
 	LinkDiscovery *LinkDiscoveryConfig `json:"link_discovery,omitempty"`
 }
 
-// LinkDiscoveryConfig 는 full-page link discovery 모드의 설정입니다 (이슈 #139).
+// LinkDiscoveryConfig 는 full-page link discovery 모드의 설정입니다 (이슈 #139, #148).
 //
 // LinkDiscoveryConfig drives the rule-based full-page <a href> discovery, replacing
-// site-specific ItemContainer extraction with a generic URL-pattern filter.
+// site-specific ItemContainer extraction with a generic policy-based filter.
 //
-// 모든 필드는 optional 이지만 ArticleURLPattern 이 비어있으면 discovery 모드 자체가 비활성화됩니다
-// (= 기존 ItemContainer 경로로 fallback). pattern 만 채우면 최소 동작 가능.
+// 모든 필드는 optional. 본 객체가 SelectorMap.LinkDiscovery 에 채워져 있으면 ParseLinks 는
+// discovery 모드로 동작합니다 — ArticleURLPattern 이 빈 문자열이어도 all-pass 모드로 진입.
+// ItemContainer fallback 은 LinkDiscovery 자체가 nil 일 때만.
 type LinkDiscoveryConfig struct {
 	// ArticleURLPattern: 통과 조건 (regex, RE2). 매칭되는 절대 URL 만 발행.
-	// 빈 문자열이면 LinkDiscovery 자체가 disabled — 호출자는 ItemContainer 경로 사용.
+	// 빈 문자열이면 all-pass 모드 — ExcludePatterns / SameOriginOnly / MaxLinksPerPage 만으로 필터링.
 	ArticleURLPattern string `json:"article_url_pattern"`
 
 	// ExcludePatterns: 제외 조건 (substring, 대소문자 무시). 기본 제외 (javascript:/mailto:/login 등)
@@ -109,8 +110,17 @@ type LinkDiscoveryConfig struct {
 	SameOriginOnly bool `json:"same_origin_only,omitempty"`
 
 	// MaxLinksPerPage: 한 페이지에서 발행할 최대 링크 수 (0 = 무제한).
-	// publish 폭증 방지 — backlog throttle (#124) 와 함께 2중 안전장치.
-	// 권장 기본 200.
+	//
+	// 우선순위 정책 (이슈 #148):
+	//   1. same-origin (raw.URL host 와 동일) 링크는 cap 무시하고 모두 통과
+	//   2. cross-origin 은 잔여 슬롯 (cap - len(same)) 만큼 무작위 sample
+	//   3. 0 (무제한) 이면 same + cross 모두 통과
+	//
+	// 사이트 자체 컨텐츠 (same) 는 noise 적고 가치 높음 — 모두 발행 가치.
+	// 외부 링크 (cross) 는 광고/제휴 noise 많음 — cap 통제 + 무작위 sample 로
+	// 페이지 상단 sponsored slot 등 특정 영역 편향 회피.
+	//
+	// publish 폭증 방지 — backlog throttle (#124) 와 함께 2중 안전장치. 권장 기본 200.
 	MaxLinksPerPage int `json:"max_links_per_page,omitempty"`
 }
 
