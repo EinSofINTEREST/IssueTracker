@@ -2,6 +2,8 @@ package rule
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"net/url"
 	"regexp"
 
 	"issuetracker/internal/crawler/core"
@@ -100,18 +102,52 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 		}
 	}
 
+	// MaxLinksPerPage 우선순위 정책 (이슈 #148 후속):
+	//   1. same-origin (raw.URL 의 host 와 동일) 링크는 maxOut 무시하고 모두 통과
+	//   2. cross-origin 링크는 잔여 슬롯 (maxOut - len(same)) 만큼 무작위 sample
+	//   3. maxOut == 0 (무제한) 이면 cross 도 모두 통과
+	//
+	// 이유: 운영 사이트 자체 컨텐츠 (same-origin) 는 noise 가 적고 가치 높음 — 모두 발행.
+	// 외부 링크 (cross-origin) 는 광고/제휴 노이즈 비율 높으므로 cap 으로 통제하되,
+	// 무작위 sample 로 특정 영역 (예: 페이지 상단의 광고 슬롯) 에 편향되지 않도록.
 	maxOut := cfg.MaxLinksPerPage
-	out := make([]parser.LinkItem, 0, len(candidates))
+	pageHost := hostOf(raw.URL)
+
+	sameOrigin := make([]parser.LinkItem, 0, len(candidates))
+	crossOrigin := make([]parser.LinkItem, 0)
 	for _, l := range candidates {
 		if pattern != nil && !pattern.MatchString(l.URL) {
 			continue
 		}
-		out = append(out, parser.LinkItem{
-			URL:   l.URL,
-			Title: l.Text,
-		})
-		if maxOut > 0 && len(out) >= maxOut {
-			break
+		item := parser.LinkItem{URL: l.URL, Title: l.Text}
+		if pageHost != "" && hostOf(l.URL) == pageHost {
+			sameOrigin = append(sameOrigin, item)
+		} else {
+			crossOrigin = append(crossOrigin, item)
+		}
+	}
+
+	out := append(make([]parser.LinkItem, 0, len(sameOrigin)+len(crossOrigin)), sameOrigin...)
+
+	switch {
+	case len(crossOrigin) == 0:
+		// nothing to add
+	case maxOut <= 0:
+		// 무제한 — cross 도 모두 추가
+		out = append(out, crossOrigin...)
+	default:
+		remaining := maxOut - len(sameOrigin)
+		switch {
+		case remaining <= 0:
+			// same-origin 만으로 cap 초과 — cross 0건 (정책상 same 우선)
+		case remaining >= len(crossOrigin):
+			out = append(out, crossOrigin...)
+		default:
+			// remaining < len(crossOrigin) — 무작위로 remaining 개 sample
+			rand.Shuffle(len(crossOrigin), func(i, j int) {
+				crossOrigin[i], crossOrigin[j] = crossOrigin[j], crossOrigin[i]
+			})
+			out = append(out, crossOrigin[:remaining]...)
 		}
 	}
 
@@ -130,4 +166,14 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 		}
 	}
 	return out, nil
+}
+
+// hostOf 는 URL 문자열에서 host 를 추출합니다 (parse 실패 시 빈 문자열).
+// 본 함수는 same-origin 분류 비교용 — 빈 문자열 비교는 항상 cross-origin 으로 취급되도록.
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u == nil {
+		return ""
+	}
+	return u.Host
 }

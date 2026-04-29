@@ -156,7 +156,72 @@ func TestPageLinkDiscovery_ExcludePatterns(t *testing.T) {
 	}
 }
 
-func TestPageLinkDiscovery_MaxLinksPerPage(t *testing.T) {
+// MaxLinksPerPage 정책 (이슈 #148 후속):
+//   - same-origin 링크는 cap 무시하고 모두 통과
+//   - cross-origin 링크는 잔여 슬롯 (maxOut - len(same)) 만큼 무작위 sample
+//   - maxOut == 0 (무제한) 이면 cross 도 모두 통과
+
+// fullPageHTML 매칭 분석 (raw.URL = https://news.example.com/category/politics):
+//   - same-origin (news.example.com): /article/2026/04/29/headline-one, .../headline-two,
+//     .../related-one, .../related-two, https://news.example.com/article/2026/04/27/cross = 5건
+//   - cross-origin: https://other.example.com/article/2026/04/27/external = 1건
+
+// SameOriginOnly=false, maxOut=2 — same-origin 5건은 cap 무시 통과, cross 0건 (이미 cap 초과).
+func TestPageLinkDiscovery_MaxLinksPerPage_SameOriginUnlimited(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: `/article/`,
+		SameOriginOnly:    false,
+		MaxLinksPerPage:   2,
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+	assert.Len(t, items, 5, "same-origin 5건은 maxOut=2 무시하고 모두 통과")
+
+	for _, it := range items {
+		assert.NotContains(t, it.URL, "other.example.com", "cap 초과로 cross-origin 0건")
+	}
+}
+
+// maxOut 이 same-origin 보다 크면 잔여 슬롯에 cross 가 채워짐.
+func TestPageLinkDiscovery_MaxLinksPerPage_CrossOriginFillsRemaining(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: `/article/`,
+		SameOriginOnly:    false,
+		MaxLinksPerPage:   10, // same 5 + cross 1 = 6 ≤ 10 → 모두 통과
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+	assert.Len(t, items, 6, "same 5 + cross 1 모두 통과 (cap 여유 있음)")
+
+	hasExternal := false
+	for _, it := range items {
+		if it.URL == "https://other.example.com/article/2026/04/27/external" {
+			hasExternal = true
+		}
+	}
+	assert.True(t, hasExternal, "잔여 슬롯에 cross-origin 채워짐")
+}
+
+// maxOut == 0 (무제한) — same + cross 모두 통과.
+func TestPageLinkDiscovery_MaxLinksPerPage_Unlimited(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: `/article/`,
+		SameOriginOnly:    false,
+		MaxLinksPerPage:   0,
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+	assert.Len(t, items, 6, "maxOut=0 무제한 — same + cross 모두 통과")
+}
+
+// SameOriginOnly=true 일 때 cross 자체가 candidates 에 안 들어옴 — same-origin 모두 통과.
+func TestPageLinkDiscovery_MaxLinksPerPage_SameOriginOnlyMode(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
 	cfg := &storage.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/`,
@@ -166,7 +231,54 @@ func TestPageLinkDiscovery_MaxLinksPerPage(t *testing.T) {
 
 	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
 	require.NoError(t, err)
-	assert.Len(t, items, 2, "MaxLinksPerPage cap 적용")
+	assert.Len(t, items, 5, "SameOriginOnly=true 면 cross 사전 제거 + same 5건 모두 통과 (cap 무시)")
+}
+
+// cross-origin 풀이 잔여 슬롯보다 클 때 무작위 sample 검증.
+// 다수의 cross-origin 링크가 들어있는 별도 HTML 사용.
+func TestPageLinkDiscovery_MaxLinksPerPage_CrossOriginRandomSample(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+
+	// same-origin 1개 + cross-origin 5개. maxOut=3 이면 same 1 + cross 무작위 2.
+	html := `
+<html><body>
+  <a href="/article/local">Local</a>
+  <a href="https://ext1.example.com/article/a">Ext A</a>
+  <a href="https://ext2.example.com/article/b">Ext B</a>
+  <a href="https://ext3.example.com/article/c">Ext C</a>
+  <a href="https://ext4.example.com/article/d">Ext D</a>
+  <a href="https://ext5.example.com/article/e">Ext E</a>
+</body></html>
+`
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: `/article/`,
+		SameOriginOnly:    false,
+		MaxLinksPerPage:   3,
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/", html), cfg)
+	require.NoError(t, err)
+	require.Len(t, items, 3, "same 1 + cross random 2 = 3")
+
+	// 첫 항목은 same-origin 이어야 함 (정책상 same 우선)
+	assert.Contains(t, items[0].URL, "news.example.com", "same-origin 우선 추가")
+
+	crossCount := 0
+	for _, it := range items {
+		if !contains(it.URL, "news.example.com") {
+			crossCount++
+		}
+	}
+	assert.Equal(t, 2, crossCount, "cross-origin 잔여 슬롯 2건만 sample")
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPageLinkDiscovery_NoMatch_ReturnsParseFailure(t *testing.T) {
