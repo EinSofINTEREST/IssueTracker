@@ -43,17 +43,20 @@
   - CI 실패 복구: `[FIX]: CI 복구, {실패 job 이름} - {변경 요약}`
 - 한국어로 작성
 
-## 자동 중단 (응답 후 2회 / 응답 전 3회 연속 무동작 시)
+## 자동 중단 (CI 완료 후 2회 연속 무동작 시)
 
 세션 종료 후 사용자 개입 없이도 idle 한 루프를 자체 정리하기 위한 단계입니다.
 회차의 마지막 단계로 항상 수행합니다.
 
-임계값을 두 단계로 분리:
-- **응답 후 (responded=true)**: active 회차가 한 번이라도 발생한 PR — 2회 연속 idle 시 종료
-- **응답 전 (responded=false)**: 아직 active 회차가 없었던 PR — 3회 연속 idle 시 종료
+정책:
+- **CI 진행 중 (pending)**: idle_streak 동결 — 증가/reset 모두 X. 다음 회차 대기.
+- **CI 완료 + 신규 처리 대상 없음 (idle)**: idle_streak += 1. 2 도달 시 종료.
+- **active**: idle_streak = 0 으로 reset.
 
-이유: 응답 전에는 늦게 도착하는 첫 리뷰를 기다릴 여지가 더 필요. 응답 후에는 이미 사이클이
-한 번 돌았으므로 추가 피드백이 없으면 빠르게 정리해도 무방.
+이유:
+- CI 가 PENDING 인 동안에는 곧 처리할 일이 발생할 가능성이 있으므로 카운터를 올리지 않음 (이슈 #160).
+- CodeRabbit / gemini 등 review bot 의 PENDING 도 동일하게 흡수 — 응답 전 첫 리뷰 기다림이 자동 보호됨.
+- 그래서 \`responded\` 필드 기반 분기 (응답 후 2 / 응답 전 3) 가 불필요해져 단일 임계값 2 로 통일.
 
 ### 1. 상태 파일
 경로: `/tmp/issuetracker-loop-state.json` (세션/체크아웃 로컬 상태)
@@ -68,28 +71,30 @@
 {
   "<PR번호>": {
     "idle_streak": 0,
-    "responded": false,
     "last_run_at": "2026-04-28T03:50:00Z"
   }
 }
 ```
 
 PR 번호는 1단계의 gh pr view 결과에서 얻은 number를 사용합니다.
-파일이 없거나 해당 PR 키가 없으면 `idle_streak=0`, `responded=false` 로 시작합니다.
+파일이 없거나 해당 PR 키가 없으면 `idle_streak=0` 으로 시작합니다.
 
 ### 2. 회차 분류
 
-본 회차가 둘 중 어느 카테고리에 해당하는지 결정:
+본 회차가 셋 중 어느 카테고리에 해당하는지 결정:
 
-**active (의미 있는 작업 발생 — 카운터 0 으로 reset, responded=true 로 표시)**
+**active (의미 있는 작업 발생 — 카운터 0 으로 reset)**
 - CI 실패 복구로 commit + push
 - 리뷰 피드백 반영으로 commit + push
 - 새 질문 코멘트 작성
 - 신규 코멘트에 👀 reaction + thread resolve
 
-**idle (무동작 — 카운터 +1)**
+**pending (CI 진행 중 — 카운터 동결)**
+- `statusCheckRollup` 에 IN_PROGRESS / QUEUED / PENDING 인 항목이 하나라도 있고 FAILURE 가 없는 상태
+- 동시에 신규 처리 대상 코멘트도 없음 (있으면 active 로 처리)
+
+**idle (CI 완료 + 무동작 — 카운터 +1)**
 - "새 피드백 없음" 출력으로 종료
-- CI 가 IN_PROGRESS / QUEUED / PENDING 만 있고 신규 처리 대상 없음
 - 기존 thread 모두 resolved 상태에서 신규 코멘트가 단순 동의/확인 답변뿐 (👀 만 부여, 코드 변경 0)
 
 판단 모호 시 active 로 분류 (보수적으로 streak 0 reset).
@@ -99,15 +104,15 @@ PR 번호는 1단계의 gh pr view 결과에서 얻은 number를 사용합니다
 회차 분류 결정 직후:
 
 1. 상태 파일 read (없으면 빈 객체로 시작)
-2. 본 PR 의 `idle_streak` / `responded` 갱신
-   - active → `idle_streak=0`, `responded=true`
-   - idle → `idle_streak += 1` (responded 는 변경 X — 한 번 true 면 유지)
+2. 본 PR 의 `idle_streak` 갱신
+   - active → `idle_streak = 0`
+   - pending → 변경 없음 (동결)
+   - idle → `idle_streak += 1`
 3. `last_run_at` 을 현재 ISO8601 시각으로 갱신
 4. 상태 파일 write
 5. **자동 종료 임계값 판정**:
-   - `responded == true` 이고 `idle_streak >= 2` → 종료
-   - `responded == false` 이고 `idle_streak >= 3` → 종료
-   - 둘 다 아니면 다음 회차 대기
+   - `idle_streak >= 2` → 종료
+   - 그 외 → 다음 회차 대기
 
 ### 4. 자동 종료 절차
 
@@ -117,7 +122,7 @@ PR 번호는 1단계의 gh pr view 결과에서 얻은 number를 사용합니다
 2. prompt 에 본 PR 번호가 포함된 loop cron 식별 (예: `"PR #128"` substring 매칭)
 3. 매칭된 cron 의 ID 로 `CronDelete` 호출
 4. 본 PR 의 상태 항목을 상태 파일에서 제거 (다음 수동 시작 시 fresh state)
-5. 사용자에게 한 줄 알림: `"<idle_streak>회 연속 무동작으로 PR #N loop 자동 종료 (cron <id>)"`
+5. 사용자에게 한 줄 알림: `"CI 완료 후 <idle_streak>회 연속 무동작으로 PR #N loop 자동 종료 (cron <id>)"`
 
 매칭되는 cron 이 없으면 (사용자가 이미 수동으로 중단했거나 다른 식별자 사용) 알림만 출력하고 종료.
 
