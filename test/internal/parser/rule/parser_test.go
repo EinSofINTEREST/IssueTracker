@@ -1,6 +1,7 @@
 package rule_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -101,7 +102,7 @@ func TestParser_ParsePage_Success(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{pageRule()}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	page, err := p.ParsePage(makeRaw("https://news.example.com/article/1", articleHTML))
+	page, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com/article/1", articleHTML))
 	require.NoError(t, err)
 
 	assert.Equal(t, "Breaking News Today", page.Title)
@@ -119,7 +120,7 @@ func TestParser_ParsePage_NoRule_ReturnsErrNoRule(t *testing.T) {
 	repo := &fakeRepo{notFound: true}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	_, err := p.ParsePage(makeRaw("https://nope.example.com/x", articleHTML))
+	_, err := p.ParsePage(context.Background(), makeRaw("https://nope.example.com/x", articleHTML))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, &rule.Error{Code: rule.ErrNoRule}))
 }
@@ -130,7 +131,7 @@ func TestParser_ParsePage_MissingTitleSelector_EmptySelector(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	_, err := p.ParsePage(makeRaw("https://news.example.com/x", articleHTML))
+	_, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com/x", articleHTML))
 	require.Error(t, err)
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
@@ -143,7 +144,7 @@ func TestParser_ParsePage_MainContentMatchesNothing_ParseFailure(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	_, err := p.ParsePage(makeRaw("https://news.example.com/x", articleHTML))
+	_, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com/x", articleHTML))
 	require.Error(t, err)
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
@@ -154,7 +155,7 @@ func TestParser_ParsePage_EmptyRaw_ParseFailure(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{pageRule()}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	_, err := p.ParsePage(&core.RawContent{URL: "https://news.example.com/x", HTML: ""})
+	_, err := p.ParsePage(context.Background(), &core.RawContent{URL: "https://news.example.com/x", HTML: ""})
 	require.Error(t, err)
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
@@ -169,7 +170,7 @@ func TestParser_ParseLinks_Success_AbsolutizesURLs(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{listRule()}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	items, err := p.ParseLinks(makeRaw("https://news.example.com/category/politics", listHTML))
+	items, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category/politics", listHTML))
 	require.NoError(t, err)
 	require.Len(t, items, 3)
 
@@ -187,7 +188,7 @@ func TestParser_ParseLinks_MissingItemContainer_EmptySelector(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	_, err := p.ParseLinks(makeRaw("https://news.example.com/x", listHTML))
+	_, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/x", listHTML))
 	require.Error(t, err)
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
@@ -200,7 +201,7 @@ func TestParser_ParseLinks_MissingItemLink_EmptySelector(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	_, err := p.ParseLinks(makeRaw("https://news.example.com/x", listHTML))
+	_, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/x", listHTML))
 	require.Error(t, err)
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
@@ -211,7 +212,7 @@ func TestParser_ParseLinks_NoRule_ReturnsErrNoRule(t *testing.T) {
 	repo := &fakeRepo{notFound: true}
 	p := rule.NewParser(rule.NewResolver(repo))
 
-	_, err := p.ParseLinks(makeRaw("https://nope.example.com/list", listHTML))
+	_, err := p.ParseLinks(context.Background(), makeRaw("https://nope.example.com/list", listHTML))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, &rule.Error{Code: rule.ErrNoRule}))
 }

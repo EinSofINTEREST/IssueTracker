@@ -14,6 +14,7 @@
 package parser
 
 import (
+	"context"
 	"time"
 
 	"issuetracker/internal/crawler/core"
@@ -61,8 +62,11 @@ type LinkItem struct {
 //
 // ContentParser parses a single web page's RawContent into a Page.
 // 구현체는 goroutine-safe 해야 합니다.
+//
+// ctx 는 호출자의 cancellation / timeout / trace metadata 전파에 사용됩니다.
+// rule resolver lookup 등 I/O 가 수반되므로 ctx 를 인터페이스에 명시 (Go 컨벤션).
 type ContentParser interface {
-	ParsePage(raw *core.RawContent) (*Page, error)
+	ParsePage(ctx context.Context, raw *core.RawContent) (*Page, error)
 }
 
 // LinkListParser 는 목록/링크-허브 페이지에서 LinkItem 들을 추출하는 인터페이스입니다.
@@ -70,5 +74,5 @@ type ContentParser interface {
 // LinkListParser extracts LinkItem entries from a list/category page.
 // 구현체는 goroutine-safe 해야 합니다.
 type LinkListParser interface {
-	ParseLinks(raw *core.RawContent) ([]LinkItem, error)
+	ParseLinks(ctx context.Context, raw *core.RawContent) ([]LinkItem, error)
 }
