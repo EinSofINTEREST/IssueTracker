@@ -87,7 +87,6 @@ func main() {
 	}
 	defer pool.Close()
 
-	newsRepo := pgstore.NewNewsArticleRepository(pool, log)
 	jobPublisher := publisher.New(crawlerProducer, resolver, log)
 
 	// rule.Parser: parsing_rules 테이블 기반 단일 파서 엔진 (이슈 #100 / #139).
@@ -201,7 +200,6 @@ func main() {
 		crawlerProducer, // normalized 토픽 발행 + chained article jobs 발행 시 publisher 가 동일 producer 사용
 		rawSvc,
 		contentSvc,
-		newsRepo,
 		jobPublisher,
 		ruleParser,
 		parserWorkerCount,

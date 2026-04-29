@@ -50,7 +50,6 @@ type ParserWorker struct {
 	producer    queue.Producer
 	rawSvc      service.RawContentService
 	contentSvc  service.ContentService
-	newsRepo    storage.NewsArticleRepository
 	publisher   general.JobPublisher
 	parser      *rule.Parser
 	workerCount int
@@ -61,14 +60,15 @@ type ParserWorker struct {
 
 // NewParserWorker 는 ParserWorker 를 생성합니다.
 //
-//   - newsRepo 는 nil 허용 — nil 이면 news_articles 보존 건너뜀 (contents 만 저장)
 //   - publisher 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 건너뜀 (이런 모드는 보통 운영 금지)
+//
+// 이슈 #161 (도메인 중립화) 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
+// 결과는 contentSvc.Store 로 contents 단일 테이블에 저장됩니다.
 func NewParserWorker(
 	consumer *queue.KafkaConsumer,
 	producer queue.Producer,
 	rawSvc service.RawContentService,
 	contentSvc service.ContentService,
-	newsRepo storage.NewsArticleRepository,
 	publisher general.JobPublisher,
 	parser *rule.Parser,
 	workerCount int,
@@ -82,7 +82,6 @@ func NewParserWorker(
 		producer:    producer,
 		rawSvc:      rawSvc,
 		contentSvc:  contentSvc,
-		newsRepo:    newsRepo,
 		publisher:   publisher,
 		parser:      parser,
 		workerCount: workerCount,
@@ -244,13 +243,6 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 	page, err := w.parser.ParsePage(ctx, raw)
 	if err != nil {
 		return w.handleRuleError(ctx, rawID, "parse_page", err, mlog)
-	}
-
-	// news_articles 보존 (옵셔널)
-	if w.newsRepo != nil {
-		if insErr := w.newsRepo.Insert(ctx, general.PageToRecord(page, raw)); insErr != nil {
-			mlog.WithError(insErr).Warn("news_articles insert failed (non-fatal)")
-		}
 	}
 
 	content := general.ConvertPage(page, raw)
