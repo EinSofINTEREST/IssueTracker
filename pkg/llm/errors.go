@@ -1,6 +1,9 @@
 package llm
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // ErrorCode 는 LLM 호출 실패의 표준화된 분류입니다.
 //
@@ -65,6 +68,26 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
+// Is 는 errors.Is 호환을 위한 비교입니다 (Gemini code review 피드백).
+//
+// target 의 비어있지 않은 필드들에 대해 AND 비교를 수행합니다 — 즉 호출자가
+// "Code=='auth' 인 모든 *Error 와 매칭" 같은 부분 매칭을 표현할 수 있습니다.
+//
+// 예시:
+//
+//	if errors.Is(err, &llm.Error{Code: llm.ErrCodeAuth}) { ... }            // Code 만 비교
+//	if errors.Is(err, &llm.Error{Provider: "openai"}) { ... }               // Provider 만 비교
+//	if errors.Is(err, &llm.Error{Code: llm.ErrCodeRateLimit, Provider: "anthropic"}) { ... }  // 둘 다
+func (e *Error) Is(target error) bool {
+	t, ok := target.(*Error)
+	if !ok {
+		return false
+	}
+	return (t.Code == "" || e.Code == t.Code) &&
+		(t.Provider == "" || e.Provider == t.Provider) &&
+		(t.Message == "" || e.Message == t.Message)
+}
+
 // IsRetryable 은 에러가 retry 가치가 있는지 빠르게 판단하는 헬퍼입니다.
 //
 // IsRetryable returns true if the error is a *llm.Error with Retryable=true.
@@ -74,25 +97,8 @@ func IsRetryable(err error) bool {
 		return false
 	}
 	var lerr *Error
-	if !errorsAs(err, &lerr) {
+	if !errors.As(err, &lerr) {
 		return false
 	}
 	return lerr.Retryable
-}
-
-// errorsAs 는 errors.As 의 thin wrapper 입니다 (테스트 친화적, std lib import 회피).
-func errorsAs(err error, target **Error) bool {
-	for err != nil {
-		if e, ok := err.(*Error); ok {
-			*target = e
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		u, ok := err.(unwrapper)
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
 }

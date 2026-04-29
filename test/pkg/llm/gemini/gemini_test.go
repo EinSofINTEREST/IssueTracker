@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -151,27 +150,7 @@ func TestGemini_Name_ReturnsGemini(t *testing.T) {
 func assertLLMError(t *testing.T, err error, wantProvider string, wantCode llm.ErrorCode) {
 	t.Helper()
 	var lerr *llm.Error
-	require.True(t, errorsAs(err, &lerr), "want *llm.Error, got %T: %v", err, err)
+	require.ErrorAs(t, err, &lerr)
 	assert.Equal(t, wantProvider, lerr.Provider)
 	assert.Equal(t, wantCode, lerr.Code)
 }
-
-// errorsAs 는 std errors.As 를 그대로 사용 (testify 의존 회피).
-func errorsAs(err error, target **llm.Error) bool {
-	for err != nil {
-		if e, ok := err.(*llm.Error); ok {
-			*target = e
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		u, ok := err.(unwrapper)
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
-}
-
-// 컴파일 사용 — strings 가 unused 없도록 (다른 import 가 필요할 때 쓸 placeholder)
-var _ = strings.Contains

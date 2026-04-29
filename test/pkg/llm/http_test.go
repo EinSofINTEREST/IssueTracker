@@ -2,7 +2,6 @@ package llm_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -120,12 +119,4 @@ func TestHTTPClient_PostJSON_BadEncodingBody(t *testing.T) {
 	var lerr *llm.Error
 	require.True(t, errors.As(err, &lerr))
 	assert.Equal(t, llm.ErrCodeBadRequest, lerr.Code)
-}
-
-// 이하 helper — 다른 provider test 들이 mock JSON 작성 시 사용
-func mustJSON(t *testing.T, v any) []byte {
-	t.Helper()
-	b, err := json.Marshal(v)
-	require.NoError(t, err)
-	return b
 }
