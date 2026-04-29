@@ -32,7 +32,8 @@ const resolveTimeout = 5 * time.Second
 // stateless / goroutine-safe — 모든 worker 가 단일 인스턴스 공유 가능.
 type Parser struct {
 	resolver    *Resolver
-	dateLayouts []string // PublishedAt try-list (앞쪽 우선)
+	discovery   *PageLinkDiscovery // 이슈 #139 — full-page link discovery
+	dateLayouts []string           // PublishedAt try-list (앞쪽 우선)
 }
 
 // NewParser 는 Resolver 를 사용하는 Parser 를 생성합니다.
@@ -43,6 +44,7 @@ func NewParser(resolver *Resolver) *Parser {
 	}
 	return &Parser{
 		resolver:    resolver,
+		discovery:   NewPageLinkDiscovery(),
 		dateLayouts: defaultDateLayouts(),
 	}
 }
@@ -126,11 +128,18 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.P
 // ParseLinks 는 RawContent 의 링크-허브 페이지를 LinkItem 슬라이스로 파싱합니다
 // (parser.LinkListParser 구현).
 //
-// 흐름:
+// 모드 분기 (이슈 #139):
+//   - rule.Selectors.LinkDiscovery.ArticleURLPattern 이 설정 → full-page discovery
+//     (페이지 전체 <a href> + URL pattern 필터). 사이드바 / 추천 / 관련 기사 포함.
+//   - 그렇지 않으면 → 기존 ItemContainer 경로 (정확한 컨테이너 기반 추출).
+//
+// ItemContainer 경로 흐름:
 //  1. raw.URL 의 host 로 active list rule lookup
 //  2. rule.ItemContainer selector 로 각 item element 순회
 //  3. 각 item 안에서 ItemLink (href) / ItemTitle / ItemSnippet 추출
 //  4. 상대 URL 은 raw.URL base 로 절대 URL 화
+//
+// LinkDiscovery 경로 흐름은 PageLinkDiscovery.Discover 에 위임.
 func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser.LinkItem, error) {
 	if err := validateRaw(raw); err != nil {
 		return nil, err
@@ -144,11 +153,16 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 		return nil, err
 	}
 
+	// LinkDiscovery 모드 (이슈 #139) — opt-in. ArticleURLPattern 비어있으면 ItemContainer fallback.
+	if cfg := rule.Selectors.LinkDiscovery; cfg != nil && cfg.ArticleURLPattern != "" {
+		return p.discovery.Discover(raw, cfg)
+	}
+
 	// ItemContainer + ItemLink 둘 다 필수 — nil 또는 CSS 빈 문자열 모두 ErrEmptySelector
 	if !hasRequiredSelector(rule.Selectors.ItemContainer) || !hasRequiredSelector(rule.Selectors.ItemLink) {
 		return nil, &Error{
 			Code:       ErrEmptySelector,
-			Message:    "list rule missing required ItemContainer or ItemLink selector",
+			Message:    "list rule missing required ItemContainer or ItemLink selector (or set LinkDiscovery.ArticleURLPattern)",
 			URL:        raw.URL,
 			TargetType: string(storage.TargetTypeList),
 		}
