@@ -51,7 +51,8 @@
 
 - 큰 PR 도 reviewable diff 단위로 분할 commit
 - 각 commit 메시지는 [06-code-style.md](06-code-style.md) 의 컨벤션 준수:
-  - `[FEAT/FIX/REFAC/DOCS/CHORE]:` + 한국어 + 변경 의도
+  - **Prefix 는 다섯 가지 중 택 1**: `[FEAT]:` / `[FIX]:` / `[REFAC]:` / `[DOCS]:` / `[CHORE]:`
+  - 이후 한국어 + 변경 의도
   - 단일 commit 이 너무 큰 변경을 담지 않도록
 - 빌드 그린 유지 — 각 commit 이 컴파일 + 테스트 통과 가능한 상태
 
@@ -62,7 +63,7 @@
 
 #### 예시
 
-```
+```bash
 git log --oneline (refactor/#148 PR 의 5 commits 패턴)
 fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery vs fallback 명확 구분
 2a063e8 [FIX]: 피드백 반영, LinkDiscoveryConfig 주석 + migration 008 주석 일관성
