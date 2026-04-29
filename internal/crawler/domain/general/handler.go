@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/parser"
 	"issuetracker/pkg/logger"
 )
 
@@ -34,82 +32,6 @@ func (b *baseHandler) delegateToNext(ctx context.Context, job *core.CrawlJob, re
 		return nil, fmt.Errorf("all fetch strategies exhausted for %s: %w", job.Target.URL, reason)
 	}
 	return b.next.Handle(ctx, job)
-}
-
-// RSSFetchHandler 는 RSS 피드로 page 들을 가져옵니다.
-// Target.Type 이 feed 이거나 metadata["feed_url"] 이 있을 때만 RSS 시도.
-type RSSFetchHandler struct {
-	baseHandler
-	fetcher RSSFetcher
-}
-
-func NewRSSFetchHandler(fetcher RSSFetcher, log *logger.Logger) *RSSFetchHandler {
-	return &RSSFetchHandler{baseHandler: baseHandler{log: log}, fetcher: fetcher}
-}
-
-func (h *RSSFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*core.RawContent, error) {
-	feedURL, ok := h.rssFeedURL(job)
-	if !ok {
-		return h.delegateToNext(ctx, job, fmt.Errorf("not a feed target"))
-	}
-
-	pages, err := h.fetcher.FetchFeed(ctx, feedURL)
-	if err != nil {
-		h.log.WithFields(map[string]interface{}{
-			"handler":  "rss",
-			"feed_url": feedURL,
-		}).WithError(err).Warn("rss fetch failed, delegating to next handler")
-		return h.delegateToNext(ctx, job, err)
-	}
-
-	h.log.WithFields(map[string]interface{}{
-		"handler":    "rss",
-		"feed_url":   feedURL,
-		"page_count": len(pages),
-	}).Info("rss feed fetched successfully")
-
-	return buildRSSRawContent(job, pages), nil
-}
-
-func (h *RSSFetchHandler) rssFeedURL(job *core.CrawlJob) (string, bool) {
-	if job.Target.Type == core.TargetTypeFeed {
-		return job.Target.URL, true
-	}
-	if val, ok := job.Target.Metadata["feed_url"]; ok {
-		if u, ok := val.(string); ok && u != "" {
-			return u, true
-		}
-	}
-	return "", false
-}
-
-// buildRSSRawContent 는 RSS 결과를 RawContent 로 변환합니다.
-// Metadata["rss_pages"] 에 page 목록 직렬화 — 후속 ConvertRSSPages 가 unwrapping.
-func buildRSSRawContent(job *core.CrawlJob, pages []*parser.Page) *core.RawContent {
-	items := make([]map[string]interface{}, 0, len(pages))
-	for _, p := range pages {
-		items = append(items, map[string]interface{}{
-			"title":        p.Title,
-			"url":          p.URL,
-			"main_content": p.MainContent,
-			"summary":      p.Summary,
-			"author":       p.Author,
-			"published_at": p.PublishedAt.Format(time.RFC3339),
-		})
-	}
-
-	return &core.RawContent{
-		ID:         fmt.Sprintf("rss-%d", time.Now().UnixNano()),
-		FetchedAt:  time.Now(),
-		URL:        job.Target.URL,
-		HTML:       "",
-		StatusCode: 200,
-		Headers:    make(map[string]string),
-		Metadata: map[string]interface{}{
-			"rss_pages":      items,
-			"fetch_strategy": "rss",
-		},
-	}
 }
 
 // GoQueryFetchHandler 는 goquery 정적 HTML 크롤링.
@@ -207,17 +129,17 @@ func (h *BrowserFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 	return raw, nil
 }
 
-// BuildChain 은 RSS → GoQuery → Browser 순서의 체인을 조립합니다.
+// BuildChain 은 GoQuery → Browser 순서의 체인을 조립합니다.
 // nil fetcher 는 체인에서 제외 — 사이트별 지원 전략만 포함.
 //
 // 호출자 (registry) 는 wiring 단계에서 fetcher 를 누락한 설정 오류를 검출하기 위해
 // (Handler, error) 를 받음. panic 대신 error 반환으로 전환 — production code 가 부팅
 // 단계 misconfig 로 crash 하지 않도록 (Coderabbit 피드백).
-func BuildChain(rss RSSFetcher, gq Fetcher, br Fetcher, log *logger.Logger, lazyKeywords ...string) (Handler, error) {
-	var handlers []Handler
-	if rss != nil {
-		handlers = append(handlers, NewRSSFetchHandler(rss, log))
+func BuildChain(gq Fetcher, br Fetcher, log *logger.Logger, lazyKeywords ...string) (Handler, error) {
+	if log == nil {
+		return nil, fmt.Errorf("BuildChain: logger must be non-nil")
 	}
+	var handlers []Handler
 	if gq != nil {
 		handlers = append(handlers, NewGoQueryFetchHandler(gq, log, lazyKeywords...))
 	}
@@ -225,7 +147,7 @@ func BuildChain(rss RSSFetcher, gq Fetcher, br Fetcher, log *logger.Logger, lazy
 		handlers = append(handlers, NewBrowserFetchHandler(br, log))
 	}
 	if len(handlers) == 0 {
-		return nil, fmt.Errorf("BuildChain: at least one fetcher (rss / goquery / browser) must be non-nil")
+		return nil, fmt.Errorf("BuildChain: at least one fetcher (goquery / browser) must be non-nil")
 	}
 	for i := 0; i < len(handlers)-1; i++ {
 		handlers[i].SetNext(handlers[i+1])

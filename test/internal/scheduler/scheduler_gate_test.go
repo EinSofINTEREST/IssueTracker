@@ -99,7 +99,7 @@ func TestScheduler_Gate_BlocksRSSEntry(t *testing.T) {
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
 		URL:         "https://rss.cnn.com/rss/cnn_health.rss",
-		TargetType:  core.TargetTypeFeed,
+		TargetType:  core.TargetTypeCategory,
 		Interval:    50 * time.Millisecond,
 		Priority:    core.PriorityNormal,
 		Timeout:     5 * time.Second,
@@ -152,7 +152,7 @@ func TestScheduler_NoGate_LegacyBehavior(t *testing.T) {
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
 		URL:         "https://rss.cnn.com/rss/cnn_health.rss",
-		TargetType:  core.TargetTypeFeed,
+		TargetType:  core.TargetTypeCategory,
 		Interval:    50 * time.Millisecond,
 		Priority:    core.PriorityNormal,
 		Timeout:     5 * time.Second,
@@ -175,7 +175,7 @@ func TestScheduler_Gate_AllowAllGuard_DelegatesAll(t *testing.T) {
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
 		URL:         "https://rss.cnn.com/rss/cnn_health.rss",
-		TargetType:  core.TargetTypeFeed,
+		TargetType:  core.TargetTypeCategory,
 		Interval:    50 * time.Millisecond,
 		Priority:    core.PriorityNormal,
 		Timeout:     5 * time.Second,

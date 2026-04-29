@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/parser"
 )
 
 // SourceCrawler 는 사이트별 크롤러가 구현해야 하는 도메인 중립 인터페이스입니다.
@@ -34,14 +33,6 @@ type SourceCrawler interface {
 // Fetcher fetches raw HTML for a URL. goquery / chromedp adapters implement this.
 type Fetcher interface {
 	Fetch(ctx context.Context, target core.Target) (*core.RawContent, error)
-}
-
-// RSSFetcher 는 RSS/Atom 피드를 가져와 파싱된 page 목록을 반환합니다.
-//
-// RSSFetcher fetches and parses an RSS/Atom feed into a list of pages.
-// 기존 NewsRSSFetcher 의 *NewsArticle 반환을 도메인 중립 *parser.Page 로 일반화.
-type RSSFetcher interface {
-	FetchFeed(ctx context.Context, feedURL string) ([]*parser.Page, error)
 }
 
 // JobPublisher 는 카테고리/목록 페이지에서 발견된 URL 을 다음 CrawlJob 으로 연결하는 인터페이스입니다.

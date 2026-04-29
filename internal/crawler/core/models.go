@@ -29,7 +29,6 @@ type SourceInfo struct {
 type TargetType string
 
 const (
-	TargetTypeFeed     TargetType = "feed"
 	TargetTypeSitemap  TargetType = "sitemap"
 	TargetTypeArticle  TargetType = "article"
 	TargetTypeCategory TargetType = "category"

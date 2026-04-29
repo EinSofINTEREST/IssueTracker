@@ -14,7 +14,7 @@ import (
 // ChainHandler 는 fetcher worker 의 책임을 담당하는 handler.Handler 어댑터입니다 (이슈 #134).
 //
 // 분리 후 책임 (Claim Check 패턴):
-//  1. Chain (RSS / GoQuery / Browser) 으로 raw HTML fetch
+//  1. Chain (GoQuery / Browser) 으로 raw HTML fetch
 //  2. RawContentService.Store 로 raw_contents 테이블에 저장 → raw_id
 //  3. RawContentRef (raw_id + url + source_info) 를 queue.TopicFetched 로 publish
 //
@@ -100,7 +100,7 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 }
 
 // publishFetchedRef 는 RawContentRef 를 TopicFetched 에 발행합니다.
-// 헤더에 target_type 을 포함하여 parser worker 가 RSS/Article/Category 분기에 사용.
+// 헤더에 target_type 을 포함하여 parser worker 가 Article/Category 분기에 사용.
 func (h *ChainHandler) publishFetchedRef(ctx context.Context, job *core.CrawlJob, raw *core.RawContent, rawID string) error {
 	ref := core.RawContentRef{
 		ID:         rawID,

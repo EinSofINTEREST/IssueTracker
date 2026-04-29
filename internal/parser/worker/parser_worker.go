@@ -6,7 +6,6 @@
 //  1. queue.TopicFetched 에서 RawContentRef consume
 //  2. RawContentService.GetByID 로 raw HTML 로드
 //  3. target_type 분기:
-//     - RSS (raw.Metadata["fetch_strategy"] == "rss"): ConvertRSSPages → 다건 content store + publish normalized
 //     - Category (TargetTypeCategory): rule.Parser.ParseLinks → publisher.Publish (chained jobs)
 //     - Article (TargetTypeArticle): rule.Parser.ParsePage → ConvertPage → content store + publish normalized
 //  4. 정상 처리 후 RawContentService.Delete (raw_contents 정리)
@@ -193,16 +192,6 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 	}
 	targetType := core.TargetType(msg.Headers["target_type"])
 	jobTimeout := parseTimeoutHeader(msg.Headers["timeout_ms"])
-
-	// RSS strategy 분기 — chain handler 가 buildRSSRawContent 로 만든 raw
-	if strategy, ok := raw.Metadata["fetch_strategy"].(string); ok && strategy == "rss" {
-		contents := general.ConvertRSSPages(raw)
-		if err := w.publishContents(ctx, contents, crawlerName); err != nil {
-			return fmt.Errorf("publish rss contents: %w", err)
-		}
-		w.deleteRaw(ctx, ref.ID, mlog)
-		return nil
-	}
 
 	// 카테고리 페이지 — ParseLinks 후 chained article jobs 발행
 	if targetType == core.TargetTypeCategory {
