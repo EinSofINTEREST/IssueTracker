@@ -6,7 +6,7 @@ package storage
 // 전이: Pending → (validator) → Passed | Rejected
 //
 //   - Pending  : chain handler 가 raw_contents INSERT 한 직후 기본값
-//                (parser worker 가 contents INSERT 시 default 'pending' 그대로 유지)
+//     (parser worker 가 contents INSERT 시 default 'pending' 그대로 유지)
 //   - Passed   : validator 통과 (issuetracker.validated 발행 직후)
 //   - Rejected : validator maxRetries 영구 실패 (contentSvc.Delete 직전)
 //
