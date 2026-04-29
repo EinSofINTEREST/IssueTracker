@@ -70,3 +70,8 @@ func (m *MockContentRepository) ExistsByURL(ctx context.Context, url string) (bo
 	args := m.Called(ctx, url)
 	return args.Bool(0), args.Error(1)
 }
+
+func (m *MockContentRepository) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
+	args := m.Called(ctx, url, status, code, detail)
+	return args.Error(0)
+}

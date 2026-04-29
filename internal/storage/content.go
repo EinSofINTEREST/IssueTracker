@@ -52,4 +52,13 @@ type ContentRepository interface {
 
 	// ExistsByURL은 해당 URL의 content가 존재하는지 확인합니다.
 	ExistsByURL(ctx context.Context, url string) (bool, error)
+
+	// UpdateValidationStatus 는 URL 기준으로 validator 결과 메타데이터를 갱신합니다 (이슈 #135 / #161).
+	//
+	// status 가 ValidationStatusRejected 가 아니면 code/detail 인자는 무시되고 NULL 로 저장됩니다.
+	// URL 이 존재하지 않으면 ErrNotFound 를 반환합니다.
+	//
+	// validator worker 는 contentSvc.Delete 직전에 본 메소드를 호출하여 reject 메타데이터를
+	// contents 에 보관합니다.
+	UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error
 }

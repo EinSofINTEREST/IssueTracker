@@ -171,6 +171,43 @@ func (r *pgContentRepository) ExistsByURL(ctx context.Context, url string) (bool
 	return exists, nil
 }
 
+const sqlUpdateContentValidationStatus = `
+UPDATE contents
+SET
+  validation_status = $2,
+  reject_code       = $3,
+  reject_detail     = $4
+WHERE url = $1
+`
+
+// UpdateValidationStatus 는 URL 기준으로 validator 결과 메타데이터를 갱신합니다 (이슈 #135 / #161).
+//
+// status 가 storage.ValidationStatusRejected 가 아니면 code/detail 인자는 무시되고 NULL 로 저장됩니다.
+// URL 이 존재하지 않으면 storage.ErrNotFound 를 반환합니다.
+func (r *pgContentRepository) UpdateValidationStatus(ctx context.Context, url, status, code, detail string) error {
+	var (
+		codeArg   any
+		detailArg any
+	)
+	if status == storage.ValidationStatusRejected {
+		if code != "" {
+			codeArg = code
+		}
+		if detail != "" {
+			detailArg = detail
+		}
+	}
+
+	tag, err := r.pool.Exec(ctx, sqlUpdateContentValidationStatus, url, status, codeArg, detailArg)
+	if err != nil {
+		return fmt.Errorf("update validation status %s: %w", url, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 내부 헬퍼 함수
 // ─────────────────────────────────────────────────────────────────────────────

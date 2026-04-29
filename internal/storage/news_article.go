@@ -7,19 +7,6 @@ import (
 	"time"
 )
 
-// ValidationStatus 는 validator 처리 결과의 라이프사이클을 나타냅니다 (이슈 #135).
-//
-// 전이: Pending → (validator) → Passed | Rejected
-//
-//   - Pending  : chain_handler 가 INSERT 한 직후 기본값
-//   - Passed   : validator 통과 (issuetracker.validated 발행 직후)
-//   - Rejected : validator maxRetries 영구 실패 (contentSvc.Delete 직전)
-const (
-	ValidationStatusPending  = "pending"
-	ValidationStatusPassed   = "passed"
-	ValidationStatusRejected = "rejected"
-)
-
 // NewsArticleRecord는 news_articles 테이블의 단일 행을 나타냅니다.
 //
 // NewsArticleRecord represents a single row in the news_articles table.
