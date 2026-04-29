@@ -77,62 +77,6 @@ func PageToRecord(page *parser.Page, raw *core.RawContent) *storage.NewsArticleR
 	return record
 }
 
-// ConvertRSSPages 는 RSS RawContent.Metadata["rss_pages"] 를 []*core.Content 로 변환합니다.
-// metadata key 는 buildRSSRawContent 에서 채우며, page 단위 URL 누락 시 해당 항목 skip.
-func ConvertRSSPages(raw *core.RawContent) []*core.Content {
-	items, ok := raw.Metadata["rss_pages"].([]map[string]interface{})
-	if !ok {
-		return nil
-	}
-	contents := make([]*core.Content, 0, len(items))
-	for _, item := range items {
-		c := rssItemToContent(item, raw)
-		if c == nil {
-			continue
-		}
-		contents = append(contents, c)
-	}
-	return contents
-}
-
-func rssItemToContent(item map[string]interface{}, raw *core.RawContent) *core.Content {
-	url, _ := item["url"].(string)
-	if url == "" {
-		return nil
-	}
-	title, _ := item["title"].(string)
-	body, _ := item["main_content"].(string)
-	author, _ := item["author"].(string)
-	summary, _ := item["summary"].(string)
-
-	var publishedAt time.Time
-	if s, ok := item["published_at"].(string); ok && s != "" {
-		// 파싱 실패는 zero value 유지 (validator 가 zero 검사로 분기) — 비표준 RSS 형식 흡수.
-		// 명시적 if 분기는 errcheck (golangci-lint) 통과 + 의도 가시화 (Gemini 피드백).
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			publishedAt = t
-		}
-	}
-
-	return &core.Content{
-		ID:           ContentID(url),
-		SourceID:     raw.SourceInfo.Name,
-		SourceType:   raw.SourceInfo.Type,
-		Country:      raw.SourceInfo.Country,
-		Language:     raw.SourceInfo.Language,
-		Title:        title,
-		Body:         body,
-		Summary:      summary,
-		Author:       author,
-		PublishedAt:  publishedAt,
-		URL:          url,
-		CanonicalURL: url,
-		WordCount:    len(strings.Fields(body)),
-		ContentHash:  ContentHash(body),
-		CreatedAt:    time.Now(),
-	}
-}
-
 // ContentID 는 URL 의 SHA-256 앞 16바이트 hex.
 func ContentID(url string) string {
 	h := sha256.Sum256([]byte(url))
