@@ -32,10 +32,15 @@ func NewPageLinkDiscovery() *PageLinkDiscovery { return &PageLinkDiscovery{} }
 // Discover 는 raw 의 HTML 에서 cfg 정책에 부합하는 링크들을 LinkItem 으로 반환합니다.
 //
 // 흐름:
-//  1. cfg.ArticleURLPattern compile (빈 문자열이면 ErrEmptySelector)
+//  1. cfg.ArticleURLPattern 이 비어있지 않으면 compile (빈 문자열이면 all-pass 모드 — 이슈 #148)
 //  2. pkg/links.Extractor 로 raw.HTML 의 모든 <a href> 추출
 //     (SameOriginOnly / PathPrefixes / ExcludePatterns / MaxLinksPerPage 적용)
-//  3. extractor 결과를 ArticleURLPattern regex 로 추가 필터링
+//  3. pattern 이 있으면 추가 regex 필터링, 없으면 extractor 결과 그대로
+//
+// All-pass 모드 (이슈 #148):
+//   - 본 시스템의 타겟은 \"뉴스 기사\" 만이 아닌 페이지 내 모든 의미 있는 글 (이슈 #100 도메인 일반화)
+//   - ArticleURLPattern 을 강제하면 사이트별 article URL regex 외 모든 컨텐츠가 누락됨
+//   - 빈 pattern 은 \"ExcludePatterns + SameOriginOnly + MaxLinksPerPage 만으로 필터\" 의도
 //
 // 반환 LinkItem 의 Title 은 anchor text 로 채움 (ItemContainer 모드 와 달리 별도 selector
 // 가 없음). Snippet 은 비워둠 — full-page discovery 는 list 페이지의 컨텍스트가 없으므로
@@ -44,24 +49,29 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 	if err := validateRaw(raw); err != nil {
 		return nil, err
 	}
-	if cfg == nil || cfg.ArticleURLPattern == "" {
+	if cfg == nil {
 		return nil, &Error{
 			Code:       ErrEmptySelector,
-			Message:    "link discovery requires non-empty ArticleURLPattern",
+			Message:    "link discovery requires non-nil LinkDiscoveryConfig",
 			URL:        raw.URL,
 			TargetType: string(storage.TargetTypeList),
 		}
 	}
 
-	pattern, err := regexp.Compile(cfg.ArticleURLPattern)
-	if err != nil {
-		return nil, &Error{
-			Code:       ErrEmptySelector,
-			Message:    fmt.Sprintf("invalid ArticleURLPattern regex: %q", cfg.ArticleURLPattern),
-			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeList),
-			Err:        err,
+	// pattern 이 비어있으면 all-pass — 이슈 #148. Extractor 의 다른 옵션만으로 필터링.
+	var pattern *regexp.Regexp
+	if cfg.ArticleURLPattern != "" {
+		compiled, err := regexp.Compile(cfg.ArticleURLPattern)
+		if err != nil {
+			return nil, &Error{
+				Code:       ErrEmptySelector,
+				Message:    fmt.Sprintf("invalid ArticleURLPattern regex: %q", cfg.ArticleURLPattern),
+				URL:        raw.URL,
+				TargetType: string(storage.TargetTypeList),
+				Err:        err,
+			}
 		}
+		pattern = compiled
 	}
 
 	opts := []links.Option{}
@@ -93,7 +103,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 	maxOut := cfg.MaxLinksPerPage
 	out := make([]parser.LinkItem, 0, len(candidates))
 	for _, l := range candidates {
-		if !pattern.MatchString(l.URL) {
+		if pattern != nil && !pattern.MatchString(l.URL) {
 			continue
 		}
 		out = append(out, parser.LinkItem{
@@ -106,11 +116,15 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 	}
 
 	if len(out) == 0 {
-		// 매칭 0건 — pattern stale 이거나 페이지에 article URL 자체가 없음.
-		// ItemContainer 경로의 0건 진단과 동일한 메시지 패턴.
+		// 매칭 0건 — pattern 모드면 stale, all-pass 모드면 페이지 자체에 통과 가능 링크 없음.
+		// 진단 메시지는 모드별로 분기하여 운영자가 원인 추적하기 쉽게.
+		msg := "all <a href> filtered out (page has no eligible links)"
+		if pattern != nil {
+			msg = "ArticleURLPattern matched 0 links on page (pattern may be stale or page empty)"
+		}
 		return nil, &Error{
 			Code:       ErrParseFailure,
-			Message:    "ArticleURLPattern matched 0 links on page (pattern may be stale or page empty)",
+			Message:    msg,
 			URL:        raw.URL,
 			TargetType: string(storage.TargetTypeList),
 		}
