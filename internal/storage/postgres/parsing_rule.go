@@ -18,12 +18,16 @@ import (
 // pgParsingRuleRepository 는 pgx/v5 기반 ParsingRuleRepository 구현체입니다 (이슈 #100).
 type pgParsingRuleRepository struct {
 	pool *pgxpool.Pool
-	log  *logger.Logger
 }
 
 // NewParsingRuleRepository 는 pgxpool 을 사용하는 ParsingRuleRepository 를 생성합니다.
+//
+// log 인자는 향후 query latency / error log 등 운영 가시성 추가를 대비해 시그니처에 유지하되,
+// 현재 구현에서는 사용하지 않습니다 (Gemini code review #8 — 미사용 필드 정리).
+// 다른 Repository 들 (NewContentRepository 등) 의 시그니처와 일관성을 위해 인자는 보존.
 func NewParsingRuleRepository(pool *pgxpool.Pool, log *logger.Logger) storage.ParsingRuleRepository {
-	return &pgParsingRuleRepository{pool: pool, log: log}
+	_ = log
+	return &pgParsingRuleRepository{pool: pool}
 }
 
 const sqlInsertParsingRule = `

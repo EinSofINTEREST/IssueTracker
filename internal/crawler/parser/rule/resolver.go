@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"issuetracker/internal/storage"
-	"issuetracker/pkg/logger"
 )
 
 // DefaultCacheTTL 은 Resolver 의 기본 양성 캐시 TTL 입니다.
@@ -25,6 +24,13 @@ const DefaultCacheTTL = 5 * time.Minute
 // DefaultNegativeCacheTTL 은 미매칭 (ErrNotFound) 결과의 캐시 TTL 입니다.
 // 양성보다 짧게 — 새 rule 등록 시 빠르게 반영되도록.
 const DefaultNegativeCacheTTL = 30 * time.Second
+
+// DefaultMaxCacheEntries 는 cache 의 최대 entry 수입니다 (이슈 #100, Gemini #6).
+//
+// 무제한 map 은 호스트 수 폭증 시 OOM 위험. 단순 정책 — 가득 차면 가장 오래된 entry
+// (만료 임박 순) 를 evict. LRU 가 아니라 expiry-order eviction 이지만 본 패키지의
+// 부하 패턴 (소수의 동일 host 반복 lookup) 에는 충분.
+const DefaultMaxCacheEntries = 10_000
 
 // Resolver 는 URL 에서 host 를 추출해 storage.ParsingRuleRecord 를 조회합니다 (이슈 #100).
 //
@@ -37,7 +43,7 @@ type Resolver struct {
 	repo             storage.ParsingRuleRepository
 	cacheTTL         time.Duration
 	negativeCacheTTL time.Duration
-	log              *logger.Logger
+	maxEntries       int
 
 	mu    sync.RWMutex
 	cache map[cacheKey]cacheEntry
@@ -69,9 +75,14 @@ func WithNegativeCacheTTL(d time.Duration) Option {
 	return func(r *Resolver) { r.negativeCacheTTL = d }
 }
 
-// WithLogger 는 cache miss / 만료 등의 trace 를 출력할 logger 를 주입합니다 (nil 허용).
-func WithLogger(log *logger.Logger) Option {
-	return func(r *Resolver) { r.log = log }
+// WithMaxCacheEntries 는 cache 의 최대 entry 수를 override 합니다 (default: 10_000).
+// 0 이하 값은 무시되고 default 유지.
+func WithMaxCacheEntries(n int) Option {
+	return func(r *Resolver) {
+		if n > 0 {
+			r.maxEntries = n
+		}
+	}
 }
 
 // NewResolver 는 ParsingRuleRepository 를 사용하는 Resolver 를 생성합니다.
@@ -84,6 +95,7 @@ func NewResolver(repo storage.ParsingRuleRepository, opts ...Option) *Resolver {
 		repo:             repo,
 		cacheTTL:         DefaultCacheTTL,
 		negativeCacheTTL: DefaultNegativeCacheTTL,
+		maxEntries:       DefaultMaxCacheEntries,
 		cache:            make(map[cacheKey]cacheEntry),
 		now:              time.Now,
 	}
@@ -162,9 +174,35 @@ func (r *Resolver) lookupCache(key cacheKey) (*storage.ParsingRuleRecord, bool, 
 	return entry.rule, true, entry.rule == nil
 }
 
+// evictExpiringSoon 은 cache 가 maxEntries 초과 시 가장 만료 임박한 entry 를 제거합니다.
+// 호출자는 이미 r.mu 를 hold 하고 있어야 합니다 (storeCache 안에서 호출).
+//
+// 단순 정책 — LRU 가 아니라 expiry-order eviction. 본 패키지의 부하 패턴 (소수의 동일
+// host 반복 lookup) 에는 충분. 호스트 폭증 시 OOM 방어가 핵심 목적.
+func (r *Resolver) evictExpiringSoon() {
+	if len(r.cache) < r.maxEntries {
+		return
+	}
+	var oldestKey cacheKey
+	var oldestExpiry time.Time
+	first := true
+	for k, e := range r.cache {
+		if first || e.expiresAt.Before(oldestExpiry) {
+			oldestKey = k
+			oldestExpiry = e.expiresAt
+			first = false
+		}
+	}
+	if !first {
+		delete(r.cache, oldestKey)
+	}
+}
+
 // storeCache 는 entry 를 저장합니다 (rule==nil 이면 negative cache).
+// maxEntries 초과 시 evictExpiringSoon 으로 가장 만료 임박 entry 제거 후 저장.
 func (r *Resolver) storeCache(key cacheKey, rule *storage.ParsingRuleRecord, ttl time.Duration) {
 	r.mu.Lock()
+	r.evictExpiringSoon()
 	r.cache[key] = cacheEntry{rule: rule, expiresAt: r.now().Add(ttl)}
 	r.mu.Unlock()
 }
