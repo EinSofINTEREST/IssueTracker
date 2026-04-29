@@ -340,6 +340,25 @@ func TestPageLinkDiscovery_EmptyPattern_ExcludeStillApplies(t *testing.T) {
 	}
 }
 
+// TestPageLinkDiscovery_EmptyPattern_PathPrefixesStillApply 는 all-pass 모드에서도
+// PathPrefixes 가 path 기반 cutoff 로 동작함을 검증합니다 (Coderabbit 피드백).
+func TestPageLinkDiscovery_EmptyPattern_PathPrefixesStillApply(t *testing.T) {
+	d := rule.NewPageLinkDiscovery()
+	cfg := &storage.LinkDiscoveryConfig{
+		ArticleURLPattern: "",
+		SameOriginOnly:    true,
+		PathPrefixes:      []string{"/article/"}, // /, /category/, /about, /login 모두 차단
+	}
+
+	items, err := d.Discover(makeRaw("https://news.example.com/category/politics", fullPageHTML), cfg)
+	require.NoError(t, err)
+	require.NotEmpty(t, items, "/article/ prefix 매칭은 통과")
+
+	for _, it := range items {
+		assert.Contains(t, it.URL, "/article/", "all-pass 모드에서도 PathPrefixes 1차 cutoff 적용")
+	}
+}
+
 func TestPageLinkDiscovery_NilConfig_ReturnsEmptySelector(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
 
@@ -420,17 +439,22 @@ func TestParser_ParseLinks_FallsBackToItemContainerWhenPatternEmpty(t *testing.T
 // TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery 는 이슈 #148 변경 검증:
 // LinkDiscovery 객체가 채워져 있으면 ArticleURLPattern 이 빈 문자열이어도 discovery 모드 진입.
 // ItemContainer fallback 은 LinkDiscovery 자체가 nil 일 때만.
+//
+// discovery vs fallback 명확 구분 (Coderabbit 피드백):
+//   - ItemContainer 를 매칭 0건 selector 로 설정 — fallback 경로 진입 시 ErrParseFailure
+//   - 그래도 3건 반환 → discovery 경로가 동작했다는 명백한 증거
 func TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery(t *testing.T) {
-	// LinkDiscovery 객체는 있지만 pattern 비어있음 → all-pass discovery (ItemContainer 사용 안 함)
 	r := listRule()
 	r.Selectors.LinkDiscovery = &storage.LinkDiscoveryConfig{
 		ArticleURLPattern: "",
 		SameOriginOnly:    true,
 	}
+	// ItemContainer 를 매칭 0건 selector 로 변경 — fallback 진입 시 ErrParseFailure 보장
+	r.Selectors.ItemContainer = &storage.FieldSelector{CSS: "div.no-such-class-anywhere"}
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
 	p := rule.NewParser(rule.NewResolver(repo))
 
 	items, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category", listHTML))
-	require.NoError(t, err)
-	require.Len(t, items, 3, "all-pass 모드 — listHTML 의 a href 3개 모두 통과")
+	require.NoError(t, err, "discovery 경로가 동작 — fallback 진입 시 stale selector 로 에러였을 것")
+	require.Len(t, items, 3, "all-pass discovery — listHTML 의 a href 3개 모두 통과")
 }
