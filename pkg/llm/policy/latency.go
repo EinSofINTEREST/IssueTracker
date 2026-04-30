@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand/v2"
 	"sort"
+	"sync"
 
 	"issuetracker/pkg/llm"
 )
@@ -23,7 +24,11 @@ import (
 type LatencyWeighted struct {
 	caps       llm.CapabilitiesProvider
 	stochastic bool
-	rng        *rand.Rand // nil 이면 default global rand
+
+	// rng 는 *math/rand/v2.Rand 가 concurrent-unsafe 하므로 rngMu 로 보호 — Policy 인터페이스
+	// contract (goroutine-safe) 준수. nil 이면 thread-safe global rand 사용 (lock 불필요).
+	rngMu sync.Mutex
+	rng   *rand.Rand
 }
 
 // LatencyWeightedOption 은 LatencyWeighted 생성 옵션입니다.
@@ -74,11 +79,14 @@ func (p *LatencyWeighted) Select(_ context.Context, req llm.Request, candidates 
 	return out, nil
 }
 
-// latencyMs returns observed EMA if MeasuredProvider, otherwise Capabilities baseline, otherwise 0.
+// latencyMs returns observed EMA if MeasuredProvider has any calls, otherwise Capabilities baseline.
+//
+// Calls() > 0 으로 측정 여부 판정 — LatencyMs()==0 도 valid 측정값일 수 있음 (sub-ms 호출).
 func (p *LatencyWeighted) latencyMs(provider llm.Provider, req llm.Request) float64 {
 	if mp, ok := provider.(*llm.MeasuredProvider); ok {
-		if observed := mp.Stats().LatencyMs(); observed > 0 {
-			return observed
+		stats := mp.Stats()
+		if stats.Calls() > 0 {
+			return stats.LatencyMs()
 		}
 	}
 	caps := capabilityFor(p.caps, provider, req)
@@ -96,18 +104,22 @@ func (p *LatencyWeighted) shuffleByInverseWeight(scored []scoredProvider) {
 		weights[i] = 1.0 / (s.score + epsilon)
 	}
 
-	rng := p.rng
+	// 주입된 *rand.Rand 는 concurrent-unsafe — Float64() 호출을 rngMu 로 보호.
+	// nil 인 경우 global rand.Float64() 는 thread-safe 하므로 lock 불필요.
+	float64Fn := func() float64 {
+		if p.rng == nil {
+			return rand.Float64()
+		}
+		p.rngMu.Lock()
+		defer p.rngMu.Unlock()
+		return p.rng.Float64()
+	}
 	pickIdx := func(remainingWeights []float64) int {
 		var total float64
 		for _, w := range remainingWeights {
 			total += w
 		}
-		var r float64
-		if rng != nil {
-			r = rng.Float64() * total
-		} else {
-			r = rand.Float64() * total
-		}
+		r := float64Fn() * total
 		var acc float64
 		for i, w := range remainingWeights {
 			acc += w

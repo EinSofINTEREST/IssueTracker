@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
+	"sync"
 	"testing"
 	"time"
 
@@ -114,6 +115,34 @@ func TestHybrid_AllZeroWeightsPreservesOrder(t *testing.T) {
 	in := []llm.Provider{pc, pa, pb}
 	out, _ := pol.Select(context.Background(), llm.Request{}, in)
 	assert.Equal(t, in, out)
+}
+
+// stochastic + 주입 rng 가 다중 goroutine 에서 race 없이 동작하는지 검증 — `go test -race` 필요 (PR #167 CodeRabbit 피드백).
+func TestLatencyWeighted_StochasticConcurrentSafe(t *testing.T) {
+	caps := llm.NewStaticCapabilitiesProviderFrom(map[string]map[string]llm.Capabilities{
+		"a": {"m": {AvgLatencyMs: 100}},
+		"b": {"m": {AvgLatencyMs: 200}},
+		"c": {"m": {AvgLatencyMs: 300}},
+	})
+	rng := rand.New(rand.NewPCG(7, 7))
+	pol := policy.NewLatencyWeighted(caps, policy.WithStochastic(true), policy.WithRand(rng))
+
+	pa, pb, pc := &fakeProvider{name: "a"}, &fakeProvider{name: "b"}, &fakeProvider{name: "c"}
+	candidates := []llm.Provider{pa, pb, pc}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				out, err := pol.Select(context.Background(), llm.Request{Model: "m"}, candidates)
+				assert.NoError(t, err)
+				assert.Len(t, out, 3)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestLatencyWeighted_StochasticDeterministicWithSeededRand(t *testing.T) {

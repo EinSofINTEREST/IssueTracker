@@ -68,7 +68,12 @@ func NewStaticCapabilitiesProviderFrom(table map[string]map[string]Capabilities)
 }
 
 // Get implements CapabilitiesProvider — provider/model 조합으로 hardcode 테이블 lookup.
+//
+// nil 수신자 보호: 호출자가 typed nil 을 인터페이스에 할당하는 케이스에서 panic 회피.
 func (s *StaticCapabilitiesProvider) Get(provider, model string) (Capabilities, bool) {
+	if s == nil {
+		return Capabilities{}, false
+	}
 	caps, ok := s.table[capKey{Provider: provider, Model: model}]
 	return caps, ok
 }

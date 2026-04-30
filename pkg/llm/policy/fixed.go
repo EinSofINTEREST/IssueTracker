@@ -32,8 +32,12 @@ type FixedOrder struct {
 }
 
 // NewFixedOrder returns a policy that selects providers by exact Name() match in the given order.
+//
+// names 를 defensive copy — 호출자의 후속 mutation 으로 routing 동작이 바뀌지 않도록 보장
+// (Policy 인터페이스 contract: goroutine-safe).
 func NewFixedOrder(names ...string) *FixedOrder {
-	return &FixedOrder{names: names}
+	copied := append([]string(nil), names...)
+	return &FixedOrder{names: copied}
 }
 
 // Select returns providers whose Name() matches names, ordered by names sequence.

@@ -82,3 +82,29 @@ func TestMeasuredProvider_RegistersPrometheusMetrics(t *testing.T) {
 	assert.Contains(t, names, "llm_provider_call_total")
 	assert.Contains(t, names, "llm_provider_latency_seconds")
 }
+
+// 동일 registry 에 두 번 호출되어도 panic 없이 동일 collector 재사용 — idempotent 보장 (PR #167 CodeRabbit 피드백).
+func TestMeasuredFactory_IdempotentOnDuplicateRegistration(t *testing.T) {
+	registry := prometheus.NewRegistry()
+
+	var f1, f2 *llm.MeasuredFactory
+	assert.NotPanics(t, func() {
+		f1 = llm.NewMeasuredFactory(registry, "llm")
+		f2 = llm.NewMeasuredFactory(registry, "llm")
+	}, "동일 registry 에 두 번 호출되어도 panic 안 됨")
+
+	stub1 := &stubProvider{name: "a", latency: time.Millisecond}
+	stub2 := &stubProvider{name: "b", latency: time.Millisecond}
+	_, _ = f1.Wrap(stub1).Generate(context.Background(), llm.Request{})
+	_, _ = f2.Wrap(stub2).Generate(context.Background(), llm.Request{})
+
+	// 두 factory 가 같은 collector 를 공유하므로 metric 이름은 1회만 등록.
+	mfs, err := registry.Gather()
+	assert.NoError(t, err)
+	counts := map[string]int{}
+	for _, m := range mfs {
+		counts[m.GetName()]++
+	}
+	assert.Equal(t, 1, counts["llm_provider_call_total"])
+	assert.Equal(t, 1, counts["llm_provider_latency_seconds"])
+}

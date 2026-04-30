@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -108,25 +109,56 @@ type MeasuredFactory struct {
 // labelPrefix 가 빈 문자열이면 "llm" 사용. metric 이름은
 // "<prefix>_provider_latency_seconds" / "<prefix>_provider_call_total".
 //
-// 동일 registry 에 두 번 생성하면 panic — 하나의 process 에서 단일 factory 인스턴스 재사용 권장.
+// 동일 registry 에 두 번 호출돼도 idempotent — 기존 collector 가 있으면 재사용 (panic 회피).
+// 프로젝트 가이드 "NEVER panic in production code" 준수.
 func NewMeasuredFactory(registry *prometheus.Registry, labelPrefix string) *MeasuredFactory {
 	if labelPrefix == "" {
 		labelPrefix = "llm"
 	}
 	f := &MeasuredFactory{}
 	if registry != nil {
-		f.latencyHist = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		f.latencyHist = registerOrReuseHistogram(registry, prometheus.HistogramOpts{
 			Name:    labelPrefix + "_provider_latency_seconds",
 			Help:    "LLM provider call latency in seconds.",
 			Buckets: []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
 		}, []string{"provider", "status"})
-		f.callCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		f.callCounter = registerOrReuseCounter(registry, prometheus.CounterOpts{
 			Name: labelPrefix + "_provider_call_total",
 			Help: "LLM provider call counter labeled by provider/status.",
 		}, []string{"provider", "status"})
-		registry.MustRegister(f.latencyHist, f.callCounter)
 	}
 	return f
+}
+
+// registerOrReuseHistogram 은 collector 를 등록하거나, 이미 등록되어 있으면 기존 collector 를 반환합니다.
+// 등록이 다른 incompatible collector 와 충돌하면 panic — fail-fast (운영자가 metric 이름 충돌 즉시 인지).
+func registerOrReuseHistogram(registry *prometheus.Registry, opts prometheus.HistogramOpts, labels []string) *prometheus.HistogramVec {
+	hist := prometheus.NewHistogramVec(opts, labels)
+	if err := registry.Register(hist); err != nil {
+		var are prometheus.AlreadyRegisteredError
+		if errors.As(err, &are) {
+			if existing, ok := are.ExistingCollector.(*prometheus.HistogramVec); ok {
+				return existing
+			}
+		}
+		panic(err) // incompatible collector 충돌 — 운영자 개입 필요한 설정 오류
+	}
+	return hist
+}
+
+// registerOrReuseCounter — registerOrReuseHistogram 의 CounterVec 변형.
+func registerOrReuseCounter(registry *prometheus.Registry, opts prometheus.CounterOpts, labels []string) *prometheus.CounterVec {
+	counter := prometheus.NewCounterVec(opts, labels)
+	if err := registry.Register(counter); err != nil {
+		var are prometheus.AlreadyRegisteredError
+		if errors.As(err, &are) {
+			if existing, ok := are.ExistingCollector.(*prometheus.CounterVec); ok {
+				return existing
+			}
+		}
+		panic(err)
+	}
+	return counter
 }
 
 // Wrap returns a MeasuredProvider sharing this factory's collectors.

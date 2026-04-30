@@ -34,7 +34,10 @@ func WithPolicyLogger(log *logger.Logger) PolicyOption {
 // candidates 가 비어있어도 panic 없이 생성됩니다 — 호출 시 ErrCodeBadRequest.
 // policy 가 nil 이면 호출 시 ErrCodeBadRequest.
 func NewWithPolicy(p policy.Policy, candidates []llm.Provider, opts ...PolicyOption) *PolicyProvider {
-	pp := &PolicyProvider{policy: p, candidates: candidates}
+	// candidates 를 defensive copy — 호출자가 후속 mutation 해도 routing 동작 불변 보장
+	// (Policy 인터페이스 contract: goroutine-safe).
+	copied := append([]llm.Provider(nil), candidates...)
+	pp := &PolicyProvider{policy: p, candidates: copied}
 	for _, o := range opts {
 		o(pp)
 	}

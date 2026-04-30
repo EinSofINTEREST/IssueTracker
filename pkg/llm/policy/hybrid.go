@@ -59,12 +59,15 @@ func (p *Hybrid) Select(_ context.Context, req llm.Request, candidates []llm.Pro
 		caps := capabilityFor(p.caps, c, req)
 		costs[i] = caps.CostInputPer1M
 		if mp, ok := c.(*llm.MeasuredProvider); ok {
-			if l := mp.Stats().LatencyMs(); l > 0 {
-				latencies[i] = l
+			// Calls() > 0 으로 측정 여부 판정 — LatencyMs()==0 도 valid 측정값일 수 있음
+			// (sub-ms 호출이 ms 단위로 round 된 경우).
+			stats := mp.Stats()
+			if stats.Calls() > 0 {
+				latencies[i] = stats.LatencyMs()
 			} else {
 				latencies[i] = float64(caps.AvgLatencyMs)
 			}
-			failures[i] = mp.Stats().FailureRate()
+			failures[i] = stats.FailureRate()
 		} else {
 			latencies[i] = float64(caps.AvgLatencyMs)
 		}
