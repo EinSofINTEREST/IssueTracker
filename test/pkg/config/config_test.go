@@ -459,3 +459,52 @@ func TestLoadScheduler_InvalidBacklogCheckTimeout(t *testing.T) {
 		t.Fatal("SCHEDULER_BACKLOG_CHECK_TIMEOUT 가 duration 형식이 아니면 에러가 반환되어야 합니다")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadPathInfer (이슈 #173 단계 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestLoadPathInfer_DefaultValues(t *testing.T) {
+	t.Setenv("PATHINFER_MIN_SAMPLES", "")
+
+	cfg, err := config.LoadPathInfer("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("기본값 로드 실패: %v", err)
+	}
+	if cfg.MinSamples != 3 {
+		t.Errorf("MinSamples default: got %d, want 3", cfg.MinSamples)
+	}
+}
+
+func TestLoadPathInfer_OverrideViaEnv(t *testing.T) {
+	t.Setenv("PATHINFER_MIN_SAMPLES", "5")
+
+	cfg, err := config.LoadPathInfer("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("override 로드 실패: %v", err)
+	}
+	if cfg.MinSamples != 5 {
+		t.Errorf("MinSamples override: got %d, want 5", cfg.MinSamples)
+	}
+}
+
+func TestLoadPathInfer_InvalidNonInteger(t *testing.T) {
+	t.Setenv("PATHINFER_MIN_SAMPLES", "abc")
+
+	_, err := config.LoadPathInfer("/tmp/nonexistent-env-file.env")
+	if err == nil {
+		t.Fatal("PATHINFER_MIN_SAMPLES 가 정수 아니면 에러")
+	}
+}
+
+func TestLoadPathInfer_InvalidZeroOrNegative(t *testing.T) {
+	for _, v := range []string{"0", "-1"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("PATHINFER_MIN_SAMPLES", v)
+			_, err := config.LoadPathInfer("/tmp/nonexistent-env-file.env")
+			if err == nil {
+				t.Fatalf("PATHINFER_MIN_SAMPLES=%q 는 1 이상이어야 함", v)
+			}
+		})
+	}
+}
