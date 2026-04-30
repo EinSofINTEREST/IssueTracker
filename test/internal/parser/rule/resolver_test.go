@@ -3,6 +3,7 @@ package rule_test
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -63,20 +64,15 @@ func (r *fakeRepo) FindActiveCandidates(_ context.Context, host string, t storag
 
 func (r *fakeRepo) calls() int { return int(atomic.LoadInt64(&r.findActiveCalls)) }
 
-// sortByPathPatternLengthDesc 는 stable insertion sort — LENGTH(path_pattern) DESC.
-// postgres 의 ORDER BY LENGTH(path_pattern) DESC, version DESC 와 동일 동작.
+// sortByPathPatternLengthDesc 는 LENGTH(path_pattern) DESC, version DESC 정렬을 수행합니다.
+// postgres 의 ORDER BY LENGTH(path_pattern) DESC, version DESC 와 동일 동작 (PR #181 gemini 피드백).
 func sortByPathPatternLengthDesc(s []*storage.ParsingRuleRecord) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0; j-- {
-			ai, aj := s[j], s[j-1]
-			if len(ai.PathPattern) > len(aj.PathPattern) ||
-				(len(ai.PathPattern) == len(aj.PathPattern) && ai.Version > aj.Version) {
-				s[j], s[j-1] = s[j-1], s[j]
-			} else {
-				break
-			}
+	sort.SliceStable(s, func(i, j int) bool {
+		if len(s[i].PathPattern) != len(s[j].PathPattern) {
+			return len(s[i].PathPattern) > len(s[j].PathPattern)
 		}
-	}
+		return s[i].Version > s[j].Version
+	})
 }
 
 func samplePageRule(host string) *storage.ParsingRuleRecord {

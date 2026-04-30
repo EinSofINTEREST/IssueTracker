@@ -203,11 +203,9 @@ func (r *Resolver) compileRegex(pattern string) *compiledPattern {
 	if v, ok := r.regexCache.Load(pattern); ok {
 		return v.(*compiledPattern)
 	}
+	// regexp.Compile 은 에러 시 re=nil 반환 — 별도 nil 처리 불필요 (PR #181 gemini 피드백).
 	re, err := regexp.Compile(pattern)
 	cp := &compiledPattern{re: re, err: err}
-	if err != nil {
-		cp.re = nil
-	}
 	// LoadOrStore 로 race 시 첫 winner 의 결과를 보존 — 같은 패턴 두 goroutine 동시 컴파일도 안전.
 	actual, _ := r.regexCache.LoadOrStore(pattern, cp)
 	return actual.(*compiledPattern)
