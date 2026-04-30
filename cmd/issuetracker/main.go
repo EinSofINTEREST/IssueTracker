@@ -352,7 +352,8 @@ func verifyParsingRulesSeeded(ctx context.Context, resolver *rule.Resolver) erro
 		{"edition.cnn.com", storage.TargetTypeList},
 	}
 	for _, r := range required {
-		if _, err := resolver.Resolve(ctx, r.host, r.typ); err != nil {
+		// "/" path 로 catch-all (path_pattern='') 매칭 검증 — seed 된 host-only rule 확인 (이슈 #173).
+		if _, err := resolver.Resolve(ctx, r.host, "/", r.typ); err != nil {
 			return fmt.Errorf("missing rule for (%s, %s): %w", r.host, r.typ, err)
 		}
 	}

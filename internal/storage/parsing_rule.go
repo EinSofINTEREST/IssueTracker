@@ -131,8 +131,9 @@ type ParsingRuleRecord struct {
 	ID          int64
 	SourceName  string     // "naver" / "cnn"
 	HostPattern string     // URL host 매칭 (예: "n.news.naver.com")
+	PathPattern string     // URL path regex (RE2). "" 면 모든 path 매칭 (이슈 #173 단계 1).
 	TargetType  TargetType // "page" | "list"
-	Version     int        // 활성 row 안에서 같은 (source, host, type) 의 최신 버전
+	Version     int        // 활성 row 안에서 같은 (source, host, path, type) 의 최신 버전
 	Enabled     bool
 	Selectors   SelectorMap // JSONB — application 측 struct 로 직렬화
 	Description string
@@ -169,7 +170,20 @@ type ParsingRuleRepository interface {
 	// FindActive 는 host + target_type 에 매칭되는 활성 규칙을 반환합니다 (RuleResolver 핫패스).
 	// 같은 (host, type) 에 여러 활성 row 가 있다면 version DESC 순으로 첫 항목 반환.
 	// 매칭 없으면 ErrNotFound.
+	//
+	// Deprecated (이슈 #173): path_pattern 도입 후 후보 슬라이스를 한꺼번에 받아 application 측에서
+	// 매칭하는 FindActiveCandidates 사용 권장. 본 메소드는 후방 호환을 위해 유지 — 내부적으로
+	// FindActiveCandidates 의 첫 항목 (length DESC 정렬, '' 포함) 을 반환합니다.
 	FindActive(ctx context.Context, host string, targetType TargetType) (*ParsingRuleRecord, error)
+
+	// FindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 LENGTH(path_pattern) DESC,
+	// version DESC 정렬로 반환합니다 (이슈 #173 단계 1).
+	//
+	// Resolver 가 반환된 슬라이스를 application 측에서 URL path 와 regex 매칭 — 첫 매칭 rule 채택.
+	// path_pattern='' 인 row 는 길이 0 으로 가장 마지막에 위치 (catch-all).
+	//
+	// 매칭 없으면 빈 슬라이스 + nil 에러 (ErrNotFound 아님 — 호출자가 빈 슬라이스로 분기).
+	FindActiveCandidates(ctx context.Context, host string, targetType TargetType) ([]*ParsingRuleRecord, error)
 
 	// List 는 필터 조건에 맞는 규칙들을 반환합니다 (운영 대시보드용).
 	List(ctx context.Context, filter ParsingRuleFilter) ([]*ParsingRuleRecord, error)
