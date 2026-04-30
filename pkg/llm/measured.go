@@ -77,32 +77,56 @@ func (s *Stats) record(latencyMs float64, failed bool) {
 	s.mu.Unlock()
 }
 
-// NewMeasuredProvider wraps inner with latency + success metrics.
+// MeasuredFactory creates MeasuredProvider instances that share a single set of Prometheus collectors.
 //
-// registry 가 nil 이면 Prometheus 등록 skip — in-memory Stats 는 항상 동작.
-// labelPrefix 는 metric 이름 prefix (예: "llm" → "llm_provider_call_total" / "llm_provider_latency_seconds").
-func NewMeasuredProvider(inner Provider, registry *prometheus.Registry, labelPrefix string) *MeasuredProvider {
+// MeasuredFactory 는 동일 registry / labelPrefix 에 대해 collector 를 1회만 생성·등록하고,
+// 여러 provider 를 wrap 할 수 있는 factory 입니다 (PR #167 gemini 피드백 — collector 중복 등록 panic 해결).
+//
+// collector 는 (provider, status) label 로 구분하므로 단일 collector 인스턴스가 모든 wrapped
+// provider 의 metric 을 처리할 수 있습니다.
+type MeasuredFactory struct {
+	latencyHist *prometheus.HistogramVec
+	callCounter *prometheus.CounterVec
+}
+
+// NewMeasuredFactory returns a MeasuredFactory ready to Wrap providers.
+//
+// registry 가 nil 이면 collector 등록 skip — Wrap 으로 만들어진 MeasuredProvider 는 in-memory
+// Stats 만 동작.
+//
+// labelPrefix 가 빈 문자열이면 "llm" 사용. metric 이름은
+// "<prefix>_provider_latency_seconds" / "<prefix>_provider_call_total".
+//
+// 동일 registry 에 두 번 생성하면 panic — 하나의 process 에서 단일 factory 인스턴스 재사용 권장.
+func NewMeasuredFactory(registry *prometheus.Registry, labelPrefix string) *MeasuredFactory {
 	if labelPrefix == "" {
 		labelPrefix = "llm"
 	}
-	mp := &MeasuredProvider{
-		inner: inner,
-		name:  inner.Name(),
-		stats: &Stats{},
-	}
+	f := &MeasuredFactory{}
 	if registry != nil {
-		mp.latencyHist = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		f.latencyHist = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    labelPrefix + "_provider_latency_seconds",
 			Help:    "LLM provider call latency in seconds.",
 			Buckets: []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
 		}, []string{"provider", "status"})
-		mp.callCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		f.callCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: labelPrefix + "_provider_call_total",
 			Help: "LLM provider call counter labeled by provider/status.",
 		}, []string{"provider", "status"})
-		registry.MustRegister(mp.latencyHist, mp.callCounter)
+		registry.MustRegister(f.latencyHist, f.callCounter)
 	}
-	return mp
+	return f
+}
+
+// Wrap returns a MeasuredProvider sharing this factory's collectors.
+func (f *MeasuredFactory) Wrap(inner Provider) *MeasuredProvider {
+	return &MeasuredProvider{
+		inner:       inner,
+		name:        inner.Name(),
+		stats:       &Stats{},
+		latencyHist: f.latencyHist,
+		callCounter: f.callCounter,
+	}
 }
 
 // Name returns the wrapped provider's name (transparent wrapping).

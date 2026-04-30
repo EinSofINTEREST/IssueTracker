@@ -37,7 +37,7 @@ func (s *stubProvider) Generate(ctx context.Context, _ llm.Request) (*llm.Respon
 
 func TestMeasuredProvider_RecordsLatencyAndCalls(t *testing.T) {
 	stub := &stubProvider{name: "stub", latency: 5 * time.Millisecond}
-	mp := llm.NewMeasuredProvider(stub, nil, "test")
+	mp := llm.NewMeasuredFactory(nil, "test").Wrap(stub)
 
 	for i := 0; i < 3; i++ {
 		_, err := mp.Generate(context.Background(), llm.Request{})
@@ -53,7 +53,7 @@ func TestMeasuredProvider_RecordsLatencyAndCalls(t *testing.T) {
 
 func TestMeasuredProvider_RecordsFailures(t *testing.T) {
 	stub := &stubProvider{name: "stub", latency: time.Millisecond, failTimes: 2}
-	mp := llm.NewMeasuredProvider(stub, nil, "test")
+	mp := llm.NewMeasuredFactory(nil, "test").Wrap(stub)
 
 	for i := 0; i < 5; i++ {
 		_, _ = mp.Generate(context.Background(), llm.Request{})
@@ -68,7 +68,7 @@ func TestMeasuredProvider_RecordsFailures(t *testing.T) {
 func TestMeasuredProvider_RegistersPrometheusMetrics(t *testing.T) {
 	stub := &stubProvider{name: "stub", latency: time.Millisecond}
 	registry := prometheus.NewRegistry()
-	mp := llm.NewMeasuredProvider(stub, registry, "llm")
+	mp := llm.NewMeasuredFactory(registry, "llm").Wrap(stub)
 
 	_, err := mp.Generate(context.Background(), llm.Request{})
 	assert.NoError(t, err)

@@ -75,7 +75,7 @@ func TestLatencyWeighted_OrdersByLatency(t *testing.T) {
 func TestLatencyWeighted_PrefersMeasuredEMAOverStatic(t *testing.T) {
 	// MeasuredProvider 가 실제 5ms latency 를 EMA 로 측정하면 static 200ms 무시.
 	stub := &stubLatencyProvider{name: "slow", latency: 5 * time.Millisecond}
-	mp := llm.NewMeasuredProvider(stub, nil, "test")
+	mp := llm.NewMeasuredFactory(nil, "test").Wrap(stub)
 
 	// 한 번 호출하여 EMA 값 채움.
 	_, _ = mp.Generate(context.Background(), llm.Request{})
