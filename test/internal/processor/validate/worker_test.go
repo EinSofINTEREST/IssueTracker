@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"issuetracker/internal/crawler/core"
+	crawlerWorker "issuetracker/internal/crawler/worker"
 	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
@@ -154,7 +155,7 @@ func makeProcessingMessage(content *core.Content, retryCount int) *queue.Message
 }
 
 func newWorker(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService) *validate.Worker {
-	return validate.NewWorker(consumer, producer, contentSvc, 1, config.DefaultValidateConfig())
+	return validate.NewWorker(consumer, producer, contentSvc, crawlerWorker.NoopProcessingLock{}, 1, config.DefaultValidateConfig())
 }
 
 func runWorker(t *testing.T, consumer *mockConsumer, w *validate.Worker, msg *queue.Message) {

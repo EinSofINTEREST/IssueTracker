@@ -29,6 +29,7 @@ import (
 	"issuetracker/internal/crawler/domain/general"
 	"issuetracker/internal/crawler/parser"
 	"issuetracker/internal/crawler/parser/rule"
+	crawlerWorker "issuetracker/internal/crawler/worker"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
@@ -52,6 +53,7 @@ type ParserWorker struct {
 	contentSvc  service.ContentService
 	publisher   general.JobPublisher
 	parser      *rule.Parser
+	procLock    crawlerWorker.ProcessingLock // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
 	workerCount int
 	log         *logger.Logger
 
@@ -61,9 +63,13 @@ type ParserWorker struct {
 // NewParserWorker 는 ParserWorker 를 생성합니다.
 //
 //   - publisher 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 건너뜀 (이런 모드는 보통 운영 금지)
+//   - procLock 은 nil 허용 — nil 이면 NoopProcessingLock 으로 fallback (단일 인스턴스 환경에서 dedup 비활성)
 //
 // 이슈 #161 (도메인 중립화) 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
 // 결과는 contentSvc.Store 로 contents 단일 테이블에 저장됩니다.
+//
+// 이슈 #178: ProcessingLock 으로 fetcher / parser / validator 가 동일 인터페이스로 단계별 dedup.
+// parser 단계는 raw.URL 단위로 acquire — Kafka rebalance 시 같은 raw 가 두 worker 에 도달해도 1회만 파싱.
 func NewParserWorker(
 	consumer *queue.KafkaConsumer,
 	producer queue.Producer,
@@ -71,11 +77,15 @@ func NewParserWorker(
 	contentSvc service.ContentService,
 	publisher general.JobPublisher,
 	parser *rule.Parser,
+	procLock crawlerWorker.ProcessingLock,
 	workerCount int,
 	log *logger.Logger,
 ) *ParserWorker {
 	if workerCount <= 0 {
 		workerCount = 1
+	}
+	if procLock == nil {
+		procLock = crawlerWorker.NoopProcessingLock{}
 	}
 	return &ParserWorker{
 		consumer:    consumer,
@@ -84,6 +94,7 @@ func NewParserWorker(
 		contentSvc:  contentSvc,
 		publisher:   publisher,
 		parser:      parser,
+		procLock:    procLock,
 		workerCount: workerCount,
 		log:         log,
 	}
@@ -173,6 +184,27 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 		"raw_id": ref.ID,
 		"url":    ref.URL,
 	})
+
+	// 이슈 #178: parser 단계 ProcessingLock — 같은 URL 의 동시 파싱을 차단.
+	// Kafka rebalance / 재배달 시 같은 raw 가 두 parser worker 에 도달해도 1회만 처리.
+	// ref.URL 은 fetcher 가 정규화한 URL — Ingestion Lock 키와 같은 정규형 사용.
+	procKey := crawlerWorker.ProcessingKey(crawlerWorker.StageParser, ref.URL)
+	acquired, lockErr := w.procLock.Acquire(ctx, procKey)
+	if lockErr != nil {
+		mlog.WithError(lockErr).Warn("failed to acquire parser processing lock, proceeding without lock")
+	} else if !acquired {
+		mlog.Debug("parser processing lock already held by another worker, skipping")
+		// 다른 parser worker 가 처리 중 — commit 없이 종료. 처리 담당 worker 의 commit 에 의존.
+		return nil
+	} else {
+		defer func() {
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if releaseErr := w.procLock.Release(releaseCtx, procKey); releaseErr != nil {
+				mlog.WithError(releaseErr).Warn("failed to release parser processing lock")
+			}
+		}()
+	}
 
 	raw, err := w.rawSvc.GetByID(ctx, ref.ID)
 	if err != nil {

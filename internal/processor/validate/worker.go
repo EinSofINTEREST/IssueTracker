@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
+	crawlerWorker "issuetracker/internal/crawler/worker"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -33,6 +34,7 @@ type Worker struct {
 	consumer    queue.Consumer
 	producer    queue.Producer
 	contentSvc  service.ContentService
+	procLock    crawlerWorker.ProcessingLock // nil 허용 → NoopProcessingLock 으로 fallback (이슈 #178)
 	cfg         config.ValidateConfig
 	workerCount int
 	jobs        chan *queue.Message
@@ -43,20 +45,29 @@ type Worker struct {
 
 // NewWorker는 새로운 Worker를 생성합니다.
 // workerCount는 동시에 실행되는 처리 goroutine 수를 결정합니다.
+// procLock 은 nil 허용 — nil 이면 NoopProcessingLock 으로 fallback (단일 인스턴스 환경에서 dedup 비활성).
 //
 // validator 결과 (passed/rejected) 는 contentSvc.UpdateValidationStatus 로 contents 테이블에
 // 기록됩니다 (이슈 #135 / #161 — news_articles 제거 후 contents 로 일원화).
+//
+// 이슈 #178: ProcessingLock 으로 fetcher / parser / validator 가 동일 인터페이스로 단계별 dedup.
+// validator 단계는 ContentRef.URL 단위로 acquire — Kafka rebalance 시 같은 ref 가 두 worker 에 도달해도 1회만 검증.
 func NewWorker(
 	consumer queue.Consumer,
 	producer queue.Producer,
 	contentSvc service.ContentService,
+	procLock crawlerWorker.ProcessingLock,
 	workerCount int,
 	cfg config.ValidateConfig,
 ) *Worker {
+	if procLock == nil {
+		procLock = crawlerWorker.NoopProcessingLock{}
+	}
 	return &Worker{
 		consumer:    consumer,
 		producer:    producer,
 		contentSvc:  contentSvc,
+		procLock:    procLock,
 		cfg:         cfg,
 		workerCount: workerCount,
 		jobs:        make(chan *queue.Message, workerCount*2),
@@ -170,6 +181,35 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 			return fmt.Errorf("send to dlq (ref unmarshal): %w", dlqErr)
 		}
 		return w.commit(ctx, msg)
+	}
+
+	// 이슈 #178: validator 단계 ProcessingLock — 같은 ref.URL 의 동시 검증을 차단.
+	// Kafka rebalance / 재배달 시 같은 ref 가 두 validator 에 도달해도 1회만 처리.
+	procKey := crawlerWorker.ProcessingKey(crawlerWorker.StageValidator, ref.URL)
+	acquired, lockErr := w.procLock.Acquire(ctx, procKey)
+	if lockErr != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+		}).WithError(lockErr).Warn("failed to acquire validator processing lock, proceeding without lock")
+	} else if !acquired {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+		}).Debug("validator processing lock already held by another worker, skipping")
+		// 다른 validator 가 처리 중 — commit 없이 종료. 처리 담당 worker 의 commit 에 의존.
+		return nil
+	} else {
+		defer func() {
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if releaseErr := w.procLock.Release(releaseCtx, procKey); releaseErr != nil {
+				log.WithFields(map[string]interface{}{
+					"job_id": pm.ID,
+					"ref_id": ref.ID,
+				}).WithError(releaseErr).Warn("failed to release validator processing lock")
+			}
+		}()
 	}
 
 	// DB에서 Content 조회 (content_bodies, content_meta 포함)
