@@ -45,8 +45,8 @@ func TestMeasuredProvider_RecordsLatencyAndCalls(t *testing.T) {
 	}
 
 	stats := mp.Stats()
-	assert.Equal(t, uint64(3), stats.Calls.Load())
-	assert.Equal(t, uint64(0), stats.Failures.Load())
+	assert.Equal(t, uint64(3), stats.Calls())
+	assert.Equal(t, uint64(0), stats.Failures())
 	assert.Greater(t, stats.LatencyMs(), 0.0)
 	assert.Equal(t, 0.0, stats.FailureRate())
 }
@@ -60,8 +60,8 @@ func TestMeasuredProvider_RecordsFailures(t *testing.T) {
 	}
 
 	stats := mp.Stats()
-	assert.Equal(t, uint64(5), stats.Calls.Load())
-	assert.Equal(t, uint64(2), stats.Failures.Load())
+	assert.Equal(t, uint64(5), stats.Calls())
+	assert.Equal(t, uint64(2), stats.Failures())
 	assert.InDelta(t, 0.4, stats.FailureRate(), 0.001)
 }
 

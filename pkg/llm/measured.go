@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,22 +29,31 @@ type MeasuredProvider struct {
 // Stats holds in-memory rolling metrics for a wrapped provider.
 //
 // Stats 는 wrap 된 provider 의 in-memory rolling metric 입니다.
-// LatencyMs 는 EMA (alpha 가중치) 로, Calls / Failures 는 atomic counter 로 누적됩니다.
+// 모든 필드는 단일 mu 보호 — calls/failures/latency 의 일관된 snapshot 보장 (PR #167 gemini 피드백).
 type Stats struct {
-	// Calls 는 누적 호출 수 (성공 + 실패).
-	Calls atomic.Uint64
-
-	// Failures 는 누적 실패 호출 수.
-	Failures atomic.Uint64
-
-	// latency EMA — float64 직접 atomic 어렵기에 mu 보호.
 	mu        sync.RWMutex
+	calls     uint64
+	failures  uint64
 	latencyMs float64
 }
 
 // LatencyEMAAlpha: EMA 가중치 (0~1). 0.2 = 새 측정치 20%, 기존 EMA 80%.
 // 작을수록 안정적, 클수록 최근 변화에 빠르게 반응. 0.2 는 일반적인 운영 default.
 const LatencyEMAAlpha = 0.2
+
+// Calls returns the cumulative call count.
+func (s *Stats) Calls() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.calls
+}
+
+// Failures returns the cumulative failure count.
+func (s *Stats) Failures() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.failures
+}
 
 // LatencyMs returns the current EMA latency in milliseconds (0 if no calls yet).
 func (s *Stats) LatencyMs() float64 {
@@ -55,26 +63,29 @@ func (s *Stats) LatencyMs() float64 {
 }
 
 // FailureRate returns the cumulative failure ratio in [0, 1] (0 if no calls yet).
+//
+// calls / failures 를 단일 lock 안에서 read 하여 race-free snapshot 보장.
 func (s *Stats) FailureRate() float64 {
-	calls := s.Calls.Load()
-	if calls == 0 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.calls == 0 {
 		return 0
 	}
-	return float64(s.Failures.Load()) / float64(calls)
+	return float64(s.failures) / float64(s.calls)
 }
 
 func (s *Stats) record(latencyMs float64, failed bool) {
-	s.Calls.Add(1)
-	if failed {
-		s.Failures.Add(1)
-	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if failed {
+		s.failures++
+	}
 	if s.latencyMs == 0 {
 		s.latencyMs = latencyMs
 	} else {
 		s.latencyMs = LatencyEMAAlpha*latencyMs + (1-LatencyEMAAlpha)*s.latencyMs
 	}
-	s.mu.Unlock()
 }
 
 // MeasuredFactory creates MeasuredProvider instances that share a single set of Prometheus collectors.
