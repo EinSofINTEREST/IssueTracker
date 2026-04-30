@@ -80,7 +80,7 @@ func Serve(ctx context.Context, addr string, registry *prometheus.Registry, log 
 
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.WithError(err).Warn("metrics endpoint shutdown error")
@@ -90,7 +90,7 @@ func Serve(ctx context.Context, addr string, registry *prometheus.Registry, log 
 	}()
 
 	return func() error {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}, nil
