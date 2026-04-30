@@ -29,6 +29,7 @@ import (
 	"issuetracker/internal/crawler/domain/general"
 	"issuetracker/internal/crawler/parser"
 	"issuetracker/internal/crawler/parser/rule"
+	"issuetracker/internal/crawler/parser/rule/llmgen"
 	crawlerWorker "issuetracker/internal/crawler/worker"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
@@ -54,6 +55,7 @@ type ParserWorker struct {
 	publisher   general.JobPublisher
 	parser      *rule.Parser
 	procLock    crawlerWorker.ProcessingLock // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
+	llmGen      *llmgen.Generator            // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 	workerCount int
 	log         *logger.Logger
 
@@ -64,6 +66,7 @@ type ParserWorker struct {
 //
 //   - publisher 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 건너뜀 (이런 모드는 보통 운영 금지)
 //   - procLock 은 nil 허용 — nil 이면 NoopProcessingLock 으로 fallback (단일 인스턴스 환경에서 dedup 비활성)
+//   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성, 이슈 #149)
 //
 // 이슈 #161 (도메인 중립화) 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
 // 결과는 contentSvc.Store 로 contents 단일 테이블에 저장됩니다.
@@ -78,6 +81,7 @@ func NewParserWorker(
 	publisher general.JobPublisher,
 	parser *rule.Parser,
 	procLock crawlerWorker.ProcessingLock,
+	llmGen *llmgen.Generator,
 	workerCount int,
 	log *logger.Logger,
 ) *ParserWorker {
@@ -95,6 +99,7 @@ func NewParserWorker(
 		publisher:   publisher,
 		parser:      parser,
 		procLock:    procLock,
+		llmGen:      llmGen,
 		workerCount: workerCount,
 		log:         log,
 	}
@@ -243,7 +248,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 
 	items, err := w.parser.ParseLinks(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, rawID, "parse_links", err, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_links", storage.TargetTypeList, err, mlog)
 	}
 	if len(items) == 0 {
 		mlog.Debug("no article links found in category page")
@@ -275,7 +280,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 
 	page, err := w.parser.ParsePage(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, rawID, "parse_page", err, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, mlog)
 	}
 
 	content := general.ConvertPage(page, raw)
@@ -289,18 +294,27 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 
 // handleRuleError 는 rule.Error (parse 실패) 와 그 외 에러를 구분합니다.
 //
-//   - rule.Error → raw 잔존 + commit (warn 로그) — LLM 재처리 윈도우
+//   - rule.ErrNoRule + llmGen 활성화 → LLM rule generator 비동기 enqueue (이슈 #149) + raw 잔존 + commit
+//   - 기타 rule.Error → raw 잔존 + commit (warn 로그) — 운영자 review 윈도우
 //   - 기타 → 호출자에게 error 전파 → commit 안 함 → 재시도
-func (w *ParserWorker) handleRuleError(ctx context.Context, rawID, stage string, err error, mlog *logger.Logger) error {
-	_ = ctx // ctx 는 향후 LLM 비동기 enqueue 시 활용 (이슈 #149)
+func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
 		mlog.WithFields(map[string]interface{}{
-			"stage":      stage,
-			"error_code": string(rerr.Code),
+			"stage":       stage,
+			"error_code":  string(rerr.Code),
+			"target_type": string(targetType),
 		}).WithError(err).Warn("rule-based parse failed, raw retained for LLM retry")
+
+		// ErrNoRule + llmGen 활성화 → LLM 자동 rule 생성 비동기 트리거 (이슈 #149)
+		// 다른 rule.Error (parse_failure / empty_selector) 는 stale rule 진단 — 운영자 review 영역.
+		if rerr.Code == rule.ErrNoRule && w.llmGen != nil {
+			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw)
+		}
+
+		_ = rawID // 본 시그니처에선 rawID 직접 사용 안 함, 향후 audit log 에서 활용
 		// raw 는 의도적으로 잔존 — cleanup cron 이 TTL (default 1h) 후 정리
-		// 또는 이슈 #149 LLM 자동 rule 생성 후 reprocess 가능
+		// 또는 LLM 자동 rule 생성 + 운영자 enable=true flip 후 reprocess 가능
 		return nil
 	}
 	return fmt.Errorf("%s: %w", stage, err)

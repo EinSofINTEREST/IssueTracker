@@ -13,6 +13,7 @@ import (
 	"issuetracker/internal/crawler/domain/general/sources/us"
 	"issuetracker/internal/crawler/handler"
 	"issuetracker/internal/crawler/parser/rule"
+	"issuetracker/internal/crawler/parser/rule/llmgen"
 	crawlerWorker "issuetracker/internal/crawler/worker"
 	parserWorker "issuetracker/internal/parser/worker"
 	"issuetracker/internal/processor/validate"
@@ -23,6 +24,10 @@ import (
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
+	"issuetracker/pkg/llm"
+	"issuetracker/pkg/llm/chain"
+	"issuetracker/pkg/llm/policy"
+	_ "issuetracker/pkg/llm/providers"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/metrics"
 	"issuetracker/pkg/queue"
@@ -203,6 +208,14 @@ func main() {
 		"low_workers":    managerCfg.Low.WorkerCount,
 	}).Info("crawler pool manager started")
 
+	// ── LLM rule generator (이슈 #149) ──────────────────────────────────────────
+	// rule.ErrNoRule (host 매칭 활성 규칙 없음) fallback 으로 LLM 이 selector 를 자동 생성합니다.
+	// LLM_ENABLED=false 또는 API key 누락 시 nil — parser worker 는 ErrNoRule 시 raw 만 잔존.
+	//
+	// **본 PR scope**: FixedOrder("gemini") 정책으로 Gemini 단일 provider 사용 (1000회/일 무료 한도 내 검증).
+	// 후속 PR (이슈 TBD) 에서 chain (gemini → openai → anthropic) 으로 정책 확장.
+	llmGen := buildLLMGenerator(parsingRuleRepo, ruleResolver, log)
+
 	// ── Parser worker (이슈 #134) ──────────────────────────────────────────────
 	// fetcher 와 분리된 별도 consumer group (issuetracker-parsers) 으로 동작 — 인스턴스 수 독립 스케일.
 	// TopicFetched 의 RawContentRef 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제.
@@ -218,6 +231,7 @@ func main() {
 		jobPublisher,
 		ruleParser,
 		procLock, // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
+		llmGen,
 		parserWorkerCount,
 		log,
 	)
@@ -324,12 +338,66 @@ func main() {
 	if err := pw.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during parser worker shutdown")
 	}
+	// llmGen.Stop 은 parser worker 정지 후 호출 — 새 Enqueue source 가 차단된 시점에
+	// in-flight LLM 호출 완료 대기 (graceful shutdown, 이슈 #149 gemini 피드백).
+	if llmGen != nil {
+		llmGen.Stop(shutdownCtx)
+	}
 	cleaner.Stop()
 	if err := validateWorker.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during validate worker shutdown")
 	}
 
 	log.Info("shutdown completed")
+}
+
+// buildLLMGenerator 는 LLMConfig 에 따라 llmgen.Generator 를 생성합니다 (이슈 #149).
+//
+// 반환값 nil 은 LLM auto-rule 비활성을 의미 — 호출자 (NewParserWorker) 가 nil 허용:
+//   - LLM_ENABLED=false → 비활성
+//   - API key 부재 → 비활성 + warn 로그 (운영자가 누락 인지하도록)
+//   - provider 생성 실패 → 비활성 + warn 로그
+//
+// fail-fast 가 아닌 graceful degrade 정책 — LLM 부재 시에도 기존 host 의 정상 파싱은 유지되고,
+// 새 host 는 단순히 raw 잔존 상태로 남음 (cleanup cron 이 TTL 후 정리).
+//
+// **본 PR scope**: FixedOrder(cfg.Provider) 정책으로 단일 provider 사용. 후속 PR 에서 chain 확장.
+func buildLLMGenerator(repo storage.ParsingRuleRepository, resolver *rule.Resolver, log *logger.Logger) *llmgen.Generator {
+	cfg, err := config.LoadLLM()
+	if err != nil {
+		log.WithError(err).Warn("failed to load LLM config, llmgen disabled")
+		return nil
+	}
+	if !cfg.Enabled {
+		log.Info("LLM rule generator disabled (LLM_ENABLED=false)")
+		return nil
+	}
+	if cfg.APIKey == "" {
+		log.WithField("provider", cfg.Provider).Warn("LLM API key missing, llmgen disabled (set GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY)")
+		return nil
+	}
+
+	provider, err := llm.New(llm.Config{
+		Provider: cfg.Provider,
+		APIKey:   cfg.APIKey,
+		Model:    cfg.Model,
+		Timeout:  cfg.Timeout,
+	})
+	if err != nil {
+		log.WithError(err).WithField("provider", cfg.Provider).Warn("failed to construct LLM provider, llmgen disabled")
+		return nil
+	}
+
+	pol := policy.NewFixedOrder(cfg.Provider)
+	composed := chain.NewWithPolicy(pol, []llm.Provider{provider}, chain.WithPolicyLogger(log))
+
+	log.WithFields(map[string]interface{}{
+		"provider": cfg.Provider,
+		"model":    cfg.Model,
+		"timeout":  cfg.Timeout.String(),
+	}).Info("LLM rule generator enabled (FixedOrder policy — see issue #149 follow-up for chain expansion)")
+
+	return llmgen.New(composed, repo, resolver, log)
 }
 
 // verifyParsingRulesSeeded 는 본 PR 이 등록할 모든 사이트의 (host, target_type) 페어가
