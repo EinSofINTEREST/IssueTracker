@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
@@ -32,16 +33,27 @@ func NewParsingRuleRepository(pool *pgxpool.Pool, log *logger.Logger) storage.Pa
 
 const sqlInsertParsingRule = `
 INSERT INTO parsing_rules (
-  source_name, host_pattern, target_type, version, enabled, selectors, description
+  source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, description
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7
+  $1, $2, $3, $4, $5, $6, $7, $8
 )
 RETURNING id, created_at, updated_at
 `
 
-// Insert 는 새 규칙을 저장합니다. 자연키 (source_name, host_pattern, target_type, version) 충돌 시
-// storage.ErrDuplicate 를 반환합니다. 성공 시 r.ID / CreatedAt / UpdatedAt 가 채워집니다.
+// Insert 는 새 규칙을 저장합니다. 자연키 (source_name, host_pattern, path_pattern, target_type, version)
+// 충돌 시 storage.ErrDuplicate 를 반환합니다.
+//
+// path_pattern 이 비어있지 않으면 RE2 컴파일 검증 — 실패 시 storage.ErrInvalid (이슈 #173).
+// DB write 전 마지막 방어선 — Resolver 가 매 호출마다 컴파일 실패한 패턴을 스킵하도록 두기보다,
+// INSERT 시점에 거부하는 것이 운영 가시성 ↑ + DB 에 잘못된 row 진입 차단.
+//
+// 성공 시 r.ID / CreatedAt / UpdatedAt 가 채워집니다.
 func (r *pgParsingRuleRepository) Insert(ctx context.Context, rec *storage.ParsingRuleRecord) error {
+	if rec.PathPattern != "" {
+		if _, reErr := regexp.Compile(rec.PathPattern); reErr != nil {
+			return fmt.Errorf("%w: path_pattern %q is not a valid regex: %v", storage.ErrInvalid, rec.PathPattern, reErr)
+		}
+	}
 	selectors, err := json.Marshal(rec.Selectors)
 	if err != nil {
 		return fmt.Errorf("marshal selectors: %w", err)
@@ -50,7 +62,7 @@ func (r *pgParsingRuleRepository) Insert(ctx context.Context, rec *storage.Parsi
 		rec.Version = 1
 	}
 	row := r.pool.QueryRow(ctx, sqlInsertParsingRule,
-		rec.SourceName, rec.HostPattern, string(rec.TargetType), rec.Version,
+		rec.SourceName, rec.HostPattern, rec.PathPattern, string(rec.TargetType), rec.Version,
 		rec.Enabled, selectors, rec.Description,
 	)
 	if err := row.Scan(&rec.ID, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
@@ -70,7 +82,7 @@ WHERE id = $1
 RETURNING updated_at
 `
 
-// Update 는 ID 로 규칙을 갱신합니다. 자연키 (source/host/type/version) 는 변경 불가 —
+// Update 는 ID 로 규칙을 갱신합니다. 자연키 (source/host/path/type/version) 는 변경 불가 —
 // 규칙 진화는 새 row 를 INSERT 후 enabled flip 으로 표현 권장.
 func (r *pgParsingRuleRepository) Update(ctx context.Context, rec *storage.ParsingRuleRecord) error {
 	selectors, err := json.Marshal(rec.Selectors)
@@ -88,7 +100,7 @@ func (r *pgParsingRuleRepository) Update(ctx context.Context, rec *storage.Parsi
 }
 
 const sqlGetParsingRuleByID = `
-SELECT id, source_name, host_pattern, target_type, version, enabled, selectors, description, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, description, created_at, updated_at
 FROM parsing_rules
 WHERE id = $1
 `
@@ -106,28 +118,59 @@ func (r *pgParsingRuleRepository) GetByID(ctx context.Context, id int64) (*stora
 	return rec, nil
 }
 
-const sqlFindActiveParsingRule = `
-SELECT id, source_name, host_pattern, target_type, version, enabled, selectors, description, created_at, updated_at
+// sqlFindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 후보 슬라이스로 반환합니다 (이슈 #173).
+//
+// 정렬:
+//   - LENGTH(path_pattern) DESC : 더 구체적인 (긴) regex 패턴 우선 (path_pattern=” 은 길이 0 으로 마지막)
+//   - version DESC             : 같은 패턴 안에서 최신 버전 우선
+const sqlFindActiveCandidates = `
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, description, created_at, updated_at
 FROM parsing_rules
 WHERE host_pattern = $1
   AND target_type  = $2
   AND enabled      = TRUE
-ORDER BY version DESC
-LIMIT 1
+ORDER BY LENGTH(path_pattern) DESC, version DESC
 `
 
-// FindActive 는 host + target_type 매칭 활성 규칙을 반환합니다 (RuleResolver 핫패스).
-// 같은 (host, type) 에 여러 활성 row 가 있다면 version DESC 순으로 첫 항목.
+// FindActive 는 host + target_type 매칭 활성 규칙 1건을 반환합니다 (후방 호환).
+//
+// Deprecated (이슈 #173): path_pattern 도입 후 후보 슬라이스를 받아 application 측에서 path 매칭하는
+// FindActiveCandidates 사용 권장. 본 메소드는 호출자 호환을 위해 유지 — 내부적으로 후보 슬라이스의
+// 첫 항목 (가장 구체적 또는 최신) 을 반환. ErrNotFound 시 storage.ErrNotFound.
 func (r *pgParsingRuleRepository) FindActive(ctx context.Context, host string, targetType storage.TargetType) (*storage.ParsingRuleRecord, error) {
-	row := r.pool.QueryRow(ctx, sqlFindActiveParsingRule, host, string(targetType))
-	rec, err := scanParsingRule(row)
+	candidates, err := r.FindActiveCandidates(ctx, host, targetType)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, storage.ErrNotFound
-		}
-		return nil, fmt.Errorf("find active parsing rule (%s, %s): %w", host, targetType, err)
+		return nil, err
 	}
-	return rec, nil
+	if len(candidates) == 0 {
+		return nil, storage.ErrNotFound
+	}
+	return candidates[0], nil
+}
+
+// FindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 LENGTH(path_pattern) DESC,
+// version DESC 정렬로 반환합니다 (이슈 #173).
+//
+// 매칭 없으면 빈 슬라이스 + nil 에러 (호출자가 빈 슬라이스로 분기).
+func (r *pgParsingRuleRepository) FindActiveCandidates(ctx context.Context, host string, targetType storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+	rows, err := r.pool.Query(ctx, sqlFindActiveCandidates, host, string(targetType))
+	if err != nil {
+		return nil, fmt.Errorf("find active candidates (%s, %s): %w", host, targetType, err)
+	}
+	defer rows.Close()
+
+	var out []*storage.ParsingRuleRecord
+	for rows.Next() {
+		rec, scanErr := scanParsingRule(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan candidate: %w", scanErr)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate candidates: %w", err)
+	}
+	return out, nil
 }
 
 // List 는 필터 조건에 맞는 규칙들을 반환합니다.
@@ -138,7 +181,7 @@ func (r *pgParsingRuleRepository) List(ctx context.Context, f storage.ParsingRul
 	}
 
 	query := `
-SELECT id, source_name, host_pattern, target_type, version, enabled, selectors, description, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, description, created_at, updated_at
 FROM parsing_rules
 WHERE 1=1`
 	args := make([]any, 0, 4)
@@ -203,7 +246,7 @@ func scanParsingRule(s scanner) (*storage.ParsingRuleRecord, error) {
 	var selectorsRaw []byte
 	var targetType string
 	if err := s.Scan(
-		&rec.ID, &rec.SourceName, &rec.HostPattern, &targetType, &rec.Version,
+		&rec.ID, &rec.SourceName, &rec.HostPattern, &rec.PathPattern, &targetType, &rec.Version,
 		&rec.Enabled, &selectorsRaw, &rec.Description, &rec.CreatedAt, &rec.UpdatedAt,
 	); err != nil {
 		return nil, err
