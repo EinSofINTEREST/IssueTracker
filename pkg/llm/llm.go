@@ -66,7 +66,28 @@ type Request struct {
 
 	// MaxTokens 는 응답 생성 시 최대 토큰 수. 0 이면 provider default.
 	MaxTokens int
+
+	// TaskHint 는 routing policy 가 작업 특성별로 적합한 provider 를 선택할 때 사용하는 hint 입니다 (이슈 #144).
+	// 빈 문자열이면 policy 기본 동작. 표준 값은 TaskHint* 상수 참고.
+	//
+	// TaskHint helps routing policies pick the most suitable provider per task type.
+	TaskHint string
 }
+
+// 표준 TaskHint 값. policy 가 호환되는 hint 면 활용, 그 외는 무시 (default 동작).
+const (
+	// TaskHintSummary: 짧은 요약 — 저렴/빠른 모델 우선.
+	TaskHintSummary = "summary"
+
+	// TaskHintReasoning: 복잡 추론 / 다단계 분석 — 큰 모델 우선.
+	TaskHintReasoning = "reasoning"
+
+	// TaskHintJSON: 구조화 JSON 응답 필요 — JSON mode / function calling 강한 모델 우선.
+	TaskHintJSON = "json"
+
+	// TaskHintLargeContext: 큰 입력 (수십~수백k tokens) — context window 큰 모델 우선.
+	TaskHintLargeContext = "large_context"
+)
 
 // Response 는 LLM 응답입니다.
 //
