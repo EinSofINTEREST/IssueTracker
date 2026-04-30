@@ -11,6 +11,8 @@ package metrics
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -37,14 +39,19 @@ func NewRegistry() *prometheus.Registry {
 
 // Serve 는 별도 goroutine 으로 /metrics endpoint 를 노출합니다 (non-blocking).
 //
-// addr 가 빈 문자열이면 endpoint 비활성화 — nil 반환 후 종료. 운영 환경별 metric 노출 토글에 사용.
-// ctx cancel 시 graceful shutdown (shutdownTimeout 내 in-flight scrape 마무리).
+// addr 가 빈 문자열이면 endpoint 비활성화 — (noop stop, nil) 반환 후 종료. 운영 환경별 metric
+// 노출 토글에 사용.
 //
-// 반환된 함수는 명시적 stop 이 필요할 때 호출 — 일반적으로 ctx cancel 만으로 충분합니다.
-func Serve(ctx context.Context, addr string, registry *prometheus.Registry, log *logger.Logger) (stop func() error) {
+// **fail-fast 정책 (PR #166 CodeRabbit 피드백)**: bind/listen 실패는 호출 시점에 동기 검출되어
+// error 로 반환됩니다 — 포트 충돌 등으로 metric 이 silent 누락되지 않도록 caller 가 Fatal 처리해야
+// 합니다. listen 성공 후 발생하는 Serve 에러만 goroutine 안에서 로깅됩니다.
+//
+// ctx cancel 시 graceful shutdown (shutdownTimeout 내 in-flight scrape 마무리).
+// 반환된 stop 함수는 명시적 종료가 필요할 때 호출 — 일반적으로 ctx cancel 만으로 충분합니다.
+func Serve(ctx context.Context, addr string, registry *prometheus.Registry, log *logger.Logger) (stop func() error, err error) {
 	if addr == "" {
 		log.Info("metrics endpoint disabled (METRICS_ADDR empty)")
-		return func() error { return nil }
+		return func() error { return nil }, nil
 	}
 
 	mux := http.NewServeMux()
@@ -58,9 +65,15 @@ func Serve(ctx context.Context, addr string, registry *prometheus.Registry, log 
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// 호출 시점에 동기 bind — 실패하면 caller 가 Fatal 가능.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen metrics endpoint %q: %w", addr, err)
+	}
+
 	go func() {
 		log.WithField("addr", addr).Info("metrics endpoint started")
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.WithError(err).Error("metrics endpoint exited unexpectedly")
 		}
 	}()
@@ -76,5 +89,9 @@ func Serve(ctx context.Context, addr string, registry *prometheus.Registry, log 
 		log.Info("metrics endpoint stopped")
 	}()
 
-	return srv.Close
+	return func() error {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		return srv.Shutdown(shutdownCtx)
+	}, nil
 }

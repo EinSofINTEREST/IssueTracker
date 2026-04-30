@@ -61,7 +61,9 @@ func main() {
 		log.WithError(err).Fatal("failed to load metrics config")
 	}
 	metricsRegistry := metrics.NewRegistry()
-	metrics.Serve(ctx, metricsCfg.Addr, metricsRegistry, log)
+	if _, err := metrics.Serve(ctx, metricsCfg.Addr, metricsRegistry, log); err != nil {
+		log.WithError(err).Fatal("failed to start metrics endpoint")
+	}
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Crawler
