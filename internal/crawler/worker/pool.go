@@ -68,8 +68,7 @@ type KafkaConsumerPool struct {
 	jobs        chan jobItem
 	wg          sync.WaitGroup
 	cbRegistry  *CircuitBreakerRegistry
-	jobLocker   JobLocker
-	urlCache    URLCache
+	procLock    ProcessingLock
 	// normalizer는 URL 정규화기입니다.
 	// 미설정(nil) 이면 정규화가 적용되지 않으며, 기존 동작이 유지됩니다.
 	// atomic.Pointer 를 사용하여 polling/worker goroutine 의 동시 Load 와
@@ -120,8 +119,7 @@ func NewKafkaConsumerPool(
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
 		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, nil),
-		NoopJobLocker{},
-		NoopURLCache{},
+		NoopProcessingLock{},
 	)
 }
 
@@ -138,13 +136,12 @@ func NewKafkaConsumerPoolWithCB(
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
 		cbRegistry,
-		NoopJobLocker{},
-		NoopURLCache{},
+		NoopProcessingLock{},
 	)
 }
 
 // NewKafkaConsumerPoolWithOptions는 모든 의존성을 외부에서 주입하는 생성자입니다.
-// 테스트에서 circuit breaker, job locker를 개별 제어할 때 사용합니다.
+// 테스트에서 circuit breaker, processing lock 을 개별 제어할 때 사용합니다.
 func NewKafkaConsumerPoolWithOptions(
 	consumer queue.Consumer,
 	producer queue.Producer,
@@ -152,9 +149,13 @@ func NewKafkaConsumerPoolWithOptions(
 	contentSvc service.ContentService,
 	workerCount int,
 	cbRegistry *CircuitBreakerRegistry,
-	jobLocker JobLocker,
-	urlCache URLCache,
+	procLock ProcessingLock,
 ) *KafkaConsumerPool {
+	// nil guard — NewParserWorker / validate.NewWorker 와 일관성 보장.
+	// 외부 호출자가 nil 을 전달해도 panic 없이 dedup 비활성으로 동작.
+	if procLock == nil {
+		procLock = NoopProcessingLock{}
+	}
 	return &KafkaConsumerPool{
 		consumer:    consumer,
 		producer:    producer,
@@ -162,8 +163,7 @@ func NewKafkaConsumerPoolWithOptions(
 		contentSvc:  contentSvc,
 		workerCount: workerCount,
 		cbRegistry:  cbRegistry,
-		jobLocker:   jobLocker,
-		urlCache:    urlCache,
+		procLock:    procLock,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
@@ -196,7 +196,7 @@ func (p *KafkaConsumerPool) SetGate(g *urlguard.Gate) {
 // nil 이거나 미호출 시 정규화는 적용되지 않으며, 기존 동작이 유지됩니다.
 //
 // 적용 지점:
-//  1. Target.URL — pollMessages 에서 unmarshal 직후 (URLCache·JobLocker 키 일관성)
+//  1. Target.URL — pollMessages 에서 unmarshal 직후 (Ingestion Lock·ProcessingLock 키 일관성)
 //  2. Content.CanonicalURL — publishNormalized 에서 Store 직전 (DB 중복 탐지)
 //  3. Kafka 파티션 키 — publishNormalized 에서 CanonicalURL 사용 (파티션 ordering)
 //
@@ -350,7 +350,7 @@ func (p *KafkaConsumerPool) pollMessages(ctx context.Context) {
 		}
 
 		// 적용 지점 ①: Target.URL 정규화
-		// 다운스트림 모든 키(URLCache, JobLocker, Kafka 파티션)가 동일한 정규형을
+		// 다운스트림 모든 키(Ingestion Lock, ProcessingLock, Kafka 파티션)가 동일한 정규형을
 		// 사용하도록 가장 이른 시점에 한 번만 적용합니다.
 		// normalizer 미설정 시 원본이 반환되어 기존 동작이 유지됩니다.
 		job.Target.URL = p.normalizeURL(job.Target.URL)
@@ -420,9 +420,9 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 	}
 
 	// 재큐잉 시 설정된 ScheduledAt이 미래면 해당 시점까지 대기합니다.
-	// JobLocker 획득 전에 대기하는 이유는 다음과 같습니다:
+	// ProcessingLock 획득 전에 대기하는 이유는 다음과 같습니다:
 	//  - 락을 먼저 잡으면 backoff 대기 시간(최대 5분)이 TTL(10분)을 소진시킴
-	//  - 다른 worker가 동일 job을 "처리 중"으로 오인해 불필요한 중복 스킵 발생
+	//  - 다른 worker가 동일 URL 을 "처리 중"으로 오인해 불필요한 중복 스킵 발생
 	// time.After가 아닌 NewTimer + Stop을 사용하여 ctx 취소 시 타이머 자원을 즉시 해제합니다.
 	if delay := time.Until(item.job.ScheduledAt); delay > 0 {
 		log.WithFields(map[string]interface{}{
@@ -440,74 +440,61 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		}
 	}
 
-	// 동일 job_id가 여러 worker에서 동시에 처리되는 것을 방지합니다.
-	// Kafka rebalance/재시작으로 동일 메시지가 중복 소비될 때 idempotency를 보장합니다.
-	// backoff 대기 이후에 Acquire하여 락 점유 시간을 실제 처리 구간으로 최소화합니다.
-	acquired, err := p.jobLocker.Acquire(ctx, item.job.ID)
+	// 이슈 #178: 동일 URL 이 여러 worker 에서 동시 처리되는 것을 ProcessingLock (stage=fetcher) 로 차단.
+	// Kafka rebalance/재시작으로 동일 메시지가 중복 소비될 때 + 같은 URL 의 다른 jobID 가 동시 처리될 때
+	// 모두 흡수. backoff 대기 이후에 Acquire 하여 락 점유 시간을 실제 처리 구간으로 최소화합니다.
+	procKey := ProcessingKey(StageFetcher, item.job.Target.URL)
+	acquired, err := p.procLock.Acquire(ctx, procKey)
 	if err != nil {
-		// 락 획득 오류 시 처리를 건너뛰지 않고 경고 후 진행합니다.
-		// JobLocker 장애가 크롤링 전체를 중단시키지 않도록 합니다.
+		// 락 획득 오류 시 처리를 건너뛰지 않고 경고 후 진행합니다 (graceful degrade).
+		// ProcessingLock 장애가 크롤링 전체를 중단시키지 않도록 합니다.
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
-		}).WithError(err).Warn("failed to acquire job lock, proceeding without lock")
+			"url":     item.job.Target.URL,
+		}).WithError(err).Warn("failed to acquire processing lock, proceeding without lock")
 	} else if !acquired {
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
-		}).Debug("job lock already held by another worker, skipping")
+			"url":     item.job.Target.URL,
+		}).Debug("processing lock already held by another worker, skipping")
 		// 다른 워커가 처리 중이므로 commit 없이 종료합니다.
-		// 처리 담당 워커의 commit에 의존하여, 해당 워커 장애 시 재처리가 보장되도록 합니다.
+		// 처리 담당 워커의 commit 에 의존하여, 해당 워커 장애 시 재처리가 보장되도록 합니다.
 		return nil
 	} else {
 		// 이슈 #137 — 운영자가 lock 획득 흐름을 추적할 수 있도록 DEBUG 로 success 기록.
+		// ttl_ms 는 ProcessingLock 인스턴스가 custom TTL 로 생성될 수 있어 인터페이스로 노출하지 않으면
+		// 정확치 않으므로 로그에서 제외 (PR #180 gemini 피드백).
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
-			"ttl_ms":  DefaultJobLockTTL.Milliseconds(),
-		}).Debug("job lock acquired")
+			"url":     item.job.Target.URL,
+		}).Debug("processing lock acquired")
 
 		defer func() {
-			// 셧다운 시 ctx가 취소되어도 락 해제는 반드시 수행되어야 합니다.
-			// 작업 ctx를 그대로 사용하면 Redis 호출이 즉시 실패해 락이 TTL(10분) 동안 점유됩니다.
-			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// 셧다운 시 ctx 가 취소되어도 락 해제는 반드시 수행되어야 합니다.
+			// context.WithoutCancel(ctx) 로 trace ID / logger 메타데이터 보존.
+			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
-			if releaseErr := p.jobLocker.Release(releaseCtx, item.job.ID); releaseErr != nil {
+			if releaseErr := p.procLock.Release(releaseCtx, procKey); releaseErr != nil {
 				log.WithFields(map[string]interface{}{
 					"job_id":  item.job.ID,
 					"crawler": item.job.CrawlerName,
-				}).WithError(releaseErr).Warn("failed to release job lock")
+					"url":     item.job.Target.URL,
+				}).WithError(releaseErr).Warn("failed to release processing lock")
 				return
 			}
 			// 이슈 #137 — release 성공도 DEBUG 로 짝을 맞춰 lifecycle 완성.
 			log.WithFields(map[string]interface{}{
 				"job_id":  item.job.ID,
 				"crawler": item.job.CrawlerName,
-			}).Debug("job lock released")
+				"url":     item.job.Target.URL,
+			}).Debug("processing lock released")
 		}()
 	}
 
-	// 카테고리 페이지는 URL 캐시 대상에서 제외합니다.
-	// 카테고리 페이지는 매 주기마다 새 기사 URL을 추출해야 하므로 캐싱하면 안 됩니다.
-	targetURL := item.job.Target.URL
-	if targetURL != "" && item.job.Target.Type != core.TargetTypeCategory {
-		cached, cacheErr := p.urlCache.Exists(ctx, targetURL)
-		if cacheErr != nil {
-			// 캐시 장애 시 fetch를 차단하지 않고 경고 후 진행합니다.
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-				"url":     targetURL,
-			}).WithError(cacheErr).Warn("url cache check failed, proceeding with fetch")
-		} else if cached {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-				"url":     targetURL,
-			}).Debug("url already cached, skipping fetch")
-			return p.commitMessage(ctx, item.msg)
-		}
-	}
+	// 이슈 #178: URL 단위 dedup 은 위 ProcessingLock + Publisher 단의 Ingestion Lock 두 층으로 보장.
 
 	log.WithFields(map[string]interface{}{
 		"job_id":  item.job.ID,
@@ -571,9 +558,8 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 	}
 
 	if len(contents) == 0 {
-		// handler가 빈 슬라이스나 nil을 반환해도 fetch 자체는 성공했으므로 캐시에 등록합니다.
-		// 다음 주기에 동일 URL을 불필요하게 재요청하는 것을 방지합니다.
-		p.cacheURLIfEligible(ctx, item, log)
+		// 이슈 #178: URL dedup 은 Publisher 의 Ingestion Lock (TTL 24h) 으로 보장 — fetch 성공 후
+		// 별도 캐시 등록 불필요. lock TTL 만료 시점에 자연스럽게 재크롤 가능.
 		cb.RecordSuccess()
 		return p.commitMessage(ctx, item.msg)
 	}
@@ -585,8 +571,6 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 			return fmt.Errorf("publish normalized for job %s: %w", item.job.ID, err)
 		}
 	}
-
-	p.cacheURLIfEligible(ctx, item, log)
 
 	// 모든 부수 효과(DB 저장 + Kafka 발행)가 성공한 시점에 circuit breaker에 성공 기록
 	cb.RecordSuccess()
@@ -681,22 +665,6 @@ func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core
 	}
 
 	return p.producer.Publish(ctx, msg)
-}
-
-// cacheURLIfEligible은 fetch 성공 후 URL을 캐시에 등록합니다.
-// 카테고리 페이지는 매 주기마다 새 기사 URL을 추출해야 하므로 캐시 대상에서 제외합니다.
-// 캐시 등록 실패는 다음 주기에 중복 fetch가 발생할 뿐이므로 에러를 전파하지 않습니다.
-func (p *KafkaConsumerPool) cacheURLIfEligible(ctx context.Context, item jobItem, log *logger.Logger) {
-	url := item.job.Target.URL
-	if url != "" && item.job.Target.Type != core.TargetTypeCategory {
-		if cacheErr := p.urlCache.Set(ctx, url); cacheErr != nil {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-				"url":     url,
-			}).WithError(cacheErr).Warn("failed to cache url after successful fetch")
-		}
-	}
 }
 
 // commitMessage 는 Kafka offset 을 commit 합니다.

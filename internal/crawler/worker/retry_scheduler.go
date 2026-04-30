@@ -131,7 +131,7 @@ func DefaultRedisRetrySchedulerConfig() RedisRetrySchedulerConfig {
 // 않고 즉시 다음 정상 job 처리로 넘어갑니다. 워커 슬롯 점유 문제 해소.
 //
 // 영속성: Redis ZSET 보관 + entry STRING 24h TTL. 프로세스 crash 시에도 다른 인스턴스가
-// 이어 받아 처리 가능 (다중 인스턴스 race 는 다운스트림 JobLocker 가 흡수).
+// 이어 받아 처리 가능 (다중 인스턴스 race 는 다운스트림 ProcessingLock 가 흡수).
 //
 // 라이프사이클: New → Run(ctx) (별도 goroutine) → ctx cancel → goroutine 정리 → Stop 대기.
 type RedisDelayedRetryScheduler struct {
@@ -273,7 +273,7 @@ func (s *RedisDelayedRetryScheduler) pollOnce(ctx context.Context) {
 //   - publish 성공  → AckRetry 로 ZSET/entry 제거 (정상 종료)
 //   - publish 실패  → 짧은 backoff 로 EnqueueRetry 재호출 (ScheduledAt overwrite) →
 //     다음 폴 사이클에 재시도. EnqueueRetry 도 실패하면 ZSET 에 원본 ScheduledAt 으로
-//     항목이 남아 즉시 재peek 되며, JobLocker 가 Kafka 중복을 흡수
+//     항목이 남아 즉시 재peek 되며, ProcessingLock 가 Kafka 중복을 흡수
 //   - payload 손상 → AckRetry 로 제거 (drop) + ERROR (운영 이상 신호)
 //
 // 프로세스 crash 안전성: republish 어느 시점에 crash 가 일어나도 ZSET 에 원본 항목이
@@ -341,7 +341,7 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 	}
 
 	// publish 성공 → ZSET/entry 제거. ack 실패는 다음 폴 사이클에서 중복 publish 로 이어짐 —
-	// JobLocker 가 흡수하므로 정합성 문제 없으나 운영 가시성을 위해 WARN.
+	// ProcessingLock 가 흡수하므로 정합성 문제 없으나 운영 가시성을 위해 WARN.
 	s.ackOrLog(ctx, item.JobID, "after successful publish")
 
 	s.log.WithFields(map[string]interface{}{
@@ -351,7 +351,7 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 	}).Debug("retry job republished from redis to kafka")
 }
 
-// ackOrLog 는 AckRetry 호출 후 실패 시 WARN 로그만 남깁니다 (정합성은 JobLocker 가 흡수).
+// ackOrLog 는 AckRetry 호출 후 실패 시 WARN 로그만 남깁니다 (정합성은 ProcessingLock 가 흡수).
 func (s *RedisDelayedRetryScheduler) ackOrLog(ctx context.Context, jobID, reason string) {
 	if err := s.client.AckRetry(ctx, jobID); err != nil {
 		s.log.WithFields(map[string]interface{}{

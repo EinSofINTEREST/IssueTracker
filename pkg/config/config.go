@@ -229,6 +229,49 @@ func LoadClassifier(envFiles ...string) (ClassifierConfig, error) {
 	return cfg, nil
 }
 
+// PathInferConfig 는 pathinfer 휴리스틱의 설정입니다 (이슈 #173 단계 2).
+//
+// pathinfer 패키지의 InferHeuristic 동작을 운영자가 환경변수로 조정 가능하도록.
+type PathInferConfig struct {
+	// MinSamples: 추론에 필요한 최소 sample URL 수.
+	// 환경변수: PATHINFER_MIN_SAMPLES (default 3).
+	// 너무 낮으면 (1-2) 공통 vs 변수 구분 의미 없음, 너무 높으면 (10+) sample 수집 지연.
+	MinSamples int
+}
+
+// DefaultPathInferConfig 는 기본 PathInferConfig 를 반환합니다.
+func DefaultPathInferConfig() PathInferConfig {
+	return PathInferConfig{
+		MinSamples: 3,
+	}
+}
+
+// LoadPathInfer 는 .env 를 로드한 후 OS 환경변수로 PathInferConfig 를 구성합니다.
+// 지원 환경변수: PATHINFER_MIN_SAMPLES (양의 정수, default 3).
+func LoadPathInfer(envFiles ...string) (PathInferConfig, error) {
+	if len(envFiles) == 0 {
+		envFiles = []string{".env"}
+	}
+	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return PathInferConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
+	}
+
+	cfg := DefaultPathInferConfig()
+
+	if v := os.Getenv("PATHINFER_MIN_SAMPLES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return PathInferConfig{}, fmt.Errorf("parse PATHINFER_MIN_SAMPLES %q: %w", v, err)
+		}
+		if n < 1 {
+			return PathInferConfig{}, fmt.Errorf("invalid PATHINFER_MIN_SAMPLES %d: must be 1 or greater", n)
+		}
+		cfg.MinSamples = n
+	}
+
+	return cfg, nil
+}
+
 // LLMConfig 는 LLM rule generator (이슈 #149) wiring 설정입니다.
 //
 // LLMConfig drives the LLM provider used for auto-generating parsing rules when
@@ -379,21 +422,24 @@ type RedisConfig struct {
 	ReadTimeout  time.Duration // REDIS_READ_TIMEOUT (default: 3s)
 	WriteTimeout time.Duration // REDIS_WRITE_TIMEOUT (default: 3s)
 	PoolSize     int           // REDIS_POOL_SIZE (default: 10)
-	URLCacheTTL  time.Duration // REDIS_URL_CACHE_TTL (default: 24h)
+	// IngestionLockTTL: 파이프라인 진입 marker 의 TTL (이슈 #178).
+	// publisher 가 atomic SETNX 로 marker 를 잡고, 본 TTL 만료 시 자연스럽게 재크롤 가능.
+	// 환경변수: REDIS_INGESTION_LOCK_TTL (default 24h).
+	IngestionLockTTL time.Duration
 }
 
 // DefaultRedisConfig는 로컬 개발 환경용 기본 RedisConfig를 반환합니다.
 func DefaultRedisConfig() RedisConfig {
 	return RedisConfig{
-		Host:         "localhost",
-		Port:         6379,
-		Password:     "",
-		DB:           0,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolSize:     10,
-		URLCacheTTL:  24 * time.Hour,
+		Host:             "localhost",
+		Port:             6379,
+		Password:         "",
+		DB:               0,
+		DialTimeout:      5 * time.Second,
+		ReadTimeout:      3 * time.Second,
+		WriteTimeout:     3 * time.Second,
+		PoolSize:         10,
+		IngestionLockTTL: 24 * time.Hour,
 	}
 }
 
@@ -475,15 +521,15 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		}
 		cfg.PoolSize = n
 	}
-	if v := os.Getenv("REDIS_URL_CACHE_TTL"); v != "" {
+	if v := os.Getenv("REDIS_INGESTION_LOCK_TTL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return RedisConfig{}, fmt.Errorf("parse REDIS_URL_CACHE_TTL %q: %w", v, err)
+			return RedisConfig{}, fmt.Errorf("parse REDIS_INGESTION_LOCK_TTL %q: %w", v, err)
 		}
 		if d <= 0 {
-			return RedisConfig{}, fmt.Errorf("invalid REDIS_URL_CACHE_TTL %q: must be positive", v)
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_INGESTION_LOCK_TTL %q: must be positive", v)
 		}
-		cfg.URLCacheTTL = d
+		cfg.IngestionLockTTL = d
 	}
 
 	return cfg, nil

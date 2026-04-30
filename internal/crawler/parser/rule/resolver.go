@@ -7,9 +7,9 @@ package rule
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -38,7 +38,11 @@ const DefaultMaxCacheEntries = 10_000
 // In-memory cache (TTL based) 로 DB roundtrip 을 줄입니다 — 운영자는 새 rule enabled 후
 // 최대 DefaultCacheTTL 만큼 지연을 감수합니다.
 //
-// goroutine-safe — sync.RWMutex 로 cache 보호.
+// 이슈 #173 단계 1: cache value 가 단일 rule → rule 슬라이스 (host 매칭 후보들) 로 변경.
+// ResolveByURL 이 슬라이스를 받아 application 측에서 URL path 와 path_pattern regex 매칭.
+// path_pattern=” 인 row 는 catch-all 로 마지막에 위치 (LENGTH DESC 정렬).
+//
+// goroutine-safe — sync.RWMutex 로 cache 보호. regex compile cache 는 sync.Map.
 type Resolver struct {
 	repo             storage.ParsingRuleRepository
 	cacheTTL         time.Duration
@@ -48,18 +52,33 @@ type Resolver struct {
 	mu    sync.RWMutex
 	cache map[cacheKey]cacheEntry
 	now   func() time.Time // 테스트 주입 (실시각 → fake clock)
+
+	// regexCache 는 path_pattern 별 compile 결과를 보관합니다 (이슈 #173).
+	// 같은 패턴의 재컴파일을 회피 — 운영 중 동일 host 의 후보 슬라이스가 cache 만료 시마다
+	// 다시 fetch 되어도 regex 객체는 재사용. sync.Map 으로 lock-free read.
+	regexCache sync.Map // map[string]*compiledPattern
 }
 
-// cacheKey 는 (host, target_type) 튜플입니다 — DB FindActive 인자와 1:1 매칭.
+// compiledPattern 은 path_pattern 의 컴파일 결과 (또는 컴파일 실패) 를 보관합니다.
+// 실패한 패턴은 err 를 보관하여 매번 재컴파일을 시도하지 않도록 negative cache 역할.
+type compiledPattern struct {
+	re  *regexp.Regexp // 컴파일 실패 또는 빈 패턴이면 nil
+	err error
+}
+
+// cacheKey 는 (host, target_type) 튜플입니다 — DB FindActiveCandidates 인자와 1:1 매칭.
 type cacheKey struct {
 	host       string
 	targetType storage.TargetType
 }
 
-// cacheEntry 는 lookup 결과를 캐싱합니다. rule==nil 이면 negative cache.
+// cacheEntry 는 lookup 결과를 캐싱합니다.
+//
+// 이슈 #173: 후보 슬라이스를 통째로 보관 — application 측 path 매칭은 매 호출마다 실행
+// (cache hit path 안에서 수행). 매칭 비용은 ms 미만 (regex 컴파일은 regexCache 로 분리).
 type cacheEntry struct {
-	rule      *storage.ParsingRuleRecord
-	expiresAt time.Time
+	candidates []*storage.ParsingRuleRecord // 빈 슬라이스 = negative cache
+	expiresAt  time.Time
 }
 
 // Option 은 Resolver 생성 옵션입니다.
@@ -105,46 +124,91 @@ func NewResolver(repo storage.ParsingRuleRepository, opts ...Option) *Resolver {
 	return r
 }
 
-// ResolveByURL 은 URL 에서 host 를 추출해 매칭 활성 규칙을 반환합니다.
+// ResolveByURL 은 URL 에서 host + path 를 추출해 매칭 활성 규칙을 반환합니다.
 //
-// 흐름:
+// 흐름 (이슈 #173):
 //  1. URL parse 실패 → ErrInvalidURL
-//  2. cache hit (양성) → 즉시 반환
-//  3. cache hit (negative, 미만료) → ErrNoRule (DB roundtrip 회피)
-//  4. cache miss → repo.FindActive → 결과를 cache 후 반환
+//  2. cache hit → 후보 슬라이스에서 path 매칭, 첫 매칭 rule 반환
+//  3. cache miss → repo.FindActiveCandidates → cache 후 path 매칭
+//
+// 후보 슬라이스 안에서 path 매칭:
+//   - path_pattern=” (catch-all) 은 모든 path 매칭, LENGTH DESC 정렬상 가장 마지막
+//   - 더 구체적인 (긴) path_pattern 이 먼저 평가되어 우선 채택
+//   - 매칭 없음 → ErrNoRule
 //
 // 매칭 없음은 storage.ErrNotFound 가 아닌 rule.ErrNoRule 로 정규화 — 호출자가 errors.Is
 // 로 분기 가능 (예: LLM 자동 생성 fallback 트리거).
 func (r *Resolver) ResolveByURL(ctx context.Context, rawURL string, targetType storage.TargetType) (*storage.ParsingRuleRecord, error) {
-	host, err := extractHost(rawURL)
+	host, path, err := extractHostPath(rawURL)
 	if err != nil {
 		return nil, &Error{Code: ErrInvalidURL, Message: err.Error(), URL: rawURL}
 	}
-	return r.Resolve(ctx, host, targetType)
+	return r.Resolve(ctx, host, path, targetType)
 }
 
-// Resolve 는 host 를 직접 받아 매칭 활성 규칙을 반환합니다 (host 가 이미 추출된 경우).
-func (r *Resolver) Resolve(ctx context.Context, host string, targetType storage.TargetType) (*storage.ParsingRuleRecord, error) {
+// Resolve 는 host + path 를 직접 받아 매칭 활성 규칙을 반환합니다 (이슈 #173).
+//
+// host 는 정규화 (lowercase, 포트 제외) 된 상태로 전달 권장. path 는 URL.Path (rawpath 아님) —
+// 정규화는 호출자 책임.
+func (r *Resolver) Resolve(ctx context.Context, host, path string, targetType storage.TargetType) (*storage.ParsingRuleRecord, error) {
 	host = strings.ToLower(host)
 	key := cacheKey{host: host, targetType: targetType}
 
-	if rule, hit, negative := r.lookupCache(key); hit {
-		if negative {
-			return nil, &Error{Code: ErrNoRule, Message: "no active rule (cached)", Host: host, TargetType: string(targetType)}
+	candidates, hit := r.lookupCache(key)
+	if !hit {
+		fetched, err := r.repo.FindActiveCandidates(ctx, host, targetType)
+		if err != nil {
+			return nil, fmt.Errorf("find active candidates (%s, %s): %w", host, targetType, err)
 		}
-		return rule, nil
+		ttl := r.cacheTTL
+		if len(fetched) == 0 {
+			ttl = r.negativeCacheTTL
+		}
+		r.storeCache(key, fetched, ttl)
+		candidates = fetched
 	}
 
-	rule, err := r.repo.FindActive(ctx, host, targetType)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			r.storeCache(key, nil, r.negativeCacheTTL)
-			return nil, &Error{Code: ErrNoRule, Message: "no active rule", Host: host, TargetType: string(targetType)}
-		}
-		return nil, fmt.Errorf("find active rule (%s, %s): %w", host, targetType, err)
+	if len(candidates) == 0 {
+		return nil, &Error{Code: ErrNoRule, Message: "no active rule (cached)", Host: host, TargetType: string(targetType)}
 	}
-	r.storeCache(key, rule, r.cacheTTL)
-	return rule, nil
+
+	// 후보 슬라이스는 LENGTH(path_pattern) DESC 로 정렬됨 — 더 구체적인 패턴부터 평가.
+	for _, c := range candidates {
+		if r.pathMatches(c.PathPattern, path) {
+			return c, nil
+		}
+	}
+	return nil, &Error{Code: ErrNoRule, Message: "no rule matched url path", Host: host, URL: path, TargetType: string(targetType)}
+}
+
+// pathMatches 는 path_pattern 이 path 와 매칭되는지 확인합니다 (이슈 #173).
+//
+//   - pattern=” → 모든 path 매칭 (catch-all)
+//   - pattern 컴파일 결과를 regexCache 에 보관 — 같은 패턴 재컴파일 회피
+//   - 컴파일 실패한 패턴은 매칭 안 됨으로 간주 (negative cache 로 보관)
+func (r *Resolver) pathMatches(pattern, path string) bool {
+	if pattern == "" {
+		return true
+	}
+	cp := r.compileRegex(pattern)
+	if cp.re == nil {
+		return false
+	}
+	return cp.re.MatchString(path)
+}
+
+// compileRegex 는 path_pattern 을 컴파일하고 결과를 sync.Map 에 캐시합니다 (이슈 #173).
+// 같은 패턴이 여러 host 또는 cache 만료 후 재fetch 되어도 컴파일은 1회만 발생.
+func (r *Resolver) compileRegex(pattern string) *compiledPattern {
+	if v, ok := r.regexCache.Load(pattern); ok {
+		return v.(*compiledPattern)
+	}
+	// regexp.Compile 은 에러 시 re=nil 반환 — 별도 nil 처리 불필요 (PR #181 gemini 피드백).
+	re, err := regexp.Compile(pattern)
+	cp := &compiledPattern{re: re, err: err}
+	// LoadOrStore 로 race 시 첫 winner 의 결과를 보존 — 같은 패턴 두 goroutine 동시 컴파일도 안전.
+	actual, _ := r.regexCache.LoadOrStore(pattern, cp)
+	return actual.(*compiledPattern)
 }
 
 // Invalidate 는 (host, type) 의 cache entry 를 즉시 제거합니다 — 운영자가 rule 변경 직후 호출.
@@ -162,16 +226,16 @@ func (r *Resolver) InvalidateAll() {
 	r.mu.Unlock()
 }
 
-// lookupCache 는 캐시 조회 결과를 반환합니다.
-// 반환값: (rule, hit, negative) — hit=true 이면 캐시 적용, negative=true 이면 미매칭 캐시.
-func (r *Resolver) lookupCache(key cacheKey) (*storage.ParsingRuleRecord, bool, bool) {
+// lookupCache 는 캐시 조회 결과를 반환합니다 (이슈 #173).
+// 반환값: (candidates, hit) — hit=true 이면 캐시 적용 (negative cache 는 빈 슬라이스).
+func (r *Resolver) lookupCache(key cacheKey) ([]*storage.ParsingRuleRecord, bool) {
 	r.mu.RLock()
 	entry, ok := r.cache[key]
 	r.mu.RUnlock()
 	if !ok || r.now().After(entry.expiresAt) {
-		return nil, false, false
+		return nil, false
 	}
-	return entry.rule, true, entry.rule == nil
+	return entry.candidates, true
 }
 
 // evictExpiringSoon 은 cache 가 maxEntries 초과 시 가장 만료 임박한 entry 를 제거합니다.
@@ -198,26 +262,33 @@ func (r *Resolver) evictExpiringSoon() {
 	}
 }
 
-// storeCache 는 entry 를 저장합니다 (rule==nil 이면 negative cache).
+// storeCache 는 후보 슬라이스를 저장합니다 (이슈 #173 — 빈 슬라이스 = negative cache).
 // maxEntries 초과 시 evictExpiringSoon 으로 가장 만료 임박 entry 제거 후 저장.
-func (r *Resolver) storeCache(key cacheKey, rule *storage.ParsingRuleRecord, ttl time.Duration) {
+func (r *Resolver) storeCache(key cacheKey, candidates []*storage.ParsingRuleRecord, ttl time.Duration) {
 	r.mu.Lock()
 	r.evictExpiringSoon()
-	r.cache[key] = cacheEntry{rule: rule, expiresAt: r.now().Add(ttl)}
+	r.cache[key] = cacheEntry{candidates: candidates, expiresAt: r.now().Add(ttl)}
 	r.mu.Unlock()
 }
 
-// extractHost 는 URL 문자열에서 host (소문자) 를 추출합니다.
-func extractHost(rawURL string) (string, error) {
+// extractHostPath 는 URL 문자열에서 host (소문자) + path 를 추출합니다 (이슈 #173).
+//
+// host: 포트 제거 + 소문자.
+// path: URL.Path (raw path 아님 — percent-decoded 표현). 빈 path 는 "/" 로 정규화.
+func extractHostPath(rawURL string) (string, string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("parse url: %w", err)
+		return "", "", fmt.Errorf("parse url: %w", err)
 	}
 	// u.Hostname() — 포트 부분 ":8080" 을 제거 (Gemini code review 피드백).
 	// DB 의 host_pattern 이 순수 호스트네임이라 포트 포함 매칭 실패 회피.
 	host := u.Hostname()
 	if host == "" {
-		return "", fmt.Errorf("empty host in url %q", rawURL)
+		return "", "", fmt.Errorf("empty host in url %q", rawURL)
 	}
-	return strings.ToLower(host), nil
+	path := u.Path
+	if path == "" {
+		path = "/"
+	}
+	return strings.ToLower(host), path, nil
 }

@@ -23,6 +23,7 @@ import (
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
+	"issuetracker/pkg/links"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/chain"
 	"issuetracker/pkg/llm/policy"
@@ -134,28 +135,30 @@ func main() {
 		log.WithError(err).Fatal("failed to register us crawlers")
 	}
 
-	// Redis 기반 JobLocker: 동일 job_id가 여러 worker/인스턴스에서 중복 처리되는 것을 방지합니다.
-	// worker/manager가 JobLocker nil을 NoopJobLocker로 fallback 처리하는 설계와 일관되게,
-	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade합니다.
-	var jobLocker crawlerWorker.JobLocker
-	var urlCache crawlerWorker.URLCache
+	// Redis 기반 ProcessingLock: 동일 URL 이 여러 worker/인스턴스에서 단계별 (fetcher/parser/validator)
+	// 중복 처리되는 것을 방지합니다 (이슈 #178). 단일 인스턴스를 fetcher / parser / validator 가 공유 —
+	// 단계 구분은 ProcessingKey(stage, url) 의 stage prefix 로 처리.
+	// worker/manager 가 nil 을 NoopProcessingLock 로 fallback 처리하는 설계와 일관되게,
+	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade 합니다.
+	var procLock crawlerWorker.ProcessingLock
+	var ingestionLock crawlerWorker.IngestionLock
 	var retryScheduler crawlerWorker.RetryScheduler
 	var retrySchedulerStop func()
 	redisCfg, err := config.LoadRedis()
 	if err != nil {
-		log.WithError(err).Warn("failed to load redis config, falling back to noop job locker and url cache")
+		log.WithError(err).Warn("failed to load redis config, falling back to noop processing lock and ingestion lock")
 	} else {
 		redisClient, redisErr := redis.New(ctx, redisCfg)
 		if redisErr != nil {
-			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop job locker and url cache")
+			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop processing lock and ingestion lock")
 		} else {
 			defer redisClient.Close()
 			log.WithFields(map[string]interface{}{
 				"host": redisCfg.Host,
 				"port": redisCfg.Port,
-			}).Info("redis connected for job locker and url cache")
-			jobLocker = crawlerWorker.NewRedisJobLocker(redisClient, crawlerWorker.DefaultJobLockTTL)
-			urlCache = crawlerWorker.NewRedisURLCache(redisClient, redisCfg.URLCacheTTL)
+			}).Info("redis connected for processing lock and ingestion lock")
+			procLock = crawlerWorker.NewRedisProcessingLock(redisClient, crawlerWorker.DefaultProcessingLockTTL)
+			ingestionLock = crawlerWorker.NewRedisIngestionLock(redisClient, redisCfg.IngestionLockTTL)
 
 			// Delayed retry queue (이슈 #82): retry 를 Redis ZSET 에 보관하고 별도
 			// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
@@ -179,20 +182,20 @@ func main() {
 		defer retrySchedulerStop()
 	}
 
-	// URL dedup (이슈 #126): Publisher 가 Kafka enqueue 직전에 cache hit URL 을
-	// 사전 필터링 — consumer-side dedup 과 동일한 RedisURLCache 인스턴스를 공유.
-	// urlCache 가 nil (Redis 부재) 인 경우 Publisher 의 dedup 도 자동 비활성.
-	if urlCache != nil {
-		jobPublisher.SetURLCache(urlCache)
-		log.Info("publisher url dedup enabled (sharing redis url cache with workers)")
+	// URL dedup — Ingestion Lock (이슈 #178, 이슈 #126 의 단일 책임화):
+	// Publisher 가 Kafka enqueue 직전에 정규화 + atomic SETNX 로 진입 marker 잡기.
+	// 진입 후에는 다운스트림 어느 worker 에서도 동일 URL 의 추가 fetch 발생 X (TTL 만료 시까지).
+	jobPublisher.SetNormalizer(links.NewNormalizer())
+	if ingestionLock != nil {
+		jobPublisher.SetIngestionLock(ingestionLock)
+		log.WithField("ttl", redisCfg.IngestionLockTTL.String()).Info("publisher ingestion lock enabled")
 	}
 
 	managerCfg := crawlerWorker.ManagerConfig{
 		High:           crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
 		Normal:         crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
 		Low:            crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
-		JobLocker:      jobLocker,
-		URLCache:       urlCache,
+		ProcessingLock: procLock,
 		RetryScheduler: retryScheduler,
 	}
 
@@ -227,6 +230,7 @@ func main() {
 		contentSvc,
 		jobPublisher,
 		ruleParser,
+		procLock, // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
 		llmGen,
 		parserWorkerCount,
 		log,
@@ -289,7 +293,7 @@ func main() {
 	validateProducer := queue.NewProducer(validateKafkaCfg)
 	defer validateProducer.Close()
 
-	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, validateWorkerCount, validateCfg)
+	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, procLock, validateWorkerCount, validateCfg)
 	validateWorker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{
@@ -416,7 +420,8 @@ func verifyParsingRulesSeeded(ctx context.Context, resolver *rule.Resolver) erro
 		{"edition.cnn.com", storage.TargetTypeList},
 	}
 	for _, r := range required {
-		if _, err := resolver.Resolve(ctx, r.host, r.typ); err != nil {
+		// "/" path 로 catch-all (path_pattern='') 매칭 검증 — seed 된 host-only rule 확인 (이슈 #173).
+		if _, err := resolver.Resolve(ctx, r.host, "/", r.typ); err != nil {
 			return fmt.Errorf("missing rule for (%s, %s): %w", r.host, r.typ, err)
 		}
 	}
