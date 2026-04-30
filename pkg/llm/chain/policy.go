@@ -2,7 +2,6 @@ package chain
 
 import (
 	"context"
-	"errors"
 
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/policy"
@@ -100,10 +99,3 @@ func (p *PolicyProvider) Generate(ctx context.Context, req llm.Request) (*llm.Re
 
 // Compile-time check — PolicyProvider 가 llm.Provider 인터페이스를 만족하는지 확인.
 var _ llm.Provider = (*PolicyProvider)(nil)
-
-// errChainPolicySelectFailed 는 policy.Select 자체 실패의 sentinel — 일반적으로 외부 노출 없이
-// llm.Error 로 wrap 됩니다. errors.Is 매칭이 필요한 호출자를 위해 export.
-var errChainPolicySelectFailed = errors.New("policy.Select failed")
-
-// ErrPolicySelectFailed returns a sentinel for tests / matching.
-func ErrPolicySelectFailed() error { return errChainPolicySelectFailed }
