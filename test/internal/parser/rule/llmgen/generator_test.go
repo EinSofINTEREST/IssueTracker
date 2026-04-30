@@ -74,6 +74,9 @@ func (r *recordingRepo) GetByID(_ context.Context, _ int64) (*storage.ParsingRul
 func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParsingRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
+func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+	return nil, nil
+}
 func (r *recordingRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil
 }
@@ -120,6 +123,9 @@ func (noopFindRepo) GetByID(_ context.Context, _ int64) (*storage.ParsingRuleRec
 }
 func (noopFindRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParsingRuleRecord, error) {
 	return nil, storage.ErrNotFound
+}
+func (noopFindRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+	return nil, nil
 }
 func (noopFindRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil
