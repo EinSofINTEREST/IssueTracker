@@ -83,7 +83,7 @@ type DueRetry struct {
 // 다른 인스턴스 / 재기동 시 다시 peek 됩니다 — at-least-once 보장.
 //
 // 다중 인스턴스 race: 동시에 같은 jobID 를 peek + publish 가능 → Kafka 에 1~2회 중복
-// publish 발생 → 다운스트림 JobLocker 가 흡수 (정합성 문제 없음).
+// publish 발생 → 다운스트림 ProcessingLock 가 흡수 (정합성 문제 없음).
 //
 // limit <= 0 이면 빈 슬라이스를 반환합니다.
 func (c *Client) PeekDueRetries(ctx context.Context, now time.Time, limit int) ([]DueRetry, error) {
@@ -158,7 +158,7 @@ func (c *Client) PeekDueRetries(ctx context.Context, now time.Time, limit int) (
 
 // AckRetry 는 publish 성공한 retry job 을 ZSET 과 entry STRING 에서 제거합니다.
 // PeekDueRetries 후 publish 성공 시 반드시 호출해야 합니다 — 미호출 시 다음 폴 사이클에
-// 동일 jobID 가 재peek 되어 중복 publish 발생 (JobLocker 가 흡수).
+// 동일 jobID 가 재peek 되어 중복 publish 발생 (ProcessingLock 가 흡수).
 //
 // idempotent: 이미 제거된 항목에 대한 호출도 에러 없이 통과합니다.
 func (c *Client) AckRetry(ctx context.Context, jobID string) error {

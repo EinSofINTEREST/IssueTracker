@@ -26,16 +26,17 @@ type PoolConfig struct {
 // ManagerConfig는 PoolManager 생성에 필요한 설정입니다.
 //
 // ManagerConfig aggregates the three per-priority pool configs.
-// JobLocker가 nil이면 NoopJobLocker가 사용되어 중복 처리 방지가 비활성화됩니다.
+// ProcessingLock 이 nil 이면 NoopProcessingLock 이 사용되어 중복 처리 방지가 비활성화됩니다.
 // RetryScheduler가 nil이면 각 Pool 이 lazy 로 KafkaImmediateRetryScheduler 를 생성하여
 // 기존 동작 (즉시 Kafka publish + worker sleep) 을 유지합니다 (이슈 #82).
 //
 // URL dedup 은 이슈 #178 의 Ingestion Lock (Publisher 단) 으로 단일화 — worker 측 별도 cache 없음.
+// 단계별 worker 간 동시처리 차단은 ProcessingLock 으로 일원화 (구 JobLocker 의 명칭 변경).
 type ManagerConfig struct {
 	High           PoolConfig
 	Normal         PoolConfig
 	Low            PoolConfig
-	JobLocker      JobLocker
+	ProcessingLock ProcessingLock
 	RetryScheduler RetryScheduler
 }
 
@@ -72,9 +73,9 @@ func NewPoolManager(
 	resolver PriorityResolver,
 	log *logger.Logger,
 ) *PoolManager {
-	jobLocker := cfg.JobLocker
-	if jobLocker == nil {
-		jobLocker = NoopJobLocker{}
+	procLock := cfg.ProcessingLock
+	if procLock == nil {
+		procLock = NoopProcessingLock{}
 	}
 
 	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여
@@ -85,7 +86,7 @@ func NewPoolManager(
 	newPool := func(pc PoolConfig, priorityName string) *KafkaConsumerPool {
 		pool := NewKafkaConsumerPoolWithOptions(
 			pc.Consumer, producer, handler, contentSvc, pc.WorkerCount,
-			cbRegistry, jobLocker,
+			cbRegistry, procLock,
 		)
 		// 이슈 #137 — heartbeat 식별자 주입 (DEBUG 레벨에서 worker pool status 출력 활성)
 		pool.SetPriority(priorityName)
