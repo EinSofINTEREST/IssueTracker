@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
+	"issuetracker/pkg/links"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 	"issuetracker/pkg/urlguard"
@@ -26,17 +27,17 @@ type PriorityResolver interface {
 	Resolve(job *core.CrawlJob) core.Priority
 }
 
-// URLCache 는 publish 직전에 URL 의 캐시 hit 여부를 확인하는 최소 인터페이스입니다.
-// (이슈 #126)
+// IngestionLock 은 publish 직전에 URL 의 파이프라인 진입 marker 를 atomic 으로 set
+// 하는 최소 인터페이스입니다 (이슈 #178).
 //
-// 의도적으로 작은 인터페이스 — Publisher 는 단지 "이 URL 을 보내도 되는가?" 만
-// 알고 싶어합니다. worker 패키지의 URLCache 와 method signature 가 동일하지만
-// publisher 가 worker 를 import 하지 않도록 별도 정의 — RedisURLCache 등 기존
+// 의도적으로 작은 인터페이스 — Publisher 는 단지 "이 URL 의 진입 슬롯을 잡을 수 있는가?"
+// 만 알고 싶어합니다. worker 패키지의 IngestionLock 와 method signature 가 동일하지만
+// publisher 가 worker 를 import 하지 않도록 별도 정의 — RedisIngestionLock 등 기존
 // 구현체는 구조적 타이핑으로 그대로 만족합니다.
 //
 // 구현체는 goroutine-safe 해야 합니다.
-type URLCache interface {
-	Exists(ctx context.Context, url string) (bool, error)
+type IngestionLock interface {
+	Acquire(ctx context.Context, url string) (bool, error)
 }
 
 // Publisher는 크롤된 페이지에서 발견된 URL을 새 CrawlJob으로 변환하여
@@ -48,25 +49,28 @@ type URLCache interface {
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
 //   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — 워커 동시 실행 중 변경에도 race 없음
 //
-// URL dedup (이슈 #126):
-//   - SetURLCache 로 URLCache 를 설정하면 message build 직전에 cache hit URL 을 필터링
-//   - TargetTypeCategory 는 dedup 미적용 (consumer-side 와 동일 규칙 — 카테고리는 매 주기
-//     새 기사 추출이 목적)
-//   - 캐시 조회 실패는 fail-open (해당 URL publish 진행) — Redis 일시 장애로 publish 가
+// URL dedup — Ingestion Lock (이슈 #178, 이슈 #126 의 단일 책임화):
+//   - SetNormalizer 로 pkg/links.Normalizer 를 주입하면 publish 직전 모든 URL 정규화
+//     (정규화된 URL 이 Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두에 일관)
+//   - SetIngestionLock 으로 IngestionLock 을 설정하면 message build 직전에 atomic SETNX
+//     — 이미 진입한 URL 은 publish 에서 제외 (다운스트림 worker 에서도 다시 차단 불필요)
+//   - TargetTypeCategory 는 lock 미적용 (카테고리 페이지는 매 주기 새 기사 추출이 목적)
+//   - lock 조회 실패는 fail-open (해당 URL publish 진행) — Redis 일시 장애로 publish 가
 //     멈추지 않도록
 //   - 미설정 시 dedup 비활성 (기존 동작 유지)
 type Publisher struct {
-	producer queue.Producer
-	resolver PriorityResolver
-	gate     atomic.Pointer[urlguard.Gate]
-	urlCache atomic.Pointer[urlCacheRef]
-	log      *logger.Logger
+	producer   queue.Producer
+	resolver   PriorityResolver
+	gate       atomic.Pointer[urlguard.Gate]
+	normalizer atomic.Pointer[links.Normalizer]
+	lock       atomic.Pointer[ingestionLockRef]
+	log        *logger.Logger
 }
 
-// urlCacheRef 는 atomic.Pointer 가 인터페이스 값을 직접 저장하지 못하므로
-// URLCache 인터페이스를 감싸 atomic 교체를 지원하는 wrapper 입니다.
-type urlCacheRef struct {
-	c URLCache
+// ingestionLockRef 는 atomic.Pointer 가 인터페이스 값을 직접 저장하지 못하므로
+// IngestionLock 인터페이스를 감싸 atomic 교체를 지원하는 wrapper 입니다.
+type ingestionLockRef struct {
+	l IngestionLock
 }
 
 // New는 새 Publisher를 생성합니다.
@@ -86,14 +90,25 @@ func (p *Publisher) SetGate(g *urlguard.Gate) {
 	p.gate.Store(g)
 }
 
-// SetURLCache 는 Publish 시 cache hit URL 사전 필터링에 사용할 URLCache 를 설정합니다.
-// nil 전달 시 dedup 비활성 (기존 동작 유지). atomic 으로 race-safe 한 swap 보장.
-func (p *Publisher) SetURLCache(c URLCache) {
-	if c == nil {
-		p.urlCache.Store(nil)
+// SetNormalizer 는 Publish 직전 URL 정규화에 사용할 Normalizer 를 설정합니다.
+// nil 전달 시 정규화 비활성 (URL 원본 그대로 사용). atomic 으로 race-safe 한 swap 보장.
+//
+// 정규화는 Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두에 동일하게 적용되도록
+// Publisher 단에서 단일 책임으로 수행 (이슈 #178).
+func (p *Publisher) SetNormalizer(n *links.Normalizer) {
+	p.normalizer.Store(n)
+}
+
+// SetIngestionLock 은 Publish 시 atomic SETNX 로 진입 marker 를 잡을 IngestionLock 을
+// 설정합니다 (이슈 #178). nil 전달 시 dedup 비활성 (기존 동작 유지).
+//
+// atomic 으로 race-safe 한 swap 보장.
+func (p *Publisher) SetIngestionLock(l IngestionLock) {
+	if l == nil {
+		p.lock.Store(nil)
 		return
 	}
-	p.urlCache.Store(&urlCacheRef{c: c})
+	p.lock.Store(&ingestionLockRef{l: l})
 }
 
 // Publish는 발견된 URL 목록으로 CrawlJob을 생성하고 한 번의 배치 요청으로 Kafka에 발행합니다.
@@ -109,6 +124,14 @@ func (p *Publisher) Publish(
 		return nil
 	}
 
+	// URL 정규화 (이슈 #178): publish 직전 단일 책임으로 정규화
+	// - Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두 동일 정규형 사용
+	// - 정규화 실패한 URL 은 통과 (fail-open) — 정규화 실패가 fetch 가능성을 차단하지 않도록
+	// - Normalizer 미설정 시 원본 그대로
+	if n := p.normalizer.Load(); n != nil {
+		urls = p.normalizeURLs(urls, n, crawlerName)
+	}
+
 	// URL 가드 (이슈 #119): 차단된 URL 을 사전 필터링
 	// Gate 가 자체 WARN 로그 + url/reason/crawler/stage 필드 자동 부착
 	if g := p.gate.Load(); g != nil {
@@ -121,12 +144,12 @@ func (p *Publisher) Publish(
 		}
 	}
 
-	// URL dedup (이슈 #126): cache hit URL 사전 필터링
-	// - TargetTypeCategory 는 dedup 미적용 (consumer-side 와 동일 규칙)
-	// - 캐시 조회 실패는 fail-open (해당 URL 통과 + WARN 로그) — Redis 일시 장애로
+	// Ingestion Lock (이슈 #178): atomic SETNX 로 진입 marker 잡기
+	// - TargetTypeCategory 는 lock 미적용 (카테고리는 매 주기 새 기사 추출이 목적)
+	// - lock 조회 실패는 fail-open (해당 URL 통과 + WARN 로그) — Redis 일시 장애로
 	//   publish 가 멈추지 않도록
-	if r := p.urlCache.Load(); r != nil && targetType != core.TargetTypeCategory {
-		urls = p.filterCachedURLs(ctx, urls, crawlerName, r.c)
+	if r := p.lock.Load(); r != nil && targetType != core.TargetTypeCategory {
+		urls = p.acquireIngestion(ctx, urls, crawlerName, r.l)
 		if len(urls) == 0 {
 			return nil
 		}
@@ -169,22 +192,48 @@ func (p *Publisher) Publish(
 	return nil
 }
 
-// filterCachedURLs 는 URLCache 를 조회하여 cache hit 인 URL 을 제외한 슬라이스를
-// 반환합니다 (이슈 #126).
+// normalizeURLs 는 입력 URL 슬라이스를 정규화하여 새 슬라이스로 반환합니다 (이슈 #178).
 //
-//   - cache hit  : DEBUG 로그 후 결과에서 제외 — 다운스트림 worker 가 cache hit 으로
-//     skip 할 것을 미리 producer 단에서 걸러 Kafka 왕복 절약
-//   - cache miss : 결과 슬라이스에 포함
-//   - 조회 실패  : fail-open (결과 슬라이스에 포함) + WARN 로그 — Redis 일시 장애가
+// 정규화 실패한 URL 은 원본을 그대로 통과 (fail-open) + WARN 로그 — 정규화 자체가
+// fetch 가능성을 차단하지 않도록. 정규화 결과가 빈 문자열이면 결과에서 제외.
+//
+// 성능: crawler/stage sub-logger 를 1회 생성 후 재사용.
+func (p *Publisher) normalizeURLs(urls []string, n *links.Normalizer, crawlerName string) []string {
+	out := make([]string, 0, len(urls))
+	l := p.log.WithFields(map[string]interface{}{
+		"crawler": crawlerName,
+		"stage":   "publisher",
+	})
+
+	for _, url := range urls {
+		normalized, err := n.Normalize(url)
+		if err != nil {
+			l.WithField("url", url).WithError(err).Warn("url normalize failed, using original")
+			out = append(out, url)
+			continue
+		}
+		if normalized == "" {
+			continue
+		}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+// acquireIngestion 은 IngestionLock 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
+// 반환합니다 (이슈 #178).
+//
+//   - acquired=true  : 신규 진입 marker 획득 — 결과 슬라이스에 포함
+//   - acquired=false : 이미 다른 publisher 또는 재배달이 marker 점유 — DEBUG 로그 후 제외
+//   - 조회 실패      : fail-open (결과 슬라이스에 포함) + WARN 로그 — Redis 일시 장애가
 //     publish 를 영구 차단하지 않도록
-//   - ctx 취소   : 즉시 종료하고 남은 URL 은 fail-open 으로 그대로 통과 — 셧다운 중
-//     무의미한 cache 호출/WARN 누적 회피. 후속 PublishBatch 가 ctx 에러로 자연 실패.
+//   - ctx 취소       : 즉시 종료하고 남은 URL 은 fail-open 으로 그대로 통과 — 셧다운 중
+//     무의미한 lock 호출/WARN 누적 회피. 후속 PublishBatch 가 ctx 에러로 자연 실패.
 //
 // 결과 슬라이스는 입력과 다른 underlying array 로 새로 할당됩니다 (입력 mutate 없음).
 //
-// 성능: crawler/stage 필드를 갖는 sub-logger 를 루프 외부에서 1회 생성하여 재사용 —
-// per-URL map 할당 회피.
-func (p *Publisher) filterCachedURLs(ctx context.Context, urls []string, crawlerName string, cache URLCache) []string {
+// 성능: crawler/stage sub-logger 를 루프 외부에서 1회 생성하여 재사용.
+func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionLock) []string {
 	out := make([]string, 0, len(urls))
 	l := p.log.WithFields(map[string]interface{}{
 		"crawler": crawlerName,
@@ -193,18 +242,18 @@ func (p *Publisher) filterCachedURLs(ctx context.Context, urls []string, crawler
 
 	for i, url := range urls {
 		if err := ctx.Err(); err != nil {
-			l.WithError(err).Warn("context cancelled during cache check, allowing remaining URLs")
+			l.WithError(err).Warn("context cancelled during ingestion lock acquire, allowing remaining URLs")
 			return append(out, urls[i:]...)
 		}
 
-		cached, err := cache.Exists(ctx, url)
+		acquired, err := lock.Acquire(ctx, url)
 		if err != nil {
-			l.WithField("url", url).WithError(err).Warn("url cache check failed, allowing publish")
+			l.WithField("url", url).WithError(err).Warn("ingestion lock acquire failed, allowing publish")
 			out = append(out, url)
 			continue
 		}
-		if cached {
-			l.WithField("url", url).Debug("url already cached, skipping publish")
+		if !acquired {
+			l.WithField("url", url).Debug("url already in pipeline, skipping publish")
 			continue
 		}
 		out = append(out, url)
