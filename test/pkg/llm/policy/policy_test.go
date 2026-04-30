@@ -133,5 +133,38 @@ func TestLatencyWeighted_StochasticDeterministicWithSeededRand(t *testing.T) {
 	assert.Equal(t, first, second)
 }
 
+func TestFixedOrder_PinsToSingleProvider(t *testing.T) {
+	pol := policy.NewFixedOrder("gemini")
+	pa := &fakeProvider{name: "openai"}
+	pb := &fakeProvider{name: "gemini"}
+	pc := &fakeProvider{name: "anthropic"}
+	out, err := pol.Select(context.Background(), llm.Request{}, []llm.Provider{pa, pb, pc})
+	assert.NoError(t, err)
+	assert.Equal(t, []llm.Provider{pb}, out, "gemini 만 결과에 포함되어야 함")
+}
+
+func TestFixedOrder_RespectsExplicitOrder(t *testing.T) {
+	pol := policy.NewFixedOrder("gemini", "openai")
+	pa := &fakeProvider{name: "openai"}
+	pb := &fakeProvider{name: "gemini"}
+	out, _ := pol.Select(context.Background(), llm.Request{}, []llm.Provider{pa, pb})
+	assert.Equal(t, []llm.Provider{pb, pa}, out, "names 순서 (gemini→openai) 가 입력 순서 (openai→gemini) 보다 우선")
+}
+
+func TestFixedOrder_FiltersUnmatched(t *testing.T) {
+	pol := policy.NewFixedOrder("gemini")
+	pa := &fakeProvider{name: "openai"}
+	out, _ := pol.Select(context.Background(), llm.Request{}, []llm.Provider{pa})
+	assert.Empty(t, out, "매칭되는 provider 없으면 빈 슬라이스")
+}
+
+func TestFixedOrder_EmptyNamesPreservesInput(t *testing.T) {
+	pol := policy.NewFixedOrder()
+	pa, pb := &fakeProvider{name: "a"}, &fakeProvider{name: "b"}
+	in := []llm.Provider{pb, pa}
+	out, _ := pol.Select(context.Background(), llm.Request{}, in)
+	assert.Equal(t, in, out, "names 비어있으면 입력 순서 그대로 반환")
+}
+
 // stub for compile-time check
 var _ error = errors.New("compile check")
