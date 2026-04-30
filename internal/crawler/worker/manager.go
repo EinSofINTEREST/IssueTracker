@@ -27,15 +27,15 @@ type PoolConfig struct {
 //
 // ManagerConfig aggregates the three per-priority pool configs.
 // JobLocker가 nil이면 NoopJobLocker가 사용되어 중복 처리 방지가 비활성화됩니다.
-// URLCache가 nil이면 NoopURLCache가 사용되어 URL 캐싱이 비활성화됩니다.
 // RetryScheduler가 nil이면 각 Pool 이 lazy 로 KafkaImmediateRetryScheduler 를 생성하여
 // 기존 동작 (즉시 Kafka publish + worker sleep) 을 유지합니다 (이슈 #82).
+//
+// URL dedup 은 이슈 #178 의 Ingestion Lock (Publisher 단) 으로 단일화 — worker 측 별도 cache 없음.
 type ManagerConfig struct {
 	High           PoolConfig
 	Normal         PoolConfig
 	Low            PoolConfig
 	JobLocker      JobLocker
-	URLCache       URLCache
 	RetryScheduler RetryScheduler
 }
 
@@ -77,11 +77,6 @@ func NewPoolManager(
 		jobLocker = NoopJobLocker{}
 	}
 
-	urlCache := cfg.URLCache
-	if urlCache == nil {
-		urlCache = NoopURLCache{}
-	}
-
 	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여
 	// 소스별 실패 카운팅이 우선순위 경계 없이 누적됩니다.
 	// log 주입 (이슈 #137) — CB state 전이마다 INFO/WARN 로그.
@@ -90,7 +85,7 @@ func NewPoolManager(
 	newPool := func(pc PoolConfig, priorityName string) *KafkaConsumerPool {
 		pool := NewKafkaConsumerPoolWithOptions(
 			pc.Consumer, producer, handler, contentSvc, pc.WorkerCount,
-			cbRegistry, jobLocker, urlCache,
+			cbRegistry, jobLocker,
 		)
 		// 이슈 #137 — heartbeat 식별자 주입 (DEBUG 레벨에서 worker pool status 출력 활성)
 		pool.SetPriority(priorityName)

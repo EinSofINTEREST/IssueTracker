@@ -69,7 +69,6 @@ type KafkaConsumerPool struct {
 	wg          sync.WaitGroup
 	cbRegistry  *CircuitBreakerRegistry
 	jobLocker   JobLocker
-	urlCache    URLCache
 	// normalizer는 URL 정규화기입니다.
 	// 미설정(nil) 이면 정규화가 적용되지 않으며, 기존 동작이 유지됩니다.
 	// atomic.Pointer 를 사용하여 polling/worker goroutine 의 동시 Load 와
@@ -121,7 +120,6 @@ func NewKafkaConsumerPool(
 		consumer, producer, handler, contentSvc, workerCount,
 		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, nil),
 		NoopJobLocker{},
-		NoopURLCache{},
 	)
 }
 
@@ -139,7 +137,6 @@ func NewKafkaConsumerPoolWithCB(
 		consumer, producer, handler, contentSvc, workerCount,
 		cbRegistry,
 		NoopJobLocker{},
-		NoopURLCache{},
 	)
 }
 
@@ -153,7 +150,6 @@ func NewKafkaConsumerPoolWithOptions(
 	workerCount int,
 	cbRegistry *CircuitBreakerRegistry,
 	jobLocker JobLocker,
-	urlCache URLCache,
 ) *KafkaConsumerPool {
 	return &KafkaConsumerPool{
 		consumer:    consumer,
@@ -163,7 +159,6 @@ func NewKafkaConsumerPoolWithOptions(
 		workerCount: workerCount,
 		cbRegistry:  cbRegistry,
 		jobLocker:   jobLocker,
-		urlCache:    urlCache,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
@@ -196,7 +191,7 @@ func (p *KafkaConsumerPool) SetGate(g *urlguard.Gate) {
 // nil 이거나 미호출 시 정규화는 적용되지 않으며, 기존 동작이 유지됩니다.
 //
 // 적용 지점:
-//  1. Target.URL — pollMessages 에서 unmarshal 직후 (URLCache·JobLocker 키 일관성)
+//  1. Target.URL — pollMessages 에서 unmarshal 직후 (Ingestion Lock·JobLocker 키 일관성)
 //  2. Content.CanonicalURL — publishNormalized 에서 Store 직전 (DB 중복 탐지)
 //  3. Kafka 파티션 키 — publishNormalized 에서 CanonicalURL 사용 (파티션 ordering)
 //
@@ -350,7 +345,7 @@ func (p *KafkaConsumerPool) pollMessages(ctx context.Context) {
 		}
 
 		// 적용 지점 ①: Target.URL 정규화
-		// 다운스트림 모든 키(URLCache, JobLocker, Kafka 파티션)가 동일한 정규형을
+		// 다운스트림 모든 키(Ingestion Lock, JobLocker, Kafka 파티션)가 동일한 정규형을
 		// 사용하도록 가장 이른 시점에 한 번만 적용합니다.
 		// normalizer 미설정 시 원본이 반환되어 기존 동작이 유지됩니다.
 		job.Target.URL = p.normalizeURL(job.Target.URL)
@@ -487,27 +482,9 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		}()
 	}
 
-	// 카테고리 페이지는 URL 캐시 대상에서 제외합니다.
-	// 카테고리 페이지는 매 주기마다 새 기사 URL을 추출해야 하므로 캐싱하면 안 됩니다.
-	targetURL := item.job.Target.URL
-	if targetURL != "" && item.job.Target.Type != core.TargetTypeCategory {
-		cached, cacheErr := p.urlCache.Exists(ctx, targetURL)
-		if cacheErr != nil {
-			// 캐시 장애 시 fetch를 차단하지 않고 경고 후 진행합니다.
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-				"url":     targetURL,
-			}).WithError(cacheErr).Warn("url cache check failed, proceeding with fetch")
-		} else if cached {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-				"url":     targetURL,
-			}).Debug("url already cached, skipping fetch")
-			return p.commitMessage(ctx, item.msg)
-		}
-	}
+	// 이슈 #178: URL dedup 은 Publisher 단의 Ingestion Lock (atomic SETNX) 으로 단일화.
+	// 같은 URL 의 두 번째 publish 는 publish 단계에서 차단되므로 worker 측 추가 검사 불필요.
+	// Kafka 재배달은 JobLocker (위쪽 Acquire) 로 흡수.
 
 	log.WithFields(map[string]interface{}{
 		"job_id":  item.job.ID,
@@ -571,9 +548,8 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 	}
 
 	if len(contents) == 0 {
-		// handler가 빈 슬라이스나 nil을 반환해도 fetch 자체는 성공했으므로 캐시에 등록합니다.
-		// 다음 주기에 동일 URL을 불필요하게 재요청하는 것을 방지합니다.
-		p.cacheURLIfEligible(ctx, item, log)
+		// 이슈 #178: URL dedup 은 Publisher 의 Ingestion Lock (TTL 24h) 으로 보장 — fetch 성공 후
+		// 별도 캐시 등록 불필요. lock TTL 만료 시점에 자연스럽게 재크롤 가능.
 		cb.RecordSuccess()
 		return p.commitMessage(ctx, item.msg)
 	}
@@ -585,8 +561,6 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 			return fmt.Errorf("publish normalized for job %s: %w", item.job.ID, err)
 		}
 	}
-
-	p.cacheURLIfEligible(ctx, item, log)
 
 	// 모든 부수 효과(DB 저장 + Kafka 발행)가 성공한 시점에 circuit breaker에 성공 기록
 	cb.RecordSuccess()
@@ -681,22 +655,6 @@ func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core
 	}
 
 	return p.producer.Publish(ctx, msg)
-}
-
-// cacheURLIfEligible은 fetch 성공 후 URL을 캐시에 등록합니다.
-// 카테고리 페이지는 매 주기마다 새 기사 URL을 추출해야 하므로 캐시 대상에서 제외합니다.
-// 캐시 등록 실패는 다음 주기에 중복 fetch가 발생할 뿐이므로 에러를 전파하지 않습니다.
-func (p *KafkaConsumerPool) cacheURLIfEligible(ctx context.Context, item jobItem, log *logger.Logger) {
-	url := item.job.Target.URL
-	if url != "" && item.job.Target.Type != core.TargetTypeCategory {
-		if cacheErr := p.urlCache.Set(ctx, url); cacheErr != nil {
-			log.WithFields(map[string]interface{}{
-				"job_id":  item.job.ID,
-				"crawler": item.job.CrawlerName,
-				"url":     url,
-			}).WithError(cacheErr).Warn("failed to cache url after successful fetch")
-		}
-	}
 }
 
 // commitMessage 는 Kafka offset 을 commit 합니다.

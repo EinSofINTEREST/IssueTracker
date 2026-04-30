@@ -278,21 +278,24 @@ type RedisConfig struct {
 	ReadTimeout  time.Duration // REDIS_READ_TIMEOUT (default: 3s)
 	WriteTimeout time.Duration // REDIS_WRITE_TIMEOUT (default: 3s)
 	PoolSize     int           // REDIS_POOL_SIZE (default: 10)
-	URLCacheTTL  time.Duration // REDIS_URL_CACHE_TTL (default: 24h)
+	// IngestionLockTTL: 파이프라인 진입 marker 의 TTL (이슈 #178).
+	// publisher 가 atomic SETNX 로 marker 를 잡고, 본 TTL 만료 시 자연스럽게 재크롤 가능.
+	// 환경변수: REDIS_INGESTION_LOCK_TTL (default 24h).
+	IngestionLockTTL time.Duration
 }
 
 // DefaultRedisConfig는 로컬 개발 환경용 기본 RedisConfig를 반환합니다.
 func DefaultRedisConfig() RedisConfig {
 	return RedisConfig{
-		Host:         "localhost",
-		Port:         6379,
-		Password:     "",
-		DB:           0,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-		PoolSize:     10,
-		URLCacheTTL:  24 * time.Hour,
+		Host:             "localhost",
+		Port:             6379,
+		Password:         "",
+		DB:               0,
+		DialTimeout:      5 * time.Second,
+		ReadTimeout:      3 * time.Second,
+		WriteTimeout:     3 * time.Second,
+		PoolSize:         10,
+		IngestionLockTTL: 24 * time.Hour,
 	}
 }
 
@@ -374,15 +377,15 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		}
 		cfg.PoolSize = n
 	}
-	if v := os.Getenv("REDIS_URL_CACHE_TTL"); v != "" {
+	if v := os.Getenv("REDIS_INGESTION_LOCK_TTL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return RedisConfig{}, fmt.Errorf("parse REDIS_URL_CACHE_TTL %q: %w", v, err)
+			return RedisConfig{}, fmt.Errorf("parse REDIS_INGESTION_LOCK_TTL %q: %w", v, err)
 		}
 		if d <= 0 {
-			return RedisConfig{}, fmt.Errorf("invalid REDIS_URL_CACHE_TTL %q: must be positive", v)
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_INGESTION_LOCK_TTL %q: must be positive", v)
 		}
-		cfg.URLCacheTTL = d
+		cfg.IngestionLockTTL = d
 	}
 
 	return cfg, nil
