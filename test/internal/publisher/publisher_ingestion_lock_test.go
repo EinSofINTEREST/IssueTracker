@@ -151,6 +151,19 @@ func TestPublisher_Normalizer_AppliedBeforeLock(t *testing.T) {
 	assert.Equal(t, "https://example.com/x", prod.urls()[0])
 }
 
+// 정규화 결과 모두 빈 문자열이면 PublishBatch 호출 없이 early return (PR #179 CodeRabbit 피드백).
+func TestPublisher_Normalizer_EarlyReturnOnAllEmpty(t *testing.T) {
+	prod := &lockMockProducer{}
+	pub := publisher.New(prod, noopResolver{}, gateLog())
+	pub.SetNormalizer(links.NewNormalizer())
+
+	// 빈 문자열 / 상대 URL — 정규화 후 모두 빈 슬라이스 또는 host 없음
+	urls := []string{"", ""}
+	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+
+	assert.Empty(t, prod.urls(), "정규화 후 빈 슬라이스면 PublishBatch 호출 0회 (early return)")
+}
+
 // Normalizer 미설정 시 URL 원본 그대로 publish.
 func TestPublisher_Normalizer_DisabledByDefault(t *testing.T) {
 	prod := &lockMockProducer{}

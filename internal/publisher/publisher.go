@@ -130,6 +130,9 @@ func (p *Publisher) Publish(
 	// - Normalizer 미설정 시 원본 그대로
 	if n := p.normalizer.Load(); n != nil {
 		urls = p.normalizeURLs(urls, n, crawlerName)
+		if len(urls) == 0 {
+			return nil
+		}
 	}
 
 	// URL 가드 (이슈 #119): 차단된 URL 을 사전 필터링

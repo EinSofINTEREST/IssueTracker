@@ -122,6 +122,28 @@ func TestRedisIngestionLock_DefaultTTLOnZero(t *testing.T) {
 	})
 }
 
+// nil receiver / nil locker 보호 — zero-value 또는 NewRedisIngestionLock(nil, ...) 호출 시
+// panic 없이 에러 반환 (PR #179 CodeRabbit 피드백).
+func TestRedisIngestionLock_NilLockerReturnsError(t *testing.T) {
+	lock := worker.NewRedisIngestionLock(nil, time.Hour)
+	acquired, err := lock.Acquire(context.Background(), "https://example.com/x")
+	assert.Error(t, err)
+	assert.False(t, acquired)
+
+	err = lock.Invalidate(context.Background(), "https://example.com/x")
+	assert.Error(t, err)
+}
+
+func TestRedisIngestionLock_NilReceiverReturnsError(t *testing.T) {
+	var lock *worker.RedisIngestionLock // zero value
+	acquired, err := lock.Acquire(context.Background(), "https://example.com/x")
+	assert.Error(t, err)
+	assert.False(t, acquired)
+
+	err = lock.Invalidate(context.Background(), "https://example.com/x")
+	assert.Error(t, err)
+}
+
 func TestNoopIngestionLock_AlwaysAcquires(t *testing.T) {
 	lock := worker.NoopIngestionLock{}
 	acquired, err := lock.Acquire(context.Background(), "https://example.com/x")

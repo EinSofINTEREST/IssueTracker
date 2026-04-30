@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -71,12 +72,23 @@ func NewRedisIngestionLock(locker redisIngestionLocker, ttl time.Duration) *Redi
 }
 
 // Acquire 는 URL 의 진입 marker 를 SET NX EX 로 atomic 시도합니다.
+//
+// nil receiver / nil locker 보호: zero-value RedisIngestionLock 또는 NewRedisIngestionLock(nil, ...)
+// 호출 시에도 panic 없이 에러 반환 — 호출자가 fail-open / 알림 등 처리 가능.
 func (l *RedisIngestionLock) Acquire(ctx context.Context, url string) (bool, error) {
+	if l == nil || l.locker == nil {
+		return false, errors.New("ingestion lock locker is nil")
+	}
 	return l.locker.AcquireLock(ctx, ingestionKey(url), l.ttl)
 }
 
 // Invalidate 는 URL marker 를 즉시 제거합니다.
+//
+// nil receiver / nil locker 보호 — Acquire 와 동일 정책.
 func (l *RedisIngestionLock) Invalidate(ctx context.Context, url string) error {
+	if l == nil || l.locker == nil {
+		return errors.New("ingestion lock locker is nil")
+	}
 	return l.locker.ReleaseLock(ctx, ingestionKey(url))
 }
 
