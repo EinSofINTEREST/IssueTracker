@@ -27,10 +27,36 @@ import (
 	"strings"
 )
 
-// minSamplesForInference 는 휴리스틱이 의미 있는 패턴을 추출하기 위한 최소 sample 수입니다.
+// DefaultMinSamples 는 휴리스틱이 의미 있는 패턴을 추출하기 위한 최소 sample 수의 default 입니다.
 // 1-2 개로는 \"공통 prefix vs 변수 부분\" 구분이 의미 없음 (모든 segment 가 \"공통\" 으로 보임).
 // 3+ 개면 변수 부분의 다양성을 검출 가능.
-const minSamplesForInference = 3
+//
+// 호출자는 WithMinSamples 옵션으로 override 가능 — 운영자가 환경변수로 조정 가능하도록
+// (예: pkg/config.LoadPathInfer 에서 PATHINFER_MIN_SAMPLES 읽어 InferHeuristic 에 전달).
+const DefaultMinSamples = 3
+
+// Option 은 InferHeuristic 의 동작을 변경하는 함수형 옵션입니다.
+type Option func(*config)
+
+// config 는 InferHeuristic 의 내부 설정입니다.
+// 외부에서 직접 변경할 수 없으며 Option 함수를 통해서만 구성됩니다.
+type config struct {
+	minSamples int
+}
+
+// WithMinSamples 는 추론에 필요한 최소 sample 수를 override 합니다.
+// n <= 0 은 무시되고 default (DefaultMinSamples) 가 유지됩니다.
+//
+// 운영 권장: 너무 낮은 값 (1-2) 은 \"공통 vs 변수\" 구분이 의미 없어 추론 품질 저하.
+// 너무 높은 값 (10+) 은 sample 수집 시간이 길어 정밀화 트리거 지연.
+// default 3 이 균형점.
+func WithMinSamples(n int) Option {
+	return func(c *config) {
+		if n > 0 {
+			c.minSamples = n
+		}
+	}
+}
 
 // PathSamples 는 휴리스틱 추론에 사용할 입력입니다.
 //
@@ -42,17 +68,24 @@ type PathSamples struct {
 
 // InferHeuristic 은 PathSamples 로부터 path_pattern regex 를 추론합니다 (이슈 #173 단계 2).
 //
+// opts 로 동작 override 가능 — WithMinSamples 등 (운영자 환경변수 주입용).
+// 미지정 시 default config (DefaultMinSamples = 3) 적용.
+//
 // 반환값:
 //   - regex string: 결과 RE2 패턴 (^...$ 앵커 포함). ok=false 면 빈 문자열.
 //   - ok bool     : 신뢰도. 다음 조건 중 하나라도 만족하지 않으면 false:
-//     1. samples 가 minSamplesForInference 미만
+//     1. samples 가 cfg.minSamples 미만
 //     2. samples 의 segment 길이가 일정하지 않음
 //     3. 변수 부분 segment 에서 공통 패턴을 찾지 못함
 //     4. 결과 regex 가 입력 samples 전체를 매칭하지 못함
 //
-// 결정성: 동일 입력 → 동일 출력. test 친화 + 운영 디버깅 용이.
-func InferHeuristic(samples PathSamples) (string, bool) {
-	if len(samples.Articles) < minSamplesForInference {
+// 결정성: 동일 입력 + 동일 옵션 → 동일 출력. test 친화 + 운영 디버깅 용이.
+func InferHeuristic(samples PathSamples, opts ...Option) (string, bool) {
+	cfg := config{minSamples: DefaultMinSamples}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if len(samples.Articles) < cfg.minSamples {
 		return "", false
 	}
 

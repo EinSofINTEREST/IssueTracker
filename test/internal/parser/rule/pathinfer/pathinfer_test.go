@@ -190,6 +190,44 @@ func TestInferHeuristic_YearFullCapture(t *testing.T) {
 	assert.Equal(t, "2024", matches[1], "첫 capturing group 은 4자리 연도 전체")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Option / config 동작
+// ─────────────────────────────────────────────────────────────────────────────
+
+// WithMinSamples 로 default(3) 보다 높게 override 시 sample 수 부족 거부.
+func TestInferHeuristic_WithMinSamples_HigherThreshold(t *testing.T) {
+	samples := []string{"/article/1", "/article/2", "/article/3"} // 3개 — default OK
+	_, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: samples})
+	require.True(t, ok, "default 3 으로는 3개 OK")
+
+	// override 5 → 거부
+	_, ok = pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: samples}, pathinfer.WithMinSamples(5))
+	assert.False(t, ok, "WithMinSamples(5) 로 3개는 거부")
+}
+
+// WithMinSamples 로 default 보다 낮게 override 시 더 적은 sample 도 통과.
+func TestInferHeuristic_WithMinSamples_LowerThreshold(t *testing.T) {
+	samples := []string{"/article/1", "/article/2"} // 2개 — default 거부
+	_, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: samples})
+	require.False(t, ok, "default 3 으로는 2개 거부")
+
+	// override 2 → 통과
+	regex, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: samples}, pathinfer.WithMinSamples(2))
+	assert.True(t, ok, "WithMinSamples(2) 로 2개 통과")
+	assert.Equal(t, `^/article/(\d+)$`, regex)
+}
+
+// WithMinSamples 0 이하는 무시되고 default 유지 (방어 동작).
+func TestInferHeuristic_WithMinSamples_ZeroIgnored(t *testing.T) {
+	samples := []string{"/article/1", "/article/2"}
+	// 0 이하 → 무시됨, default(3) 유지 → 2개는 거부
+	_, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: samples}, pathinfer.WithMinSamples(0))
+	assert.False(t, ok, "WithMinSamples(0) 무시 — default 3 유지")
+
+	_, ok = pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: samples}, pathinfer.WithMinSamples(-5))
+	assert.False(t, ok, "WithMinSamples(-5) 무시 — default 3 유지")
+}
+
 // 모든 정상 케이스에서 결과 regex 가 입력 sample 전체 매칭 보장.
 // (개별 케이스에서 assertMatchesAll 로 검증 — 본 테스트는 대표 케이스만 추가 확인)
 func TestInferHeuristic_ResultMatchesAllSamples(t *testing.T) {
