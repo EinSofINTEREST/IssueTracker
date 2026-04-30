@@ -76,8 +76,8 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 	}
 	if dup {
 		// 동일 URL 의 이전 raw 가 이미 존재 — 새 fetch 가 의미 없음 (parser 가 이전 raw 를 처리 중이거나 처리 완료).
-		// 단, dedup 정책상 publisher 가 URL cache 로 사전 차단해야 정상 — 여기 도달은 race condition.
-		// 정상 흐름이라 가정하고 ref 만 다시 발행 (idempotent — JobLocker 가 parser 측 중복 흡수).
+		// 단, dedup 정책상 publisher 가 Ingestion Lock 으로 사전 차단해야 정상 — 여기 도달은 race condition.
+		// 정상 흐름이라 가정하고 ref 만 다시 발행 (idempotent — ProcessingLock 이 parser 측 중복 흡수).
 		h.Log.WithFields(map[string]interface{}{
 			"crawler":     job.CrawlerName,
 			"url":         raw.URL,

@@ -130,27 +130,29 @@ func main() {
 		log.WithError(err).Fatal("failed to register us crawlers")
 	}
 
-	// Redis 기반 JobLocker: 동일 job_id가 여러 worker/인스턴스에서 중복 처리되는 것을 방지합니다.
-	// worker/manager가 JobLocker nil을 NoopJobLocker로 fallback 처리하는 설계와 일관되게,
-	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade합니다.
-	var jobLocker crawlerWorker.JobLocker
+	// Redis 기반 ProcessingLock: 동일 URL 이 여러 worker/인스턴스에서 단계별 (fetcher/parser/validator)
+	// 중복 처리되는 것을 방지합니다 (이슈 #178). 단일 인스턴스를 fetcher / parser / validator 가 공유 —
+	// 단계 구분은 ProcessingKey(stage, url) 의 stage prefix 로 처리.
+	// worker/manager 가 nil 을 NoopProcessingLock 로 fallback 처리하는 설계와 일관되게,
+	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade 합니다.
+	var procLock crawlerWorker.ProcessingLock
 	var ingestionLock crawlerWorker.IngestionLock
 	var retryScheduler crawlerWorker.RetryScheduler
 	var retrySchedulerStop func()
 	redisCfg, err := config.LoadRedis()
 	if err != nil {
-		log.WithError(err).Warn("failed to load redis config, falling back to noop job locker and ingestion lock")
+		log.WithError(err).Warn("failed to load redis config, falling back to noop processing lock and ingestion lock")
 	} else {
 		redisClient, redisErr := redis.New(ctx, redisCfg)
 		if redisErr != nil {
-			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop job locker and ingestion lock")
+			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop processing lock and ingestion lock")
 		} else {
 			defer redisClient.Close()
 			log.WithFields(map[string]interface{}{
 				"host": redisCfg.Host,
 				"port": redisCfg.Port,
-			}).Info("redis connected for job locker and ingestion lock")
-			jobLocker = crawlerWorker.NewRedisJobLocker(redisClient, crawlerWorker.DefaultJobLockTTL)
+			}).Info("redis connected for processing lock and ingestion lock")
+			procLock = crawlerWorker.NewRedisProcessingLock(redisClient, crawlerWorker.DefaultProcessingLockTTL)
 			ingestionLock = crawlerWorker.NewRedisIngestionLock(redisClient, redisCfg.IngestionLockTTL)
 
 			// Delayed retry queue (이슈 #82): retry 를 Redis ZSET 에 보관하고 별도
@@ -188,7 +190,7 @@ func main() {
 		High:           crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
 		Normal:         crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
 		Low:            crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
-		JobLocker:      jobLocker,
+		ProcessingLock: procLock,
 		RetryScheduler: retryScheduler,
 	}
 
@@ -215,6 +217,7 @@ func main() {
 		contentSvc,
 		jobPublisher,
 		ruleParser,
+		procLock, // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
 		parserWorkerCount,
 		log,
 	)
@@ -276,7 +279,7 @@ func main() {
 	validateProducer := queue.NewProducer(validateKafkaCfg)
 	defer validateProducer.Close()
 
-	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, validateWorkerCount, validateCfg)
+	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, procLock, validateWorkerCount, validateCfg)
 	validateWorker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{

@@ -15,18 +15,18 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mock JobLocker
+// Mock ProcessingLock
 // ─────────────────────────────────────────────────────────────────────────────
 
-type mockJobLocker struct{ mock.Mock }
+type mockProcessingLock struct{ mock.Mock }
 
-func (m *mockJobLocker) Acquire(ctx context.Context, jobID string) (bool, error) {
-	args := m.Called(ctx, jobID)
+func (m *mockProcessingLock) Acquire(ctx context.Context, key string) (bool, error) {
+	args := m.Called(ctx, key)
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *mockJobLocker) Release(ctx context.Context, jobID string) error {
-	args := m.Called(ctx, jobID)
+func (m *mockProcessingLock) Release(ctx context.Context, key string) error {
+	args := m.Called(ctx, key)
 	return args.Error(0)
 }
 
@@ -54,40 +54,54 @@ func runPoolWithLocker(t *testing.T, consumer *mockConsumer, pool *worker.KafkaC
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// JobLocker 단위 테스트
+// ProcessingLock 단위 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestNoopJobLocker_AlwaysAcquires는 NoopJobLocker가 항상 락 획득에 성공하는지 검증합니다.
-func TestNoopJobLocker_AlwaysAcquires(t *testing.T) {
-	var locker worker.NoopJobLocker
+// TestNoopProcessingLock_AlwaysAcquires는 NoopProcessingLock 이 항상 락 획득에 성공하는지 검증합니다.
+func TestNoopProcessingLock_AlwaysAcquires(t *testing.T) {
+	var locker worker.NoopProcessingLock
 
-	acquired, err := locker.Acquire(context.Background(), "job-001")
+	acquired, err := locker.Acquire(context.Background(), "any-key")
 	assert.NoError(t, err)
 	assert.True(t, acquired)
 }
 
-// TestNoopJobLocker_ReleaseNoError는 NoopJobLocker의 Release가 항상 성공하는지 검증합니다.
-func TestNoopJobLocker_ReleaseNoError(t *testing.T) {
-	var locker worker.NoopJobLocker
+// TestNoopProcessingLock_ReleaseNoError 는 NoopProcessingLock 의 Release 가 항상 성공하는지 검증합니다.
+func TestNoopProcessingLock_ReleaseNoError(t *testing.T) {
+	var locker worker.NoopProcessingLock
 
-	err := locker.Release(context.Background(), "job-001")
+	err := locker.Release(context.Background(), "any-key")
 	assert.NoError(t, err)
 }
 
+// ProcessingKey 가 (stage, url) 페어로 일관된 키를 만들고, stage 가 다르거나 url 이 다르면 키도 다른지 검증.
+func TestProcessingKey_Determinism(t *testing.T) {
+	url := "https://example.com/article/1"
+	a1 := worker.ProcessingKey(worker.StageFetcher, url)
+	a2 := worker.ProcessingKey(worker.StageFetcher, url)
+	assert.Equal(t, a1, a2, "동일 (stage, url) 은 동일 키")
+
+	b := worker.ProcessingKey(worker.StageParser, url)
+	assert.NotEqual(t, a1, b, "stage 다르면 키 다름")
+
+	c := worker.ProcessingKey(worker.StageFetcher, "https://example.com/article/2")
+	assert.NotEqual(t, a1, c, "url 다르면 키 다름")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Pool + JobLocker 통합 테스트
+// Pool + ProcessingLock 통합 테스트
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsWithoutCommit는
-// 다른 worker가 이미 락을 보유 중일 때 처리와 commit을 모두 건너뛰는지 검증합니다.
-// 메시지 유실 방지: 락 보유 워커가 처리 도중 장애로 종료되어도 해당 워커가 commit하지
-// 않았다면 Kafka가 메시지를 재전달하여 재처리가 보장됩니다.
-func TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsWithoutCommit(t *testing.T) {
+// TestKafkaConsumerPool_ProcessingLock_AlreadyAcquired_SkipsWithoutCommit 는
+// 다른 worker 가 이미 락을 보유 중일 때 처리와 commit 을 모두 건너뛰는지 검증합니다.
+// 메시지 유실 방지: 락 보유 워커가 처리 도중 장애로 종료되어도 해당 워커가 commit 하지
+// 않았다면 Kafka 가 메시지를 재전달하여 재처리가 보장됩니다.
+func TestKafkaConsumerPool_ProcessingLock_AlreadyAcquired_SkipsWithoutCommit(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
-	locker := new(mockJobLocker)
+	locker := new(mockProcessingLock)
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
@@ -97,9 +111,10 @@ func TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsWithoutCommit(t *testi
 
 	job := newTestJob()
 	msg := marshaledJobMsg(t, job)
+	wantKey := worker.ProcessingKey(worker.StageFetcher, job.Target.URL)
 
-	// 이미 다른 worker가 락을 보유 중
-	locker.On("Acquire", mock.Anything, job.ID).Return(false, nil)
+	// 이미 다른 worker 가 락을 보유 중
+	locker.On("Acquire", mock.Anything, wantKey).Return(false, nil)
 
 	runPoolWithLocker(t, consumer, pool, msg)
 
@@ -110,14 +125,14 @@ func TestKafkaConsumerPool_JobLocker_AlreadyAcquired_SkipsWithoutCommit(t *testi
 	locker.AssertExpectations(t)
 }
 
-// TestKafkaConsumerPool_JobLocker_Acquired_ReleasedAfterProcessing는
-// 락 획득 후 처리 완료 시 Release가 호출되는지 검증합니다.
-func TestKafkaConsumerPool_JobLocker_Acquired_ReleasedAfterProcessing(t *testing.T) {
+// TestKafkaConsumerPool_ProcessingLock_Acquired_ReleasedAfterProcessing 는
+// 락 획득 후 처리 완료 시 Release 가 호출되는지 검증합니다.
+func TestKafkaConsumerPool_ProcessingLock_Acquired_ReleasedAfterProcessing(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
-	locker := new(mockJobLocker)
+	locker := new(mockProcessingLock)
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
@@ -128,9 +143,10 @@ func TestKafkaConsumerPool_JobLocker_Acquired_ReleasedAfterProcessing(t *testing
 	job := newTestJob()
 	content := newTestContent()
 	msg := marshaledJobMsg(t, job)
+	wantKey := worker.ProcessingKey(worker.StageFetcher, job.Target.URL)
 
-	locker.On("Acquire", mock.Anything, job.ID).Return(true, nil)
-	locker.On("Release", mock.Anything, job.ID).Return(nil)
+	locker.On("Acquire", mock.Anything, wantKey).Return(true, nil)
+	locker.On("Release", mock.Anything, wantKey).Return(nil)
 
 	handler.On("Handle", mock.Anything, job).Return([]*core.Content{content}, nil)
 	contentSvc.On("Store", mock.Anything, content).Return(content.ID, false, nil)
@@ -141,18 +157,18 @@ func TestKafkaConsumerPool_JobLocker_Acquired_ReleasedAfterProcessing(t *testing
 
 	runPoolWithLocker(t, consumer, pool, msg)
 
-	locker.AssertCalled(t, "Release", mock.Anything, job.ID)
+	locker.AssertCalled(t, "Release", mock.Anything, wantKey)
 	handler.AssertExpectations(t)
 }
 
-// TestKafkaConsumerPool_JobLocker_AcquireError_ProceedsWithoutLock는
+// TestKafkaConsumerPool_ProcessingLock_AcquireError_ProceedsWithoutLock 는
 // 락 획득 오류 시 처리를 중단하지 않고 경고 후 계속 진행하는지 검증합니다.
-func TestKafkaConsumerPool_JobLocker_AcquireError_ProceedsWithoutLock(t *testing.T) {
+func TestKafkaConsumerPool_ProcessingLock_AcquireError_ProceedsWithoutLock(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
-	locker := new(mockJobLocker)
+	locker := new(mockProcessingLock)
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, 1,
@@ -163,9 +179,10 @@ func TestKafkaConsumerPool_JobLocker_AcquireError_ProceedsWithoutLock(t *testing
 	job := newTestJob()
 	content := newTestContent()
 	msg := marshaledJobMsg(t, job)
+	wantKey := worker.ProcessingKey(worker.StageFetcher, job.Target.URL)
 
 	// 락 획득 오류 — Redis 장애 시뮬레이션
-	locker.On("Acquire", mock.Anything, job.ID).Return(false, errors.New("redis unavailable"))
+	locker.On("Acquire", mock.Anything, wantKey).Return(false, errors.New("redis unavailable"))
 
 	// 락 오류에도 처리는 계속 진행되어야 합니다
 	handler.On("Handle", mock.Anything, job).Return([]*core.Content{content}, nil)
@@ -179,6 +196,6 @@ func TestKafkaConsumerPool_JobLocker_AcquireError_ProceedsWithoutLock(t *testing
 
 	handler.AssertExpectations(t)
 	producer.AssertExpectations(t)
-	// 락 오류 시 Release는 호출되지 않아야 합니다
+	// 락 오류 시 Release 는 호출되지 않아야 합니다
 	locker.AssertNotCalled(t, "Release", mock.Anything, mock.Anything)
 }
