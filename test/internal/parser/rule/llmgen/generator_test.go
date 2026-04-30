@@ -308,6 +308,90 @@ func TestGenerator_Enqueue_EmptyHTML_NoCall(t *testing.T) {
 	assert.Empty(t, repo.inserts())
 }
 
+// Stop 은 진행 중인 background goroutine 의 완료를 대기해야 함 (graceful shutdown, PR #168 gemini 피드백).
+func TestGenerator_Stop_WaitsForInflightGoroutines(t *testing.T) {
+	provider := &slowProvider{
+		fakeProvider: fakeProvider{
+			name: "fake",
+			response: `{
+				"title": {"css": "h1.article-title"},
+				"main_content": {"css": "article p"}
+			}`,
+		},
+		delay: 200 * time.Millisecond,
+	}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/x", HTML: samplePageHTML,
+	})
+
+	// 충분한 timeout 으로 Stop — provider delay (200ms) 가 끝날 때까지 대기.
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	g.Stop(stopCtx)
+
+	// Stop 반환 후에는 INSERT 가 이미 완료되어 있어야 함 (in-flight 대기 보장).
+	assert.Len(t, repo.inserts(), 1, "Stop 은 in-flight goroutine 완료를 대기해야 함")
+}
+
+// Stop 후 Enqueue 는 noop — 새 작업 차단.
+func TestGenerator_EnqueueAfterStop_NoOp(t *testing.T) {
+	provider := &fakeProvider{name: "fake", response: "{}"}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.Stop(context.Background())
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/x", HTML: samplePageHTML,
+	})
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 0, provider.callCount(), "Stop 이후 Enqueue 는 LLM 호출하지 않아야 함")
+}
+
+// Stop 은 idempotent — 여러 번 호출되어도 안전.
+func TestGenerator_Stop_Idempotent(t *testing.T) {
+	provider := &fakeProvider{name: "fake", response: "{}"}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	assert.NotPanics(t, func() {
+		g.Stop(context.Background())
+		g.Stop(context.Background())
+		g.Stop(context.Background())
+	}, "Stop 은 여러 번 호출되어도 안전")
+}
+
+// 호출자 ctx cancel 되어도 LLM 호출은 진행 (best-effort) — context.WithoutCancel 동작 검증.
+func TestGenerator_Enqueue_OutlivesCallerCtxCancel(t *testing.T) {
+	provider := &slowProvider{
+		fakeProvider: fakeProvider{
+			name: "fake",
+			response: `{
+				"title": {"css": "h1.article-title"},
+				"main_content": {"css": "article p"}
+			}`,
+		},
+		delay: 100 * time.Millisecond,
+	}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	callerCtx, cancel := context.WithCancel(context.Background())
+	g.Enqueue(callerCtx, "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/x", HTML: samplePageHTML,
+	})
+
+	// 호출자 ctx 즉시 cancel — LLM 호출 중에 cancel 됨. WithoutCancel 이라 호출은 계속 진행되어야 함.
+	cancel()
+
+	waitForInserts(t, repo, 1, 2*time.Second)
+	assert.Equal(t, 1, provider.callCount(), "호출자 ctx cancel 후에도 LLM 호출은 best-effort 진행")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // helpers
 // ─────────────────────────────────────────────────────────────────────────────

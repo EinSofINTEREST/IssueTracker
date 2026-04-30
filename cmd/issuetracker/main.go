@@ -334,6 +334,11 @@ func main() {
 	if err := pw.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during parser worker shutdown")
 	}
+	// llmGen.Stop 은 parser worker 정지 후 호출 — 새 Enqueue source 가 차단된 시점에
+	// in-flight LLM 호출 완료 대기 (graceful shutdown, 이슈 #149 gemini 피드백).
+	if llmGen != nil {
+		llmGen.Stop(shutdownCtx)
+	}
 	cleaner.Stop()
 	if err := validateWorker.Stop(shutdownCtx); err != nil {
 		log.WithError(err).Error("error during validate worker shutdown")
