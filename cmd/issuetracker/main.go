@@ -23,6 +23,7 @@ import (
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
+	"issuetracker/pkg/metrics"
 	"issuetracker/pkg/queue"
 	"issuetracker/pkg/redis"
 )
@@ -52,6 +53,17 @@ func main() {
 	defer cancel()
 
 	ctx = log.ToContext(ctx)
+
+	// ── Metrics endpoint (이슈 #165) ──────────────────────────────────────────
+	// METRICS_ADDR 빈 값이면 endpoint 비활성화. default ":9090".
+	metricsCfg, err := config.LoadMetrics()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load metrics config")
+	}
+	metricsRegistry := metrics.NewRegistry()
+	if _, err := metrics.Serve(ctx, metricsCfg.Addr, metricsRegistry, log); err != nil {
+		log.WithError(err).Fatal("failed to start metrics endpoint")
+	}
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Crawler

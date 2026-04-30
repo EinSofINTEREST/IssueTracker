@@ -12,6 +12,7 @@ import (
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
+	"issuetracker/pkg/metrics"
 	"issuetracker/pkg/queue"
 )
 
@@ -37,6 +38,16 @@ func main() {
 	defer cancel()
 
 	ctx = log.ToContext(ctx)
+
+	// ── Metrics endpoint (이슈 #165) ──────────────────────────────────────────
+	metricsCfg, err := config.LoadMetrics()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load metrics config")
+	}
+	metricsRegistry := metrics.NewRegistry()
+	if _, err := metrics.Serve(ctx, metricsCfg.Addr, metricsRegistry, log); err != nil {
+		log.WithError(err).Fatal("failed to start metrics endpoint")
+	}
 
 	// ── 1. 검증 임계값 설정 로드 ──────────────────────────────────────────────
 	validateCfg, err := config.LoadValidate()
