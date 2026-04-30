@@ -54,13 +54,13 @@ const (
 // 호출자 책임: url 은 pkg/links.Normalizer 로 정규화된 상태로 전달 — 동일 컨텐츠를 가리키는
 // 두 URL 이 다른 키를 갖지 않도록.
 //
-// stage 표준 값 (worker 패키지 내부에서 stageFetcher / stageParser / stageValidator 상수 사용):
-//   - "fetcher" — crawler worker (raw HTML fetch)
-//   - "parser"  — parser worker (rule.Parser.ParsePage / ParseLinks)
-//   - "validator" — validate worker (Content 검증)
+// stage 표준 값 (StageFetcher / StageParser / StageValidator 상수를 통해 일관된 키 생성 보장):
+//   - "fetcher" — crawler worker (raw HTML fetch, internal/crawler/worker)
+//   - "parser"  — parser worker (rule.Parser.ParsePage / ParseLinks, internal/parser/worker)
+//   - "validator" — validate worker (Content 검증, internal/processor/validate)
 //
-// 외부 패키지 (parser/worker, processor/validate) 는 worker 패키지에서 export 된 상수를 사용해야 함 —
-// StageFetcher / StageParser / StageValidator 로 export 가능하나 본 PR 에선 worker 측에서만 사용.
+// 외부 패키지도 본 worker 패키지를 import 하여 동일 상수와 ProcessingKey 헬퍼를 사용 —
+// fetcher / parser / validator 가 동일한 ProcessingLock 인스턴스를 stage 만 달리하여 공유.
 func ProcessingKey(stage, url string) string {
 	h := sha256.Sum256([]byte(url))
 	return fmt.Sprintf("%s%s:url:%s", processingLockKeyPrefix, stage, hex.EncodeToString(h[:]))

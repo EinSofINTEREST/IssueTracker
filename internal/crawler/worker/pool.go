@@ -151,6 +151,11 @@ func NewKafkaConsumerPoolWithOptions(
 	cbRegistry *CircuitBreakerRegistry,
 	procLock ProcessingLock,
 ) *KafkaConsumerPool {
+	// nil guard — NewParserWorker / validate.NewWorker 와 일관성 보장.
+	// 외부 호출자가 nil 을 전달해도 panic 없이 dedup 비활성으로 동작.
+	if procLock == nil {
+		procLock = NoopProcessingLock{}
+	}
 	return &KafkaConsumerPool{
 		consumer:    consumer,
 		producer:    producer,
@@ -459,17 +464,18 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		return nil
 	} else {
 		// 이슈 #137 — 운영자가 lock 획득 흐름을 추적할 수 있도록 DEBUG 로 success 기록.
+		// ttl_ms 는 ProcessingLock 인스턴스가 custom TTL 로 생성될 수 있어 인터페이스로 노출하지 않으면
+		// 정확치 않으므로 로그에서 제외 (PR #180 gemini 피드백).
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
 			"url":     item.job.Target.URL,
-			"ttl_ms":  DefaultProcessingLockTTL.Milliseconds(),
 		}).Debug("processing lock acquired")
 
 		defer func() {
 			// 셧다운 시 ctx 가 취소되어도 락 해제는 반드시 수행되어야 합니다.
-			// 작업 ctx 를 그대로 사용하면 Redis 호출이 즉시 실패해 락이 TTL(10분) 동안 점유됩니다.
-			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// context.WithoutCancel(ctx) 로 trace ID / logger 메타데이터 보존.
+			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			if releaseErr := p.procLock.Release(releaseCtx, procKey); releaseErr != nil {
 				log.WithFields(map[string]interface{}{

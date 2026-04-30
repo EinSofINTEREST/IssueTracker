@@ -198,7 +198,8 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 		return nil
 	} else {
 		defer func() {
-			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// 셧다운 시 ctx cancel 되어도 락 해제 보장 + trace ID 등 메타데이터 보존 (PR #180 gemini 피드백).
+			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			if releaseErr := w.procLock.Release(releaseCtx, procKey); releaseErr != nil {
 				mlog.WithError(releaseErr).Warn("failed to release parser processing lock")
