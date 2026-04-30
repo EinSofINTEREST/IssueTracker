@@ -97,12 +97,15 @@ func InferHeuristic(samples PathSamples) (string, bool) {
 	result := "^/" + strings.Join(parts, "/") + "$"
 
 	// 검증: 입력 samples 전체가 결과 regex 에 매칭되는지 확인 — hallucination 방어.
+	// splitSegments 가 leading/trailing slash 를 trim 후 분리했으므로, 검증도 정규화된
+	// 형태 ("/" + trimmed) 로 매칭 — 그렇지 않으면 trailing slash 있는 path 는 자체 거부됨
+	// (PR #183 gemini 피드백).
 	re, err := regexp.Compile(result)
 	if err != nil {
 		return "", false
 	}
 	for _, p := range samples.Articles {
-		if !re.MatchString(p) {
+		if !re.MatchString("/" + strings.Trim(p, "/")) {
 			return "", false
 		}
 	}
@@ -145,7 +148,9 @@ func inferVariablePattern(values []string) (string, bool) {
 	case allMatch(values, regexUUID):
 		return `([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`, true
 	case allMatch(values, regexYear):
-		return `(19|20)\d{2}`, true
+		// 외곽 capturing group 으로 4자리 연도 전체를 capture (PR #183 gemini 피드백)
+		// — 다른 패턴 (numeric/UUID/slug/month) 과 capture 일관성 보장.
+		return `((19|20)\d{2})`, true
 	case allMatch(values, regexMonth):
 		return `(0[1-9]|1[0-2])`, true
 	case allMatch(values, regexNumeric):

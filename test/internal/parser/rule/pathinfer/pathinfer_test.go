@@ -168,6 +168,28 @@ func TestInferHeuristic_ConcurrentSafe(t *testing.T) {
 // Validation 검증 — 결과 regex 가 입력 samples 모두 매칭
 // ─────────────────────────────────────────────────────────────────────────────
 
+// trailing slash 가 있는 path 도 정규화 후 검증되어 ok=true 반환 (PR #183 gemini 피드백).
+// 운영 환경에서는 Normalizer 가 trailing slash 를 제거하지만, 정규화 미적용 input 도 방어.
+func TestInferHeuristic_TrailingSlashTolerated(t *testing.T) {
+	samples := []string{"/article/1/", "/article/2/", "/article/30/"}
+	regex, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: samples})
+	require.True(t, ok, "trailing slash 가 있어도 정규화 후 매칭")
+	assert.Equal(t, `^/article/(\d+)$`, regex)
+}
+
+// 연도 패턴이 외곽 capturing group 으로 4자리 전체를 capture (PR #183 gemini 피드백).
+func TestInferHeuristic_YearFullCapture(t *testing.T) {
+	samples := []string{"/news/2024/04/12345", "/news/2023/12/67890", "/news/2025/01/55555"}
+	regex, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: samples})
+	require.True(t, ok)
+
+	re, err := regexp.Compile(regex)
+	require.NoError(t, err)
+	matches := re.FindStringSubmatch("/news/2024/04/12345")
+	require.NotNil(t, matches)
+	assert.Equal(t, "2024", matches[1], "첫 capturing group 은 4자리 연도 전체")
+}
+
 // 모든 정상 케이스에서 결과 regex 가 입력 sample 전체 매칭 보장.
 // (개별 케이스에서 assertMatchesAll 로 검증 — 본 테스트는 대표 케이스만 추가 확인)
 func TestInferHeuristic_ResultMatchesAllSamples(t *testing.T) {
