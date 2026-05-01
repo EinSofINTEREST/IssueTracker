@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
@@ -95,6 +96,33 @@ func (r *pgParsingRuleRepository) Update(ctx context.Context, rec *storage.Parsi
 			return storage.ErrNotFound
 		}
 		return fmt.Errorf("update parsing rule %d: %w", rec.ID, err)
+	}
+	return nil
+}
+
+const sqlUpdatePathPattern = `
+UPDATE parsing_rules
+SET path_pattern = $2, description = $3
+WHERE id = $1
+RETURNING updated_at
+`
+
+// UpdatePathPattern 은 정밀화 워크플로 (이슈 #173 단계 4-2) 에서 호출 — path_pattern + description 갱신.
+//
+// pattern != "" 이면 RE2 컴파일 검증 (Insert 와 동일 정책) — 실패 시 storage.ErrInvalid.
+// rule 미존재 시 storage.ErrNotFound.
+func (r *pgParsingRuleRepository) UpdatePathPattern(ctx context.Context, id int64, pattern, description string) error {
+	if pattern != "" {
+		if _, reErr := regexp.Compile(pattern); reErr != nil {
+			return fmt.Errorf("%w: path_pattern %q is not a valid regex: %v", storage.ErrInvalid, pattern, reErr)
+		}
+	}
+	var updatedAt time.Time
+	if err := r.pool.QueryRow(ctx, sqlUpdatePathPattern, id, pattern, description).Scan(&updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storage.ErrNotFound
+		}
+		return fmt.Errorf("update path_pattern (id=%d): %w", id, err)
 	}
 	return nil
 }

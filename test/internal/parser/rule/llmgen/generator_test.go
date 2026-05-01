@@ -81,6 +81,9 @@ func (r *recordingRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]
 	return nil, nil
 }
 func (r *recordingRepo) Delete(_ context.Context, _ int64) error { return nil }
+func (r *recordingRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) error {
+	return nil
+}
 func (r *recordingRepo) inserts() []*storage.ParsingRuleRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -131,6 +134,9 @@ func (noopFindRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*sto
 	return nil, nil
 }
 func (noopFindRepo) Delete(_ context.Context, _ int64) error { return nil }
+func (noopFindRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) error {
+	return nil
+}
 
 // waitForInserts 는 polling 으로 비동기 Insert 가 발생할 때까지 대기합니다.
 // timeout 안에 want 만큼 발생하지 않으면 t.Fatal.
