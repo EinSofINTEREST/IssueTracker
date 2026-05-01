@@ -54,6 +54,8 @@ type ParserWorker struct {
 	contentSvc  service.ContentService
 	publisher   general.JobPublisher
 	parser      *rule.Parser
+	resolver    *rule.Resolver               // 이슈 #173 단계 4-1 — sample 누적 시 매칭된 rule lookup
+	sampleSvc   storage.SampleURLRepository  // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
 	procLock    crawlerWorker.ProcessingLock // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
 	llmGen      *llmgen.Generator            // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 	workerCount int
@@ -67,6 +69,7 @@ type ParserWorker struct {
 //   - publisher 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 건너뜀 (이런 모드는 보통 운영 금지)
 //   - procLock 은 nil 허용 — nil 이면 NoopProcessingLock 으로 fallback (단일 인스턴스 환경에서 dedup 비활성)
 //   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성, 이슈 #149)
+//   - resolver / sampleSvc 는 nil 허용 — nil 이면 sample 누적 skip (이슈 #173 단계 4-1, 정밀화 워크플로 비활성)
 //
 // 이슈 #161 (도메인 중립화) 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
 // 결과는 contentSvc.Store 로 contents 단일 테이블에 저장됩니다.
@@ -80,6 +83,8 @@ func NewParserWorker(
 	contentSvc service.ContentService,
 	publisher general.JobPublisher,
 	parser *rule.Parser,
+	resolver *rule.Resolver,
+	sampleSvc storage.SampleURLRepository,
 	procLock crawlerWorker.ProcessingLock,
 	llmGen *llmgen.Generator,
 	workerCount int,
@@ -98,6 +103,8 @@ func NewParserWorker(
 		contentSvc:  contentSvc,
 		publisher:   publisher,
 		parser:      parser,
+		resolver:    resolver,
+		sampleSvc:   sampleSvc,
 		procLock:    procLock,
 		llmGen:      llmGen,
 		workerCount: workerCount,
@@ -288,6 +295,10 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 		return fmt.Errorf("publish article content: %w", err)
 	}
 
+	// 이슈 #173 단계 4-1: 정상 파싱 성공 시 sample URL 누적 — 단계 4-2 의 정밀화 트리거 입력.
+	// 누적 실패는 정상 흐름 차단 안 함 (warn 로그).
+	w.accumulateSample(ctx, raw, mlog)
+
 	w.deleteRaw(ctx, rawID, mlog)
 	return nil
 }
@@ -388,6 +399,49 @@ func (w *ParserWorker) deleteRaw(ctx context.Context, rawID string, mlog *logger
 		mlog.WithError(err).Warn("raw delete failed (non-fatal — cleanup cron will catch)")
 	}
 }
+
+// accumulateSample 은 정상 파싱 성공한 article 의 URL 을 sample 에 누적합니다 (이슈 #173 단계 4-1).
+//
+// 누적 조건 (모두 충족 시만):
+//  1. resolver / sampleSvc 둘 다 wiring 됨
+//  2. raw.URL 의 host 로 활성 rule lookup 성공
+//  3. 매칭된 rule.PathPattern == "" (catch-all — 정밀화 대상)
+//  4. 매칭된 rule.SourceName == "llm-auto" (운영자 hand-tuned 는 정밀화 대상 아님 — 누적 X)
+//
+// 모든 실패 (lookup 실패 / Insert 에러 / cap 도달) 는 정상 흐름 차단 X — DEBUG/WARN 로그만.
+func (w *ParserWorker) accumulateSample(ctx context.Context, raw *core.RawContent, mlog *logger.Logger) {
+	if w.resolver == nil || w.sampleSvc == nil {
+		return
+	}
+	rule, err := w.resolver.ResolveByURL(ctx, raw.URL, storage.TargetTypePage)
+	if err != nil {
+		// rule 매칭 안 되거나 resolver 에러 — 정상 파싱 후라 비정상 상황. 단지 디버그 로그.
+		mlog.WithError(err).Debug("sample accumulate: rule lookup failed")
+		return
+	}
+	if rule.PathPattern != "" || rule.SourceName != llmAutoSourceName {
+		// 정밀화 대상 아닌 rule — 누적 skip (catch-all + llm-auto 만 누적)
+		return
+	}
+	if err := w.sampleSvc.Insert(ctx, rule.ID, raw.URL); err != nil {
+		// 중복은 정상 (이미 누적된 URL) — 그 외만 warn.
+		if !errors.Is(err, storage.ErrDuplicate) {
+			mlog.WithFields(map[string]interface{}{
+				"rule_id": rule.ID,
+				"url":     raw.URL,
+			}).WithError(err).Warn("sample accumulate failed (non-fatal)")
+		}
+		return
+	}
+	mlog.WithFields(map[string]interface{}{
+		"rule_id": rule.ID,
+		"url":     raw.URL,
+	}).Debug("sample accumulated for refinement trigger")
+}
+
+// llmAutoSourceName 은 LLM 자동 생성 rule 의 source_name 식별자입니다 (llmgen 패키지와 동일 상수).
+// llmgen 패키지를 import 하면 순환 의존 위험이 있어 별도 상수 — 두 곳을 동기화 유지해야 함.
+const llmAutoSourceName = "llm-auto"
 
 // uniqueURLs 는 LinkItem 슬라이스에서 빈 URL 제거 + limit 까지의 unique URL 반환.
 func uniqueURLs(items []parser.LinkItem, limit int) []string {
