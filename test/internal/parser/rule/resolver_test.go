@@ -32,6 +32,9 @@ func (r *fakeRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*stor
 	return nil, nil
 }
 func (r *fakeRepo) Delete(_ context.Context, _ int64) error { return nil }
+func (r *fakeRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) error {
+	return nil
+}
 
 // FindActive 는 FindActiveCandidates 의 첫 항목을 반환 (이슈 #173 후방 호환).
 func (r *fakeRepo) FindActive(ctx context.Context, host string, t storage.TargetType) (*storage.ParsingRuleRecord, error) {

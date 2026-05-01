@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
@@ -95,6 +96,44 @@ func (r *pgParsingRuleRepository) Update(ctx context.Context, rec *storage.Parsi
 			return storage.ErrNotFound
 		}
 		return fmt.Errorf("update parsing rule %d: %w", rec.ID, err)
+	}
+	return nil
+}
+
+// sqlUpdatePathPattern 은 catch-all + llm-auto + enabled 상태 가드를 포함한 optimistic update 입니다.
+//
+// PR #191 CodeRabbit 피드백 — 단순 `WHERE id=$1` 은 lost-update 윈도우 발생:
+//   - 다중 issuetracker 인스턴스에서 동시 정밀화 시 마지막 writer 만 적용
+//   - 운영자가 List 직후 rule 의 source_name / enabled / path_pattern 을 수동 변경했을 때 덮어씀
+//
+// 가드 조건이 false 면 `pgx.ErrNoRows` → storage.ErrNotFound 반환 — 호출자 (refiner) 는 이미 ErrNotFound
+// 분기에서 Invalidate / Purge 모두 skip 하므로 stale 변경 사이드이펙트 없음.
+const sqlUpdatePathPattern = `
+UPDATE parsing_rules
+SET path_pattern = $2, description = $3
+WHERE id = $1
+  AND source_name = 'llm-auto'
+  AND enabled = TRUE
+  AND path_pattern = ''
+RETURNING updated_at
+`
+
+// UpdatePathPattern 은 정밀화 워크플로 (이슈 #173 단계 4-2) 에서 호출 — path_pattern + description 갱신.
+//
+// pattern != "" 이면 RE2 컴파일 검증 (Insert 와 동일 정책) — 실패 시 storage.ErrInvalid.
+// rule 이 미존재하거나 catch-all + llm-auto + enabled 상태가 아니면 storage.ErrNotFound.
+func (r *pgParsingRuleRepository) UpdatePathPattern(ctx context.Context, id int64, pattern, description string) error {
+	if pattern != "" {
+		if _, reErr := regexp.Compile(pattern); reErr != nil {
+			return fmt.Errorf("%w: path_pattern %q is not a valid regex: %v", storage.ErrInvalid, pattern, reErr)
+		}
+	}
+	var updatedAt time.Time
+	if err := r.pool.QueryRow(ctx, sqlUpdatePathPattern, id, pattern, description).Scan(&updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storage.ErrNotFound
+		}
+		return fmt.Errorf("update path_pattern (id=%d): %w", id, err)
 	}
 	return nil
 }
