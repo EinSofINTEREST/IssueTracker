@@ -53,7 +53,7 @@
 | `buildLLMProvider()`      | `LLM_ENABLED` + API key 검증 → [`pkg/llm`](../../../pkg/llm/) chain provider 구성 | nil 반환 (LLM 비활성) |
 | `buildLLMGenerator()`     | provider nil 이면 nil — 아니면 [`llmgen.New`](../../../internal/crawler/parser/rule/llmgen/) | nil 허용         |
 | `buildRefiner()`          | `REFINEMENT_ENABLED` + provider 옵션 결합 → [`refiner.New`](../../../internal/crawler/parser/rule/refiner/) | nil 반환 (정밀화 비활성) |
-| `verifyParsingRulesSeeded()` | migration 007 의 seed 가 적용됐는지 확인              | **fail-fast (Fatal)** |
+| `verifyParsingRulesSeeded()` | 기본 파싱 규칙(seed data) 이 DB 에 정상 로드됐는지 검증 | **fail-fast (Fatal)** |
 
 <br>
 

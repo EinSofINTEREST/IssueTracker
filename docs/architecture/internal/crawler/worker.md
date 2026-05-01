@@ -47,7 +47,7 @@ ProcessingLock / IngestionLock / RetryScheduler** 로 다중 인스턴스 환경
   4. handler.Registry.Handle(ctx, job)
      ├ 성공 → commit
      └ 에러:
-        - Retryable + RetryCount < Max → RetryScheduler.Schedule(job, backoff)
+        - Retryable + RetryCount < Max → job.ScheduledAt 셋팅 후 RetryScheduler.Enqueue(ctx, job, lastErr)
         - 비-Retryable 또는 Max 초과 → DLQ 발행 + commit
         - CircuitBreaker.RecordFailure(source)
 ```
@@ -93,17 +93,19 @@ type IngestionLock interface {
 
 ```go
 type RetryScheduler interface {
-    Schedule(ctx context.Context, job core.CrawlJob, runAt time.Time) error
-    Start(ctx context.Context)
-    Stop()
+    Enqueue(ctx context.Context, job *core.CrawlJob, lastErr error) error
 }
 ```
 
+호출자 (worker pool) 는 `job.ScheduledAt` 과 `job.RetryCount` 를 미리 셋팅해 전달합니다 — 구현체가
+score 로 사용하거나 즉시 발행하거나의 차이만 흡수.
+
 구현:
-- [`NewRedisDelayedRetryScheduler`](../../../../internal/crawler/worker/retry_scheduler.go) — Redis ZSET (score=RunAt unixtime)
-  + 별도 goroutine 이 ready job 을 Kafka 에 publish
-- [`KafkaImmediateRetryScheduler`](../../../../internal/crawler/worker/retry_scheduler.go) — Redis 부재 시 fallback,
-  즉시 republish (worker slot 점유)
+- [`NewRedisDelayedRetryScheduler`](../../../../internal/crawler/worker/retry_scheduler.go) — Redis ZSET
+  (score=`ScheduledAt` unix timestamp) + 별도 goroutine (`Start(ctx)` / `Stop()`) 이 ready job 을
+  Kafka 에 publish — worker slot 미점유 (이슈 #82)
+- [`KafkaImmediateRetryScheduler`](../../../../internal/crawler/worker/retry_scheduler.go) — Redis 부재 시
+  fallback, 즉시 republish 후 worker 가 `ScheduledAt` 까지 sleep (worker slot 점유)
 
 <br>
 

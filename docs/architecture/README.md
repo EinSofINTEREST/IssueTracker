@@ -143,13 +143,17 @@ docs/architecture/
 
 | Topic                              | Producer                                              | Consumer Group                              |
 |------------------------------------|-------------------------------------------------------|---------------------------------------------|
-| `issuetracker.crawl.high`          | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers-high`         |
-| `issuetracker.crawl.normal`        | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers-normal`       |
-| `issuetracker.crawl.low`           | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers-low`          |
-| `issuetracker.fetched`             | [crawler/worker](../../internal/crawler/worker/)      | `issuetracker-parsers`                      |
-| `issuetracker.normalized`          | [parser/worker](../../internal/parser/worker/)        | `issuetracker-validators`                   |
-| `issuetracker.validated`           | [processor/validate](../../internal/processor/validate/) | (downstream — TBD)                       |
-| `issuetracker.dlq`                 | 모든 stage 실패 분기                                  | (운영 모니터링)                              |
+| `issuetracker.crawl.high`          | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (`GroupCrawlerWorkers`) — 3 토픽 단일 그룹 |
+| `issuetracker.crawl.normal`        | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (동일)                                    |
+| `issuetracker.crawl.low`           | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (동일)                                    |
+| `issuetracker.fetched`             | [crawler/worker](../../internal/crawler/worker/)      | `issuetracker-parsers` (`GroupParsers`)                                   |
+| `issuetracker.normalized`          | [parser/worker](../../internal/parser/worker/)        | `issuetracker-validators` (`GroupValidators`)                             |
+| `issuetracker.validated`           | [processor/validate](../../internal/processor/validate/) | (downstream — TBD)                                                    |
+| `issuetracker.dlq`                 | 모든 stage 실패 분기                                  | (운영 모니터링)                                                            |
+
+> 3-tier priority topic 은 **단일 consumer group** 을 공유합니다 — [PoolManager](../../internal/crawler/worker/manager.go) 가 priority 별
+> Consumer 인스턴스 3개를 같은 group ID 로 띄워, Kafka 가 파티션을 자동 분배합니다.
+> 상수 정의는 [`pkg/queue/config.go`](../../pkg/queue/config.go) 단일 소스.
 
 <br>
 
