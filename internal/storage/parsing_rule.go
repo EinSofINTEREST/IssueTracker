@@ -164,11 +164,15 @@ type ParsingRuleRepository interface {
 	// 갱신 가능 필드: Selectors, Enabled, Description (자연키는 변경 불가).
 	Update(ctx context.Context, r *ParsingRuleRecord) error
 
-	// UpdatePathPattern 은 정밀화 워크플로 (이슈 #173 단계 4-2) 에서 호출 — path_pattern 만 갱신.
-	// pattern 이 비어있지 않으면 RE2 컴파일 검증 (Insert 와 동일 정책) — 실패 시 ErrInvalid.
-	// rule 미존재 시 ErrNotFound.
+	// UpdatePathPattern 은 정밀화 워크플로 (이슈 #173 단계 4-2) 에서 호출 — path_pattern + description 갱신.
 	//
-	// description 도 함께 갱신 가능 — 정밀화 시각 / 방식 (algorithm / llm) 등 추적용.
+	// pattern 이 비어있지 않으면 RE2 컴파일 검증 (Insert 와 동일 정책) — 실패 시 ErrInvalid.
+	//
+	// optimistic guard (PR #191 CodeRabbit 피드백): 대상 rule 이 여전히
+	// (source_name='llm-auto' AND enabled=TRUE AND path_pattern='') 상태일 때만 적용.
+	// 가드 실패 또는 rule 미존재 시 ErrNotFound — 호출자가 lost-update 회피용으로 분기.
+	//
+	// description 은 정밀화 시각 / 방식 (algorithm / llm) 등 추적용 history append.
 	UpdatePathPattern(ctx context.Context, id int64, pattern, description string) error
 
 	// GetByID 는 ID 로 규칙을 조회합니다.

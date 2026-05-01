@@ -74,13 +74,18 @@ func (r *fakeRulesRepo) UpdatePathPattern(_ context.Context, id int64, pattern, 
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.updates = append(r.updates, updateCall{id: id, pattern: pattern, desc: description})
 	for _, rec := range r.records {
-		if rec.ID == id {
-			rec.PathPattern = pattern
-			rec.Description = description
-			return nil
+		if rec.ID != id {
+			continue
 		}
+		// optimistic guard 미러링 (PR #191 CodeRabbit 피드백): postgres 구현과 동일 contract.
+		if rec.SourceName != llmgen.LLMAutoSourceName || !rec.Enabled || rec.PathPattern != "" {
+			return storage.ErrNotFound
+		}
+		r.updates = append(r.updates, updateCall{id: id, pattern: pattern, desc: description})
+		rec.PathPattern = pattern
+		rec.Description = description
+		return nil
 	}
 	return storage.ErrNotFound
 }
@@ -380,6 +385,35 @@ func TestRunOnce_UpdateError_NoPurge(t *testing.T) {
 	require.NoError(t, r.RunOnce(context.Background()))
 
 	assert.Zero(t, samples.purgeCount(1), "purge should not run after update failure")
+}
+
+// PR #191 CodeRabbit: optimistic guard 가 stale candidate (이미 다른 인스턴스가 정밀화 완료) 에
+// 대해 ErrNotFound 반환 → refiner 가 Invalidate / Purge 모두 skip.
+func TestRunOnce_StaleGuard_NoPurge(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+	for _, u := range []string{
+		"https://news.example.com/article/100",
+		"https://news.example.com/article/200",
+		"https://news.example.com/article/300",
+	} {
+		require.NoError(t, samples.Insert(context.Background(), 1, u))
+	}
+
+	// List 직후 다른 instance 가 이미 정밀화 완료 → PathPattern 비어있지 않은 상태로 선반영.
+	// 본 refiner cycle 의 UpdatePathPattern 은 guard 실패로 ErrNotFound 반환되어야 함.
+	rec.PathPattern = `^/article/(\d+)$`
+
+	r := newRefiner(t, rules, samples)
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	// candidates List 시점에 PathPattern != "" 이면 refiner 가 위에서 catch-all 필터링으로 skip —
+	// 본 케이스는 List 시점 catch-all 이었다가 update 직전에 변경된 race 시뮬레이션.
+	// 현재 구조에서는 List 직후 바로 refineOne 들어가므로, race 시뮬은 직접 UpdatePathPattern 호출로 검증.
+	// 본 테스트는 mock 의 guard 동작 자체를 검증.
+	err := rules.UpdatePathPattern(context.Background(), 1, `^/x/(\d+)$`, "stale write")
+	require.ErrorIs(t, err, storage.ErrNotFound, "guard must reject stale (non-catch-all) candidate")
 }
 
 func TestRun_RespectsCancellation(t *testing.T) {
