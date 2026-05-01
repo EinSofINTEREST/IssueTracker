@@ -83,6 +83,18 @@ func TestInferLLM_ExtractFirstLineSkipsEmpty(t *testing.T) {
 	assert.Equal(t, `^/news/\d+$`, regex)
 }
 
+// single-line fence (```pattern```) 추출 (PR #187 gemini 피드백).
+func TestInferLLM_ExtractFromSingleLineFence(t *testing.T) {
+	llm := &fakeLLM{resp: "```^/article/\\d+$```"}
+	samples := pathinfer.LLMSamples{
+		Articles: []string{"/article/1", "/article/2", "/article/30"},
+	}
+	regex, ok, err := pathinfer.InferLLM(context.Background(), samples, llm)
+	require.NoError(t, err)
+	require.True(t, ok, "single-line fence 안의 regex 추출")
+	assert.Equal(t, `^/article/\d+$`, regex)
+}
+
 // LLM 이 prose 를 먼저 출력하고 fenced regex 로 감싸는 패턴 cover (PR #187 CodeRabbit 피드백).
 // 기존 로직은 prose 첫 줄을 반환하던 회귀 케이스.
 func TestInferLLM_ExtractFromMidResponseFence(t *testing.T) {

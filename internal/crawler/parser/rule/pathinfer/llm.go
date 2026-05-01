@@ -143,6 +143,13 @@ func extractPattern(resp string) string {
 		for _, raw := range strings.Split(resp, "\n") {
 			line := strings.TrimSpace(raw)
 			if strings.HasPrefix(line, "```") {
+				// single-line fence — ```pattern``` 형식 — 안의 패턴을 즉시 추출
+				// (PR #187 gemini 피드백, ``` 가 한 라인에 양쪽으로 있는 경우).
+				if strings.HasSuffix(line, "```") && len(line) > 6 {
+					if inner := strings.TrimSpace(line[3 : len(line)-3]); inner != "" {
+						return inner
+					}
+				}
 				inFence = !inFence
 				continue
 			}
