@@ -22,6 +22,7 @@ package refiner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -103,26 +104,26 @@ func WithMetrics(m *Metrics) Option {
 	return func(r *Refiner) { r.metrics = m }
 }
 
-// New 는 Refiner 를 생성합니다. rules / samples / resolver / log 가 nil 이면 panic —
-// wire 누락 즉시 가시화. LLMClient 만 nil 허용 (algorithm-only 동작).
+// New 는 Refiner 를 생성합니다. rules / samples / resolver / log 가 nil 이면 error —
+// 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208). LLMClient 만 nil 허용 (algorithm-only 동작).
 func New(
 	rules storage.ParsingRuleRepository,
 	samples storage.SampleURLRepository,
 	resolver *rule.Resolver,
 	log *logger.Logger,
 	opts ...Option,
-) *Refiner {
+) (*Refiner, error) {
 	if rules == nil {
-		panic("refiner: New requires non-nil rules repo")
+		return nil, errors.New("refiner: New requires non-nil rules repo")
 	}
 	if samples == nil {
-		panic("refiner: New requires non-nil samples repo")
+		return nil, errors.New("refiner: New requires non-nil samples repo")
 	}
 	if resolver == nil {
-		panic("refiner: New requires non-nil resolver")
+		return nil, errors.New("refiner: New requires non-nil resolver")
 	}
 	if log == nil {
-		panic("refiner: New requires non-nil logger")
+		return nil, errors.New("refiner: New requires non-nil logger")
 	}
 	r := &Refiner{
 		rules:      rules,
@@ -135,7 +136,7 @@ func New(
 	for _, o := range opts {
 		o(r)
 	}
-	return r
+	return r, nil
 }
 
 // Start 는 background goroutine 으로 polling 을 시작하고 즉시 반환합니다 (PR #191 피드백).

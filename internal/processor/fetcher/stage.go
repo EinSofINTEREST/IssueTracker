@@ -7,6 +7,7 @@ package fetcher
 
 import (
 	"context"
+	"errors"
 
 	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/fetcher/worker"
@@ -24,12 +25,12 @@ type Stage struct {
 }
 
 // NewStage 는 wired PoolManager 를 받아 fetcher.Stage 를 반환합니다.
-// manager 가 nil 이면 panic — wiring 누락 즉시 가시화.
-func NewStage(manager *worker.PoolManager) *Stage {
+// manager 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+func NewStage(manager *worker.PoolManager) (*Stage, error) {
 	if manager == nil {
-		panic("fetcher: NewStage requires non-nil PoolManager")
+		return nil, errors.New("fetcher: NewStage requires non-nil PoolManager")
 	}
-	return &Stage{manager: manager}
+	return &Stage{manager: manager}, nil
 }
 
 // Name 은 stage 식별자 ("fetcher") 를 반환합니다.

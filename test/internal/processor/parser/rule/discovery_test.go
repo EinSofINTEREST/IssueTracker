@@ -419,7 +419,8 @@ func TestParser_ParseLinks_RoutesToDiscoveryWhenPatternSet(t *testing.T) {
 		SameOriginOnly:    true,
 	}
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{discoveryRule(cfg)}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	items, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category/politics", fullPageHTML))
 	require.NoError(t, err)
@@ -429,7 +430,8 @@ func TestParser_ParseLinks_RoutesToDiscoveryWhenPatternSet(t *testing.T) {
 func TestParser_ParseLinks_FallsBackToItemContainerWhenPatternEmpty(t *testing.T) {
 	// LinkDiscovery 가 nil → 기존 ItemContainer 경로 사용
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{listRule()}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	items, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category", listHTML))
 	require.NoError(t, err)
@@ -452,7 +454,8 @@ func TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery(t *tes
 	// ItemContainer 를 매칭 0건 selector 로 변경 — fallback 진입 시 ErrParseFailure 보장
 	r.Selectors.ItemContainer = &storage.FieldSelector{CSS: "div.no-such-class-anywhere"}
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	items, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category", listHTML))
 	require.NoError(t, err, "discovery 경로가 동작 — fallback 진입 시 stale selector 로 에러였을 것")

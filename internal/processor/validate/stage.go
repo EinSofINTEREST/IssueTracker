@@ -6,6 +6,7 @@ package validate
 
 import (
 	"context"
+	"errors"
 
 	"issuetracker/internal/processor"
 )
@@ -19,12 +20,12 @@ type Stage struct {
 }
 
 // NewStage 는 wired Worker 를 받아 validate.Stage 를 반환합니다.
-// worker 가 nil 이면 panic — wiring 누락 즉시 가시화.
-func NewStage(worker *Worker) *Stage {
+// worker 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+func NewStage(worker *Worker) (*Stage, error) {
 	if worker == nil {
-		panic("validate: NewStage requires non-nil Worker")
+		return nil, errors.New("validate: NewStage requires non-nil Worker")
 	}
-	return &Stage{worker: worker}
+	return &Stage{worker: worker}, nil
 }
 
 // Name 은 stage 식별자 ("validate") 를 반환합니다.

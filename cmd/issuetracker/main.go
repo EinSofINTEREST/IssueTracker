@@ -117,8 +117,14 @@ func main() {
 	// rule.Parser: parsing_rules 테이블 기반 단일 파서 엔진 (이슈 #100 / #139).
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
 	parsingRuleRepo := pgstore.NewParsingRuleRepository(pool, log)
-	ruleResolver := rule.NewResolver(parsingRuleRepo)
-	ruleParser := rule.NewParser(ruleResolver)
+	ruleResolver, err := rule.NewResolver(parsingRuleRepo)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct rule resolver")
+	}
+	ruleParser, err := rule.NewParser(ruleResolver)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct rule parser")
+	}
 
 	// Readiness check: 사이트 등록 전 parsing_rules 가 seed 됐는지 검증.
 	// 부재 시 fail-fast — 실행 중 모든 ParsePage/ParseLinks 가 ErrNoRule 로 죽는 것보다 즉시 종료.
@@ -320,14 +326,22 @@ func main() {
 	}).Info("validate worker constructed")
 
 	// ══════════════════════════════════════════════════════════════════════════
-	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리 (이슈 #206)
+	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리 (이슈 #206 / #208)
 	// ══════════════════════════════════════════════════════════════════════════
 
-	stages := []processor.Stage{
-		fetcher.NewStage(manager),
-		parserStage.NewStage(pw, cleaner, llmGen, pathRefiner, log),
-		validate.NewStage(validateWorker),
+	fetcherStage, err := fetcher.NewStage(manager)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct fetcher stage")
 	}
+	parserStg, err := parserStage.NewStage(pw, cleaner, llmGen, pathRefiner, log)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct parser stage")
+	}
+	validateStage, err := validate.NewStage(validateWorker)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct validate stage")
+	}
+	stages := []processor.Stage{fetcherStage, parserStg, validateStage}
 	for _, s := range stages {
 		s.Start(ctx)
 		log.WithField("stage", s.Name()).Info("pipeline stage started")
@@ -427,11 +441,16 @@ func buildLLMProvider(log *logger.Logger) llm.Provider {
 // buildLLMGenerator 는 buildLLMProvider 결과로 llmgen.Generator 를 구성합니다 (이슈 #149).
 //
 // provider 가 nil (LLM 비활성) 이면 nil 반환 — parser worker 는 ErrNoRule 시 raw 만 잔존.
+// llmgen.New 자체 실패는 wiring 버그라 fatal — 도달하면 dependency injection 모순 (이슈 #208).
 func buildLLMGenerator(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, log *logger.Logger) *llmgen.Generator {
 	if provider == nil {
 		return nil
 	}
-	return llmgen.New(provider, repo, resolver, log)
+	gen, err := llmgen.New(provider, repo, resolver, log)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct llmgen generator")
+	}
+	return gen
 }
 
 // buildRefiner 는 RefinementConfig + LLM provider 로 refiner.Refiner 를 구성합니다 (이슈 #173 단계 4-2).
@@ -463,9 +482,17 @@ func buildRefiner(
 		refiner.WithMetrics(refiner.NewMetrics(metricsRegistry)),
 	}
 	if provider != nil {
-		opts = append(opts, refiner.WithLLMClient(refiner.NewLLMAdapter(provider)))
+		adapter, err := refiner.NewLLMAdapter(provider)
+		if err != nil {
+			log.WithError(err).Fatal("failed to construct refiner LLM adapter")
+		}
+		opts = append(opts, refiner.WithLLMClient(adapter))
 	}
-	return refiner.New(rules, samples, resolver, log, opts...)
+	r, err := refiner.New(rules, samples, resolver, log, opts...)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct refiner")
+	}
+	return r
 }
 
 // verifyParsingRulesSeeded 는 본 PR 이 등록할 모든 사이트의 (host, target_type) 페어가

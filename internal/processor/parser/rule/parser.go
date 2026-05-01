@@ -2,6 +2,7 @@ package rule
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -37,16 +38,16 @@ type Parser struct {
 }
 
 // NewParser 는 Resolver 를 사용하는 Parser 를 생성합니다.
-// resolver 가 nil 이면 panic — wire 누락 즉시 가시화.
-func NewParser(resolver *Resolver) *Parser {
+// resolver 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+func NewParser(resolver *Resolver) (*Parser, error) {
 	if resolver == nil {
-		panic("rule: NewParser requires non-nil resolver")
+		return nil, errors.New("rule: NewParser requires non-nil resolver")
 	}
 	return &Parser{
 		resolver:    resolver,
 		discovery:   NewPageLinkDiscovery(),
 		dateLayouts: defaultDateLayouts(),
-	}
+	}, nil
 }
 
 // defaultDateLayouts 는 PublishedAt 추출 시 시도할 layout 목록입니다.

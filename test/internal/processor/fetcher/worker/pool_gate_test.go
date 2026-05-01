@@ -22,7 +22,8 @@ func TestKafkaConsumerPool_Gate_BlocksRSSURL_CommitsAndSkipsHandler(t *testing.T
 	contentSvc := new(mockContentService)
 
 	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
-	pool.SetGate(urlguard.NewGate(urlguard.Default(), logger.New(logger.DefaultConfig())))
+	gate, _ := urlguard.NewGate(urlguard.Default(), logger.New(logger.DefaultConfig()))
+	pool.SetGate(gate)
 
 	// 차단될 RSS URL 을 가진 job 메시지
 	job := newTestJob()
@@ -49,7 +50,8 @@ func TestKafkaConsumerPool_Gate_AllowsArticleURL_DelegatesToHandler(t *testing.T
 	contentSvc := new(mockContentService)
 
 	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
-	pool.SetGate(urlguard.NewGate(urlguard.Default(), logger.New(logger.DefaultConfig())))
+	gate, _ := urlguard.NewGate(urlguard.Default(), logger.New(logger.DefaultConfig()))
+	pool.SetGate(gate)
 
 	job := newTestJob()
 	job.Target.URL = "https://edition.cnn.com/health/article-123"
@@ -103,7 +105,8 @@ func TestKafkaConsumerPool_Gate_AllowAllGuard_DelegatesAll(t *testing.T) {
 	contentSvc := new(mockContentService)
 
 	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
-	pool.SetGate(urlguard.NewGate(urlguard.AllowAllGuard{}, logger.New(logger.DefaultConfig())))
+	gate, _ := urlguard.NewGate(urlguard.AllowAllGuard{}, logger.New(logger.DefaultConfig()))
+	pool.SetGate(gate)
 
 	job := newTestJob()
 	job.Target.URL = "https://rss.cnn.com/rss/cnn_health.rss"
@@ -132,10 +135,9 @@ func TestKafkaConsumerPool_Gate_RaceFreeUpdate(t *testing.T) {
 	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
 
 	// 동시에 여러 번 SetGate 호출 — atomic.Pointer 가 보장
-	guards := []*urlguard.Gate{
-		urlguard.NewGate(urlguard.Default(), nil),
-		urlguard.NewGate(urlguard.AllowAllGuard{}, nil),
-	}
+	g1, _ := urlguard.NewGate(urlguard.Default(), nil)
+	g2, _ := urlguard.NewGate(urlguard.AllowAllGuard{}, nil)
+	guards := []*urlguard.Gate{g1, g2}
 	for i := 0; i < 100; i++ {
 		pool.SetGate(guards[i%2])
 	}
