@@ -132,6 +132,25 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 			}).Warn("partial DOM did not meet validation threshold, retaining anyway")
 		}
 
+		// Navigate 자체 실패 가드 (CodeRabbit 피드백): main-document 응답이 한 번도
+		// 도착하지 않았고 (statusCode == 0) 캡처도 빈 결과면 페이지가 사실상 미응답.
+		// 이슈 #146 acceptance criteria "Navigate 자체 실패 (네트워크 오류) 는 기존대로
+		// CDP_002 에러" 를 충족하기 위해 명시적으로 CDP_002 에러로 분류한다.
+		statusMu.Lock()
+		preCheckStatus := statusCode
+		statusMu.Unlock()
+		if preCheckStatus == 0 && partialHTML == "" {
+			return nil, &core.CrawlerError{
+				Category:  core.ErrCategoryNetwork,
+				Code:      "CDP_002",
+				Message:   "failed to render page: navigation produced no main-document response",
+				Source:    c.name,
+				URL:       target.URL,
+				Retryable: true,
+				Err:       runErr,
+			}
+		}
+
 		html = partialHTML
 		partialLoad = true
 		log.WithFields(map[string]interface{}{
