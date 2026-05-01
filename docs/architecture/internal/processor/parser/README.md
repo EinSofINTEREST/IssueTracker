@@ -1,11 +1,11 @@
-# internal/parser — Domain-Agnostic Parser + Claim Check Worker
+# internal/processor/parser — Domain-Agnostic Parser + Claim Check Worker
 
-소스: [`internal/parser/`](../../../../internal/parser/)
+소스: [`internal/processor/parser/`](../../../../../internal/processor/parser/)
 
 본 패키지는 두 layer 로 구성됩니다 (이슈 #196 통합):
 
 1. **Rule engine** ([rule.md](rule.md)) — `parser.go` (도메인 중립 인터페이스) + `rule/` (DB-driven engine, llmgen, pathinfer, refiner)
-2. **Kafka worker** ([worker/](../../../../internal/parser/worker/)) — Claim Check 패턴으로 raw 로드 + rule engine 호출 + content 저장
+2. **Kafka worker** ([worker/](../../../../../internal/processor/parser/worker/)) — Claim Check 패턴으로 raw 로드 + rule engine 호출 + content 저장
 
 이슈 #134 에서 fetcher 와 parser 를 분리하면서 도입된 별도 consumer group `issuetracker-parsers`.
 [Claim Check 패턴](https://learn.microsoft.com/en-us/azure/architecture/patterns/claim-check) 으로
@@ -17,8 +17,8 @@ Kafka 메시지에 raw HTML 을 싣지 않고 DB 에서 로드합니다.
 
 | 파일                                                                    | 역할                                                |
 |------------------------------------------------------------------------|-----------------------------------------------------|
-| [parser_worker.go](../../../../internal/parser/worker/parser_worker.go) | `ParserWorker` — TopicFetched consume + parse + content store |
-| [cleanup.go](../../../../internal/parser/worker/cleanup.go)             | `RawContentCleaner` — cron 으로 오래된 raw_contents 정리 |
+| [parser_worker.go](../../../../../internal/processor/parser/worker/parser_worker.go) | `ParserWorker` — TopicFetched consume + parse + content store |
+| [cleanup.go](../../../../../internal/processor/parser/worker/cleanup.go)             | `RawContentCleaner` — cron 으로 오래된 raw_contents 정리 |
 
 <br>
 
@@ -54,28 +54,28 @@ Kafka 메시지에 raw HTML 을 싣지 않고 DB 에서 로드합니다.
 ## RawContentCleaner
 
 ParserWorker 가 이상 종료 / rule.Error 잔존 / LLM 재처리 윈도우 만료된 row 가 누적되는 것을 방지하는
-간단한 cron. [`cleanup.go`](../../../../internal/parser/worker/cleanup.go) 가 일정 주기마다
+간단한 cron. [`cleanup.go`](../../../../../internal/processor/parser/worker/cleanup.go) 가 일정 주기마다
 `RawContentService.PurgeOlderThan(...)` 호출.
 
 <br>
 
 ## 의존
 
-- [`internal/parser/rule`](rule.md) — `Parser`, `Resolver`
-- [`internal/parser/rule/llmgen`](rule.md) — `Generator.Enqueue` (선택)
-- [`internal/processor/fetcher/domain/general`](../processor/fetcher/domain.md) — `ConvertPageToContent`
-- [`internal/locks`](../locks/README.md) — `ProcessingLock`
-- [`internal/storage/service`](../storage/service.md) — `RawContentService`, `ContentService`
-- [`internal/storage`](../storage/README.md) — `SampleURLRepository`
-- [`internal/publisher`](../publisher.md) — chained job 발행
+- [`internal/processor/parser/rule`](rule.md) — `Parser`, `Resolver`
+- [`internal/processor/parser/rule/llmgen`](rule.md) — `Generator.Enqueue` (선택)
+- [`internal/processor/fetcher/domain/general`](../fetcher/domain.md) — `ConvertPageToContent`
+- [`internal/locks`](../../locks/README.md) — `ProcessingLock`
+- [`internal/storage/service`](../../storage/service.md) — `RawContentService`, `ContentService`
+- [`internal/storage`](../../storage/README.md) — `SampleURLRepository`
+- [`internal/publisher`](../../publisher.md) — chained job 발행
 - [`pkg/queue`](../../pkg/queue.md), [`pkg/logger`](../../pkg/logger.md)
 
 <br>
 
 ## Wiring 위치
 
-[`cmd/issuetracker/main.go`](../../../../cmd/issuetracker/main.go) — 단계 10 (parser worker), 단계 12
-(cleanup cron). 자세한 wiring 은 [cmd/issuetracker.md](../../cmd/issuetracker.md) 참조.
+[`cmd/issuetracker/main.go`](../../../../../cmd/issuetracker/main.go) — 단계 10 (parser worker), 단계 12
+(cleanup cron). 자세한 wiring 은 [cmd/issuetracker.md](../../../cmd/issuetracker.md) 참조.
 
 <br>
 

@@ -118,7 +118,7 @@ seed publish 차단.
 
 ## 호출 측
 
-거의 모든 단계 worker — [`processor/fetcher/worker`](../internal/processor/fetcher/worker.md), [`parser/worker`](../internal/parser/README.md),
+거의 모든 단계 worker — [`processor/fetcher/worker`](../internal/processor/fetcher/worker.md), [`processor/parser/worker`](../internal/processor/parser/README.md),
 [`processor/validate`](../internal/processor/validate.md), [`scheduler`](../internal/scheduler.md), [`publisher`](../internal/publisher.md).
 
 <br>

@@ -2,7 +2,7 @@
 -- parsing_rules row 로 이전 (이슈 #100 / #139 follow-up).
 --
 -- 본 migration 적용 후, 사이트별 parser.go (NaverParser/DaumParser/YonhapParser/CNNParser) 가
--- 제거되고 internal/parser/rule.Parser 가 단일 엔진으로 동작합니다.
+-- 제거되고 internal/processor/parser/rule.Parser 가 단일 엔진으로 동작합니다.
 --
 -- 운영자 노트:
 --   - 사이트가 selector 를 바꾼 경우 본 row 의 selectors JSONB 만 UPDATE 하면 된다 (재배포 X).

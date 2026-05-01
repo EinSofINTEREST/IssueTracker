@@ -104,17 +104,10 @@ issuetracker/
 │       └── main.go
 │
 ├── internal/                   # Private application code
-│   ├── parser/                # ✅ Domain-agnostic parser + DB-driven rule engine (이슈 #100, #196)
-│   │   ├── parser.go          # ContentParser / LinkListParser interfaces + Page model
-│   │   ├── rule/              # parsing_rules 기반 단일 engine
-│   │   │   ├── llmgen/        # LLM 기반 selector 자동 생성 (이슈 #149)
-│   │   │   ├── pathinfer/     # path_pattern 추론 알고리즘 (이슈 #173)
-│   │   │   └── refiner/       # path_pattern 정밀화 polling
-│   │   └── worker/            # Claim Check 기반 ParserWorker (Kafka consumer)
 │   ├── locks/                 # ✅ 단계 무관 distributed lock — fetcher/parser/validator 공유 (이슈 #197)
 │   │   ├── ingestion_lock.go  # IngestionLock (Publisher 가 Kafka enqueue 직전 사용)
 │   │   └── processing_lock.go # ProcessingLock + ProcessingKey(stage, url)
-│   ├── processor/             # ✅ 파이프라인 단계별 정렬 (이슈 #195)
+│   ├── processor/             # ✅ 파이프라인 단계별 정렬 — 모든 stage 가 본 디렉토리 하위 (이슈 #195)
 │   │   ├── fetcher/           # ✅ Web fetch + DB-driven parse 라우팅 + worker pool (이슈 #198)
 │   │   │   ├── core/          # 인터페이스 + 모델 + 에러 + HTTP client + retry
 │   │   │   ├── handler/       # crawler_name → Handler registry
@@ -122,6 +115,13 @@ issuetracker/
 │   │   │   ├── domain/        # 사이트 chain handler + 사이트별 등록 (sources/)
 │   │   │   ├── rate_limiter/  # IP 단위 token bucket
 │   │   │   └── worker/        # PoolManager + KafkaConsumerPool + RetryScheduler + CircuitBreaker
+│   │   ├── parser/            # ✅ Domain-agnostic parser + DB-driven rule engine + ParserWorker (이슈 #100, #196, #204)
+│   │   │   ├── parser.go      # ContentParser / LinkListParser interfaces + Page model
+│   │   │   ├── rule/          # parsing_rules 기반 단일 engine
+│   │   │   │   ├── llmgen/    # LLM 기반 selector 자동 생성 (이슈 #149)
+│   │   │   │   ├── pathinfer/ # path_pattern 추론 알고리즘 (이슈 #173)
+│   │   │   │   └── refiner/   # path_pattern 정밀화 polling
+│   │   │   └── worker/        # Claim Check 기반 ParserWorker (Kafka consumer) + RawContentCleaner
 │   │   └── validate/          # Validate worker (Validation logic)
 │   ├── embedding/             # Embedding & ML (planned)
 │   │   ├── model/             # Embedding models
@@ -142,8 +142,7 @@ issuetracker/
 │   ├── internal/              # ✅ internal/ 패키지 테스트
 │   │   ├── classifier/        # ← internal/classifier/
 │   │   ├── locks/             # ← internal/locks/
-│   │   ├── parser/            # ← internal/parser/
-│   │   ├── processor/         # ← internal/processor/ (fetcher/{core,worker,...} + validate)
+│   │   ├── processor/         # ← internal/processor/ (fetcher/{core,worker,...} + parser/{rule,worker} + validate)
 │   │   └── storage/           # ← internal/storage/
 │   └── pkg/                   # ✅ pkg/ 패키지 테스트
 │       ├── config/            # ← pkg/config/

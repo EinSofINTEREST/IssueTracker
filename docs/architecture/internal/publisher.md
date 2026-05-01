@@ -53,7 +53,7 @@ for each job in batch:
 
 ## 호출 측
 
-- [`internal/parser/worker.ParserWorker`](parser/README.md) — TargetTypeList 처리 시 발견 링크 발행
+- [`internal/processor/parser/worker.ParserWorker`](processor/parser/README.md) — TargetTypeList 처리 시 발견 링크 발행
 - [`internal/scheduler.Scheduler`](scheduler.md) 는 **미사용** — Scheduler 는 직접 `Emitter.Emit` 호출
 
 <br>
