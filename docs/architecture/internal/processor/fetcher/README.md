@@ -50,7 +50,7 @@ worker ──→ handler ──→ (domain/general → fetcher) ──→ implem
    └──→ core (interfaces, models, errors) ──── 모든 패키지가 의존
 ```
 
-> Parser engine 은 별도 패키지 (`internal/parser/`) 로 분리됨 (이슈 #196). 상세는 [`internal/parser/README.md`](../../parser/README.md).
+> Parser engine 은 별도 패키지 (`internal/processor/parser/`) 로 분리됨 (이슈 #196). 상세는 [`internal/processor/parser/README.md`](../parser/README.md).
 
 `core` 가 sink 노드 (다른 어떤 서브패키지도 의존하지 않음 — 가장 안정적인 인터페이스 계층).
 
@@ -83,7 +83,7 @@ worker ──→ handler ──→ (domain/general → fetcher) ──→ implem
 8. RawContentRef 를 issuetracker.fetched 토픽에 발행
        │
        ▼
-   (parser stage 로 핸드오프 — internal/parser/README.md)
+   (parser stage 로 핸드오프 — internal/processor/parser/README.md)
 ```
 
 각 단계의 자세한 책임은 위 패키지별 문서 참조.

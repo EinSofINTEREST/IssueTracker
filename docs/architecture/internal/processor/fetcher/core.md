@@ -12,7 +12,7 @@
 | 인터페이스         | 위치                                                              | 책임                                                  |
 |--------------------|------------------------------------------------------------------|-------------------------------------------------------|
 | `Crawler`          | [crawler.go](../../../../internal/processor/fetcher/core/crawler.go)        | Initialize / Start / Stop / Fetch / HealthCheck       |
-| `Parser`           | (동일 파일)                                                       | RawContent → 도메인 모델 (별도 [parser](../../parser/rule.md) 가 구현)  |
+| `Parser`           | (동일 파일)                                                       | RawContent → 도메인 모델 (별도 [parser](../parser/rule.md) 가 구현)  |
 | `RateLimiter`      | (동일 파일)                                                       | Wait(ctx) — 토큰 buckets 등으로 호출 빈도 제한        |
 | `URLRateLimiter`   | (동일 파일)                                                       | URL → IP 매핑 + per-IP rate limit (DNS 해석 필요)     |
 | `HTTPClient`       | [http_client.go](../../../../internal/processor/fetcher/core/http_client.go) | Do(req) — 표준 `*http.Client` wrapper                |
@@ -61,7 +61,7 @@
 ## 의존 관계
 
 - **누구도 import 하지 않는** 외부 의존 외엔 standard lib + zerolog 정도
-- 본 패키지를 import 하는 패키지: `domain/`, `handler/`, `worker/`, `parser/`, `rate_limiter/`, 그리고 [`internal/parser`](../../parser/README.md), [`internal/scheduler`](../../scheduler.md), [`internal/storage/service`](../../storage/service.md) 등 — 사실상 거의 모든 곳
+- 본 패키지를 import 하는 패키지: `domain/`, `handler/`, `worker/`, `parser/`, `rate_limiter/`, 그리고 [`internal/processor/parser`](../parser/README.md), [`internal/scheduler`](../../scheduler.md), [`internal/storage/service`](../../storage/service.md) 등 — 사실상 거의 모든 곳
 
 본 패키지가 변경되면 광범위한 영향이 있으므로 신중히. 새 인터페이스 추가는 자유롭지만 기존 인터페이스
 시그니처 변경은 큰 PR 이 됩니다.

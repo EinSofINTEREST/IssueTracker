@@ -59,7 +59,7 @@
 | `LLM_*`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | [pkg/llm](llm.md) |
 | `VALIDATE_*`       | [validate.md](../internal/processor/validate.md) |
 | `SCHEDULER_*`      | [scheduler.md](../internal/scheduler.md)      |
-| `REFINEMENT_*`     | [refiner](../internal/parser/rule.md)      |
+| `REFINEMENT_*`     | [refiner](../internal/processor/parser/rule.md)      |
 | `METRICS_ADDR`     | [pkg/metrics](metrics.md)                     |
 | `LOG_*`            | [pkg/logger](logger.md)                        |
 | `CLASSIFIER_*`     | [classifier](../internal/classifier/README.md) |

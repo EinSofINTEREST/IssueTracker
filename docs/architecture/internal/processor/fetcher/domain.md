@@ -100,5 +100,5 @@ us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, log)
 2. `sources/<country>/registry.go` 의 `Register` 에 site 추가
 3. [`internal/scheduler.DefaultEntries`](../../scheduler.md) 에 카테고리 seed entry 추가
 4. `parsing_rules` 에 host_pattern + path_pattern + selectors 시드 (마이그레이션 또는 운영자 INSERT)
-   — `path_pattern` 은 빈 문자열이면 catch-all 로 동작하며, [refiner](../../parser/rule.md) 가 누적 sample
+   — `path_pattern` 은 빈 문자열이면 catch-all 로 동작하며, [refiner](../parser/rule.md) 가 누적 sample
    기반으로 정밀화합니다 (이슈 #173).

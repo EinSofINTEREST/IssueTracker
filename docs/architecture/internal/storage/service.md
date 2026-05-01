@@ -69,8 +69,8 @@ ParserWorker (이슈 #134) 가 파싱 완료된 raw row 를 즉시 `Delete` — 
 | 호출자                                              | 사용 메소드                                       |
 |----------------------------------------------------|--------------------------------------------------|
 | [processor/fetcher/domain/general.ChainHandler](../processor/fetcher/domain.md) | `RawContentService.Store` (Claim Check)   |
-| [parser/worker.ParserWorker](../parser/README.md)   | `RawContentService.GetByID` / `Delete`<br>`ContentService.Store` |
-| [parser/worker.RawContentCleaner](../parser/README.md) | `RawContentService.PurgeOlderThan`            |
+| [parser/worker.ParserWorker](../processor/parser/README.md)   | `RawContentService.GetByID` / `Delete`<br>`ContentService.Store` |
+| [parser/worker.RawContentCleaner](../processor/parser/README.md) | `RawContentService.PurgeOlderThan`            |
 | [processor/validate.Worker](../processor/validate.md) | `ContentService.GetByID` / `Delete` / `UpdateValidationStatus` |
 
 <br>

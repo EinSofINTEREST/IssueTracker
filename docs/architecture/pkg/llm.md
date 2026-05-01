@@ -115,8 +115,8 @@ p := chain.NewWithPolicy(pol, []llm.Provider{...}, chain.WithPolicyLogger(log))
 ## 호출 측
 
 - [`cmd/issuetracker.buildLLMProvider`](../cmd/issuetracker.md) — chain 구성
-- [`internal/parser/rule/llmgen`](../internal/parser/rule.md) — selector 자동 생성
-- [`internal/parser/rule/refiner`](../internal/parser/rule.md) — path_pattern 정밀화
+- [`internal/processor/parser/rule/llmgen`](../internal/processor/parser/rule.md) — selector 자동 생성
+- [`internal/processor/parser/rule/refiner`](../internal/processor/parser/rule.md) — path_pattern 정밀화
 
 <br>
 

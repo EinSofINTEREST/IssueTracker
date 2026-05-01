@@ -37,9 +37,6 @@ docs/architecture/
 │   │   └── http.md
 │   ├── locks/                             ← 단계 무관 distributed lock (이슈 #197)
 │   │   └── README.md                      ← ProcessingLock + IngestionLock (Redis SETNX)
-│   ├── parser/
-│   │   ├── README.md                      ← Domain-Agnostic Parser + Claim Check Worker
-│   │   └── rule.md                        ← rule.Parser (DB-driven) + llmgen + pathinfer + refiner
 │   ├── processor/                         ← 파이프라인 단계별 정렬 (이슈 #195)
 │   │   ├── README.md
 │   │   ├── fetcher/                       ← Web fetch + DB-driven parse + rate limit + worker pool (이슈 #198)
@@ -50,6 +47,9 @@ docs/architecture/
 │   │   │   ├── implementation.md          ← chromedp / goquery
 │   │   │   ├── rate_limiter.md
 │   │   │   └── worker.md                  ← PoolManager + RetryScheduler + CircuitBreaker
+│   │   ├── parser/                        ← Domain-Agnostic Parser + Claim Check Worker (이슈 #204)
+│   │   │   ├── README.md
+│   │   │   └── rule.md                    ← rule.Parser (DB-driven) + llmgen + pathinfer + refiner
 │   │   └── validate.md                    ← news/community Validator
 │   ├── publisher.md                       ← chained job 발행 + IngestionLock
 │   ├── scheduler.md                       ← seed job 주기적 발행
@@ -108,7 +108,7 @@ docs/architecture/
        ▼
 ┌─────────────────────┐    rule.Parser (DB-driven, parsing_rules 테이블)
 │   ParserWorker      │      ├─ ErrNoRule  → llmgen.Generator (async, enabled=false)
-│ internal/parser/    │      └─ list 페이지 → Publisher.PublishBatch (chained CrawlJob)
+│ internal/processor/parser/    │      └─ list 페이지 → Publisher.PublishBatch (chained CrawlJob)
 │       worker        │
 └──────┬──────────────┘
        │ Content → ContentService.Store → ContentRef
@@ -130,7 +130,7 @@ docs/architecture/
 └──────────────────────────────────────────────────────────────────────────┘
 
 부수 흐름:
-  • Refiner (internal/parser/rule/refiner) — 주기적 polling 으로 llm-auto 규칙의
+  • Refiner (internal/processor/parser/rule/refiner) — 주기적 polling 으로 llm-auto 규칙의
     path_pattern 을 sample_urls 기반으로 정밀화 (이슈 #173).
   • Classifier (internal/classifier) — gRPC 기본 + HTTP fallback 으로 ELArchive Classifier
     호출 — 향후 enrich 단계에서 사용.
@@ -149,7 +149,7 @@ docs/architecture/
 | `issuetracker.crawl.normal`        | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (동일)                                    |
 | `issuetracker.crawl.low`           | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (동일)                                    |
 | `issuetracker.fetched`             | [processor/fetcher/worker](../../internal/processor/fetcher/worker/)      | `issuetracker-parsers` (`GroupParsers`)                                   |
-| `issuetracker.normalized`          | [parser/worker](../../internal/parser/worker/)        | `issuetracker-validators` (`GroupValidators`)                             |
+| `issuetracker.normalized`          | [parser/worker](../../internal/processor/parser/worker/)        | `issuetracker-validators` (`GroupValidators`)                             |
 | `issuetracker.validated`           | [processor/validate](../../internal/processor/validate/) | (downstream — TBD)                                                    |
 | `issuetracker.dlq`                 | 모든 stage 실패 분기                                  | (운영 모니터링)                                                            |
 
@@ -196,7 +196,7 @@ docs/architecture/
 
 1. [docs/architecture/cmd/issuetracker.md](cmd/issuetracker.md) — `main()` 가 어떤 모듈을 어떤 순서로 wire 하는지
 2. [docs/architecture/internal/processor/fetcher/worker.md](internal/processor/fetcher/worker.md) — Kafka consumer + lock + retry 의 핵심 패턴
-3. [docs/architecture/internal/parser/README.md](internal/parser/README.md) — Claim Check + rule-driven 파싱
+3. [docs/architecture/internal/processor/parser/README.md](internal/processor/parser/README.md) — Claim Check + rule-driven 파싱
 4. [docs/architecture/internal/storage/README.md](internal/storage/README.md) — Repository → Service 분리 원칙
 5. [docs/architecture/pkg/queue.md](pkg/queue.md) — 토픽 상수와 Kafka producer/consumer 추상
 
