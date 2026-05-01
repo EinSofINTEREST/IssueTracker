@@ -219,7 +219,7 @@ make deps
 - [x] Priority-based multi-pool manager (`PoolManager`)
 
 ✅ **News Domain Crawlers** (v0.4.0)
-- [x] News domain DIP interfaces (`internal/crawler/domain/news/news.go`)
+- [x] News domain DIP interfaces (`internal/processor/fetcher/domain/news/news.go`)
 - [x] Chain of Responsibility handler (`handler.go`) — RSS → GoQuery → Browser fallback chain
 - [x] RSS/GoQuery/Browser adapters (`fetcher/`)
 - [x] **Korean Sources**:
@@ -520,7 +520,7 @@ See [examples/basic_usage.go](examples/basic_usage.go) for a complete example:
 ```go
 import (
   "issuetracker/pkg/logger"
-  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/processor/fetcher/core"
 )
 
 // Setup logger (development mode with pretty printing)

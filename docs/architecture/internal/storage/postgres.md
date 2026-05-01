@@ -70,7 +70,7 @@ poolCfg.MaxConnIdleTime = 10 * time.Minute
 ## 의존
 
 - [`internal/storage`](README.md) — 인터페이스 + 공유 타입
-- [`internal/crawler/core`](../crawler/core.md) — `Content`, `RawContent`
+- [`internal/processor/fetcher/core`](../processor/fetcher/core.md) — `Content`, `RawContent`
 - [`pkg/config`](../../pkg/config.md), [`pkg/logger`](../../pkg/logger.md)
 - 외부: `github.com/jackc/pgx/v5`, `pgxpool`, `github.com/jackc/pgerrcode`
 

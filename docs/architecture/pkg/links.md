@@ -37,13 +37,13 @@ canonical, err := n.Normalize("https://www.Example.com/path/?utm_source=x#frag")
 ## Extractor
 
 [extractor.go](../../../pkg/links/extractor.go) — HTML + base URL → 절대 URL 리스트. 구현 자체는 generic 이며,
-boundary 변환은 [`internal/crawler/core.HTMLLinkExtractor`](../internal/crawler/core.md) 가 수행:
+boundary 변환은 [`internal/processor/fetcher/core.HTMLLinkExtractor`](../internal/processor/fetcher/core.md) 가 수행:
 
 ```go
 // pkg/links (generic util — fmt.Errorf wrap)
 extracted, err := pkgLinks.Extract(html, baseURL)
 
-// internal/crawler/core (boundary — CrawlerError 변환)
+// internal/processor/fetcher/core (boundary — CrawlerError 변환)
 func (e *HTMLLinkExtractor) Extract(raw *RawContent) ([]Link, error) {
     res, err := e.inner.Extract(raw.HTML, raw.URL)
     if err != nil {
@@ -66,4 +66,4 @@ func (e *HTMLLinkExtractor) Extract(raw *RawContent) ([]Link, error) {
 
 - [`internal/publisher`](../internal/publisher.md) — Publisher.SetNormalizer
 - [`internal/parser/rule/discovery`](../internal/parser/rule.md) — full-page link discovery
-- [`internal/crawler/core/extractor`](../internal/crawler/core.md) — boundary wrapper
+- [`internal/processor/fetcher/core/extractor`](../internal/processor/fetcher/core.md) — boundary wrapper

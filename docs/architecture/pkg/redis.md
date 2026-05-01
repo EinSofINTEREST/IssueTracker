@@ -19,7 +19,7 @@ defer client.Close()
 
 - `RedisProcessingLock` ([`internal/locks`](../internal/locks/README.md)) — `SET ... NX PX ttl` (이슈 #178)
 - `RedisIngestionLock` ([`internal/locks`](../internal/locks/README.md)) — `SET ... NX PX ttl`
-- `RedisDelayedRetryScheduler` ([`internal/crawler/worker`](../internal/crawler/worker.md)) — ZSET (`ZADD score=runAt`, `ZRANGEBYSCORE`, `ZREM`)
+- `RedisDelayedRetryScheduler` ([`internal/processor/fetcher/worker`](../internal/processor/fetcher/worker.md)) — ZSET (`ZADD score=runAt`, `ZRANGEBYSCORE`, `ZREM`)
 
 <br>
 
@@ -52,7 +52,7 @@ defer client.Close()
 
 - [`cmd/issuetracker`](../cmd/issuetracker.md) 단계 7 — `redis.New(ctx, cfg)` + `defer client.Close()`
 - [`internal/locks`](../internal/locks/README.md) — Client 를 받아 ProcessingLock / IngestionLock 구현
-- [`internal/crawler/worker`](../internal/crawler/worker.md) — Client 를 받아 RetryScheduler 구현
+- [`internal/processor/fetcher/worker`](../internal/processor/fetcher/worker.md) — Client 를 받아 RetryScheduler 구현
 
 Redis 가 부재일 때 [`cmd/issuetracker`](../cmd/issuetracker.md) 는 graceful degrade — `NoopProcessingLock`
 fallback.

@@ -29,7 +29,7 @@ issuetracker/
 ├── test/                       # Test files (mirrors service architecture)
 │   ├── internal/              # internal/ 패키지 테스트
 │   │   ├── classifier/        # ← internal/classifier/
-│   │   ├── crawler_core/      # ← internal/crawler/core/
+│   │   ├── crawler_core/      # ← internal/processor/fetcher/core/
 │   │   └── storage/           # ← internal/storage/
 │   └── pkg/                   # pkg/ 패키지 테스트
 │       ├── config/            # ← pkg/config/
@@ -84,7 +84,7 @@ issuetracker/
 package main
 
 import (
-  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/processor/fetcher/core"
   "issuetracker/pkg/logger"
 )
 
@@ -102,7 +102,7 @@ func main() {
 - Examples: `crawler/core`, `processor`, `storage`
 
 **Key Rules:**
-- Go compiler prevents imports like `github.com/other/project/internal/crawler`
+- Go compiler prevents imports like `github.com/other/project/internal/secret`
 - Use this for application-specific code
 - Well-structured internal packages promote modularity
 
@@ -133,7 +133,7 @@ func main() {
 **디렉토리 매핑 예시:**
 ```
 internal/classifier/handler.go     → test/internal/classifier/handler_test.go
-internal/crawler/core/retry.go     → test/internal/crawler_core/retry_test.go
+internal/processor/fetcher/core/retry.go     → test/internal/crawler_core/retry_test.go
 pkg/logger/logger.go               → test/pkg/logger/logger_test.go
 ```
 
@@ -201,7 +201,7 @@ pkg/logger/logger.go               → test/pkg/logger/logger_test.go
 
 ### Internal Packages
 ```go
-import "issuetracker/internal/crawler/core"
+import "issuetracker/internal/processor/fetcher/core"
 ```
 
 - Use for private application code
@@ -332,8 +332,8 @@ type Crawler struct {
 ✓ crawler → models
 ✗ crawler → models → crawler
 
-✓ cmd/crawler → internal/crawler/core → pkg/logger
-✗ pkg/logger → internal/crawler/core
+✓ cmd/crawler → internal/processor/fetcher/core → pkg/logger
+✗ pkg/logger → internal/processor/fetcher/core
 ```
 
 ## Growth Strategy

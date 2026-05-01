@@ -74,7 +74,7 @@
 
 ## 의존
 
-- [`internal/crawler/core`](../crawler/core.md) — `Content`, `RawContent`
+- [`internal/processor/fetcher/core`](../processor/fetcher/core.md) — `Content`, `RawContent`
 - [`pkg/config`](../../pkg/config.md), [`pkg/logger`](../../pkg/logger.md)
 - 외부: `github.com/jackc/pgx/v5`, `github.com/jackc/pgerrcode`
 

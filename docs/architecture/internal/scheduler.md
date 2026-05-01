@@ -82,8 +82,8 @@ sched.SetThrottler(throttler)
 
 ## 의존
 
-- [`internal/crawler/core`](crawler/core.md) — `CrawlJob`, `Priority`, `TargetType`
-- [`internal/crawler/domain/general/sources/{kr,us}/.../config`](crawler/domain.md) — 카테고리 URL
+- [`internal/processor/fetcher/core`](processor/fetcher/core.md) — `CrawlJob`, `Priority`, `TargetType`
+- [`internal/processor/fetcher/domain/general/sources/{kr,us}/.../config`](processor/fetcher/domain.md) — 카테고리 URL
 - [`pkg/queue`](../pkg/queue.md) — Kafka producer / BacklogChecker
 - [`pkg/urlguard`](../pkg/urlguard.md), [`pkg/logger`](../pkg/logger.md)
 

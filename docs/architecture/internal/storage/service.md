@@ -59,7 +59,7 @@ ParserWorker (이슈 #134) 가 파싱 완료된 raw row 를 즉시 `Delete` — 
 ## 의존
 
 - [`internal/storage`](README.md) — Repository 인터페이스 + 공유 타입
-- [`internal/crawler/core`](../crawler/core.md) — `Content`, `RawContent`
+- [`internal/processor/fetcher/core`](../processor/fetcher/core.md) — `Content`, `RawContent`
 - [`pkg/logger`](../../pkg/logger.md)
 
 <br>
@@ -68,7 +68,7 @@ ParserWorker (이슈 #134) 가 파싱 완료된 raw row 를 즉시 `Delete` — 
 
 | 호출자                                              | 사용 메소드                                       |
 |----------------------------------------------------|--------------------------------------------------|
-| [crawler/domain/general.ChainHandler](../crawler/domain.md) | `RawContentService.Store` (Claim Check)   |
+| [processor/fetcher/domain/general.ChainHandler](../processor/fetcher/domain.md) | `RawContentService.Store` (Claim Check)   |
 | [parser/worker.ParserWorker](../parser/README.md)   | `RawContentService.GetByID` / `Delete`<br>`ContentService.Store` |
 | [parser/worker.RawContentCleaner](../parser/README.md) | `RawContentService.PurgeOlderThan`            |
 | [processor/validate.Worker](../processor/validate.md) | `ContentService.GetByID` / `Delete` / `UpdateValidationStatus` |

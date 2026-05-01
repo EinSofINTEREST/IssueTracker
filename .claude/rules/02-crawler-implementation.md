@@ -482,7 +482,7 @@ type Target struct {
 ### Per-Source Modules
 
 ```
-internal/crawler/news/us/
+internal/processor/fetcher/news/us/
 ├── cnn/
 │   ├── crawler.go      # Implements Crawler interface
 │   ├── parser.go       # HTML parsing logic

@@ -1,7 +1,7 @@
-# internal/crawler/domain — Generic Fetcher Chain & Source Configs
+# internal/processor/fetcher/domain — Generic Fetcher Chain & Source Configs
 
-소스: [`internal/crawler/domain/`](../../../../internal/crawler/domain/)
-주 패키지: [`internal/crawler/domain/general/`](../../../../internal/crawler/domain/general/)
+소스: [`internal/processor/fetcher/domain/`](../../../../internal/processor/fetcher/domain/)
+주 패키지: [`internal/processor/fetcher/domain/general/`](../../../../internal/processor/fetcher/domain/general/)
 
 도메인 중립 (news / community / blog 모두 공용) 의 Fetcher Chain of Responsibility 와, 사이트별 config
 (카테고리 URL / RPS / Source 메타) 등록 지점입니다.
@@ -12,11 +12,11 @@
 
 | 위치                                                                      | 역할                                                            |
 |--------------------------------------------------------------------------|-----------------------------------------------------------------|
-| [types.go](../../../../internal/crawler/domain/general/types.go)          | `SourceCrawler` (=`core.Crawler` 별칭), `Fetcher`, `JobPublisher` 인터페이스 |
-| [handler.go](../../../../internal/crawler/domain/general/handler.go)      | `FetchHandler` (Chain link) — 실패 시 다음 link 로 위임          |
-| [chain_handler.go](../../../../internal/crawler/domain/general/chain_handler.go) | `ChainHandler` — fetch chain 실행 → raw_contents 저장 → RawContentRef 발행 |
-| [source_crawler.go](../../../../internal/crawler/domain/general/source_crawler.go) | `genericCrawler` — `core.Crawler` 의 default 구현               |
-| [convert.go](../../../../internal/crawler/domain/general/convert.go)      | `parser.Page` ↔ `core.Content` 양방향 변환                      |
+| [types.go](../../../../internal/processor/fetcher/domain/general/types.go)          | `SourceCrawler` (=`core.Crawler` 별칭), `Fetcher`, `JobPublisher` 인터페이스 |
+| [handler.go](../../../../internal/processor/fetcher/domain/general/handler.go)      | `FetchHandler` (Chain link) — 실패 시 다음 link 로 위임          |
+| [chain_handler.go](../../../../internal/processor/fetcher/domain/general/chain_handler.go) | `ChainHandler` — fetch chain 실행 → raw_contents 저장 → RawContentRef 발행 |
+| [source_crawler.go](../../../../internal/processor/fetcher/domain/general/source_crawler.go) | `genericCrawler` — `core.Crawler` 의 default 구현               |
+| [convert.go](../../../../internal/processor/fetcher/domain/general/convert.go)      | `parser.Page` ↔ `core.Content` 양방향 변환                      |
 
 <br>
 
@@ -85,10 +85,10 @@ us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, log)
 
 ## 의존
 
-- [`internal/crawler/core`](core.md) — 모든 인터페이스/모델
-- [`internal/crawler/handler`](handler.md) — Registry 등록 대상
-- [`internal/crawler/implementation/{goquery,chromedp}`](implementation.md) — 실제 fetcher
-- [`internal/storage/service`](../storage/service.md) — `RawContentService` (Claim Check 저장)
+- [`internal/processor/fetcher/core`](core.md) — 모든 인터페이스/모델
+- [`internal/processor/fetcher/handler`](handler.md) — Registry 등록 대상
+- [`internal/processor/fetcher/implementation/{goquery,chromedp}`](implementation.md) — 실제 fetcher
+- [`internal/storage/service`](../../storage/service.md) — `RawContentService` (Claim Check 저장)
 - [`pkg/queue`](../../pkg/queue.md) — Kafka producer
 - [`pkg/links`](../../pkg/links.md) — URL normalize / link extract
 
@@ -98,7 +98,7 @@ us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, log)
 
 1. `sources/<country>/<site>/config.go` 생성 (`SourceInfo` + 카테고리 URL + RPS)
 2. `sources/<country>/registry.go` 의 `Register` 에 site 추가
-3. [`internal/scheduler.DefaultEntries`](../scheduler.md) 에 카테고리 seed entry 추가
+3. [`internal/scheduler.DefaultEntries`](../../scheduler.md) 에 카테고리 seed entry 추가
 4. `parsing_rules` 에 host_pattern + path_pattern + selectors 시드 (마이그레이션 또는 운영자 INSERT)
-   — `path_pattern` 은 빈 문자열이면 catch-all 로 동작하며, [refiner](../parser/rule.md) 가 누적 sample
+   — `path_pattern` 은 빈 문자열이면 catch-all 로 동작하며, [refiner](../../parser/rule.md) 가 누적 sample
    기반으로 정밀화합니다 (이슈 #173).

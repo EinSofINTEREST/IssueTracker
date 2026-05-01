@@ -22,7 +22,7 @@
 
 ## Layer Rules — When to Use `CrawlerError` vs `fmt.Errorf`
 
-본 프로젝트는 `internal/crawler/core.CrawlerError` 를 시스템 전반의 구조화 에러 타입으로
+본 프로젝트는 `internal/processor/fetcher/core.CrawlerError` 를 시스템 전반의 구조화 에러 타입으로
 사용합니다(타입 이름은 역사적 사유). 모든 에러 생성을 일률적으로 구조화하지 않고, 레이어별
 규칙을 명확히 분리합니다.
 
@@ -33,7 +33,7 @@
 
 | 레이어 | 카테고리 | 생성자 |
 |---|---|---|
-| `internal/crawler/` 의 fetch/parse 결과 | `Network`, `RateLimit`, `Timeout`, `Parse`, `NotFound`, `Forbidden` | `NewNetworkError`, `NewRateLimitError`, `NewTimeoutError`, `NewParseError`, `NewNotFoundError`, `NewForbiddenError`, `NewHTTPServerError`, `NewHTTPClientError` |
+| `internal/processor/fetcher/` 의 fetch/parse 결과 | `Network`, `RateLimit`, `Timeout`, `Parse`, `NotFound`, `Forbidden` | `NewNetworkError`, `NewRateLimitError`, `NewTimeoutError`, `NewParseError`, `NewNotFoundError`, `NewForbiddenError`, `NewHTTPServerError`, `NewHTTPClientError` |
 | `internal/processor/validate/` 의 검증 결과 | `Validation` | `NewValidationError` (코드: `VAL_001` ~ `VAL_006`) |
 | `internal/storage/service/` 의 boundary 메소드 | `Storage` | `NewStorageError` (`STORAGE_001` 조회 / `STORAGE_002` 저장 / `STORAGE_003` 삭제) |
 | 카테고리화된 DB 에러를 식별 가능한 곳 | `Database` | `NewDatabaseError` (`DB_001` ~ `DB_004`) |
@@ -44,7 +44,7 @@
 
 - **`pkg/` 의 generic 유틸 패키지** (`pkg/queue`, `pkg/links`, `pkg/redis`, `pkg/config`)
   - `pkg/` 는 도메인 의존성을 갖지 않는 standalone 라이브러리로 설계됨.
-  - `internal/crawler/core` 를 import 하면 레이어링이 무너짐.
+  - `internal/processor/fetcher/core` 를 import 하면 레이어링이 무너짐.
   - 호출하는 `internal/` boundary 에서 카테고리에 맞는 `CrawlerError` 로 변환해 wrap 합니다.
 - **`internal/` 의 helper / 내부 함수**
   - 패키지 외부로 노출되지 않는 helper 는 fmt.Errorf 로 충분.
@@ -63,7 +63,7 @@ func (e *Extractor) Extract(html, baseURL string) ([]Link, error) {
     ...
 }
 
-// internal/crawler/core/extractor.go (boundary — CrawlerError 로 변환)
+// internal/processor/fetcher/core/extractor.go (boundary — CrawlerError 로 변환)
 func (e *HTMLLinkExtractor) Extract(raw *RawContent) ([]Link, error) {
     extracted, err := e.inner.Extract(raw.HTML, raw.URL)
     if err != nil {
@@ -417,16 +417,16 @@ log.WithError(err).Error("failed to send message to dlq")
 
 컴포넌트별로 모든 로그 항목에 반드시 포함해야 하는 최소 필드입니다.
 
-**HTTP Client** (`internal/crawler/core/http_client.go`):
+**HTTP Client** (`internal/processor/fetcher/core/http_client.go`):
 - 모든 로그: `url`
 - 요청 완료 시: `status_code`, `duration_ms`
 - 에러 발생 시: `error_code`
 
-**Retry Logic** (`internal/crawler/core/retry.go`):
+**Retry Logic** (`internal/processor/fetcher/core/retry.go`):
 - 재시도 시: `attempt`, `max_attempts`, `delay_ms`
 - 에러 포함: `.WithError(err)` 체이닝
 
-**Worker Pool** (`internal/crawler/worker/`):
+**Worker Pool** (`internal/processor/fetcher/worker/`):
 - Job 처리 로그: `job_id`, `crawler`
 - Job 시작/완료 로그: `job_id`, `crawler`, `url`
 - Pool 라이프사이클 로그: `priority`, `worker_count`

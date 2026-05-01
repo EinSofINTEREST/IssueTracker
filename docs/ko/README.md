@@ -197,7 +197,7 @@ make deps
 - [x] 우선순위 기반 다중 풀 매니저 (`PoolManager`)
 
 ✅ **뉴스 도메인 크롤러** (v0.4.0)
-- [x] 뉴스 도메인 DIP 인터페이스 (`internal/crawler/domain/news/news.go`)
+- [x] 뉴스 도메인 DIP 인터페이스 (`internal/processor/fetcher/domain/news/news.go`)
 - [x] Chain of Responsibility 핸들러 (`handler.go`) — RSS → GoQuery → Browser 폴백 체인
 - [x] RSS/GoQuery/Browser 어댑터 (`fetcher/`)
 - [x] **한국 소스**:
@@ -469,7 +469,7 @@ golangci-lint run
 ```go
 import (
   "issuetracker/pkg/logger"
-  "issuetracker/internal/crawler/core"
+  "issuetracker/internal/processor/fetcher/core"
 )
 
 // 로거 설정 (개발 모드, pretty printing)

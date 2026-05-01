@@ -1,6 +1,6 @@
-# internal/crawler/ — Web Crawling Subsystem
+# internal/processor/fetcher/ — Web Crawling Subsystem
 
-[`internal/crawler/`](../../../../internal/crawler/) 는 IssueTracker 의 **fetch 단계**를 구성하는
+[`internal/processor/fetcher/`](../../../../internal/processor/fetcher/) 는 IssueTracker 의 **fetch 단계**를 구성하는
 패키지군입니다. 토픽 `issuetracker.crawl.{high,normal,low}` 를 consume 하여 웹페이지 본문을 가져오고,
 [Claim Check 패턴](https://learn.microsoft.com/en-us/azure/architecture/patterns/claim-check) 으로
 `raw_contents` 테이블에 저장한 뒤 `RawContentRef` 를 `issuetracker.fetched` 에 발행합니다.
@@ -10,7 +10,7 @@
 ## 서브패키지 트리
 
 ```
-internal/crawler/
+internal/processor/fetcher/
 ├── core/             ← 인터페이스 + 모델 + 에러 (모든 다른 패키지가 의존)
 ├── handler/          ← Registry: crawler_name → Handler
 ├── domain/general/   ← Fetcher Chain of Responsibility + 사이트별 config
@@ -28,12 +28,12 @@ internal/crawler/
 
 | 패키지                                                              | 문서                                       |
 |---------------------------------------------------------------------|-------------------------------------------|
-| [`internal/crawler/core/`](../../../../internal/crawler/core/)       | [core.md](core.md)                        |
-| [`internal/crawler/handler/`](../../../../internal/crawler/handler/) | [handler.md](handler.md)                  |
-| [`internal/crawler/domain/`](../../../../internal/crawler/domain/)   | [domain.md](domain.md)                    |
-| [`internal/crawler/implementation/`](../../../../internal/crawler/implementation/) | [implementation.md](implementation.md) |
-| [`internal/crawler/rate_limiter/`](../../../../internal/crawler/rate_limiter/) | [rate_limiter.md](rate_limiter.md) |
-| [`internal/crawler/worker/`](../../../../internal/crawler/worker/)   | [worker.md](worker.md)                    |
+| [`internal/processor/fetcher/core/`](../../../../internal/processor/fetcher/core/)       | [core.md](core.md)                        |
+| [`internal/processor/fetcher/handler/`](../../../../internal/processor/fetcher/handler/) | [handler.md](handler.md)                  |
+| [`internal/processor/fetcher/domain/`](../../../../internal/processor/fetcher/domain/)   | [domain.md](domain.md)                    |
+| [`internal/processor/fetcher/implementation/`](../../../../internal/processor/fetcher/implementation/) | [implementation.md](implementation.md) |
+| [`internal/processor/fetcher/rate_limiter/`](../../../../internal/processor/fetcher/rate_limiter/) | [rate_limiter.md](rate_limiter.md) |
+| [`internal/processor/fetcher/worker/`](../../../../internal/processor/fetcher/worker/)   | [worker.md](worker.md)                    |
 
 <br>
 
@@ -50,7 +50,7 @@ worker ──→ handler ──→ (domain/general → fetcher) ──→ implem
    └──→ core (interfaces, models, errors) ──── 모든 패키지가 의존
 ```
 
-> Parser engine 은 별도 패키지 (`internal/parser/`) 로 분리됨 (이슈 #196). 상세는 [`internal/parser/README.md`](../parser/README.md).
+> Parser engine 은 별도 패키지 (`internal/parser/`) 로 분리됨 (이슈 #196). 상세는 [`internal/parser/README.md`](../../parser/README.md).
 
 `core` 가 sink 노드 (다른 어떤 서브패키지도 의존하지 않음 — 가장 안정적인 인터페이스 계층).
 

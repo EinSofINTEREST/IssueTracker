@@ -688,7 +688,7 @@ test/                               # 모든 테스트 파일의 루트
 │   │   ├── handler_test.go
 │   │   └── http/                  # ← internal/classifier/http/
 │   │       └── client_test.go
-│   ├── crawler_core/               # ← internal/crawler/core/
+│   ├── crawler_core/               # ← internal/processor/fetcher/core/
 │   │   ├── errors_test.go
 │   │   ├── http_client_test.go
 │   │   ├── models_test.go

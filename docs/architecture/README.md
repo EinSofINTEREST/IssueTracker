@@ -35,21 +35,21 @@ docs/architecture/
 │   │   ├── README.md
 │   │   ├── grpc.md
 │   │   └── http.md
-│   ├── crawler/
-│   │   ├── README.md
-│   │   ├── core.md                        ← 인터페이스 + 모델 + 에러
-│   │   ├── domain.md                      ← Fetcher chain + 사이트 등록
-│   │   ├── handler.md                     ← Registry (crawler_name → Handler)
-│   │   ├── implementation.md              ← chromedp / goquery
-│   │   ├── rate_limiter.md
-│   │   └── worker.md                      ← PoolManager + RetryScheduler + CircuitBreaker
 │   ├── locks/                             ← 단계 무관 distributed lock (이슈 #197)
 │   │   └── README.md                      ← ProcessingLock + IngestionLock (Redis SETNX)
 │   ├── parser/
 │   │   ├── README.md                      ← Domain-Agnostic Parser + Claim Check Worker
 │   │   └── rule.md                        ← rule.Parser (DB-driven) + llmgen + pathinfer + refiner
-│   ├── processor/
+│   ├── processor/                         ← 파이프라인 단계별 정렬 (이슈 #195)
 │   │   ├── README.md
+│   │   ├── fetcher/                       ← Web fetch + DB-driven parse + rate limit + worker pool (이슈 #198)
+│   │   │   ├── README.md
+│   │   │   ├── core.md                    ← 인터페이스 + 모델 + 에러
+│   │   │   ├── domain.md                  ← Fetcher chain + 사이트 등록
+│   │   │   ├── handler.md                 ← Registry (crawler_name → Handler)
+│   │   │   ├── implementation.md          ← chromedp / goquery
+│   │   │   ├── rate_limiter.md
+│   │   │   └── worker.md                  ← PoolManager + RetryScheduler + CircuitBreaker
 │   │   └── validate.md                    ← news/community Validator
 │   ├── publisher.md                       ← chained job 발행 + IngestionLock
 │   ├── scheduler.md                       ← seed job 주기적 발행
@@ -89,14 +89,14 @@ docs/architecture/
 ┌─────────────────────┐    ProcessingLock (Redis SETNX) — URL 동시처리 방지
 │   PoolManager       │    CircuitBreaker — source 단위 실패 트래킹
 │   (3-tier pools)    │    RetryScheduler (Redis ZSET) — 지연 재시도
-│ internal/crawler/   │
+│ internal/processor/fetcher/   │
 │       worker        │
 └──────┬──────────────┘
        │ dispatch by crawler_name
        ▼
 ┌─────────────────────┐    Chain of Responsibility:
 │  ChainHandler       │      goquery (정적 HTML)
-│ (crawler/domain/    │        ↓ (동적/lazy 감지)
+│ (processor/fetcher/domain/    │        ↓ (동적/lazy 감지)
 │      general)       │      chromedp (헤드리스 Chrome)
 └──────┬──────────────┘
        │ RawContent → DB(raw_contents) → RawContentRef (Claim Check)
@@ -148,12 +148,12 @@ docs/architecture/
 | `issuetracker.crawl.high`          | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (`GroupCrawlerWorkers`) — 3 토픽 단일 그룹 |
 | `issuetracker.crawl.normal`        | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (동일)                                    |
 | `issuetracker.crawl.low`           | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (동일)                                    |
-| `issuetracker.fetched`             | [crawler/worker](../../internal/crawler/worker/)      | `issuetracker-parsers` (`GroupParsers`)                                   |
+| `issuetracker.fetched`             | [processor/fetcher/worker](../../internal/processor/fetcher/worker/)      | `issuetracker-parsers` (`GroupParsers`)                                   |
 | `issuetracker.normalized`          | [parser/worker](../../internal/parser/worker/)        | `issuetracker-validators` (`GroupValidators`)                             |
 | `issuetracker.validated`           | [processor/validate](../../internal/processor/validate/) | (downstream — TBD)                                                    |
 | `issuetracker.dlq`                 | 모든 stage 실패 분기                                  | (운영 모니터링)                                                            |
 
-> 3-tier priority topic 은 **단일 consumer group** 을 공유합니다 — [PoolManager](../../internal/crawler/worker/manager.go) 가 priority 별
+> 3-tier priority topic 은 **단일 consumer group** 을 공유합니다 — [PoolManager](../../internal/processor/fetcher/worker/manager.go) 가 priority 별
 > Consumer 인스턴스 3개를 같은 group ID 로 띄워, Kafka 가 파티션을 자동 분배합니다.
 > 상수 정의는 [`pkg/queue/config.go`](../../pkg/queue/config.go) 단일 소스.
 
@@ -165,9 +165,9 @@ docs/architecture/
 |----------------------------|------------------------------------------------------------|-----------------------------------------------|
 | Kafka                      | [pkg/queue/](../../pkg/queue/)                              | 모든 stage 간 메시지 버스                      |
 | PostgreSQL                 | [internal/storage/postgres/](../../internal/storage/postgres/) | contents / content_bodies / content_meta / raw_contents / parsing_rules / sample_urls / schema_migrations |
-| Redis                      | [pkg/redis/](../../pkg/redis/), [internal/locks/](../../internal/locks/), [internal/crawler/worker/](../../internal/crawler/worker/) | ProcessingLock + IngestionLock (locks) / RetryQueue ZSET (crawler/worker) |
+| Redis                      | [pkg/redis/](../../pkg/redis/), [internal/locks/](../../internal/locks/), [internal/processor/fetcher/worker/](../../internal/processor/fetcher/worker/) | ProcessingLock + IngestionLock (locks) / RetryQueue ZSET (processor/fetcher/worker) |
 | LLM (Gemini/OpenAI/Claude) | [pkg/llm/](../../pkg/llm/)                                  | parser rule 자동 생성 / path_pattern refinement |
-| Chrome (CDP)               | [internal/crawler/implementation/chromedp/](../../internal/crawler/implementation/chromedp/) | 동적 페이지 헤드리스 렌더                      |
+| Chrome (CDP)               | [internal/processor/fetcher/implementation/chromedp/](../../internal/processor/fetcher/implementation/chromedp/) | 동적 페이지 헤드리스 렌더                      |
 | ELArchive Classifier       | [internal/classifier/](../../internal/classifier/) + [proto/classifier/](../../proto/classifier/) | 카테고리 분류 (gRPC primary, HTTP fallback)    |
 | Prometheus                 | [pkg/metrics/](../../pkg/metrics/)                          | `/metrics` 엔드포인트                          |
 
@@ -195,7 +195,7 @@ docs/architecture/
 처음 합류한 사람 기준:
 
 1. [docs/architecture/cmd/issuetracker.md](cmd/issuetracker.md) — `main()` 가 어떤 모듈을 어떤 순서로 wire 하는지
-2. [docs/architecture/internal/crawler/worker.md](internal/crawler/worker.md) — Kafka consumer + lock + retry 의 핵심 패턴
+2. [docs/architecture/internal/processor/fetcher/worker.md](internal/processor/fetcher/worker.md) — Kafka consumer + lock + retry 의 핵심 패턴
 3. [docs/architecture/internal/parser/README.md](internal/parser/README.md) — Claim Check + rule-driven 파싱
 4. [docs/architecture/internal/storage/README.md](internal/storage/README.md) — Repository → Service 분리 원칙
 5. [docs/architecture/pkg/queue.md](pkg/queue.md) — 토픽 상수와 Kafka producer/consumer 추상
