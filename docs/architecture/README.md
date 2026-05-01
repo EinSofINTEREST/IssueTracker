@@ -149,7 +149,7 @@ docs/architecture/
 | `issuetracker.crawl.normal`        | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (동일)                                    |
 | `issuetracker.crawl.low`           | [scheduler](../../internal/scheduler/) / publisher    | `issuetracker-crawler-workers` (동일)                                    |
 | `issuetracker.fetched`             | [processor/fetcher/worker](../../internal/processor/fetcher/worker/)      | `issuetracker-parsers` (`GroupParsers`)                                   |
-| `issuetracker.normalized`          | [parser/worker](../../internal/processor/parser/worker/)        | `issuetracker-validators` (`GroupValidators`)                             |
+| `issuetracker.normalized`          | [processor/parser/worker](../../internal/processor/parser/worker/)        | `issuetracker-validators` (`GroupValidators`)                             |
 | `issuetracker.validated`           | [processor/validate](../../internal/processor/validate/) | (downstream — TBD)                                                    |
 | `issuetracker.dlq`                 | 모든 stage 실패 분기                                  | (운영 모니터링)                                                            |
 
