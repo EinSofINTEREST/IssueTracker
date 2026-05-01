@@ -90,34 +90,20 @@ Following [Standard Go Project Layout](https://github.com/golang-standards/proje
 ```
 issuetracker/
 ├── cmd/                        # Application entry points (all build to bin/)
-│   ├── crawler/               # ✅ Crawler pool manager → bin/crawler
+│   ├── api/                   # ✅ HTTP API server → bin/api
 │   │   └── main.go
-│   ├── processor/             # ✅ Validate worker → bin/processor
+│   ├── processor/             # ✅ Validator-only standalone → bin/processor
 │   │   └── main.go
-│   ├── issuetracker/          # ✅ Crawler + Processor combined → bin/issuetracker
+│   ├── issuetracker/          # ✅ Fetcher + Parser + Validator combined → bin/issuetracker
 │   │   └── main.go
 │   ├── migrate/               # ✅ DB migration (up) → bin/migrate
 │   │   └── main.go
-│   └── migrate-down/          # ✅ DB migration (down) → bin/migrate-down
+│   ├── migrate-down/          # ✅ DB migration (down) → bin/migrate-down
+│   │   └── main.go
+│   └── rldebug/               # ✅ Rate limiter debug 도구 → bin/rldebug
 │       └── main.go
 │
 ├── internal/                   # Private application code
-│   ├── crawler/
-│   │   ├── core/              # ✅ Core crawler implementation
-│   │   │   ├── crawler.go     # Crawler interfaces
-│   │   │   ├── errors.go      # Error types
-│   │   │   ├── http_client.go # HTTP client
-│   │   │   ├── models.go      # Data models
-│   │   │   ├── rate_limiter.go# Rate limiter
-│   │   │   └── retry.go       # Retry logic
-│   │   ├── news/              # News source crawlers (planned)
-│   │   │   ├── us/            # US sources
-│   │   │   │   ├── cnn/
-│   │   │   │   └── nytimes/
-│   │   │   └── kr/            # Korean sources
-│   │   │       ├── naver/
-│   │   │       └── daum/
-│   │   └── community/         # Community crawlers (planned)
 │   ├── parser/                # ✅ Domain-agnostic parser + DB-driven rule engine (이슈 #100, #196)
 │   │   ├── parser.go          # ContentParser / LinkListParser interfaces + Page model
 │   │   ├── rule/              # parsing_rules 기반 단일 engine
@@ -128,10 +114,15 @@ issuetracker/
 │   ├── locks/                 # ✅ 단계 무관 distributed lock — fetcher/parser/validator 공유 (이슈 #197)
 │   │   ├── ingestion_lock.go  # IngestionLock (Publisher 가 Kafka enqueue 직전 사용)
 │   │   └── processing_lock.go # ProcessingLock + ProcessingKey(stage, url)
-│   ├── processor/             # Processing pipeline (planned)
-│   │   ├── normalize/         # Data normalization
-│   │   ├── enrich/            # Data enrichment
-│   │   └── validate/          # Validation logic
+│   ├── processor/             # ✅ 파이프라인 단계별 정렬 (이슈 #195)
+│   │   ├── fetcher/           # ✅ Web fetch + DB-driven parse 라우팅 + worker pool (이슈 #198)
+│   │   │   ├── core/          # 인터페이스 + 모델 + 에러 + HTTP client + retry
+│   │   │   ├── handler/       # crawler_name → Handler registry
+│   │   │   ├── implementation/# chromedp / goquery 구현체
+│   │   │   ├── domain/        # 사이트 chain handler + 사이트별 등록 (sources/)
+│   │   │   ├── rate_limiter/  # IP 단위 token bucket
+│   │   │   └── worker/        # PoolManager + KafkaConsumerPool + RetryScheduler + CircuitBreaker
+│   │   └── validate/          # Validate worker (Validation logic)
 │   ├── embedding/             # Embedding & ML (planned)
 │   │   ├── model/             # Embedding models
 │   │   ├── cluster/           # Clustering logic
@@ -150,7 +141,9 @@ issuetracker/
 ├── test/                       # Test files (mirrors service architecture)
 │   ├── internal/              # ✅ internal/ 패키지 테스트
 │   │   ├── classifier/        # ← internal/classifier/
-│   │   ├── crawler_core/      # ← internal/crawler/core/
+│   │   ├── locks/             # ← internal/locks/
+│   │   ├── parser/            # ← internal/parser/
+│   │   ├── processor/         # ← internal/processor/ (fetcher/{core,worker,...} + validate)
 │   │   └── storage/           # ← internal/storage/
 │   └── pkg/                   # ✅ pkg/ 패키지 테스트
 │       ├── config/            # ← pkg/config/

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"issuetracker/internal/crawler/core"
-	cdp "issuetracker/internal/crawler/implementation/chromedp"
-	"issuetracker/internal/crawler/implementation/goquery"
+	"issuetracker/internal/processor/fetcher/core"
+	cdp "issuetracker/internal/processor/fetcher/implementation/chromedp"
+	"issuetracker/internal/processor/fetcher/implementation/goquery"
 	"issuetracker/pkg/logger"
 )
 

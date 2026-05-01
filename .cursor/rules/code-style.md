@@ -43,7 +43,7 @@ import (
   "github.com/rs/zerolog/log"
 
   // Internal packages
-  "issuetracker/internal/crawler"
+  "issuetracker/internal/processor/fetcher"
   "issuetracker/pkg/logger"
 )
 ```

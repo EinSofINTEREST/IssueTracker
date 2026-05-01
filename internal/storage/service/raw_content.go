@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 )

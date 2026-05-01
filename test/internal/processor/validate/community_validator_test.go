@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/community"
 	"issuetracker/pkg/config"
 )

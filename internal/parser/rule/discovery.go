@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"regexp"
 
-	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/parser"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/links"
 )

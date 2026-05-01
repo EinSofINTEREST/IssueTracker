@@ -19,7 +19,7 @@
 /go.sum                         @juhy0987
 
 # 크롤러 코어
-/internal/crawler/core/         @juhy0987
+/internal/processor/fetcher/core/         @juhy0987
 
 # 처리 파이프라인 / 분류기 / 스토리지
 /internal/processor/            @juhy0987

@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/locks"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"

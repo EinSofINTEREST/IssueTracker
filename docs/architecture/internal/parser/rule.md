@@ -29,7 +29,7 @@ type Page struct {
 ```
 
 호출자는 도메인 (news / blog / community) 별로 `Page → 자기 모델` 변환 책임을 가집니다 (예:
-[`domain/general/convert.go`](../../../../internal/crawler/domain/general/convert.go) 가 `Page → Content`).
+[`domain/general/convert.go`](../../../../internal/processor/fetcher/domain/general/convert.go) 가 `Page → Content`).
 
 <br>
 

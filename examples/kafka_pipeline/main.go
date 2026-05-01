@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/worker"
+	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/fetcher/worker"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"

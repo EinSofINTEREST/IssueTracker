@@ -17,7 +17,7 @@ import (
 	"context"
 	"time"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 )
 
 // Page 는 임의 웹페이지에서 추출한 핵심 내용입니다.

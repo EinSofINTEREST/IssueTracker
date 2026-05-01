@@ -5,7 +5,7 @@ package storage
 import (
 	"context"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 )
 
 // ContentRepository는 Content CRUD 연산을 위한 데이터 접근 인터페이스입니다.

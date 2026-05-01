@@ -57,7 +57,7 @@
    	"github.com/rs/zerolog/log"
    
    	// Internal packages
-   	"issuetracker/internal/crawler"
+   	"issuetracker/internal/processor/fetcher"
    	"issuetracker/internal/storage"
    )
    ```

@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/crawler/core"
 	parserWorker "issuetracker/internal/parser/worker"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 )

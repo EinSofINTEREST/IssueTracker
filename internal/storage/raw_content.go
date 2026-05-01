@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 )
 
 // RawContentRepository는 크롤링된 원본 데이터 CRUD 연산을 위한 인터페이스입니다.

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/locks"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"

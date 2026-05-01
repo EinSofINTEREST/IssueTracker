@@ -12,7 +12,7 @@
 - URL 정규화 ([`pkg/links.Normalizer`](../pkg/links.md))
 - IngestionLock atomic dedup ([`locks.IngestionLock`](locks/README.md))
 - URL Guard 검사 ([`pkg/urlguard.Gate`](../pkg/urlguard.md))
-- Priority 결정 ([`crawler/worker.PriorityResolver`](crawler/worker.md))
+- Priority 결정 ([`processor/fetcher/worker.PriorityResolver`](processor/fetcher/worker.md))
 - 토픽 라우팅 (Priority → TopicCrawlHigh/Normal/Low)
 
 <br>
@@ -60,8 +60,8 @@ for each job in batch:
 
 ## 의존
 
-- [`internal/crawler/core`](crawler/core.md) — `CrawlJob`
-- [`internal/crawler/worker`](crawler/worker.md) — `PriorityResolver`
+- [`internal/processor/fetcher/core`](processor/fetcher/core.md) — `CrawlJob`
+- [`internal/processor/fetcher/worker`](processor/fetcher/worker.md) — `PriorityResolver`
 - [`internal/locks`](locks/README.md) — `IngestionLock`
 - [`pkg/queue`](../pkg/queue.md), [`pkg/links`](../pkg/links.md), [`pkg/urlguard`](../pkg/urlguard.md), [`pkg/logger`](../pkg/logger.md)
 

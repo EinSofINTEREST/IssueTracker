@@ -152,7 +152,7 @@ import (
   "github.com/rs/zerolog/log"
 
   // Internal packages
-  "issuetracker/internal/crawler"
+  "issuetracker/internal/processor/fetcher"
   "issuetracker/internal/storage"
 )
 ```
@@ -741,8 +741,8 @@ PR 생성 시 구현 내용에 따라 관련 task를 자동으로 추가:
 - #15
 
 ## 구현 내용
-- `internal/crawler/` 패키지에 CNN HTML 크롤러 구현
-- `internal/crawler/` 패키지에 Naver RSS 크롤러 구현
+- `internal/processor/fetcher/` 패키지에 CNN HTML 크롤러 구현
+- `internal/processor/fetcher/` 패키지에 Naver RSS 크롤러 구현
 - `Crawler` 인터페이스 기반 공통 추상화 적용
 - rate limiter 연동 (token bucket, 100 req/hr)
 

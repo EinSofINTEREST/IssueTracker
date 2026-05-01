@@ -62,7 +62,7 @@ git checkout -b feat/your-feature-name
 # test/internal_crawler_core/feature_test.go
 
 # 2. Implement feature
-# internal/crawler/core/feature.go
+# internal/processor/fetcher/core/feature.go
 
 # 3. Run tests
 make test
@@ -264,7 +264,7 @@ make help          # Show all available commands
 make test
 
 # Run specific package tests
-go test ./internal/crawler/core/...
+go test ./internal/processor/fetcher/core/...
 
 # Run with verbose output
 make test-verbose
