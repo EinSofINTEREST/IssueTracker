@@ -115,7 +115,7 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 			"timeout_ms": c.config.Timeout.Milliseconds(),
 		}).Warn("page render timed out, attempting graceful capture")
 
-		partialHTML, captureErr := captureOuterHTML(browserCtx)
+		partialHTML, captureErr := captureOuterHTML(browserCtx, c.opts.GracefulCaptureTimeout)
 		if captureErr != nil {
 			// 부분 캡처 자체가 실패 → 빈 페이지/네트워크 불가와 동등한 완전 실패로 분류
 			// runErr(원인 timeout)와 captureErr(캡처 실패 사유 — target closed,

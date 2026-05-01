@@ -2,6 +2,7 @@ package chromedp
 
 import (
 	"context"
+	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
 )
@@ -51,18 +52,29 @@ type ChromedpOptions struct {
 	// RemoteURL: 원격 Chrome WebSocket 주소 (기본값: ws://localhost:9222)
 	// Docker 실행 예시: docker run -d -p 9222:9222 chromedp/headless-shell
 	RemoteURL string
+
+	// GracefulCaptureTimeout: navigation timeout 발생 후 별도 context 로 OuterHTML 을
+	// 재캡처할 때 허용하는 최대 시간 (이슈 #146).
+	// 0 또는 음수면 DefaultGracefulCaptureTimeout (10s) 사용.
+	// 부하 상태의 CDP 응답 + page.StopLoading() 후 OuterHTML 회수까지 시간이 필요해
+	// 기존 3s 는 너무 짧았음. 운영 튜닝 가능하도록 옵션화.
+	GracefulCaptureTimeout time.Duration
 }
+
+// DefaultGracefulCaptureTimeout: GracefulCaptureTimeout 미지정 시 기본값 (이슈 #146).
+const DefaultGracefulCaptureTimeout = 10 * time.Second
 
 // DefaultOptions: 로컬 Chrome 실행 기본 옵션
 func DefaultOptions() ChromedpOptions {
 	return ChromedpOptions{
-		Headless:        true,
-		WaitStable:      true,
-		WaitSelector:    "",
-		WaitNetworkIdle: false,
-		ViewportWidth:   1920,
-		ViewportHeight:  1080,
-		UseRemote:       false,
+		Headless:               true,
+		WaitStable:             true,
+		WaitSelector:           "",
+		WaitNetworkIdle:        false,
+		ViewportWidth:          1920,
+		ViewportHeight:         1080,
+		UseRemote:              false,
+		GracefulCaptureTimeout: DefaultGracefulCaptureTimeout,
 	}
 }
 
@@ -70,13 +82,14 @@ func DefaultOptions() ChromedpOptions {
 // chromedp/headless-shell 컨테이너를 ws://localhost:9222 에서 연결
 func DefaultRemoteOptions() ChromedpOptions {
 	return ChromedpOptions{
-		Headless:        true,
-		WaitStable:      true,
-		WaitSelector:    "",
-		WaitNetworkIdle: false,
-		ViewportWidth:   1920,
-		ViewportHeight:  1080,
-		UseRemote:       true,
-		RemoteURL:       "ws://localhost:9222",
+		Headless:               true,
+		WaitStable:             true,
+		WaitSelector:           "",
+		WaitNetworkIdle:        false,
+		ViewportWidth:          1920,
+		ViewportHeight:         1080,
+		UseRemote:              true,
+		RemoteURL:              "ws://localhost:9222",
+		GracefulCaptureTimeout: DefaultGracefulCaptureTimeout,
 	}
 }
