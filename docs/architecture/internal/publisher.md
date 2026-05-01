@@ -10,7 +10,7 @@
 ## 책임
 
 - URL 정규화 ([`pkg/links.Normalizer`](../pkg/links.md))
-- IngestionLock atomic dedup ([`crawler/worker.IngestionLock`](crawler/worker.md))
+- IngestionLock atomic dedup ([`locks.IngestionLock`](locks/README.md))
 - URL Guard 검사 ([`pkg/urlguard.Gate`](../pkg/urlguard.md))
 - Priority 결정 ([`crawler/worker.PriorityResolver`](crawler/worker.md))
 - 토픽 라우팅 (Priority → TopicCrawlHigh/Normal/Low)
@@ -61,7 +61,8 @@ for each job in batch:
 ## 의존
 
 - [`internal/crawler/core`](crawler/core.md) — `CrawlJob`
-- [`internal/crawler/worker`](crawler/worker.md) — `PriorityResolver`, `IngestionLock`
+- [`internal/crawler/worker`](crawler/worker.md) — `PriorityResolver`
+- [`internal/locks`](locks/README.md) — `IngestionLock`
 - [`pkg/queue`](../pkg/queue.md), [`pkg/links`](../pkg/links.md), [`pkg/urlguard`](../pkg/urlguard.md), [`pkg/logger`](../pkg/logger.md)
 
 <br>

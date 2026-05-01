@@ -64,7 +64,7 @@ ParserWorker 가 이상 종료 / rule.Error 잔존 / LLM 재처리 윈도우 만
 - [`internal/parser/rule`](rule.md) — `Parser`, `Resolver`
 - [`internal/parser/rule/llmgen`](rule.md) — `Generator.Enqueue` (선택)
 - [`internal/crawler/domain/general`](../crawler/domain.md) — `ConvertPageToContent`
-- [`internal/crawler/worker`](../crawler/worker.md) — `ProcessingLock`
+- [`internal/locks`](../locks/README.md) — `ProcessingLock`
 - [`internal/storage/service`](../storage/service.md) — `RawContentService`, `ContentService`
 - [`internal/storage`](../storage/README.md) — `SampleURLRepository`
 - [`internal/publisher`](../publisher.md) — chained job 발행

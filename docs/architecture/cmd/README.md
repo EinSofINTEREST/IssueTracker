@@ -40,7 +40,7 @@ make pg-migrate-down    # 마이그레이션 롤백 (운영자 전용)
 
 ```
 cmd/issuetracker  ──→ internal/* (전부) + pkg/* (전부)
-cmd/processor     ──→ internal/{processor/validate, storage/*, crawler/worker(NoopProcessingLock)} + pkg/*
+cmd/processor     ──→ internal/{processor/validate, storage/*, locks(NoopProcessingLock)} + pkg/*
 cmd/migrate       ──→ internal/storage/postgres + migrations
 cmd/migrate-down  ──→ internal/storage/postgres + migrations
 ```

@@ -42,7 +42,9 @@ docs/architecture/
 │   │   ├── handler.md                     ← Registry (crawler_name → Handler)
 │   │   ├── implementation.md              ← chromedp / goquery
 │   │   ├── rate_limiter.md
-│   │   └── worker.md                      ← PoolManager + ProcessingLock + RetryScheduler
+│   │   └── worker.md                      ← PoolManager + RetryScheduler + CircuitBreaker
+│   ├── locks/                             ← 단계 무관 distributed lock (이슈 #197)
+│   │   └── README.md                      ← ProcessingLock + IngestionLock (Redis SETNX)
 │   ├── parser/
 │   │   ├── README.md                      ← Domain-Agnostic Parser + Claim Check Worker
 │   │   └── rule.md                        ← rule.Parser (DB-driven) + llmgen + pathinfer + refiner
@@ -163,7 +165,7 @@ docs/architecture/
 |----------------------------|------------------------------------------------------------|-----------------------------------------------|
 | Kafka                      | [pkg/queue/](../../pkg/queue/)                              | 모든 stage 간 메시지 버스                      |
 | PostgreSQL                 | [internal/storage/postgres/](../../internal/storage/postgres/) | contents / content_bodies / content_meta / raw_contents / parsing_rules / sample_urls / schema_migrations |
-| Redis                      | [pkg/redis/](../../pkg/redis/), [internal/crawler/worker/](../../internal/crawler/worker/) | ProcessingLock(SETNX) / IngestionLock / RetryQueue(ZSET) |
+| Redis                      | [pkg/redis/](../../pkg/redis/), [internal/locks/](../../internal/locks/), [internal/crawler/worker/](../../internal/crawler/worker/) | ProcessingLock + IngestionLock (locks) / RetryQueue ZSET (crawler/worker) |
 | LLM (Gemini/OpenAI/Claude) | [pkg/llm/](../../pkg/llm/)                                  | parser rule 자동 생성 / path_pattern refinement |
 | Chrome (CDP)               | [internal/crawler/implementation/chromedp/](../../internal/crawler/implementation/chromedp/) | 동적 페이지 헤드리스 렌더                      |
 | ELArchive Classifier       | [internal/classifier/](../../internal/classifier/) + [proto/classifier/](../../proto/classifier/) | 카테고리 분류 (gRPC primary, HTTP fallback)    |
