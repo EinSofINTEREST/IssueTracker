@@ -363,11 +363,11 @@ func main() {
 
 	sched.Stop()
 
-	// Stage 들을 정의 역순으로 stop — fetcher → parser → validate 로 시작했으므로
-	// validate → parser → fetcher 순서로 정리. parser.Stage 내부에서 lifecycle 의존성
-	// (worker → llmGen → refiner → cleaner) 이 처리됨 — 본 main 은 단순 역순 loop.
-	for i := len(stages) - 1; i >= 0; i-- {
-		s := stages[i]
+	// Stage 들을 정의 순서대로 stop — fetcher → parser → validate 순서로 정리.
+	// 데이터 파이프라인 source-first 원칙: fetcher 가 먼저 Kafka 발행을 멈추면 downstream
+	// stage 가 in-flight 메시지를 graceful drain 가능. parser.Stage 내부에서 lifecycle
+	// 의존성 (worker → llmGen → refiner → cleaner) 이 처리됨.
+	for _, s := range stages {
 		if err := s.Stop(shutdownCtx); err != nil {
 			log.WithFields(map[string]interface{}{"stage": s.Name()}).WithError(err).Error("error during stage shutdown")
 		} else {

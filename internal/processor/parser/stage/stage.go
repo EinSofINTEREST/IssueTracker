@@ -100,9 +100,9 @@ func (s *Stage) Start(ctx context.Context) {
 func (s *Stage) Stop(ctx context.Context) error {
 	var firstErr error
 
-	// 1. ParserWorker — Enqueue source 차단
+	// 1. ParserWorker — Enqueue source 차단. 에러는 호출자 (main) 에서 stage 별로 일괄 로깅하므로
+	// 본 위치에서는 중복 로그 회피 — 단순 first-error 보존만 (PR #207 gemini 피드백).
 	if err := s.worker.Stop(ctx); err != nil {
-		s.log.WithError(err).Error("parser worker stop failed")
 		firstErr = err
 	}
 
@@ -116,8 +116,22 @@ func (s *Stage) Stop(ctx context.Context) error {
 		s.refiner.Stop(ctx)
 	}
 
-	// 4. RawContentCleaner — ctx 무시 (시그니처상 인자 없음). janitor 라 마지막에 정리.
-	s.cleaner.Stop()
+	// 4. RawContentCleaner — 시그니처가 ctx 를 받지 않아 별도 goroutine + select 로 caller 의
+	// timeout 을 honor (PR #207 CodeRabbit 피드백). janitor 라 ctx cancel 시 firstErr 만 기록하고
+	// 강제 반환 — 본 stop 은 best-effort.
+	cleanerStopped := make(chan struct{})
+	go func() {
+		s.cleaner.Stop()
+		close(cleanerStopped)
+	}()
+	select {
+	case <-cleanerStopped:
+	case <-ctx.Done():
+		s.log.WithError(ctx.Err()).Warn("raw content cleaner stop canceled by ctx")
+		if firstErr == nil {
+			firstErr = ctx.Err()
+		}
+	}
 
 	return firstErr
 }
