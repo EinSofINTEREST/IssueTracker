@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/locks"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -36,7 +37,7 @@ type ManagerConfig struct {
 	High           PoolConfig
 	Normal         PoolConfig
 	Low            PoolConfig
-	ProcessingLock ProcessingLock
+	ProcessingLock locks.ProcessingLock
 	RetryScheduler RetryScheduler
 }
 
@@ -75,7 +76,7 @@ func NewPoolManager(
 ) *PoolManager {
 	procLock := cfg.ProcessingLock
 	if procLock == nil {
-		procLock = NoopProcessingLock{}
+		procLock = locks.NoopProcessingLock{}
 	}
 
 	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/locks"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/logger"
@@ -68,7 +69,7 @@ type KafkaConsumerPool struct {
 	jobs        chan jobItem
 	wg          sync.WaitGroup
 	cbRegistry  *CircuitBreakerRegistry
-	procLock    ProcessingLock
+	procLock    locks.ProcessingLock
 	// normalizer는 URL 정규화기입니다.
 	// 미설정(nil) 이면 정규화가 적용되지 않으며, 기존 동작이 유지됩니다.
 	// atomic.Pointer 를 사용하여 polling/worker goroutine 의 동시 Load 와
@@ -119,7 +120,7 @@ func NewKafkaConsumerPool(
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
 		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, nil),
-		NoopProcessingLock{},
+		locks.NoopProcessingLock{},
 	)
 }
 
@@ -136,7 +137,7 @@ func NewKafkaConsumerPoolWithCB(
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
 		cbRegistry,
-		NoopProcessingLock{},
+		locks.NoopProcessingLock{},
 	)
 }
 
@@ -149,12 +150,12 @@ func NewKafkaConsumerPoolWithOptions(
 	contentSvc service.ContentService,
 	workerCount int,
 	cbRegistry *CircuitBreakerRegistry,
-	procLock ProcessingLock,
+	procLock locks.ProcessingLock,
 ) *KafkaConsumerPool {
 	// nil guard — NewParserWorker / validate.NewWorker 와 일관성 보장.
 	// 외부 호출자가 nil 을 전달해도 panic 없이 dedup 비활성으로 동작.
 	if procLock == nil {
-		procLock = NoopProcessingLock{}
+		procLock = locks.NoopProcessingLock{}
 	}
 	return &KafkaConsumerPool{
 		consumer:    consumer,
@@ -443,7 +444,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 	// 이슈 #178: 동일 URL 이 여러 worker 에서 동시 처리되는 것을 ProcessingLock (stage=fetcher) 로 차단.
 	// Kafka rebalance/재시작으로 동일 메시지가 중복 소비될 때 + 같은 URL 의 다른 jobID 가 동시 처리될 때
 	// 모두 흡수. backoff 대기 이후에 Acquire 하여 락 점유 시간을 실제 처리 구간으로 최소화합니다.
-	procKey := ProcessingKey(StageFetcher, item.job.Target.URL)
+	procKey := locks.ProcessingKey(locks.StageFetcher, item.job.Target.URL)
 	acquired, err := p.procLock.Acquire(ctx, procKey)
 	if err != nil {
 		// 락 획득 오류 시 처리를 건너뛰지 않고 경고 후 진행합니다 (graceful degrade).

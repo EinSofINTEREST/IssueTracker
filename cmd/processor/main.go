@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"time"
 
-	crawlerWorker "issuetracker/internal/crawler/worker"
+	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/validate"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
@@ -93,7 +93,7 @@ func main() {
 	// validator 결과 (passed/rejected) 는 contentSvc.UpdateValidationStatus 로 contents 에 기록 (이슈 #135 / #161).
 	// processor 단독 실행은 dev/test 시나리오 — Redis wiring 없이 NoopProcessingLock 사용.
 	// 다중 인스턴스 운영은 cmd/issuetracker 통합 바이너리에서 Redis 기반 ProcessingLock 공유.
-	worker := validate.NewWorker(consumer, producer, contentSvc, crawlerWorker.NoopProcessingLock{}, validateWorkerCount, validateCfg)
+	worker := validate.NewWorker(consumer, producer, contentSvc, locks.NoopProcessingLock{}, validateWorkerCount, validateCfg)
 	worker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{

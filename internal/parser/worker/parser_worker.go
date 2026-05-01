@@ -27,7 +27,7 @@ import (
 
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/crawler/domain/general"
-	crawlerWorker "issuetracker/internal/crawler/worker"
+	"issuetracker/internal/locks"
 	"issuetracker/internal/parser"
 	"issuetracker/internal/parser/rule"
 	"issuetracker/internal/parser/rule/llmgen"
@@ -54,10 +54,10 @@ type ParserWorker struct {
 	contentSvc  service.ContentService
 	publisher   general.JobPublisher
 	parser      *rule.Parser
-	resolver    *rule.Resolver               // 이슈 #173 단계 4-1 — sample 누적 시 매칭된 rule lookup
-	sampleSvc   storage.SampleURLRepository  // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
-	procLock    crawlerWorker.ProcessingLock // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
-	llmGen      *llmgen.Generator            // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
+	resolver    *rule.Resolver              // 이슈 #173 단계 4-1 — sample 누적 시 매칭된 rule lookup
+	sampleSvc   storage.SampleURLRepository // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
+	procLock    locks.ProcessingLock        // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
+	llmGen      *llmgen.Generator           // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 	workerCount int
 	log         *logger.Logger
 
@@ -85,7 +85,7 @@ func NewParserWorker(
 	parser *rule.Parser,
 	resolver *rule.Resolver,
 	sampleSvc storage.SampleURLRepository,
-	procLock crawlerWorker.ProcessingLock,
+	procLock locks.ProcessingLock,
 	llmGen *llmgen.Generator,
 	workerCount int,
 	log *logger.Logger,
@@ -94,7 +94,7 @@ func NewParserWorker(
 		workerCount = 1
 	}
 	if procLock == nil {
-		procLock = crawlerWorker.NoopProcessingLock{}
+		procLock = locks.NoopProcessingLock{}
 	}
 	return &ParserWorker{
 		consumer:    consumer,
@@ -200,7 +200,7 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 	// 이슈 #178: parser 단계 ProcessingLock — 같은 URL 의 동시 파싱을 차단.
 	// Kafka rebalance / 재배달 시 같은 raw 가 두 parser worker 에 도달해도 1회만 처리.
 	// ref.URL 은 fetcher 가 정규화한 URL — Ingestion Lock 키와 같은 정규형 사용.
-	procKey := crawlerWorker.ProcessingKey(crawlerWorker.StageParser, ref.URL)
+	procKey := locks.ProcessingKey(locks.StageParser, ref.URL)
 	acquired, lockErr := w.procLock.Acquire(ctx, procKey)
 	if lockErr != nil {
 		mlog.WithError(lockErr).Warn("failed to acquire parser processing lock, proceeding without lock")
