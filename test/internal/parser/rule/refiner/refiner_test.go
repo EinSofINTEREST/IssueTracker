@@ -1,0 +1,407 @@
+package refiner_test
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"issuetracker/internal/crawler/parser/rule"
+	"issuetracker/internal/crawler/parser/rule/llmgen"
+	"issuetracker/internal/crawler/parser/rule/refiner"
+	"issuetracker/internal/storage"
+	"issuetracker/pkg/logger"
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// In-memory mocks
+// ─────────────────────────────────────────────────────────────────────────────
+
+// fakeRulesRepo 는 ParsingRuleRepository 의 in-memory 구현입니다.
+// List / UpdatePathPattern / FindActiveCandidates 만 사용 — 나머지는 zero stub.
+type fakeRulesRepo struct {
+	mu      sync.Mutex
+	records []*storage.ParsingRuleRecord
+	updates []updateCall
+	listErr error
+	upErr   error
+}
+
+type updateCall struct {
+	id      int64
+	pattern string
+	desc    string
+}
+
+func (r *fakeRulesRepo) Insert(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
+func (r *fakeRulesRepo) Update(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
+func (r *fakeRulesRepo) GetByID(_ context.Context, _ int64) (*storage.ParsingRuleRecord, error) {
+	return nil, storage.ErrNotFound
+}
+func (r *fakeRulesRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParsingRuleRecord, error) {
+	return nil, storage.ErrNotFound
+}
+func (r *fakeRulesRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+	return nil, nil
+}
+func (r *fakeRulesRepo) List(_ context.Context, f storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*storage.ParsingRuleRecord, 0)
+	for _, rec := range r.records {
+		if f.SourceName != "" && rec.SourceName != f.SourceName {
+			continue
+		}
+		if f.OnlyEnabled && !rec.Enabled {
+			continue
+		}
+		out = append(out, rec)
+	}
+	return out, nil
+}
+func (r *fakeRulesRepo) Delete(_ context.Context, _ int64) error { return nil }
+func (r *fakeRulesRepo) UpdatePathPattern(_ context.Context, id int64, pattern, description string) error {
+	if r.upErr != nil {
+		return r.upErr
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.updates = append(r.updates, updateCall{id: id, pattern: pattern, desc: description})
+	for _, rec := range r.records {
+		if rec.ID == id {
+			rec.PathPattern = pattern
+			rec.Description = description
+			return nil
+		}
+	}
+	return storage.ErrNotFound
+}
+
+func (r *fakeRulesRepo) updateCalls() []updateCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]updateCall, len(r.updates))
+	copy(out, r.updates)
+	return out
+}
+
+// fakeSamplesRepo 는 SampleURLRepository 의 in-memory 구현입니다.
+type fakeSamplesRepo struct {
+	mu      sync.Mutex
+	byRule  map[int64][]*storage.SampleURL
+	purged  map[int64]int // rule_id 별 Purge 호출 횟수
+	listErr error
+}
+
+func newFakeSamplesRepo() *fakeSamplesRepo {
+	return &fakeSamplesRepo{
+		byRule: make(map[int64][]*storage.SampleURL),
+		purged: make(map[int64]int),
+	}
+}
+
+func (r *fakeSamplesRepo) Insert(_ context.Context, ruleID int64, url string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.byRule[ruleID] = append(r.byRule[ruleID], &storage.SampleURL{
+		ID: int64(len(r.byRule[ruleID]) + 1), RuleID: ruleID, URL: url, ObservedAt: time.Now(),
+	})
+	return nil
+}
+func (r *fakeSamplesRepo) Count(_ context.Context, ruleID int64) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.byRule[ruleID]), nil
+}
+func (r *fakeSamplesRepo) List(_ context.Context, ruleID int64, limit int) ([]*storage.SampleURL, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	all := r.byRule[ruleID]
+	if limit > 0 && limit < len(all) {
+		all = all[:limit]
+	}
+	out := make([]*storage.SampleURL, len(all))
+	copy(out, all)
+	return out, nil
+}
+func (r *fakeSamplesRepo) Purge(_ context.Context, ruleID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.byRule, ruleID)
+	r.purged[ruleID]++
+	return nil
+}
+func (r *fakeSamplesRepo) purgeCount(ruleID int64) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.purged[ruleID]
+}
+
+// fakeLLM 는 pathinfer.LLMClient 의 stub.
+type fakeLLM struct {
+	resp string
+	err  error
+	hits int64
+}
+
+func (f *fakeLLM) Generate(_ context.Context, _ string, _ string) (string, error) {
+	atomic.AddInt64(&f.hits, 1)
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.resp, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+func newCatchAllRule(id int64, host string) *storage.ParsingRuleRecord {
+	return &storage.ParsingRuleRecord{
+		ID:          id,
+		SourceName:  llmgen.LLMAutoSourceName,
+		HostPattern: host,
+		PathPattern: "", // catch-all — 정밀화 대상
+		TargetType:  storage.TargetTypePage,
+		Version:     1,
+		Enabled:     true,
+	}
+}
+
+func newRefiner(t *testing.T, rules storage.ParsingRuleRepository, samples storage.SampleURLRepository, opts ...refiner.Option) *refiner.Refiner {
+	t.Helper()
+	resolver := rule.NewResolver(rules)
+	log := logger.New(logger.DefaultConfig())
+	// minSamples 3 (테스트 가독성). interval 은 RunOnce 만 호출하면 무관.
+	defaults := []refiner.Option{refiner.WithMinSamples(3)}
+	defaults = append(defaults, opts...)
+	return refiner.New(rules, samples, resolver, log, defaults...)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestRunOnce_AlgorithmSuccess_UpdatesPathPattern(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+
+	// numeric ID 패턴 — InferHeuristic 이 ^/article/(\d+)$ 추론.
+	for _, u := range []string{
+		"https://news.example.com/article/100",
+		"https://news.example.com/article/200",
+		"https://news.example.com/article/300",
+	} {
+		require.NoError(t, samples.Insert(context.Background(), 1, u))
+	}
+
+	r := newRefiner(t, rules, samples)
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	calls := rules.updateCalls()
+	require.Len(t, calls, 1, "expected 1 UpdatePathPattern call")
+	assert.Equal(t, int64(1), calls[0].id)
+	assert.Contains(t, calls[0].pattern, `(\d+)`, "pattern should contain numeric capture group")
+	assert.Contains(t, calls[0].desc, "method=algorithm")
+
+	assert.Equal(t, 1, samples.purgeCount(1), "samples should be purged after refinement")
+}
+
+func TestRunOnce_BelowThreshold_NoUpdate(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+
+	// 2 sample — minSamples 3 미만.
+	require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/article/100"))
+	require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/article/200"))
+
+	r := newRefiner(t, rules, samples)
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	assert.Empty(t, rules.updateCalls(), "no update expected below threshold")
+	assert.Zero(t, samples.purgeCount(1), "no purge expected below threshold")
+}
+
+func TestRunOnce_AlreadyRefined_Skipped(t *testing.T) {
+	// PathPattern != "" → 정밀화 대상 아님.
+	rec := newCatchAllRule(1, "news.example.com")
+	rec.PathPattern = `^/news/(\d+)$`
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/news/1"))
+	}
+
+	r := newRefiner(t, rules, samples)
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	assert.Empty(t, rules.updateCalls(), "already-refined rule must not be updated")
+}
+
+func TestRunOnce_AlgorithmFails_LLMFallback(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+
+	// segment 길이가 다른 sample — InferHeuristic 실패 케이스.
+	for _, u := range []string{
+		"https://news.example.com/article/100",
+		"https://news.example.com/article/news/200",
+		"https://news.example.com/post/300",
+	} {
+		require.NoError(t, samples.Insert(context.Background(), 1, u))
+	}
+
+	// LLM 이 모든 sample 을 매칭하는 정직한 패턴 응답.
+	llm := &fakeLLM{resp: `^/.+/\d+$`}
+
+	r := newRefiner(t, rules, samples, refiner.WithLLMClient(llm))
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	calls := rules.updateCalls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, `^/.+/\d+$`, calls[0].pattern)
+	assert.Contains(t, calls[0].desc, "method=llm")
+	assert.Equal(t, int64(1), atomic.LoadInt64(&llm.hits))
+}
+
+func TestRunOnce_AlgorithmFails_NoLLM_Skipped(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+	// segment 길이가 다른 sample — InferHeuristic 실패.
+	for _, u := range []string{
+		"https://news.example.com/article/100",
+		"https://news.example.com/article/news/200",
+		"https://news.example.com/post/300",
+	} {
+		require.NoError(t, samples.Insert(context.Background(), 1, u))
+	}
+
+	r := newRefiner(t, rules, samples) // LLM 없음
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	assert.Empty(t, rules.updateCalls())
+	assert.Zero(t, samples.purgeCount(1))
+}
+
+func TestRunOnce_LLMError_NoUpdate(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+	// algorithm 실패 케이스.
+	for _, u := range []string{
+		"https://news.example.com/article/100",
+		"https://news.example.com/post/200",
+		"https://news.example.com/news/300",
+	} {
+		require.NoError(t, samples.Insert(context.Background(), 1, u))
+	}
+
+	llm := &fakeLLM{err: errors.New("llm down")}
+
+	r := newRefiner(t, rules, samples, refiner.WithLLMClient(llm))
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	assert.Empty(t, rules.updateCalls(), "LLM error should not result in update")
+}
+
+func TestRunOnce_NonAutoRule_Skipped(t *testing.T) {
+	// SourceName != "llm-auto" → List filter 가 거름.
+	rec := newCatchAllRule(1, "news.example.com")
+	rec.SourceName = "operator-tuned"
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/article/1"))
+	}
+
+	r := newRefiner(t, rules, samples)
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	assert.Empty(t, rules.updateCalls())
+}
+
+func TestRunOnce_DisabledRule_Skipped(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rec.Enabled = false
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	samples := newFakeSamplesRepo()
+	for i := 0; i < 5; i++ {
+		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/article/1"))
+	}
+
+	r := newRefiner(t, rules, samples)
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	assert.Empty(t, rules.updateCalls())
+}
+
+func TestRunOnce_ListError_Returned(t *testing.T) {
+	rules := &fakeRulesRepo{listErr: errors.New("db down")}
+	samples := newFakeSamplesRepo()
+
+	r := newRefiner(t, rules, samples)
+	err := r.RunOnce(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db down")
+}
+
+func TestRunOnce_UpdateError_NoPurge(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{
+		records: []*storage.ParsingRuleRecord{rec},
+		upErr:   errors.New("update failed"),
+	}
+	samples := newFakeSamplesRepo()
+	for _, u := range []string{
+		"https://news.example.com/article/100",
+		"https://news.example.com/article/200",
+		"https://news.example.com/article/300",
+	} {
+		require.NoError(t, samples.Insert(context.Background(), 1, u))
+	}
+
+	r := newRefiner(t, rules, samples)
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	assert.Zero(t, samples.purgeCount(1), "purge should not run after update failure")
+}
+
+func TestRun_RespectsCancellation(t *testing.T) {
+	rules := &fakeRulesRepo{}
+	samples := newFakeSamplesRepo()
+
+	r := newRefiner(t, rules, samples, refiner.WithInterval(50*time.Millisecond))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+
+	// Run 이 ticker 를 등록한 후 cancel.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
