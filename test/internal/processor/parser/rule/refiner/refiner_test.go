@@ -189,12 +189,14 @@ func newCatchAllRule(id int64, host string) *storage.ParsingRuleRecord {
 
 func newRefiner(t *testing.T, rules storage.ParsingRuleRepository, samples storage.SampleURLRepository, opts ...refiner.Option) *refiner.Refiner {
 	t.Helper()
-	resolver := rule.NewResolver(rules)
+	resolver, _ := rule.NewResolver(rules)
 	log := logger.New(logger.DefaultConfig())
 	// minSamples 3 (테스트 가독성). interval 은 RunOnce 만 호출하면 무관.
 	defaults := []refiner.Option{refiner.WithMinSamples(3)}
 	defaults = append(defaults, opts...)
-	return refiner.New(rules, samples, resolver, log, defaults...)
+	r, err := refiner.New(rules, samples, resolver, log, defaults...)
+	require.NoError(t, err)
+	return r
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

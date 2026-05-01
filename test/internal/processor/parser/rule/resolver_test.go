@@ -99,7 +99,7 @@ func samplePageRule(host string) *storage.ParsingRuleRecord {
 
 func TestResolver_ResolveByURL_Success(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/1", storage.TargetTypePage)
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestResolver_ResolveByURL_Success(t *testing.T) {
 
 func TestResolver_ResolveByURL_HostUppercaseNormalized(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	// URL host 가 대문자여도 lookup 은 lowercase 로 정규화되어 매칭
 	_, err := r.ResolveByURL(context.Background(), "https://NEWS.EXAMPLE.COM/x", storage.TargetTypePage)
@@ -118,7 +118,7 @@ func TestResolver_ResolveByURL_HostUppercaseNormalized(t *testing.T) {
 
 func TestResolver_ResolveByURL_InvalidURL_ReturnsError(t *testing.T) {
 	repo := &fakeRepo{}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	_, err := r.ResolveByURL(context.Background(), "://no-scheme", storage.TargetTypePage)
 	require.Error(t, err)
@@ -130,7 +130,7 @@ func TestResolver_ResolveByURL_InvalidURL_ReturnsError(t *testing.T) {
 
 func TestResolver_NoMatch_ReturnsErrNoRule(t *testing.T) {
 	repo := &fakeRepo{notFound: true}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	_, err := r.Resolve(context.Background(), "no-rule.example.com", "/", storage.TargetTypePage)
 	require.Error(t, err)
@@ -143,7 +143,7 @@ func TestResolver_NoMatch_ReturnsErrNoRule(t *testing.T) {
 
 func TestResolver_Cache_HitsAvoidRepoCall(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	// 첫 호출 → repo 1
 	_, err := r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
@@ -160,7 +160,7 @@ func TestResolver_Cache_HitsAvoidRepoCall(t *testing.T) {
 
 func TestResolver_NegativeCache_AvoidRepoCallForMissingHost(t *testing.T) {
 	repo := &fakeRepo{notFound: true}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	for i := 0; i < 5; i++ {
 		_, err := r.Resolve(context.Background(), "missing.example.com", "/", storage.TargetTypePage)
@@ -171,7 +171,7 @@ func TestResolver_NegativeCache_AvoidRepoCallForMissingHost(t *testing.T) {
 
 func TestResolver_Invalidate_ForcesRepoCall(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	_, err := r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
 	require.NoError(t, err)
@@ -191,7 +191,7 @@ func TestResolver_InvalidateAll_ClearsAllEntries(t *testing.T) {
 		samplePageRule("a.example.com"),
 		samplePageRule("b.example.com"),
 	}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	_, err := r.Resolve(context.Background(), "a.example.com", "/", storage.TargetTypePage)
 	require.NoError(t, err)
@@ -211,7 +211,7 @@ func TestResolver_InvalidateAll_ClearsAllEntries(t *testing.T) {
 func TestResolver_CacheTTL_ExpiresAfterDuration(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
 	// TTL 50ms — 테스트 친화적 짧은 시간
-	r := rule.NewResolver(repo, rule.WithCacheTTL(50*time.Millisecond))
+	r, _ := rule.NewResolver(repo, rule.WithCacheTTL(50*time.Millisecond))
 
 	_, err := r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
 	require.NoError(t, err)
@@ -224,10 +224,11 @@ func TestResolver_CacheTTL_ExpiresAfterDuration(t *testing.T) {
 	assert.Equal(t, 2, repo.calls(), "TTL 만료 후 repo 다시 호출")
 }
 
-func TestNewResolver_NilRepo_Panics(t *testing.T) {
-	assert.PanicsWithValue(t, "rule: NewResolver requires non-nil repo", func() {
-		rule.NewResolver(nil)
-	})
+func TestNewResolver_NilRepo_ReturnsError(t *testing.T) {
+	r, err := rule.NewResolver(nil)
+	assert.Nil(t, r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil repo")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -237,7 +238,7 @@ func TestNewResolver_NilRepo_Panics(t *testing.T) {
 // path_pattern=” (catch-all) rule 만 있을 때 어떤 path 든 매칭됨 — 기존 동작 보존.
 func TestResolver_PathPattern_EmptyMatchesAnyPath(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{samplePageRule("news.example.com")}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	for _, path := range []string{"/", "/article/1", "/sports/breaking-news", "/about"} {
 		got, err := r.Resolve(context.Background(), "news.example.com", path, storage.TargetTypePage)
@@ -258,7 +259,7 @@ func TestResolver_PathPattern_LongerPatternWinsOverCatchAll(t *testing.T) {
 	catchAll.Selectors.Title = &storage.FieldSelector{CSS: "h1.default"}
 
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{specific, catchAll}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	// /sports/* path 는 specific rule 매칭 (LENGTH DESC 정렬상 우선)
 	got, err := r.Resolve(context.Background(), "news.example.com", "/sports/breaking", storage.TargetTypePage)
@@ -277,7 +278,7 @@ func TestResolver_PathPattern_NoMatchReturnsErrNoRule(t *testing.T) {
 	specific.PathPattern = "^/sports/.*$"
 
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{specific}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	_, err := r.Resolve(context.Background(), "news.example.com", "/about", storage.TargetTypePage)
 	require.Error(t, err)
@@ -296,7 +297,7 @@ func TestResolver_PathPattern_InvalidRegexFallsThrough(t *testing.T) {
 	catchAll.Selectors.Title = &storage.FieldSelector{CSS: "h1.default"}
 
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{bad, catchAll}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	got, err := r.Resolve(context.Background(), "news.example.com", "/article/1", storage.TargetTypePage)
 	require.NoError(t, err)
@@ -314,7 +315,7 @@ func TestResolver_PathPattern_RegexCacheReuseAcrossHosts(t *testing.T) {
 	b.PathPattern = pattern
 
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{a, b}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	got, err := r.Resolve(context.Background(), "a.example.com", "/news/123", storage.TargetTypePage)
 	require.NoError(t, err)
@@ -332,7 +333,7 @@ func TestResolver_ResolveByURL_PathPatternMatching(t *testing.T) {
 	specific.Selectors.Title = &storage.FieldSelector{CSS: "h1.article"}
 
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{specific}}
-	r := rule.NewResolver(repo)
+	r, _ := rule.NewResolver(repo)
 
 	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/12345?utm=x", storage.TargetTypePage)
 	require.NoError(t, err)

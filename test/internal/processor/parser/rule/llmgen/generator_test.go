@@ -111,8 +111,9 @@ const sampleListHTML = `<!DOCTYPE html><html><body>
 
 func newGenerator(t *testing.T, provider llm.Provider, repo storage.ParsingRuleRepository) (*llmgen.Generator, *rule.Resolver) {
 	t.Helper()
-	resolver := rule.NewResolver(&noopFindRepo{}, rule.WithCacheTTL(time.Minute))
-	g := llmgen.New(provider, repo, resolver, logger.New(logger.DefaultConfig()))
+	resolver, _ := rule.NewResolver(&noopFindRepo{}, rule.WithCacheTTL(time.Minute))
+	g, err := llmgen.New(provider, repo, resolver, logger.New(logger.DefaultConfig()))
+	require.NoError(t, err)
 	return g, resolver
 }
 

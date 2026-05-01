@@ -148,7 +148,7 @@ func extractLogEntries(t *testing.T, buf *bytes.Buffer) []map[string]interface{}
 
 func TestGate_Allow_Pass_NoLog(t *testing.T) {
 	buf := &bytes.Buffer{}
-	gate := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
 
 	ok := gate.Allow("https://edition.cnn.com/health", map[string]interface{}{"crawler": "cnn"})
 	assert.True(t, ok)
@@ -157,7 +157,7 @@ func TestGate_Allow_Pass_NoLog(t *testing.T) {
 
 func TestGate_Allow_Block_LogsWarn(t *testing.T) {
 	buf := &bytes.Buffer{}
-	gate := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
 
 	ok := gate.Allow("https://rss.cnn.com/rss/cnn_health.rss",
 		map[string]interface{}{"crawler": "cnn", "stage": "scheduler"})
@@ -175,7 +175,7 @@ func TestGate_Allow_Block_LogsWarn(t *testing.T) {
 
 func TestGate_Allow_NilFields_StillLogs(t *testing.T) {
 	buf := &bytes.Buffer{}
-	gate := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
 
 	ok := gate.Allow("https://rss.cnn.com/rss/foo.rss", nil)
 	assert.False(t, ok)
@@ -188,7 +188,7 @@ func TestGate_Allow_NilFields_StillLogs(t *testing.T) {
 
 func TestGate_Filter_PartialBlock(t *testing.T) {
 	buf := &bytes.Buffer{}
-	gate := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
 
 	urls := []string{
 		"https://edition.cnn.com/article/1",
@@ -209,7 +209,7 @@ func TestGate_Filter_PartialBlock(t *testing.T) {
 
 func TestGate_Filter_AllPass_NoLog(t *testing.T) {
 	buf := &bytes.Buffer{}
-	gate := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(buf))
 
 	urls := []string{"https://edition.cnn.com/a", "https://news.naver.com/b"}
 	allowed := gate.Filter(urls, nil)
@@ -218,7 +218,7 @@ func TestGate_Filter_AllPass_NoLog(t *testing.T) {
 }
 
 func TestGate_Filter_AllBlocked_ReturnsEmptyNotNil(t *testing.T) {
-	gate := urlguard.NewGate(urlguard.Default(), captureLogger(&bytes.Buffer{}))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(&bytes.Buffer{}))
 
 	allowed := gate.Filter([]string{
 		"https://rss.cnn.com/rss/a.rss",
@@ -229,14 +229,14 @@ func TestGate_Filter_AllBlocked_ReturnsEmptyNotNil(t *testing.T) {
 }
 
 func TestGate_Filter_EmptyInput(t *testing.T) {
-	gate := urlguard.NewGate(urlguard.Default(), captureLogger(&bytes.Buffer{}))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(&bytes.Buffer{}))
 
 	assert.Empty(t, gate.Filter(nil, nil))
 	assert.Empty(t, gate.Filter([]string{}, nil))
 }
 
 func TestGate_Filter_DoesNotMutateInput(t *testing.T) {
-	gate := urlguard.NewGate(urlguard.Default(), captureLogger(&bytes.Buffer{}))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(&bytes.Buffer{}))
 
 	input := []string{"https://edition.cnn.com/a", "https://rss.cnn.com/rss/b.rss"}
 	original := append([]string{}, input...)
@@ -245,15 +245,16 @@ func TestGate_Filter_DoesNotMutateInput(t *testing.T) {
 	assert.Equal(t, original, input, "Filter 가 입력 슬라이스를 변경하면 안 됨")
 }
 
-func TestNewGate_NilGuard_Panics(t *testing.T) {
-	assert.Panics(t, func() {
-		urlguard.NewGate(nil, nil)
-	})
+func TestNewGate_NilGuard_ReturnsError(t *testing.T) {
+	gate, err := urlguard.NewGate(nil, nil)
+	assert.Nil(t, gate)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil Guard")
 }
 
 func TestNewGate_NilLogger_UsesDefault(t *testing.T) {
 	// nil logger 는 panic 하지 않고 fallback 기본 logger 사용
-	gate := urlguard.NewGate(urlguard.Default(), nil)
+	gate, _ := urlguard.NewGate(urlguard.Default(), nil)
 	require.NotNil(t, gate)
 	// 호출이 panic 하지 않는지만 검증 (출력은 stdout 으로 흘러감)
 	assert.NotPanics(t, func() {

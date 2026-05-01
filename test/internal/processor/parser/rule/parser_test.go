@@ -100,7 +100,8 @@ func makeRaw(url, html string) *core.RawContent {
 
 func TestParser_ParsePage_Success(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{pageRule()}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	page, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com/article/1", articleHTML))
 	require.NoError(t, err)
@@ -118,7 +119,8 @@ func TestParser_ParsePage_Success(t *testing.T) {
 
 func TestParser_ParsePage_NoRule_ReturnsErrNoRule(t *testing.T) {
 	repo := &fakeRepo{notFound: true}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	_, err := p.ParsePage(context.Background(), makeRaw("https://nope.example.com/x", articleHTML))
 	require.Error(t, err)
@@ -129,7 +131,8 @@ func TestParser_ParsePage_MissingTitleSelector_EmptySelector(t *testing.T) {
 	r := pageRule()
 	r.Selectors.Title = nil
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	_, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com/x", articleHTML))
 	require.Error(t, err)
@@ -142,7 +145,8 @@ func TestParser_ParsePage_MainContentMatchesNothing_ParseFailure(t *testing.T) {
 	r := pageRule()
 	r.Selectors.MainContent = &storage.FieldSelector{CSS: "div.no-such-class", Multi: true}
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	_, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com/x", articleHTML))
 	require.Error(t, err)
@@ -153,7 +157,8 @@ func TestParser_ParsePage_MainContentMatchesNothing_ParseFailure(t *testing.T) {
 
 func TestParser_ParsePage_EmptyRaw_ParseFailure(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{pageRule()}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	_, err := p.ParsePage(context.Background(), &core.RawContent{URL: "https://news.example.com/x", HTML: ""})
 	require.Error(t, err)
@@ -168,7 +173,8 @@ func TestParser_ParsePage_EmptyRaw_ParseFailure(t *testing.T) {
 
 func TestParser_ParseLinks_Success_AbsolutizesURLs(t *testing.T) {
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{listRule()}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	items, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category/politics", listHTML))
 	require.NoError(t, err)
@@ -186,7 +192,8 @@ func TestParser_ParseLinks_MissingItemContainer_EmptySelector(t *testing.T) {
 	r := listRule()
 	r.Selectors.ItemContainer = nil
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	_, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/x", listHTML))
 	require.Error(t, err)
@@ -199,7 +206,8 @@ func TestParser_ParseLinks_MissingItemLink_EmptySelector(t *testing.T) {
 	r := listRule()
 	r.Selectors.ItemLink = nil
 	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	_, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/x", listHTML))
 	require.Error(t, err)
@@ -210,15 +218,17 @@ func TestParser_ParseLinks_MissingItemLink_EmptySelector(t *testing.T) {
 
 func TestParser_ParseLinks_NoRule_ReturnsErrNoRule(t *testing.T) {
 	repo := &fakeRepo{notFound: true}
-	p := rule.NewParser(rule.NewResolver(repo))
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
 
 	_, err := p.ParseLinks(context.Background(), makeRaw("https://nope.example.com/list", listHTML))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, &rule.Error{Code: rule.ErrNoRule}))
 }
 
-func TestNewParser_NilResolver_Panics(t *testing.T) {
-	assert.PanicsWithValue(t, "rule: NewParser requires non-nil resolver", func() {
-		rule.NewParser(nil)
-	})
+func TestNewParser_NilResolver_ReturnsError(t *testing.T) {
+	p, err := rule.NewParser(nil)
+	assert.Nil(t, p)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-nil resolver")
 }

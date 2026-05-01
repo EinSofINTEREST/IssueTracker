@@ -107,7 +107,8 @@ func TestScheduler_Gate_BlocksRSSEntry(t *testing.T) {
 
 	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, gateTestLogger(), 3)
 	// Gate 의 logger 를 캡쳐 — 차단 시 'blocked by url guard' 로그가 buf 에 기록됨
-	sched.SetGate(urlguard.NewGate(urlguard.Default(), captureLogger(gateLogBuf)))
+	gate, _ := urlguard.NewGate(urlguard.Default(), captureLogger(gateLogBuf))
+	sched.SetGate(gate)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sched.Start(ctx)
@@ -136,7 +137,8 @@ func TestScheduler_Gate_AllowsCategoryEntry(t *testing.T) {
 	}
 
 	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, gateTestLogger(), 3)
-	sched.SetGate(urlguard.NewGate(urlguard.Default(), gateTestLogger()))
+	gate, _ := urlguard.NewGate(urlguard.Default(), gateTestLogger())
+	sched.SetGate(gate)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sched.Start(ctx)
@@ -182,7 +184,8 @@ func TestScheduler_Gate_AllowAllGuard_DelegatesAll(t *testing.T) {
 	}
 
 	sched := scheduler.New([]scheduler.ScheduleEntry{entry}, pub, gateTestLogger(), 3)
-	sched.SetGate(urlguard.NewGate(urlguard.AllowAllGuard{}, gateTestLogger()))
+	gate, _ := urlguard.NewGate(urlguard.AllowAllGuard{}, gateTestLogger())
+	sched.SetGate(gate)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sched.Start(ctx)

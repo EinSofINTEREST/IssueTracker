@@ -59,7 +59,8 @@ func gateLog() *logger.Logger { return logger.New(logger.DefaultConfig()) }
 func TestPublisher_Gate_FiltersBlockedURLs(t *testing.T) {
 	prod := &gateMockProducer{}
 	pub := publisher.New(prod, noopResolver{}, gateLog())
-	pub.SetGate(urlguard.NewGate(urlguard.Default(), gateLog()))
+	gate, _ := urlguard.NewGate(urlguard.Default(), gateLog())
+	pub.SetGate(gate)
 
 	urls := []string{
 		"https://edition.cnn.com/article/1",      // pass
@@ -78,7 +79,8 @@ func TestPublisher_Gate_FiltersBlockedURLs(t *testing.T) {
 func TestPublisher_Gate_AllBlocked_NoPublish(t *testing.T) {
 	prod := &gateMockProducer{}
 	pub := publisher.New(prod, noopResolver{}, gateLog())
-	pub.SetGate(urlguard.NewGate(urlguard.Default(), gateLog()))
+	gate, _ := urlguard.NewGate(urlguard.Default(), gateLog())
+	pub.SetGate(gate)
 
 	err := pub.Publish(context.Background(), "cnn", []string{
 		"https://rss.cnn.com/rss/cnn_health.rss",
@@ -112,7 +114,8 @@ func TestPublisher_NoGate_LegacyBehavior(t *testing.T) {
 func TestPublisher_Gate_AllowAllGuard_NoFiltering(t *testing.T) {
 	prod := &gateMockProducer{}
 	pub := publisher.New(prod, noopResolver{}, gateLog())
-	pub.SetGate(urlguard.NewGate(urlguard.AllowAllGuard{}, gateLog()))
+	gate, _ := urlguard.NewGate(urlguard.AllowAllGuard{}, gateLog())
+	pub.SetGate(gate)
 
 	urls := []string{
 		"https://rss.cnn.com/rss/cnn_health.rss",
