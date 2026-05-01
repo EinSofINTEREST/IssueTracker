@@ -12,8 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/validate/types"
 	"issuetracker/pkg/config"
 )
 
@@ -31,8 +31,8 @@ func NewValidator(cfg config.ValidateConfig) *Validator {
 }
 
 // Validate는 뉴스 컨텐츠의 필수 필드, 품질 점수, 스팸 여부를 검증합니다.
-func (v *Validator) Validate(_ context.Context, content *core.Content) processor.ValidationResult {
-	var errs []processor.ValidationError
+func (v *Validator) Validate(_ context.Context, content *core.Content) types.ValidationResult {
+	var errs []types.ValidationError
 
 	errs = append(errs, v.validateTitle(content)...)
 	errs = append(errs, v.validateBody(content)...)
@@ -48,7 +48,7 @@ func (v *Validator) Validate(_ context.Context, content *core.Content) processor
 		wordScore := v.scoreWordCount(content.WordCount)
 		metaScore := scoreMetadata(content)
 		structScore := scoreStructure(content)
-		errs = append(errs, processor.ValidationError{
+		errs = append(errs, types.ValidationError{
 			Field: "QualityScore",
 			Rule:  "quality_low",
 			Message: fmt.Sprintf(
@@ -60,24 +60,24 @@ func (v *Validator) Validate(_ context.Context, content *core.Content) processor
 
 	isValid := len(errs) == 0 && score >= threshold
 
-	return processor.ValidationResult{
+	return types.ValidationResult{
 		IsValid:      isValid,
 		QualityScore: score,
 		Errors:       errs,
 	}
 }
 
-func (v *Validator) validateTitle(c *core.Content) []processor.ValidationError {
+func (v *Validator) validateTitle(c *core.Content) []types.ValidationError {
 	length := utf8.RuneCountInString(c.Title)
 	if length < v.cfg.NewsTitleMinLen {
-		return []processor.ValidationError{{
+		return []types.ValidationError{{
 			Field:   "Title",
 			Rule:    "min_length",
 			Message: fmt.Sprintf("title must be at least %d characters, got %d", v.cfg.NewsTitleMinLen, length),
 		}}
 	}
 	if length > v.cfg.NewsTitleMaxLen {
-		return []processor.ValidationError{{
+		return []types.ValidationError{{
 			Field:   "Title",
 			Rule:    "max_length",
 			Message: fmt.Sprintf("title must be at most %d characters, got %d", v.cfg.NewsTitleMaxLen, length),
@@ -86,17 +86,17 @@ func (v *Validator) validateTitle(c *core.Content) []processor.ValidationError {
 	return nil
 }
 
-func (v *Validator) validateBody(c *core.Content) []processor.ValidationError {
+func (v *Validator) validateBody(c *core.Content) []types.ValidationError {
 	length := utf8.RuneCountInString(c.Body)
 	if length < v.cfg.NewsBodyMinLen {
-		return []processor.ValidationError{{
+		return []types.ValidationError{{
 			Field:   "Body",
 			Rule:    "min_length",
 			Message: fmt.Sprintf("body must be at least %d characters, got %d", v.cfg.NewsBodyMinLen, length),
 		}}
 	}
 	if length > v.cfg.NewsBodyMaxLen {
-		return []processor.ValidationError{{
+		return []types.ValidationError{{
 			Field:   "Body",
 			Rule:    "max_length",
 			Message: fmt.Sprintf("body must be at most %d characters, got %d", v.cfg.NewsBodyMaxLen, length),
@@ -105,9 +105,9 @@ func (v *Validator) validateBody(c *core.Content) []processor.ValidationError {
 	return nil
 }
 
-func (v *Validator) validatePublishedAt(c *core.Content) []processor.ValidationError {
+func (v *Validator) validatePublishedAt(c *core.Content) []types.ValidationError {
 	if c.PublishedAt.IsZero() {
-		return []processor.ValidationError{{
+		return []types.ValidationError{{
 			Field:   "PublishedAt",
 			Rule:    "required",
 			Message: "published_at is required for news content",
@@ -117,7 +117,7 @@ func (v *Validator) validatePublishedAt(c *core.Content) []processor.ValidationE
 }
 
 // detectSpam은 과도한 대문자 및 구두점 비율로 스팸을 탐지합니다.
-func (v *Validator) detectSpam(c *core.Content) []processor.ValidationError {
+func (v *Validator) detectSpam(c *core.Content) []types.ValidationError {
 	text := c.Title + " " + c.Body
 	runes := []rune(text)
 	total := len(runes)
@@ -135,10 +135,10 @@ func (v *Validator) detectSpam(c *core.Content) []processor.ValidationError {
 		}
 	}
 
-	var errs []processor.ValidationError
+	var errs []types.ValidationError
 
 	if float64(capCount)/float64(total) > v.cfg.NewsMaxCapRatio {
-		errs = append(errs, processor.ValidationError{
+		errs = append(errs, types.ValidationError{
 			Field:   "Body",
 			Rule:    "spam_caps",
 			Message: fmt.Sprintf("excessive capitalization detected (%.0f%%)", float64(capCount)/float64(total)*100),
@@ -146,7 +146,7 @@ func (v *Validator) detectSpam(c *core.Content) []processor.ValidationError {
 	}
 
 	if float64(punctCount)/float64(total) > v.cfg.NewsMaxPunctRatio {
-		errs = append(errs, processor.ValidationError{
+		errs = append(errs, types.ValidationError{
 			Field:   "Body",
 			Rule:    "spam_punct",
 			Message: fmt.Sprintf("excessive punctuation detected (%.0f%%)", float64(punctCount)/float64(total)*100),

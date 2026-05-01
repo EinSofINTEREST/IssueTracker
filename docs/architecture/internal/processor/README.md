@@ -50,12 +50,18 @@ stage 추가 (예: enrich, embed) 시 `Stage` 인터페이스만 만족하면 ma
 
 <br>
 
-## 검증 타입 (validate 단계 공유 hub)
+## 검증 타입 (validate 단계 leaf hub)
 
-`Validator` / `ValidationResult` / `ValidationError` 는 `validate/news/` + `validate/community/`
-sub-validator 가 공유하는 타입이라 본 패키지에 잔류 (validate/ 로 옮기면 sub-package 가 부모를 import → cycle).
+`Validator` / `ValidationResult` / `ValidationError` 는 `internal/processor/validate/types/`
+leaf sub-package 에 위치합니다 — `validate/news/` + `validate/community/` sub-validator 가
+본 타입을 import 하고, `validate` (parent) 도 `NewValidator` 에서 sub-validator 를 import.
+타입을 validate (parent) 에 두면 sub → parent → sub 의 import cycle 이 발생하므로,
+leaf-only sub-package 가 cycle 을 회피합니다.
 
 ```go
+// internal/processor/validate/types/types.go
+package types
+
 type Validator interface {
     Validate(ctx context.Context, content *core.Content) ValidationResult
 }
@@ -65,6 +71,14 @@ type ValidationResult struct {
     QualityScore float32  // 0.0 ~ 1.0; 0.5 미만이면 DLQ 라우팅 대상
     Errors       []ValidationError
 }
+```
+
+import 의존:
+```
+validate (parent)  → types  (NewValidator 가 types.Validator 반환)
+validate/news      → types
+validate/community → types
+validate/worker.go → types  (RunValidation 이 types.Validator 인자)
 ```
 
 <br>

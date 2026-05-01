@@ -9,10 +9,10 @@ import (
 	"context"
 	"fmt"
 
-	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/community"
 	"issuetracker/internal/processor/validate/news"
+	"issuetracker/internal/processor/validate/types"
 	"issuetracker/pkg/config"
 )
 
@@ -21,7 +21,7 @@ import (
 //
 // NewValidator returns the appropriate Validator for the given SourceType.
 // Defaults to the news validator for unknown or social types.
-func NewValidator(sourceType core.SourceType, cfg config.ValidateConfig) processor.Validator {
+func NewValidator(sourceType core.SourceType, cfg config.ValidateConfig) types.Validator {
 	switch sourceType {
 	case core.SourceTypeCommunity:
 		return community.NewValidator(cfg)
@@ -35,7 +35,7 @@ func NewValidator(sourceType core.SourceType, cfg config.ValidateConfig) process
 //
 // 검증 통과 시: content.Reliability = QualityScore 설정, (content, nil) 반환.
 // 검증 실패 시: core.CrawlerError(Validation 카테고리) 반환 — 첫 번째 룰 기준 코드 부여.
-func RunValidation(ctx context.Context, v processor.Validator, content *core.Content) (*core.Content, error) {
+func RunValidation(ctx context.Context, v types.Validator, content *core.Content) (*core.Content, error) {
 	result := v.Validate(ctx, content)
 	content.Reliability = result.QualityScore
 
@@ -51,7 +51,7 @@ func RunValidation(ctx context.Context, v processor.Validator, content *core.Con
 // codeForValidationResult 는 ValidationResult.Errors 에서 첫 번째 룰을 참조하여
 // 가장 적절한 에러 코드를 결정합니다. errors 가 비어있으면 임계 미달로 간주합니다 (legacy 안전망 —
 // 이슈 #135 이후 validator 들은 임계 미달 시 명시적으로 quality_low 룰을 errors 에 추가합니다).
-func codeForValidationResult(result processor.ValidationResult) string {
+func codeForValidationResult(result types.ValidationResult) string {
 	if len(result.Errors) == 0 {
 		return core.CodeValQualityLow
 	}
