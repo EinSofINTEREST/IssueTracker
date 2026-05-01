@@ -184,8 +184,8 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 
 | 위치 | 형식 | 예시 | 강제 |
 |---|---|---|---|
-| Commit message | `[FEAT]:` / `[FIX]:` / `[REFAC]:` / `[DOCS]:` / `[CHORE]:` (축약 + 콜론) | `[FIX]: 인덱스 누락 보정` | CI Commit Lint |
-| PR title | `[FEAT#N]` / `[FIX#N]` / `[REFAC#N]` / `[DOCS#N]` / `[CHORE#N]` (commit prefix + #이슈번호) | `[DOCS#212] 규약 6 정정` | CI PR Title Lint |
+| Commit message | `[FEAT]:` / `[FIX]:` / `[REFAC]:` / `[DOCS]:` / `[CHORE]:` (축약 + 콜론) | `[FIX]: 인덱스 누락 보정` | GitHub Actions Commit Lint |
+| PR title | `[FEAT#N]` / `[FIX#N]` / `[REFAC#N]` / `[DOCS#N]` / `[CHORE#N]` (commit 카테고리 + #이슈번호, 콜론 없음) | `[DOCS#212] 규약 6 정정` | GitHub Actions PR Title Lint |
 | **Issue title** | **`[FEATURE]` / `[FIX]` / `[REFACTOR]` / `[DOCS]` / `[CHORE]` / `[HOTFIX]`** (full-word, 콜론 없음) | `[FEATURE] 새 크롤러 추가` | (lint 미강제, 규약 6 운영) |
 
 **핵심 차이**: 이슈 prefix 는 commit prefix 의 축약형이 아니라 **원본 단어** 를 그대로 쓴다. 또한 commit/PR 에는 없는 `[HOTFIX]` 가 이슈 prefix 에만 존재 — 배포 중 긴급 대응이라는 별도 카테고리. 이 표기 차이는 의도된 설계이며, 본 규약 6 의 매핑 표는 **이슈 prefix → Label/Type** 매핑이다.
