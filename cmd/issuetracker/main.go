@@ -223,6 +223,9 @@ func main() {
 	parserKafkaCfg := queue.DefaultConfig()
 	parserKafkaCfg.GroupID = queue.GroupParsers
 	parserConsumer := queue.NewConsumer(parserKafkaCfg, queue.TopicFetched)
+	// 이슈 #173 단계 4-1: sample URL 누적 — parser_worker 가 정상 파싱 후 누적, 단계 4-2 의 정밀화 트리거 입력.
+	sampleRepo := pgstore.NewSampleURLRepository(pool, log)
+
 	pw := parserWorker.NewParserWorker(
 		parserConsumer,
 		crawlerProducer, // normalized 토픽 발행 + chained article jobs 발행 시 publisher 가 동일 producer 사용
@@ -230,7 +233,9 @@ func main() {
 		contentSvc,
 		jobPublisher,
 		ruleParser,
-		procLock, // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
+		ruleResolver, // 이슈 #173 단계 4-1: sample 누적 시 매칭 rule lookup
+		sampleRepo,   // 이슈 #173 단계 4-1
+		procLock,     // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
 		llmGen,
 		parserWorkerCount,
 		log,
