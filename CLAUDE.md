@@ -61,15 +61,16 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 - [ ] 커밋 메시지가 `[카테고리]: 한국어 설명` 형식인가?
 - [ ] `make fmt && make lint && make test` 를 로컬에서 통과했는가?
 
-## AI 작업 진행 규약 (이슈 #152, #199)
+## AI 작업 진행 규약 (이슈 #152, #199, #210)
 
-상세는 [`.claude/rules/07-workflow.md`](.claude/rules/07-workflow.md). 핵심 5 규약:
+상세는 [`.claude/rules/07-workflow.md`](.claude/rules/07-workflow.md). 핵심 6 규약:
 
-1. **이슈 먼저 생성** — 코드 수정 시작 전 GitHub 이슈 생성. 큰 작업은 메인 + sub-issue N개로 분할 후 모두 사전 생성. PR 직전 ad-hoc 이슈 금지 (이슈 #199).
+1. **이슈 먼저 생성** — 코드 수정 시작 전 GitHub 이슈 생성. 큰 작업은 메인 + sub-issue N개로 분할 후 모두 사전 생성 (Sub-issue Relation 활성화). PR 직전 ad-hoc 이슈 금지 (이슈 #199).
 2. **자율 진행** — 시스템 변경 / destructive 권한 / 외부 영향 / 모호 영역만 사용자 확인. 그 외는 쿼리 의도 기반 자율 진행.
 3. **Commit-per-TODO** — 별 언급 없으면 논리적 변경 단위마다 commit (메시지 컨벤션 준수).
 4. **PR 자동 생성** — 작업 완료 직후 컨벤션 + 템플릿 준수해서 `Closes #<sub-issue>` 포함 PR 자동 생성. 마지막 sub-issue PR 에서 메인 이슈도 close.
 5. **권한 사용 최소화** — 새 permission / 외부 도구 / 의존성은 작업 완수에 불가피한 경우에만.
+6. **Label · Issue Type 부여 필수** (이슈 #210) — 이슈/PR 생성 시 commit prefix 기준 Label (`[FEAT]→enhancement`, `[REFAC]→refactor`, `[CHORE]→chore`, `[DOCS]→documentation`, `[FIX]→bug` (+ 배포 긴급은 `hotfix`)). 이슈는 추가로 Issue Type (`[FEAT]→Feature`, `[FIX]→Bug`, 그 외 `Task`).
 
 ## PR 생성 후 자동 동작 (이슈 #129)
 
