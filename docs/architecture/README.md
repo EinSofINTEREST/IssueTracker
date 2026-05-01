@@ -41,11 +41,11 @@ docs/architecture/
 │   │   ├── domain.md                      ← Fetcher chain + 사이트 등록
 │   │   ├── handler.md                     ← Registry (crawler_name → Handler)
 │   │   ├── implementation.md              ← chromedp / goquery
-│   │   ├── parser.md                      ← rule.Parser (DB-driven) + llmgen + refiner
 │   │   ├── rate_limiter.md
 │   │   └── worker.md                      ← PoolManager + ProcessingLock + RetryScheduler
 │   ├── parser/
-│   │   └── README.md                      ← Claim Check 기반 ParserWorker
+│   │   ├── README.md                      ← Domain-Agnostic Parser + Claim Check Worker
+│   │   └── rule.md                        ← rule.Parser (DB-driven) + llmgen + pathinfer + refiner
 │   ├── processor/
 │   │   ├── README.md
 │   │   └── validate.md                    ← news/community Validator
@@ -128,7 +128,7 @@ docs/architecture/
 └──────────────────────────────────────────────────────────────────────────┘
 
 부수 흐름:
-  • Refiner (internal/crawler/parser/rule/refiner) — 주기적 polling 으로 llm-auto 규칙의
+  • Refiner (internal/parser/rule/refiner) — 주기적 polling 으로 llm-auto 규칙의
     path_pattern 을 sample_urls 기반으로 정밀화 (이슈 #173).
   • Classifier (internal/classifier) — gRPC 기본 + HTTP fallback 으로 ELArchive Classifier
     호출 — 향후 enrich 단계에서 사용.

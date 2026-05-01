@@ -118,6 +118,13 @@ issuetracker/
 │   │   │       ├── naver/
 │   │   │       └── daum/
 │   │   └── community/         # Community crawlers (planned)
+│   ├── parser/                # ✅ Domain-agnostic parser + DB-driven rule engine (이슈 #100, #196)
+│   │   ├── parser.go          # ContentParser / LinkListParser interfaces + Page model
+│   │   ├── rule/              # parsing_rules 기반 단일 engine
+│   │   │   ├── llmgen/        # LLM 기반 selector 자동 생성 (이슈 #149)
+│   │   │   ├── pathinfer/     # path_pattern 추론 알고리즘 (이슈 #173)
+│   │   │   └── refiner/       # path_pattern 정밀화 polling
+│   │   └── worker/            # Claim Check 기반 ParserWorker (Kafka consumer)
 │   ├── processor/             # Processing pipeline (planned)
 │   │   ├── normalize/         # Data normalization
 │   │   ├── enrich/            # Data enrichment
