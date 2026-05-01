@@ -34,7 +34,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/parser/rule"
+	"issuetracker/internal/parser/rule"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/logger"

@@ -27,10 +27,10 @@ defer stop()
 | 메트릭                              | 종류       | 위치                                                                | 의미                                |
 |------------------------------------|-----------|---------------------------------------------------------------------|-------------------------------------|
 | Go runtime / process               | Collector | NewRegistry 자동                                                     | GC, goroutine, mem, fd 등           |
-| `refiner_attempts`                 | Counter   | [refiner/metrics.go](../../../internal/crawler/parser/rule/refiner/metrics.go) | path_pattern 정밀화 시도 횟수 (PR #191) |
+| `refiner_attempts`                 | Counter   | [refiner/metrics.go](../../../internal/parser/rule/refiner/metrics.go) | path_pattern 정밀화 시도 횟수 (PR #191) |
 | (그 외) Circuit Breaker 상태 등    | (개별 패키지가 자체 등록) | -                                                  |                                     |
 
-신규 메트릭 추가 시 해당 패키지 (예: `internal/crawler/parser/rule/refiner`) 가
+신규 메트릭 추가 시 해당 패키지 (예: `internal/parser/rule/refiner`) 가
 `prometheus.NewCounterVec` 등으로 만들고 `metricsRegistry.MustRegister` 로 등록 — registry 인스턴스를
 [`cmd/issuetracker`](../cmd/issuetracker.md) 가 wiring 시점에 주입.
 

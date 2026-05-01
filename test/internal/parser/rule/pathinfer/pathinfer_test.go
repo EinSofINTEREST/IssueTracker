@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/crawler/parser/rule/pathinfer"
+	"issuetracker/internal/parser/rule/pathinfer"
 )
 
 // 결과 regex 가 입력 sample 들 모두 매칭하는지 확인하는 헬퍼.

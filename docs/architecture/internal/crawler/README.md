@@ -18,11 +18,6 @@ internal/crawler/
 ├── implementation/   ← Fetcher 구현체
 │   ├── chromedp/     ← 헤드리스 Chrome (CDP)
 │   └── goquery/      ← 정적 HTTP + goquery
-├── parser/           ← (별도 도메인) DB-driven Parser 인터페이스 + rule engine
-│   └── rule/
-│       ├── llmgen/   ← LLM 으로 selector 자동 생성 (이슈 #149)
-│       ├── pathinfer/← path_pattern 추론
-│       └── refiner/  ← path_pattern 정밀화 polling (이슈 #173)
 ├── rate_limiter/     ← IP 단위 token bucket
 └── worker/           ← PoolManager + ProcessingLock + RetryScheduler + CircuitBreaker
 ```
@@ -37,7 +32,6 @@ internal/crawler/
 | [`internal/crawler/handler/`](../../../../internal/crawler/handler/) | [handler.md](handler.md)                  |
 | [`internal/crawler/domain/`](../../../../internal/crawler/domain/)   | [domain.md](domain.md)                    |
 | [`internal/crawler/implementation/`](../../../../internal/crawler/implementation/) | [implementation.md](implementation.md) |
-| [`internal/crawler/parser/`](../../../../internal/crawler/parser/)   | [parser.md](parser.md)                    |
 | [`internal/crawler/rate_limiter/`](../../../../internal/crawler/rate_limiter/) | [rate_limiter.md](rate_limiter.md) |
 | [`internal/crawler/worker/`](../../../../internal/crawler/worker/)   | [worker.md](worker.md)                    |
 
@@ -54,11 +48,9 @@ worker ──→ handler ──→ (domain/general → fetcher) ──→ implem
    │           └──→ noop fallback
    │
    └──→ core (interfaces, models, errors) ──── 모든 패키지가 의존
-
-parser/rule ──→ storage (parsing_rules / sample_urls 조회)
-parser/rule/llmgen ──→ pkg/llm (provider abstract)
-parser/rule/refiner ──→ pkg/llm + storage + pathinfer
 ```
+
+> Parser engine 은 별도 패키지 (`internal/parser/`) 로 분리됨 (이슈 #196). 상세는 [`internal/parser/README.md`](../parser/README.md).
 
 `core` 가 sink 노드 (다른 어떤 서브패키지도 의존하지 않음 — 가장 안정적인 인터페이스 계층).
 
@@ -101,10 +93,9 @@ parser/rule/refiner ──→ pkg/llm + storage + pathinfer
 ## 외부 의존
 
 - **Kafka**: `issuetracker.crawl.{high,normal,low}` consume / `issuetracker.fetched` produce
-- **PostgreSQL**: `raw_contents` (Claim Check) / `parsing_rules` (rule engine, parser/) / `sample_urls` (refiner)
+- **PostgreSQL**: `raw_contents` (Claim Check 저장 — parser 단계가 소비/정리)
 - **Redis**: ProcessingLock (SETNX) / IngestionLock / RetryQueue (ZSET)
 - **Chrome (CDP)**: `implementation/chromedp` 가 `ws://localhost:9222` 또는 컨테이너 내장 chrome 사용
-- **LLM**: `parser/rule/llmgen` 과 `parser/rule/refiner` 가 [`pkg/llm`](../../../../pkg/llm/) 통해 호출
 
 <br>
 

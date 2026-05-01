@@ -27,10 +27,10 @@ import (
 
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/crawler/domain/general"
-	"issuetracker/internal/crawler/parser"
-	"issuetracker/internal/crawler/parser/rule"
-	"issuetracker/internal/crawler/parser/rule/llmgen"
 	crawlerWorker "issuetracker/internal/crawler/worker"
+	"issuetracker/internal/parser"
+	"issuetracker/internal/parser/rule"
+	"issuetracker/internal/parser/rule/llmgen"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"

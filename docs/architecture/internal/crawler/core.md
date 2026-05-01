@@ -12,7 +12,7 @@
 | 인터페이스         | 위치                                                              | 책임                                                  |
 |--------------------|------------------------------------------------------------------|-------------------------------------------------------|
 | `Crawler`          | [crawler.go](../../../../internal/crawler/core/crawler.go)        | Initialize / Start / Stop / Fetch / HealthCheck       |
-| `Parser`           | (동일 파일)                                                       | RawContent → 도메인 모델 (별도 [parser](parser.md) 가 구현)  |
+| `Parser`           | (동일 파일)                                                       | RawContent → 도메인 모델 (별도 [parser](../parser/rule.md) 가 구현)  |
 | `RateLimiter`      | (동일 파일)                                                       | Wait(ctx) — 토큰 buckets 등으로 호출 빈도 제한        |
 | `URLRateLimiter`   | (동일 파일)                                                       | URL → IP 매핑 + per-IP rate limit (DNS 해석 필요)     |
 | `HTTPClient`       | [http_client.go](../../../../internal/crawler/core/http_client.go) | Do(req) — 표준 `*http.Client` wrapper                |

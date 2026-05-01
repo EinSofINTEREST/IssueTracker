@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/parser/rule"
-	"issuetracker/internal/crawler/parser/rule/llmgen"
+	"issuetracker/internal/parser/rule"
+	"issuetracker/internal/parser/rule/llmgen"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/logger"

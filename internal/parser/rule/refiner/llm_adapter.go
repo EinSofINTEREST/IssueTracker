@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"issuetracker/internal/crawler/parser/rule/pathinfer"
+	"issuetracker/internal/parser/rule/pathinfer"
 	"issuetracker/pkg/llm"
 )
 

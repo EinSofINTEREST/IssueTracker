@@ -1,9 +1,11 @@
-# internal/parser — Claim Check Parser Worker
+# internal/parser — Domain-Agnostic Parser + Claim Check Worker
 
-소스: [`internal/parser/worker/`](../../../../internal/parser/worker/)
+소스: [`internal/parser/`](../../../../internal/parser/)
 
-> ⚠️ 이름 주의: 본 패키지(`internal/parser`)는 [internal/crawler/parser](../crawler/parser.md) 와 다릅니다.
-> `internal/crawler/parser` 가 **rule engine** 이라면, 본 패키지는 그 engine 을 사용하는 **Kafka worker** 입니다.
+본 패키지는 두 layer 로 구성됩니다 (이슈 #196 통합):
+
+1. **Rule engine** ([rule.md](rule.md)) — `parser.go` (도메인 중립 인터페이스) + `rule/` (DB-driven engine, llmgen, pathinfer, refiner)
+2. **Kafka worker** ([worker/](../../../../internal/parser/worker/)) — Claim Check 패턴으로 raw 로드 + rule engine 호출 + content 저장
 
 이슈 #134 에서 fetcher 와 parser 를 분리하면서 도입된 별도 consumer group `issuetracker-parsers`.
 [Claim Check 패턴](https://learn.microsoft.com/en-us/azure/architecture/patterns/claim-check) 으로
@@ -59,8 +61,8 @@ ParserWorker 가 이상 종료 / rule.Error 잔존 / LLM 재처리 윈도우 만
 
 ## 의존
 
-- [`internal/crawler/parser/rule`](../crawler/parser.md) — `Parser`, `Resolver`
-- [`internal/crawler/parser/rule/llmgen`](../crawler/parser.md) — `Generator.Enqueue` (선택)
+- [`internal/parser/rule`](rule.md) — `Parser`, `Resolver`
+- [`internal/parser/rule/llmgen`](rule.md) — `Generator.Enqueue` (선택)
 - [`internal/crawler/domain/general`](../crawler/domain.md) — `ConvertPageToContent`
 - [`internal/crawler/worker`](../crawler/worker.md) — `ProcessingLock`
 - [`internal/storage/service`](../storage/service.md) — `RawContentService`, `ContentService`

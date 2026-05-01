@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/crawler/parser/rule/pathinfer"
+	"issuetracker/internal/parser/rule/pathinfer"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

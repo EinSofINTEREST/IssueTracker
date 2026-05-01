@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/crawler/parser/rule"
-	"issuetracker/internal/crawler/parser/rule/llmgen"
-	"issuetracker/internal/crawler/parser/rule/refiner"
+	"issuetracker/internal/parser/rule"
+	"issuetracker/internal/parser/rule/llmgen"
+	"issuetracker/internal/parser/rule/refiner"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 )

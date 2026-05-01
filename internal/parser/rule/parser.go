@@ -10,7 +10,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/parser"
+	"issuetracker/internal/parser"
 	"issuetracker/internal/storage"
 )
 
