@@ -29,7 +29,7 @@ issuetracker/
 ├── test/                       # Test files (mirrors service architecture)
 │   ├── internal/              # internal/ 패키지 테스트
 │   │   ├── classifier/        # ← internal/classifier/
-│   │   ├── crawler_core/      # ← internal/processor/fetcher/core/
+│   │   ├── processor/fetcher/core/ # ← internal/processor/fetcher/core/
 │   │   └── storage/           # ← internal/storage/
 │   └── pkg/                   # pkg/ 패키지 테스트
 │       ├── config/            # ← pkg/config/
@@ -133,7 +133,7 @@ func main() {
 **디렉토리 매핑 예시:**
 ```
 internal/classifier/handler.go     → test/internal/classifier/handler_test.go
-internal/processor/fetcher/core/retry.go     → test/internal/crawler_core/retry_test.go
+internal/processor/fetcher/core/retry.go     → test/internal/processor/fetcher/core/retry_test.go
 pkg/logger/logger.go               → test/pkg/logger/logger_test.go
 ```
 
