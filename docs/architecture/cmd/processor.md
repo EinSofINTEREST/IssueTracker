@@ -34,7 +34,7 @@
 ## 의존 패키지
 
 - [`internal/processor/validate`](../../../internal/processor/validate/) — Worker / Validator
-- [`internal/crawler/worker`](../../../internal/crawler/worker/) — `NoopProcessingLock`
+- [`internal/locks`](../../../internal/locks/) — `NoopProcessingLock`
 - [`internal/storage/postgres`](../../../internal/storage/postgres/) + [`internal/storage/service`](../../../internal/storage/service/)
 - [`pkg/config`](../../../pkg/config/), [`pkg/queue`](../../../pkg/queue/), [`pkg/logger`](../../../pkg/logger/), [`pkg/metrics`](../../../pkg/metrics/)
 

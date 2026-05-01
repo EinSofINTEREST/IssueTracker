@@ -125,6 +125,9 @@ issuetracker/
 │   │   │   ├── pathinfer/     # path_pattern 추론 알고리즘 (이슈 #173)
 │   │   │   └── refiner/       # path_pattern 정밀화 polling
 │   │   └── worker/            # Claim Check 기반 ParserWorker (Kafka consumer)
+│   ├── locks/                 # ✅ 단계 무관 distributed lock — fetcher/parser/validator 공유 (이슈 #197)
+│   │   ├── ingestion_lock.go  # IngestionLock (Publisher 가 Kafka enqueue 직전 사용)
+│   │   └── processing_lock.go # ProcessingLock + ProcessingKey(stage, url)
 │   ├── processor/             # Processing pipeline (planned)
 │   │   ├── normalize/         # Data normalization
 │   │   ├── enrich/            # Data enrichment

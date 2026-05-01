@@ -15,12 +15,11 @@ defer client.Close()
 ```
 
 `*Client` 자체에는 `AcquireLock` / `ReleaseLock` / `Enqueue` / `Dequeue` 등 helper 가 정의되어 있을 수
-있으나, 현재 시스템에서는 **`*Client` 를 직접 받아** [`internal/crawler/worker`](../internal/crawler/worker.md)
-의 다음 컴포넌트들이 필요한 명령을 발행합니다:
+있으나, 현재 시스템에서는 **`*Client` 를 직접 받아** 다음 컴포넌트들이 필요한 명령을 발행합니다:
 
-- `RedisProcessingLock` — `SET ... NX PX ttl` (이슈 #178)
-- `RedisIngestionLock` — `SET ... NX PX ttl`
-- `RedisDelayedRetryScheduler` — ZSET (`ZADD score=runAt`, `ZRANGEBYSCORE`, `ZREM`)
+- `RedisProcessingLock` ([`internal/locks`](../internal/locks/README.md)) — `SET ... NX PX ttl` (이슈 #178)
+- `RedisIngestionLock` ([`internal/locks`](../internal/locks/README.md)) — `SET ... NX PX ttl`
+- `RedisDelayedRetryScheduler` ([`internal/crawler/worker`](../internal/crawler/worker.md)) — ZSET (`ZADD score=runAt`, `ZRANGEBYSCORE`, `ZREM`)
 
 <br>
 
@@ -52,7 +51,8 @@ defer client.Close()
 ## 호출 측
 
 - [`cmd/issuetracker`](../cmd/issuetracker.md) 단계 7 — `redis.New(ctx, cfg)` + `defer client.Close()`
-- [`internal/crawler/worker`](../internal/crawler/worker.md) — Client 를 받아 lock / retry 동작
+- [`internal/locks`](../internal/locks/README.md) — Client 를 받아 ProcessingLock / IngestionLock 구현
+- [`internal/crawler/worker`](../internal/crawler/worker.md) — Client 를 받아 RetryScheduler 구현
 
 Redis 가 부재일 때 [`cmd/issuetracker`](../cmd/issuetracker.md) 는 graceful degrade — `NoopProcessingLock`
 fallback.

@@ -38,7 +38,8 @@
 
 각 단계의 자세한 책임은 해당 패키지 문서 참조:
 
-- [internal/crawler/worker.md](../internal/crawler/worker.md) — PoolManager, ProcessingLock, RetryScheduler
+- [internal/crawler/worker.md](../internal/crawler/worker.md) — PoolManager, RetryScheduler
+- [internal/locks/README.md](../internal/locks/README.md) — ProcessingLock, IngestionLock
 - [internal/parser/rule.md](../internal/parser/rule.md) — rule.Parser, llmgen, refiner
 - [internal/parser/README.md](../internal/parser/README.md) — ParserWorker (Claim Check)
 - [internal/processor/validate.md](../internal/processor/validate.md) — Validator

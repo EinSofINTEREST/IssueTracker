@@ -1,23 +1,23 @@
-# internal/crawler/worker — Pool Manager + Distributed Coordination
+# internal/crawler/worker — Pool Manager + Retry/CircuitBreaker
 
 소스: [`internal/crawler/worker/`](../../../../internal/crawler/worker/)
 
 크롤러 단계의 핵심 오케스트레이터. **3-tier priority Kafka consumer pool** 을 운영하며, **Redis 기반
-ProcessingLock / IngestionLock / RetryScheduler** 로 다중 인스턴스 환경의 중복 처리/재시도를 안전하게
-처리합니다. 추가로 **per-source CircuitBreaker** 로 실패 폭주를 차단합니다.
+RetryScheduler** 로 지연 재시도를 처리하고 **per-source CircuitBreaker** 로 실패 폭주를 차단합니다.
+
+> 단계 무관 distributed lock (ProcessingLock / IngestionLock) 은 [`internal/locks`](../locks/README.md)
+> 로 분리됨 (이슈 #197). fetcher worker 는 `locks.ProcessingLock(stage="fetcher", url)` 형태로 사용.
 
 <br>
 
 ## 핵심 타입
 
-| 타입                          | 위치                                                                   | 책임                                                            |
-|------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------------|
-| `PoolManager`                 | [manager.go](../../../../internal/crawler/worker/manager.go)           | 3개 priority pool 의 lifecycle 관리                              |
-| `KafkaConsumerPool`           | [pool.go](../../../../internal/crawler/worker/pool.go)                 | 단일 priority 의 worker goroutine pool + retry 라우팅           |
-| `ProcessingLock` (interface)  | [processing_lock.go](../../../../internal/crawler/worker/processing_lock.go) | URL 동시 처리 방지 — Redis SETNX / Noop 두 구현                |
-| `IngestionLock` (interface)   | [ingestion_lock.go](../../../../internal/crawler/worker/ingestion_lock.go)   | URL pipeline 진입 marker — Publisher 가 사용                  |
-| `RetryScheduler` (interface)  | [retry_scheduler.go](../../../../internal/crawler/worker/retry_scheduler.go) | 지연 retry — Redis ZSET 또는 즉시 republish                  |
-| `CircuitBreakerRegistry`      | [circuit_breaker.go](../../../../internal/crawler/worker/circuit_breaker.go) | per-source 실패율 트래킹 + 차단                              |
+| 타입                           | 위치                                                                   | 책임                                                            |
+|-------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------------|
+| `PoolManager`                  | [manager.go](../../../../internal/crawler/worker/manager.go)           | 3개 priority pool 의 lifecycle 관리                              |
+| `KafkaConsumerPool`            | [pool.go](../../../../internal/crawler/worker/pool.go)                 | 단일 priority 의 worker goroutine pool + retry 라우팅           |
+| `RetryScheduler` (interface)   | [retry_scheduler.go](../../../../internal/crawler/worker/retry_scheduler.go) | 지연 retry — Redis ZSET 또는 즉시 republish                  |
+| `CircuitBreakerRegistry`       | [circuit_breaker.go](../../../../internal/crawler/worker/circuit_breaker.go) | per-source 실패율 트래킹 + 차단                              |
 | `PriorityResolver` (interface) | [resolver.go](../../../../internal/crawler/worker/resolver.go)         | retry/escalation 시 새 priority 결정 전략                       |
 
 <br>
@@ -51,45 +51,6 @@ ProcessingLock / IngestionLock / RetryScheduler** 로 다중 인스턴스 환경
         - 비-Retryable 또는 Max 초과 → DLQ 발행 + commit
         - CircuitBreaker.RecordFailure(source)
 ```
-
-<br>
-
-## ProcessingLock (Redis SETNX 또는 Noop)
-
-이슈 #178. 동일 URL 이 여러 worker / 인스턴스에서 단계별 (fetcher / parser / validator) 중복 처리되는 것을
-차단. 인터페이스는 prebuilt key 만 받으며, **stage 분기는 별도 helper `ProcessingKey(stage, url)` 가
-담당** — 호출자가 정규화된 URL 을 hashed key 로 변환해 전달.
-
-```go
-type ProcessingLock interface {
-    Acquire(ctx context.Context, key string) (acquired bool, err error)
-    Release(ctx context.Context, key string) error
-}
-
-// helper — (stage, normalized_url) → Redis key
-func ProcessingKey(stage, url string) string
-```
-
-stage 상수는 패키지 외부에서도 일관 사용 가능 (예: parser worker 가 `worker.ProcessingKey(StageParser, url)`).
-
-구현:
-- [`NewRedisProcessingLock`](../../../../internal/crawler/worker/processing_lock.go) — Redis `SET NX PX ttl`
-- [`NoopProcessingLock`](../../../../internal/crawler/worker/processing_lock.go) — 항상 acquired=true (단일 프로세스 / dev)
-
-<br>
-
-## IngestionLock (Publisher 와 짝)
-
-[`internal/publisher`](../publisher.md) 가 Kafka enqueue **직전**에 URL 을 marking — 이미 marked URL 은
-Publisher 가 무시. ProcessingLock 은 처리 단계 dedup, IngestionLock 은 진입 dedup 으로 책임 분리.
-
-```go
-type IngestionLock interface {
-    Acquire(ctx context.Context, url string) (acquired bool, err error)
-}
-```
-
-기본 TTL 은 `redisCfg.IngestionLockTTL` (ENV 로 조정).
 
 <br>
 

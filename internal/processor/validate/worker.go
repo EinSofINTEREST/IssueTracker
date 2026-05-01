@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"issuetracker/internal/crawler/core"
-	crawlerWorker "issuetracker/internal/crawler/worker"
+	"issuetracker/internal/locks"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -34,7 +34,7 @@ type Worker struct {
 	consumer    queue.Consumer
 	producer    queue.Producer
 	contentSvc  service.ContentService
-	procLock    crawlerWorker.ProcessingLock // nil 허용 → NoopProcessingLock 으로 fallback (이슈 #178)
+	procLock    locks.ProcessingLock // nil 허용 → NoopProcessingLock 으로 fallback (이슈 #178)
 	cfg         config.ValidateConfig
 	workerCount int
 	jobs        chan *queue.Message
@@ -56,12 +56,12 @@ func NewWorker(
 	consumer queue.Consumer,
 	producer queue.Producer,
 	contentSvc service.ContentService,
-	procLock crawlerWorker.ProcessingLock,
+	procLock locks.ProcessingLock,
 	workerCount int,
 	cfg config.ValidateConfig,
 ) *Worker {
 	if procLock == nil {
-		procLock = crawlerWorker.NoopProcessingLock{}
+		procLock = locks.NoopProcessingLock{}
 	}
 	return &Worker{
 		consumer:    consumer,
@@ -185,7 +185,7 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 
 	// 이슈 #178: validator 단계 ProcessingLock — 같은 ref.URL 의 동시 검증을 차단.
 	// Kafka rebalance / 재배달 시 같은 ref 가 두 validator 에 도달해도 1회만 처리.
-	procKey := crawlerWorker.ProcessingKey(crawlerWorker.StageValidator, ref.URL)
+	procKey := locks.ProcessingKey(locks.StageValidator, ref.URL)
 	acquired, lockErr := w.procLock.Acquire(ctx, procKey)
 	if lockErr != nil {
 		log.WithFields(map[string]interface{}{

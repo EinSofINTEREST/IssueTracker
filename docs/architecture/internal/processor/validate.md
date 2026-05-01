@@ -60,7 +60,7 @@ graceful shutdown 시 in-flight 메시지를 `drainTimeout` 동안 finalize.
 ## 의존
 
 - [`internal/crawler/core`](../crawler/core.md)
-- [`internal/crawler/worker`](../crawler/worker.md) — `ProcessingLock` (issuetracker 통합 모드) / `NoopProcessingLock` (processor 단독 모드)
+- [`internal/locks`](../locks/README.md) — `ProcessingLock` (issuetracker 통합 모드) / `NoopProcessingLock` (processor 단독 모드)
 - [`internal/storage/service`](../storage/service.md) — `ContentService`
 - [`internal/storage`](../storage/README.md) — `ValidationStatus`
 - [`pkg/queue`](../../pkg/queue.md), [`pkg/config`](../../pkg/config.md), [`pkg/logger`](../../pkg/logger.md)

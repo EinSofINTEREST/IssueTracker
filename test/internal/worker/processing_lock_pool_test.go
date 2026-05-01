@@ -6,16 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/crawler/worker"
+	"issuetracker/internal/locks"
 	"issuetracker/pkg/queue"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mock ProcessingLock
+// Mock ProcessingLock — 본 파일 안에서만 사용 (test/internal/locks 의 동일명 mock 와 분리).
+// 단위 테스트 (NoopProcessingLock / ProcessingKey) 는 test/internal/locks 에 있음.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type mockProcessingLock struct{ mock.Mock }
@@ -29,10 +30,6 @@ func (m *mockProcessingLock) Release(ctx context.Context, key string) error {
 	args := m.Called(ctx, key)
 	return args.Error(0)
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 헬퍼
-// ─────────────────────────────────────────────────────────────────────────────
 
 func runPoolWithLocker(t *testing.T, consumer *mockConsumer, pool *worker.KafkaConsumerPool, msg *queue.Message) {
 	t.Helper()
@@ -53,45 +50,6 @@ func runPoolWithLocker(t *testing.T, consumer *mockConsumer, pool *worker.KafkaC
 	_ = pool.Stop(stopCtx)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ProcessingLock 단위 테스트
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestNoopProcessingLock_AlwaysAcquires는 NoopProcessingLock 이 항상 락 획득에 성공하는지 검증합니다.
-func TestNoopProcessingLock_AlwaysAcquires(t *testing.T) {
-	var locker worker.NoopProcessingLock
-
-	acquired, err := locker.Acquire(context.Background(), "any-key")
-	assert.NoError(t, err)
-	assert.True(t, acquired)
-}
-
-// TestNoopProcessingLock_ReleaseNoError 는 NoopProcessingLock 의 Release 가 항상 성공하는지 검증합니다.
-func TestNoopProcessingLock_ReleaseNoError(t *testing.T) {
-	var locker worker.NoopProcessingLock
-
-	err := locker.Release(context.Background(), "any-key")
-	assert.NoError(t, err)
-}
-
-// ProcessingKey 가 (stage, url) 페어로 일관된 키를 만들고, stage 가 다르거나 url 이 다르면 키도 다른지 검증.
-func TestProcessingKey_Determinism(t *testing.T) {
-	url := "https://example.com/article/1"
-	a1 := worker.ProcessingKey(worker.StageFetcher, url)
-	a2 := worker.ProcessingKey(worker.StageFetcher, url)
-	assert.Equal(t, a1, a2, "동일 (stage, url) 은 동일 키")
-
-	b := worker.ProcessingKey(worker.StageParser, url)
-	assert.NotEqual(t, a1, b, "stage 다르면 키 다름")
-
-	c := worker.ProcessingKey(worker.StageFetcher, "https://example.com/article/2")
-	assert.NotEqual(t, a1, c, "url 다르면 키 다름")
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Pool + ProcessingLock 통합 테스트
-// ─────────────────────────────────────────────────────────────────────────────
-
 // TestKafkaConsumerPool_ProcessingLock_AlreadyAcquired_SkipsWithoutCommit 는
 // 다른 worker 가 이미 락을 보유 중일 때 처리와 commit 을 모두 건너뛰는지 검증합니다.
 // 메시지 유실 방지: 락 보유 워커가 처리 도중 장애로 종료되어도 해당 워커가 commit 하지
@@ -111,7 +69,7 @@ func TestKafkaConsumerPool_ProcessingLock_AlreadyAcquired_SkipsWithoutCommit(t *
 
 	job := newTestJob()
 	msg := marshaledJobMsg(t, job)
-	wantKey := worker.ProcessingKey(worker.StageFetcher, job.Target.URL)
+	wantKey := locks.ProcessingKey(locks.StageFetcher, job.Target.URL)
 
 	// 이미 다른 worker 가 락을 보유 중
 	locker.On("Acquire", mock.Anything, wantKey).Return(false, nil)
@@ -143,7 +101,7 @@ func TestKafkaConsumerPool_ProcessingLock_Acquired_ReleasedAfterProcessing(t *te
 	job := newTestJob()
 	content := newTestContent()
 	msg := marshaledJobMsg(t, job)
-	wantKey := worker.ProcessingKey(worker.StageFetcher, job.Target.URL)
+	wantKey := locks.ProcessingKey(locks.StageFetcher, job.Target.URL)
 
 	locker.On("Acquire", mock.Anything, wantKey).Return(true, nil)
 	locker.On("Release", mock.Anything, wantKey).Return(nil)
@@ -179,7 +137,7 @@ func TestKafkaConsumerPool_ProcessingLock_AcquireError_ProceedsWithoutLock(t *te
 	job := newTestJob()
 	content := newTestContent()
 	msg := marshaledJobMsg(t, job)
-	wantKey := worker.ProcessingKey(worker.StageFetcher, job.Target.URL)
+	wantKey := locks.ProcessingKey(locks.StageFetcher, job.Target.URL)
 
 	// 락 획득 오류 — Redis 장애 시뮬레이션
 	locker.On("Acquire", mock.Anything, wantKey).Return(false, errors.New("redis unavailable"))

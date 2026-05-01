@@ -1,4 +1,4 @@
-package worker_test
+package locks_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"issuetracker/internal/crawler/worker"
+	"issuetracker/internal/locks"
 )
 
 // fakeRedisLocker — 테스트용 in-memory SETNX 시뮬레이션.
@@ -65,7 +65,7 @@ func (f *fakeRedisLocker) callCount() int {
 
 func TestRedisIngestionLock_AcquireReturnsTrueOnFirstCall(t *testing.T) {
 	r := newFakeRedisLocker()
-	lock := worker.NewRedisIngestionLock(r, time.Hour)
+	lock := locks.NewRedisIngestionLock(r, time.Hour)
 
 	acquired, err := lock.Acquire(context.Background(), "https://example.com/article/1")
 	assert.NoError(t, err)
@@ -74,7 +74,7 @@ func TestRedisIngestionLock_AcquireReturnsTrueOnFirstCall(t *testing.T) {
 
 func TestRedisIngestionLock_AcquireReturnsFalseOnDuplicate(t *testing.T) {
 	r := newFakeRedisLocker()
-	lock := worker.NewRedisIngestionLock(r, time.Hour)
+	lock := locks.NewRedisIngestionLock(r, time.Hour)
 
 	first, _ := lock.Acquire(context.Background(), "https://example.com/x")
 	second, _ := lock.Acquire(context.Background(), "https://example.com/x")
@@ -84,7 +84,7 @@ func TestRedisIngestionLock_AcquireReturnsFalseOnDuplicate(t *testing.T) {
 
 func TestRedisIngestionLock_DifferentURLsIndependent(t *testing.T) {
 	r := newFakeRedisLocker()
-	lock := worker.NewRedisIngestionLock(r, time.Hour)
+	lock := locks.NewRedisIngestionLock(r, time.Hour)
 
 	a, _ := lock.Acquire(context.Background(), "https://example.com/a")
 	b, _ := lock.Acquire(context.Background(), "https://example.com/b")
@@ -94,7 +94,7 @@ func TestRedisIngestionLock_DifferentURLsIndependent(t *testing.T) {
 
 func TestRedisIngestionLock_InvalidateAllowsReacquire(t *testing.T) {
 	r := newFakeRedisLocker()
-	lock := worker.NewRedisIngestionLock(r, time.Hour)
+	lock := locks.NewRedisIngestionLock(r, time.Hour)
 
 	_, _ = lock.Acquire(context.Background(), "https://example.com/x")
 	err := lock.Invalidate(context.Background(), "https://example.com/x")
@@ -107,7 +107,7 @@ func TestRedisIngestionLock_InvalidateAllowsReacquire(t *testing.T) {
 func TestRedisIngestionLock_PropagatesError(t *testing.T) {
 	r := newFakeRedisLocker()
 	r.failErr = errors.New("redis unavailable")
-	lock := worker.NewRedisIngestionLock(r, time.Hour)
+	lock := locks.NewRedisIngestionLock(r, time.Hour)
 
 	acquired, err := lock.Acquire(context.Background(), "https://example.com/x")
 	assert.Error(t, err)
@@ -118,14 +118,14 @@ func TestRedisIngestionLock_DefaultTTLOnZero(t *testing.T) {
 	r := newFakeRedisLocker()
 	// ttl 0 → DefaultIngestionLockTTL (24h) 사용 — panic 없이 동작 확인
 	assert.NotPanics(t, func() {
-		_ = worker.NewRedisIngestionLock(r, 0)
+		_ = locks.NewRedisIngestionLock(r, 0)
 	})
 }
 
 // nil receiver / nil locker 보호 — zero-value 또는 NewRedisIngestionLock(nil, ...) 호출 시
 // panic 없이 에러 반환 (PR #179 CodeRabbit 피드백).
 func TestRedisIngestionLock_NilLockerReturnsError(t *testing.T) {
-	lock := worker.NewRedisIngestionLock(nil, time.Hour)
+	lock := locks.NewRedisIngestionLock(nil, time.Hour)
 	acquired, err := lock.Acquire(context.Background(), "https://example.com/x")
 	assert.Error(t, err)
 	assert.False(t, acquired)
@@ -135,7 +135,7 @@ func TestRedisIngestionLock_NilLockerReturnsError(t *testing.T) {
 }
 
 func TestRedisIngestionLock_NilReceiverReturnsError(t *testing.T) {
-	var lock *worker.RedisIngestionLock // zero value
+	var lock *locks.RedisIngestionLock // zero value
 	acquired, err := lock.Acquire(context.Background(), "https://example.com/x")
 	assert.Error(t, err)
 	assert.False(t, acquired)
@@ -145,14 +145,14 @@ func TestRedisIngestionLock_NilReceiverReturnsError(t *testing.T) {
 }
 
 func TestNoopIngestionLock_AlwaysAcquires(t *testing.T) {
-	lock := worker.NoopIngestionLock{}
+	lock := locks.NoopIngestionLock{}
 	acquired, err := lock.Acquire(context.Background(), "https://example.com/x")
 	assert.NoError(t, err)
 	assert.True(t, acquired, "Noop 은 항상 acquired=true (단일 인스턴스 fallback)")
 }
 
 func TestNoopIngestionLock_InvalidateNoOp(t *testing.T) {
-	lock := worker.NoopIngestionLock{}
+	lock := locks.NoopIngestionLock{}
 	err := lock.Invalidate(context.Background(), "https://example.com/x")
 	assert.NoError(t, err)
 }
@@ -161,7 +161,7 @@ func TestNoopIngestionLock_InvalidateNoOp(t *testing.T) {
 // fakeRedisLocker 가 mutex 보호하므로 SETNX semantics 시뮬레이션 정확.
 func TestRedisIngestionLock_ConcurrentAcquireSingleWinner(t *testing.T) {
 	r := newFakeRedisLocker()
-	lock := worker.NewRedisIngestionLock(r, time.Hour)
+	lock := locks.NewRedisIngestionLock(r, time.Hour)
 
 	const concurrency = 50
 	var winners int
@@ -190,7 +190,7 @@ func TestRedisIngestionLock_ConcurrentAcquireSingleWinner(t *testing.T) {
 // 같은 URL 은 같은 SETNX 결과 — 두 번째 acquire false 를 통해 간접 검증).
 func TestRedisIngestionLock_SameURLProducesSameKey(t *testing.T) {
 	r := newFakeRedisLocker()
-	lock := worker.NewRedisIngestionLock(r, time.Hour)
+	lock := locks.NewRedisIngestionLock(r, time.Hour)
 
 	url := strings.Repeat("https://example.com/very/long/path/", 20) // 720+ chars
 	first, _ := lock.Acquire(context.Background(), url)

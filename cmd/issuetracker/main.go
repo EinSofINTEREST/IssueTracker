@@ -15,6 +15,7 @@ import (
 	"issuetracker/internal/crawler/domain/general/sources/us"
 	"issuetracker/internal/crawler/handler"
 	crawlerWorker "issuetracker/internal/crawler/worker"
+	"issuetracker/internal/locks"
 	"issuetracker/internal/parser/rule"
 	"issuetracker/internal/parser/rule/llmgen"
 	"issuetracker/internal/parser/rule/refiner"
@@ -143,8 +144,8 @@ func main() {
 	// 단계 구분은 ProcessingKey(stage, url) 의 stage prefix 로 처리.
 	// worker/manager 가 nil 을 NoopProcessingLock 로 fallback 처리하는 설계와 일관되게,
 	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade 합니다.
-	var procLock crawlerWorker.ProcessingLock
-	var ingestionLock crawlerWorker.IngestionLock
+	var procLock locks.ProcessingLock
+	var ingestionLock locks.IngestionLock
 	var retryScheduler crawlerWorker.RetryScheduler
 	var retrySchedulerStop func()
 	redisCfg, err := config.LoadRedis()
@@ -160,8 +161,8 @@ func main() {
 				"host": redisCfg.Host,
 				"port": redisCfg.Port,
 			}).Info("redis connected for processing lock and ingestion lock")
-			procLock = crawlerWorker.NewRedisProcessingLock(redisClient, crawlerWorker.DefaultProcessingLockTTL)
-			ingestionLock = crawlerWorker.NewRedisIngestionLock(redisClient, redisCfg.IngestionLockTTL)
+			procLock = locks.NewRedisProcessingLock(redisClient, locks.DefaultProcessingLockTTL)
+			ingestionLock = locks.NewRedisIngestionLock(redisClient, redisCfg.IngestionLockTTL)
 
 			// Delayed retry queue (이슈 #82): retry 를 Redis ZSET 에 보관하고 별도
 			// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
