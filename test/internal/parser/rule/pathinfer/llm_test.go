@@ -83,6 +83,19 @@ func TestInferLLM_ExtractFirstLineSkipsEmpty(t *testing.T) {
 	assert.Equal(t, `^/news/\d+$`, regex)
 }
 
+// LLM 이 prose 를 먼저 출력하고 fenced regex 로 감싸는 패턴 cover (PR #187 CodeRabbit 피드백).
+// 기존 로직은 prose 첫 줄을 반환하던 회귀 케이스.
+func TestInferLLM_ExtractFromMidResponseFence(t *testing.T) {
+	llm := &fakeLLM{resp: "Here is the regex you requested:\n\n```\n^/article/\\d+$\n```\n\nLet me know if you need adjustments."}
+	samples := pathinfer.LLMSamples{
+		Articles: []string{"/article/1", "/article/2", "/article/30"},
+	}
+	regex, ok, err := pathinfer.InferLLM(context.Background(), samples, llm)
+	require.NoError(t, err)
+	require.True(t, ok, "fenced block 이 응답 중간에 있어도 안의 regex 추출")
+	assert.Equal(t, `^/article/\d+$`, regex)
+}
+
 // negative 가 있어도 정상 매칭 + 거부 동작.
 func TestInferLLM_NegativeRejected(t *testing.T) {
 	// LLM 이 잘못된 (너무 broad) 패턴 반환 — negative match 시 거부

@@ -125,31 +125,34 @@ func joinOrNone(items []string) string {
 
 // extractPattern 은 LLM 응답에서 첫 번째 RE2 패턴 라인을 추출합니다 (이슈 #173 단계 3).
 //
-// 처리:
-//   - markdown 코드 펜스 (```...```) 안에 들어있어도 추출 가능 — 펜스 안의 첫 비어있지 않은 라인 사용
-//   - 펜스 없으면 응답 첫 비어있지 않은 라인 사용
-//   - 라인 trim (whitespace 제거)
-//   - 빈 결과 → ""
+// 처리 우선순위:
+//  1. markdown 코드 펜스 (```...```) 가 응답 어느 위치에든 있으면 → 펜스 내부 첫 비어있지 않은 라인 우선 사용
+//     (LLM 이 prose 먼저 출력 후 펜스로 regex 를 감싸는 케이스 cover — PR #187 CodeRabbit 피드백)
+//  2. 펜스 없으면 응답 첫 비어있지 않은 라인 사용
+//  3. 라인 trim (whitespace 제거)
+//  4. 빈 결과 → ""
 func extractPattern(resp string) string {
 	resp = strings.TrimSpace(resp)
 	if resp == "" {
 		return ""
 	}
 
-	// markdown 펜스 처리 — ```regex 또는 ``` 로 시작하면 펜스 내부의 첫 라인 사용.
-	if strings.HasPrefix(resp, "```") {
-		// 첫 줄 (펜스 시작) 제외
-		if nl := strings.IndexByte(resp, '\n'); nl >= 0 {
-			resp = resp[nl+1:]
+	// fenced block 우선 — 응답 어느 위치에 있든 fence 안의 첫 비어있지 않은 라인 사용.
+	if strings.Contains(resp, "```") {
+		inFence := false
+		for _, raw := range strings.Split(resp, "\n") {
+			line := strings.TrimSpace(raw)
+			if strings.HasPrefix(line, "```") {
+				inFence = !inFence
+				continue
+			}
+			if inFence && line != "" {
+				return line
+			}
 		}
-		// 닫는 펜스 이전까지만
-		if end := strings.Index(resp, "```"); end >= 0 {
-			resp = resp[:end]
-		}
-		resp = strings.TrimSpace(resp)
 	}
 
-	// 첫 비어있지 않은 라인 사용.
+	// fence 없거나 fence 안에 비어있지 않은 라인이 없으면 첫 비어있지 않은 라인 fallback.
 	for _, line := range strings.Split(resp, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
