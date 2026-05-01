@@ -1,11 +1,11 @@
 package scheduler
 
 import (
-	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/domain/general/sources/kr/daum"
-	"issuetracker/internal/crawler/domain/general/sources/kr/naver"
-	"issuetracker/internal/crawler/domain/general/sources/kr/yonhap"
-	"issuetracker/internal/crawler/domain/general/sources/us/cnn"
+	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/fetcher/domain/general/sources/kr/daum"
+	"issuetracker/internal/processor/fetcher/domain/general/sources/kr/naver"
+	"issuetracker/internal/processor/fetcher/domain/general/sources/kr/yonhap"
+	"issuetracker/internal/processor/fetcher/domain/general/sources/us/cnn"
 	"issuetracker/pkg/config"
 )
 

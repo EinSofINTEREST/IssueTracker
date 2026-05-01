@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	core "issuetracker/internal/crawler/core"
 	"issuetracker/internal/processor"
+	core "issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate"
 )
 

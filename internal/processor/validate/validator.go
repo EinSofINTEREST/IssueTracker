@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/processor"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/community"
 	"issuetracker/internal/processor/validate/news"
 	"issuetracker/pkg/config"

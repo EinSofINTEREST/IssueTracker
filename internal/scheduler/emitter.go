@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )

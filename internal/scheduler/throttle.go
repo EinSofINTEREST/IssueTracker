@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )

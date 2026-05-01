@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 )
 
 // ScheduleEntry는 주기적으로 발행할 크롤 Job의 스케줄 항목입니다.

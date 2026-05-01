@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/processor"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/config"
 )
 

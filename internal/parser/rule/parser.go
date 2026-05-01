@@ -9,8 +9,8 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/parser"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 )
 

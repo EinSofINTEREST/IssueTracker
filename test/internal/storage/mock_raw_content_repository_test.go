@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 )
 

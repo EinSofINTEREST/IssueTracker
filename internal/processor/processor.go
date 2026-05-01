@@ -7,7 +7,7 @@ package processor
 import (
 	"context"
 
-	"issuetracker/internal/crawler/core"
+	"issuetracker/internal/processor/fetcher/core"
 )
 
 // ContentProcessor는 Content를 변환하는 파이프라인 단계의 공통 인터페이스입니다.

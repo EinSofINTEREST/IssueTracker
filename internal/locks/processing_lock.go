@@ -55,7 +55,7 @@ const (
 // 두 URL 이 다른 키를 갖지 않도록.
 //
 // stage 표준 값 (StageFetcher / StageParser / StageValidator 상수를 통해 일관된 키 생성 보장):
-//   - "fetcher" — crawler worker (raw HTML fetch, internal/crawler/worker)
+//   - "fetcher" — crawler worker (raw HTML fetch, internal/processor/fetcher/worker)
 //   - "parser"  — parser worker (rule.Parser.ParsePage / ParseLinks, internal/parser/worker)
 //   - "validator" — validate worker (Content 검증, internal/processor/validate)
 //
