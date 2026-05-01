@@ -234,9 +234,8 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 	}).Debug("starting content validation")
 
 	v := NewValidator(content.SourceType, w.cfg)
-	cp := NewContentProcessor(v)
 
-	_, err = cp.Process(ctx, content)
+	_, err = RunValidation(ctx, v, content)
 	if err != nil {
 		// 검증 실패: contents에서 삭제 후 DLQ 또는 재큐잉
 		if pm.RetryCount >= maxRetries(msg) {

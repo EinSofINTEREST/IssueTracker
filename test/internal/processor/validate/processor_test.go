@@ -81,10 +81,8 @@ func TestContentProcessor_Process_AssignsCodeFromFirstRule(t *testing.T) {
 					Errors:       tt.errors,
 				},
 			}
-			cp := validate.NewContentProcessor(v)
-
 			content := &core.Content{ID: "test-id"}
-			out, err := cp.Process(context.Background(), content)
+			out, err := validate.RunValidation(context.Background(), v, content)
 
 			assert.Nil(t, out)
 			require.Error(t, err)
@@ -107,10 +105,8 @@ func TestContentProcessor_Process_SuccessSetsReliability(t *testing.T) {
 			Errors:       nil,
 		},
 	}
-	cp := validate.NewContentProcessor(v)
-
 	content := &core.Content{ID: "ok-id"}
-	out, err := cp.Process(context.Background(), content)
+	out, err := validate.RunValidation(context.Background(), v, content)
 
 	require.NoError(t, err)
 	assert.Equal(t, content, out)
