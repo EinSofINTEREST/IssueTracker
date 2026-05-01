@@ -10,7 +10,7 @@
 
 <br>
 
-## 핵심 5 규약
+## 핵심 6 규약
 
 ### 1. 이슈 먼저 (issue-first) 생성 정책
 
@@ -19,9 +19,11 @@
 #### 원칙
 
 - 모든 작업은 GitHub 이슈로 추적 — branch / commit / PR 모두 그 이슈를 참조
+- **이슈 생성 시 Label · Issue Type 부여 필수** (규약 6 매핑 표 참조)
 - **규모가 PR 1개로 reviewable diff 안 되면 메인 이슈 + sub-issue N개로 분할** 하여 모두 사전에 생성
   - 메인 이슈 본문에 전체 그림 + sub-issue 목록 + 완료 조건 명시
-  - sub-issue 본문 첫 줄에 `Parent: #<메인 이슈>` 명시 (GitHub 자체 sub-issue 기능 미지원이므로 본문 link 로 대체)
+  - **GitHub 의 Sub-issue 기능 + Relation 적극 활용** — `gh api graphql` 의 `addSubIssue` mutation 으로 메인 ↔ sub 관계 활성화하여 GitHub UI 에서 계층 명시
+  - 본문 link (`Parent: #<메인>`) 만으로 표기하던 기존 방식은 보조용. native sub-issue 가 우선
 - 각 sub-issue 단위로 `branch → 작업 → commit → PR` 사이클 반복
 - PR closing reference 는 그 sub-issue (`Closes #<sub>`). 메인 이슈는 모든 sub-issue 가 close 될 때까지 OPEN 유지하고 마지막 sub-issue PR 에서 함께 close
 
@@ -40,6 +42,22 @@
 
 규모가 작아 보이더라도 **이슈 1개 생성** — 작업 끝난 후 PR 본문 정리할 때 추가 비용 거의 없음.
 "이거 큰가?" 가 50/50 이면 **메인 + sub-issue 분할 쪽** 으로 보수 분류.
+
+#### Sub-issue 등록 명령
+
+```bash
+# 메인 이슈에 sub-issue 등록 (Relation 자동 활성화)
+MAIN_ID=$(gh issue view <MAIN_NUMBER> --json id --jq .id)
+SUB_ID=$(gh issue view <SUB_NUMBER> --json id --jq .id)
+
+gh api graphql -f query='
+mutation($issueId: ID!, $subIssueId: ID!) {
+  addSubIssue(input: {issueId: $issueId, subIssueId: $subIssueId}) {
+    issue { number }
+    subIssue { number }
+  }
+}' -f issueId="$MAIN_ID" -f subIssueId="$SUB_ID"
+```
 
 <br>
 
@@ -119,6 +137,7 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
   - 변경 영향 범위 + 위험도
   - 롤백 계획
 - **이슈 링크**: PR 본문 또는 Development sidebar 에 closing reference
+- **Label 부여 필수**: 규약 6 매핑 표에 따라 PR 에도 동일 label 부여 (`gh pr create --label <label>` 또는 생성 직후 `gh pr edit --add-label`)
 
 #### PR 생성 직후 자동 동작 (이슈 #129)
 
@@ -154,15 +173,89 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 
 <br>
 
+### 6. 이슈 / PR 분류 메타데이터 정책 — Label · Issue Type
+
+이슈 / PR 생성 시 **항상 Label 부여** (필수). 이슈는 추가로 **Issue Type 부여** (필수).
+분류·필터링·자동화 (예: hotfix 라벨로 우선순위 알림) 가 누락되지 않도록 일관 매핑 적용.
+
+#### Label 매핑 (이슈 + PR 공통)
+
+| Commit prefix | 기본 Label | 추가 Label (조건부) |
+|---|---|---|
+| `[FEATURE]` | `enhancement` | — |
+| `[REFACTOR]` | `refactor` | — |
+| `[CHORE]` | `chore` | — |
+| `[DOCS]` | `documentation` | — |
+| `[FIX]` (일반 에러 이슈) | `bug` | — |
+| `[HOTFIX]` (배포 중 긴급) | `bug` | + `hotfix` |
+
+#### Issue Type 매핑 (이슈 전용)
+
+GitHub Issue Type 은 라벨과 별개의 native 분류 — `gh api graphql` 의 `updateIssueIssueType` mutation 으로 부여.
+
+| Commit prefix | Issue Type |
+|---|---|
+| `[FEATURE]` | `Feature` |
+| `[FIX]` | `Bug` |
+| `[REFACTOR]` / `[CHORE]` / `[DOCS]` | `Task` |
+
+본 repo 의 Issue Type ID:
+- `Feature` → `IT_kwDODsDQh84By0jb`
+- `Bug` → `IT_kwDODsDQh84By0ja`
+- `Task` → `IT_kwDODsDQh84By0jZ`
+
+#### 부여 명령 예시
+
+**이슈 생성 시 Label**:
+```bash
+gh issue create --repo EinSofINTEREST/IssueTracker \
+  --title "[DOCS] 제목" \
+  --label documentation \
+  --body "..."
+```
+
+**이슈 Type 부여 (생성 직후)**:
+```bash
+ISSUE_ID=$(gh issue view <ISSUE_NUMBER> --json id --jq .id)
+
+gh api graphql -f query='
+mutation($issueId: ID!, $issueTypeId: ID!) {
+  updateIssueIssueType(input: {issueId: $issueId, issueTypeId: $issueTypeId}) {
+    issue { number issueType { name } }
+  }
+}' -f issueId="$ISSUE_ID" -f issueTypeId="IT_kwDODsDQh84By0jZ"
+```
+
+**PR 생성 시 Label**:
+```bash
+gh pr create --label documentation --title "[DOCS#N] 제목" --body "..."
+# 또는 생성 후
+gh pr edit <PR_NUMBER> --add-label documentation
+```
+
+#### Why
+
+- Label 누락 시 GitHub Issues / PR 필터링이 무력화 — `is:issue label:bug` 같은 운영 쿼리가 불완전
+- Issue Type 은 native 분류로, label 보다 강한 시멘틱 (Project Roadmap 의 Type 컬럼 자동 반영)
+- `hotfix` 라벨은 배포 게이트 우선순위 알림 / Slack 라우팅 트리거에 활용 가능
+
+#### How to apply
+
+- 이슈 생성 후 즉시 Label + Type 둘 다 부여 (생성 직후 같은 회차에서 처리, 까먹지 않도록)
+- PR 생성 시 `--label` 플래그로 같이 지정 (생성 후 add-label 도 OK)
+- 매핑이 모호하면 (예: refactor 인데 bug 도 같이 잡는 PR) 가장 큰 변경 의도 prefix 기준으로 분류 + 보조 label 추가 가능
+
+<br>
+
 ## 적용 흐름 (요약)
 
 사용자 요청 도착 →
 1. **의도가 명확한가?** Yes → 진행 / No → 구체화 질문 (규약 2 의 모호 영역)
-2. **이슈 생성** (규약 1) — 단발은 이슈 1개 / 큰 작업은 메인 + sub-issue N개로 분할 후 모두 사전 생성. "이슈 없이 진행해" 명시 시 skip
+2. **이슈 생성 + Label/Type 부여** (규약 1 + 규약 6) — 단발은 이슈 1개 / 큰 작업은 메인 + sub-issue N개로 분할 후 모두 사전 생성 (sub-issue Relation 활성화). 모든 이슈에 Label · Issue Type 부여. "이슈 없이 진행해" 명시 시 skip
 3. **destructive / 시스템 / 외부 영향?** Yes → 사용자 확인 / No → 진행
 4. **새 권한 / 외부 의존성 필요?** Yes → 사용자 확인 / No → 진행 (규약 5)
 5. **작업 진행** — sub-issue 단위로 branch / 논리 단위마다 commit (규약 3)
-6. **작업 완료 → PR 자동 생성** (규약 4) — `Closes #<sub-issue>` 명시, 마지막 sub-issue PR 에서 메인 이슈도 close → cron 자동 등록 (이슈 #129)
+6. **작업 완료 → PR 자동 생성 + Label 부여** (규약 4 + 규약 6) — `Closes #<sub-issue>` 명시, 마지막 sub-issue PR 에서 메인 이슈도 close → cron 자동 등록 (이슈 #129)
 
 <br>
 
@@ -176,4 +269,5 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
   - 이슈 #121 — PR 타이틀 lint 정규식
   - 이슈 #129 — PR 생성 직후 cron 자동 등록
   - 이슈 #199 — 이슈 먼저 (issue-first) 워크플로 명문화 (규약 1 도입)
+  - 이슈 #210 — Label · Issue Type · Sub-issue Relation 정책 명문화 (규약 6 도입)
 - 관련 문서: [.github/PULL_REQUEST_TEMPLATE.md](../../.github/PULL_REQUEST_TEMPLATE.md)
