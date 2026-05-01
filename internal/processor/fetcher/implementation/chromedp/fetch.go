@@ -140,6 +140,14 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		preCheckStatus := statusCode
 		statusMu.Unlock()
 		if preCheckStatus == 0 && partialHTML == "" {
+			// gemini 피드백: shutdown 으로 인한 cancel 과 일반 timeout 실패를 구분.
+			// browserCtx 는 c.allocCtx 의 child 이므로, allocCtx 가 cancel 된 셧다운
+			// 상황에서는 browserCtx.Err() 가 non-nil. 이 경우 false-positive alert 회피를
+			// 위해 raw context error 그대로 반환 (Retryable 분류 안 함, 다운스트림이 자체
+			// 종료 흐름에서 처리).
+			if browserErr := browserCtx.Err(); browserErr != nil {
+				return nil, browserErr
+			}
 			return nil, &core.CrawlerError{
 				Category:  core.ErrCategoryNetwork,
 				Code:      "CDP_002",
