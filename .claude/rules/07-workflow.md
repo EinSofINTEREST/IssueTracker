@@ -47,8 +47,8 @@
 
 ```bash
 # 메인 이슈에 sub-issue 등록 (Relation 자동 활성화)
-MAIN_ID=$(gh api graphql -f query='{repository(owner:"EinSofINTEREST",name:"IssueTracker"){issue(number:<main>){id}}}' --jq '.data.repository.issue.id')
-SUB_ID=$(gh api graphql -f query='{repository(owner:"EinSofINTEREST",name:"IssueTracker"){issue(number:<sub>){id}}}' --jq '.data.repository.issue.id')
+MAIN_ID=$(gh issue view <MAIN_NUMBER> --json id --jq .id)
+SUB_ID=$(gh issue view <SUB_NUMBER> --json id --jq .id)
 
 gh api graphql -f query='
 mutation($issueId: ID!, $subIssueId: ID!) {
@@ -216,9 +216,7 @@ gh issue create --repo EinSofINTEREST/IssueTracker \
 
 **이슈 Type 부여 (생성 직후)**:
 ```bash
-ISSUE_ID=$(gh api graphql -f query='
-{repository(owner:"EinSofINTEREST",name:"IssueTracker"){issue(number:<N>){id}}}' \
-  --jq '.data.repository.issue.id')
+ISSUE_ID=$(gh issue view <ISSUE_NUMBER> --json id --jq .id)
 
 gh api graphql -f query='
 mutation($issueId: ID!, $issueTypeId: ID!) {
@@ -232,7 +230,7 @@ mutation($issueId: ID!, $issueTypeId: ID!) {
 ```bash
 gh pr create --label documentation --title "[DOCS#N] 제목" --body "..."
 # 또는 생성 후
-gh pr edit <PR번호> --add-label documentation
+gh pr edit <PR_NUMBER> --add-label documentation
 ```
 
 #### Why
