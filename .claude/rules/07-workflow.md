@@ -10,9 +10,40 @@
 
 <br>
 
-## 핵심 4 규약
+## 핵심 5 규약
 
-### 1. 자율 진행 정책 — 승인 요청 최소화
+### 1. 이슈 먼저 (issue-first) 생성 정책
+
+사용자 작업 지시가 도착하면 **코드 수정 시작 전에 GitHub 이슈를 먼저 생성** 한다 (이슈 #199).
+
+#### 원칙
+
+- 모든 작업은 GitHub 이슈로 추적 — branch / commit / PR 모두 그 이슈를 참조
+- **규모가 PR 1개로 reviewable diff 안 되면 메인 이슈 + sub-issue N개로 분할** 하여 모두 사전에 생성
+  - 메인 이슈 본문에 전체 그림 + sub-issue 목록 + 완료 조건 명시
+  - sub-issue 본문 첫 줄에 `Parent: #<메인 이슈>` 명시 (GitHub 자체 sub-issue 기능 미지원이므로 본문 link 로 대체)
+- 각 sub-issue 단위로 `branch → 작업 → commit → PR` 사이클 반복
+- PR closing reference 는 그 sub-issue (`Closes #<sub>`). 메인 이슈는 모든 sub-issue 가 close 될 때까지 OPEN 유지하고 마지막 sub-issue PR 에서 함께 close
+
+#### Why
+
+- 작업 진입 전 사용자와 scope 합의가 강제됨 → 작업 도중 방향 이탈 / scope creep 회피
+- ad-hoc 으로 PR 직전에 이슈 만드는 패턴 차단 (기존 사례: PR #181 / #183 / #189 / #191 — closing reference 가 필요해서 PR 직전 즉흥 sub-issue 생성)
+- 메인 이슈와 sub-issue 의 계층 관계가 GitHub 상에서 명확히 link
+
+#### 예외
+
+- 사용자가 명시적으로 **"이슈 없이 진행해"** / **"단발 hotfix"** 라고 지시한 경우
+- 1줄 typo 수정 / 명백한 작은 chore (사용자 동의 없이 진행해도 손실 적음 — 단, PR 생성 시점에는 이슈 만들 것)
+
+#### 판단 모호 시
+
+규모가 작아 보이더라도 **이슈 1개 생성** — 작업 끝난 후 PR 본문 정리할 때 추가 비용 거의 없음.
+"이거 큰가?" 가 50/50 이면 **메인 + sub-issue 분할 쪽** 으로 보수 분류.
+
+<br>
+
+### 2. 자율 진행 정책 — 승인 요청 최소화
 
 쿼리의 의도가 명확하면 AI 는 **사용자 승인 없이 진행** 한다. 다음 4가지 영역만 예외로
 사용자 확인을 받는다:
@@ -43,7 +74,7 @@
 
 <br>
 
-### 2. Commit-per-TODO 정책
+### 3. Commit-per-TODO 정책
 
 별다른 사용자 언급이 없으면, AI 는 작업을 **논리적 변경 단위 (TODO)** 마다 commit 한다.
 
@@ -74,7 +105,7 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 
 <br>
 
-### 3. PR 자동 생성 정책
+### 4. PR 자동 생성 정책
 
 작업 완료 직후 (별다른 언급 없으면) AI 는 **PR 을 자동 생성** 한다.
 
@@ -102,7 +133,7 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 
 <br>
 
-### 4. 권한 사용 최소화
+### 5. 권한 사용 최소화
 
 자율 진행 시, **꼭 필요한 경우가 아니면 이미 허용된 권한 범위 내에서만 동작** 한다.
 
@@ -126,11 +157,12 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 ## 적용 흐름 (요약)
 
 사용자 요청 도착 →
-1. **의도가 명확한가?** Yes → 진행 / No → 구체화 질문 (규약 1 의 모호 영역)
-2. **destructive / 시스템 / 외부 영향?** Yes → 사용자 확인 / No → 진행
-3. **새 권한 / 외부 의존성 필요?** Yes → 사용자 확인 / No → 진행 (규약 4)
-4. **작업 진행** — 논리적 단위마다 commit (규약 2)
-5. **작업 완료 → PR 자동 생성** (규약 3) → cron 자동 등록 (이슈 #129)
+1. **의도가 명확한가?** Yes → 진행 / No → 구체화 질문 (규약 2 의 모호 영역)
+2. **이슈 생성** (규약 1) — 단발은 이슈 1개 / 큰 작업은 메인 + sub-issue N개로 분할 후 모두 사전 생성. "이슈 없이 진행해" 명시 시 skip
+3. **destructive / 시스템 / 외부 영향?** Yes → 사용자 확인 / No → 진행
+4. **새 권한 / 외부 의존성 필요?** Yes → 사용자 확인 / No → 진행 (규약 5)
+5. **작업 진행** — sub-issue 단위로 branch / 논리 단위마다 commit (규약 3)
+6. **작업 완료 → PR 자동 생성** (규약 4) — `Closes #<sub-issue>` 명시, 마지막 sub-issue PR 에서 메인 이슈도 close → cron 자동 등록 (이슈 #129)
 
 <br>
 
@@ -143,4 +175,5 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 - 관련 이슈:
   - 이슈 #121 — PR 타이틀 lint 정규식
   - 이슈 #129 — PR 생성 직후 cron 자동 등록
+  - 이슈 #199 — 이슈 먼저 (issue-first) 워크플로 명문화 (규약 1 도입)
 - 관련 문서: [.github/PULL_REQUEST_TEMPLATE.md](../../.github/PULL_REQUEST_TEMPLATE.md)
