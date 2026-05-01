@@ -406,42 +406,40 @@ func (w *ParserWorker) deleteRaw(ctx context.Context, rawID string, mlog *logger
 //  1. resolver / sampleSvc 둘 다 wiring 됨
 //  2. raw.URL 의 host 로 활성 rule lookup 성공
 //  3. 매칭된 rule.PathPattern == "" (catch-all — 정밀화 대상)
-//  4. 매칭된 rule.SourceName == "llm-auto" (운영자 hand-tuned 는 정밀화 대상 아님 — 누적 X)
+//  4. 매칭된 rule.SourceName == llmgen.LLMAutoSourceName (운영자 hand-tuned 는 정밀화 대상 아님 — 누적 X)
 //
 // 모든 실패 (lookup 실패 / Insert 에러 / cap 도달) 는 정상 흐름 차단 X — DEBUG/WARN 로그만.
+//
+// 변수명 matchedRule: import 된 rule 패키지와의 shadowing 회피 (PR #189 gemini 피드백).
 func (w *ParserWorker) accumulateSample(ctx context.Context, raw *core.RawContent, mlog *logger.Logger) {
 	if w.resolver == nil || w.sampleSvc == nil {
 		return
 	}
-	rule, err := w.resolver.ResolveByURL(ctx, raw.URL, storage.TargetTypePage)
+	matchedRule, err := w.resolver.ResolveByURL(ctx, raw.URL, storage.TargetTypePage)
 	if err != nil {
 		// rule 매칭 안 되거나 resolver 에러 — 정상 파싱 후라 비정상 상황. 단지 디버그 로그.
 		mlog.WithError(err).Debug("sample accumulate: rule lookup failed")
 		return
 	}
-	if rule.PathPattern != "" || rule.SourceName != llmAutoSourceName {
+	if matchedRule.PathPattern != "" || matchedRule.SourceName != llmgen.LLMAutoSourceName {
 		// 정밀화 대상 아닌 rule — 누적 skip (catch-all + llm-auto 만 누적)
 		return
 	}
-	if err := w.sampleSvc.Insert(ctx, rule.ID, raw.URL); err != nil {
+	if err := w.sampleSvc.Insert(ctx, matchedRule.ID, raw.URL); err != nil {
 		// 중복은 정상 (이미 누적된 URL) — 그 외만 warn.
 		if !errors.Is(err, storage.ErrDuplicate) {
 			mlog.WithFields(map[string]interface{}{
-				"rule_id": rule.ID,
+				"rule_id": matchedRule.ID,
 				"url":     raw.URL,
 			}).WithError(err).Warn("sample accumulate failed (non-fatal)")
 		}
 		return
 	}
 	mlog.WithFields(map[string]interface{}{
-		"rule_id": rule.ID,
+		"rule_id": matchedRule.ID,
 		"url":     raw.URL,
 	}).Debug("sample accumulated for refinement trigger")
 }
-
-// llmAutoSourceName 은 LLM 자동 생성 rule 의 source_name 식별자입니다 (llmgen 패키지와 동일 상수).
-// llmgen 패키지를 import 하면 순환 의존 위험이 있어 별도 상수 — 두 곳을 동기화 유지해야 함.
-const llmAutoSourceName = "llm-auto"
 
 // uniqueURLs 는 LinkItem 슬라이스에서 빈 URL 제거 + limit 까지의 unique URL 반환.
 func uniqueURLs(items []parser.LinkItem, limit int) []string {
