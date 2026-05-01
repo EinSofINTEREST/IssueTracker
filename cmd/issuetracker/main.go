@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"issuetracker/internal/crawler/core"
 	"issuetracker/internal/crawler/domain/general/sources/kr"
 	"issuetracker/internal/crawler/domain/general/sources/us"
@@ -249,7 +251,8 @@ func main() {
 	// ── Refiner (이슈 #173 단계 4-2) ──────────────────────────────────────────
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
-	pathRefiner := buildRefiner(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, log)
+	// metricsRegistry 는 nil 허용 — Record* 호출이 noop (PR #191 피드백).
+	pathRefiner := buildRefiner(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
 	if pathRefiner != nil {
 		pathRefiner.Start(ctx)
 	}
@@ -434,11 +437,13 @@ func buildLLMGenerator(provider llm.Provider, repo storage.ParsingRuleRepository
 //
 // 반환값 nil 은 정밀화 비활성을 의미 — REFINEMENT_ENABLED=false 또는 config load 실패 시.
 // LLM provider 는 nil 허용 — algorithm-only 모드로 동작.
+// metricsRegistry 는 nil 허용 — METRICS_ADDR 빈 값으로 endpoint 비활성인 환경에서 noop (PR #191 피드백).
 func buildRefiner(
 	provider llm.Provider,
 	rules storage.ParsingRuleRepository,
 	samples storage.SampleURLRepository,
 	resolver *rule.Resolver,
+	metricsRegistry *prometheus.Registry,
 	log *logger.Logger,
 ) *refiner.Refiner {
 	cfg, err := config.LoadRefinement()
@@ -454,6 +459,7 @@ func buildRefiner(
 	opts := []refiner.Option{
 		refiner.WithInterval(cfg.Interval),
 		refiner.WithMinSamples(cfg.MinSamples),
+		refiner.WithMetrics(refiner.NewMetrics(metricsRegistry)),
 	}
 	if provider != nil {
 		opts = append(opts, refiner.WithLLMClient(refiner.NewLLMAdapter(provider)))

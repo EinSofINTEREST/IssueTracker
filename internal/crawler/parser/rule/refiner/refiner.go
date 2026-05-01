@@ -59,6 +59,7 @@ type Refiner struct {
 	samples  storage.SampleURLRepository
 	resolver *rule.Resolver
 	llm      pathinfer.LLMClient // nil 허용
+	metrics  *Metrics            // nil 허용 (Record* 메소드가 noop)
 	log      *logger.Logger
 
 	interval   time.Duration
@@ -94,6 +95,12 @@ func WithMinSamples(n int) Option {
 // nil 이면 algorithm-only 동작 (InferLLM 단계 skip).
 func WithLLMClient(c pathinfer.LLMClient) Option {
 	return func(r *Refiner) { r.llm = c }
+}
+
+// WithMetrics 는 Prometheus collector 를 주입합니다 (PR #191 피드백).
+// nil 또는 미지정 시 모든 Record* 호출이 noop — REFINEMENT 활성 + METRICS 비활성 환경 cover.
+func WithMetrics(m *Metrics) Option {
+	return func(r *Refiner) { r.metrics = m }
 }
 
 // New 는 Refiner 를 생성합니다. rules / samples / resolver / log 가 nil 이면 panic —
@@ -251,6 +258,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 	count, err := r.samples.Count(ctx, rec.ID)
 	if err != nil {
 		rlog.WithError(err).Warn("sample count failed")
+		r.metrics.RecordAttempt(ResultError, MethodNone)
 		return
 	}
 	if count < r.minSamples {
@@ -259,12 +267,14 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 			"sample_count": count,
 			"min_samples":  r.minSamples,
 		}).Debug("sample threshold not reached")
+		r.metrics.RecordAttempt(ResultSkipped, MethodNone)
 		return
 	}
 
 	samples, err := r.samples.List(ctx, rec.ID, r.minSamples)
 	if err != nil {
 		rlog.WithError(err).Warn("sample list failed")
+		r.metrics.RecordAttempt(ResultError, MethodNone)
 		return
 	}
 	paths := extractPaths(samples)
@@ -274,15 +284,17 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 			"sample_count": len(samples),
 			"path_count":   len(paths),
 		}).Warn("not enough valid paths after extraction")
+		r.metrics.RecordAttempt(ResultSkipped, MethodNone)
 		return
 	}
 
 	// 1) algorithm 우선 시도 → 실패 시 LLM fallback. LLM 호출 에러는 별도 분기 (PR #191 gemini 피드백).
-	pattern, method, inferErr := inferPattern(ctx, paths, r.llm, r.minSamples)
+	pattern, method, inferErr := inferPattern(ctx, paths, r.llm, r.minSamples, r.metrics)
 	if inferErr != nil {
 		rlog.WithFields(map[string]interface{}{
 			"sample_count": len(paths),
 		}).WithError(inferErr).Warn("llm inference call failed (non-fatal — next cycle will retry)")
+		r.metrics.RecordAttempt(ResultError, MethodLLM)
 		return
 	}
 	if pattern == "" {
@@ -290,6 +302,13 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 			"sample_count": len(paths),
 			"llm_enabled":  r.llm != nil,
 		}).Debug("no pattern inferred (algorithm + llm both rejected)")
+		// algorithm 실패 + (LLM 비활성 또는 LLM 거부) — algorithm 단계까지는 시도된 셈.
+		// LLM 이 활성이었지만 invalid 결과로 거부됐을 때도 포함됨 (LLM 호출 자체는 RecordLLMCall 로 별도 추적).
+		fallbackMethod := MethodAlgorithm
+		if r.llm != nil {
+			fallbackMethod = MethodLLM
+		}
+		r.metrics.RecordAttempt(ResultSkipped, fallbackMethod)
 		return
 	}
 
@@ -299,6 +318,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 			"pattern": pattern,
 			"method":  method,
 		}).WithError(err).Warn("update path_pattern failed")
+		r.metrics.RecordAttempt(ResultError, method)
 		return
 	}
 
@@ -315,6 +335,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 		"method":       method,
 		"sample_count": len(paths),
 	}).Info("path_pattern refined")
+	r.metrics.RecordAttempt(ResultSuccess, method)
 }
 
 // inferPattern 은 algorithm 우선 → LLM fallback hybrid 흐름을 수행합니다.
@@ -326,11 +347,14 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 //
 // PR #191 gemini 피드백: LLM 에러를 삼키지 않고 호출자에게 전달 — 운영자가 LLM 장애 / 할당량
 // 초과 등을 로그로 즉시 인지 가능.
-func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, minSamples int) (string, string, error) {
+//
+// PR #191 후속 (metrics): LLM Generate 호출 1건이 발생할 때 metrics.RecordLLMCall 호출 —
+// success / error 라벨로 운영자가 호출 빈도 + 실패율 추적 가능. metrics nil 허용.
+func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, minSamples int, metrics *Metrics) (string, string, error) {
 	opt := pathinfer.WithMinSamples(minSamples)
 
 	if pattern, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: paths}, opt); ok {
-		return pattern, "algorithm", nil
+		return pattern, MethodAlgorithm, nil
 	}
 
 	if llm == nil {
@@ -339,12 +363,14 @@ func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, 
 
 	pattern, ok, err := pathinfer.InferLLM(ctx, pathinfer.LLMSamples{Articles: paths}, llm, opt)
 	if err != nil {
+		metrics.RecordLLMCall(LLMStatusError)
 		return "", "", err
 	}
+	metrics.RecordLLMCall(LLMStatusSuccess)
 	if !ok || pattern == "" {
 		return "", "", nil
 	}
-	return pattern, "llm", nil
+	return pattern, MethodLLM, nil
 }
 
 // extractPaths 는 SampleURL 슬라이스의 URL 들에서 path 부분만 추출합니다.

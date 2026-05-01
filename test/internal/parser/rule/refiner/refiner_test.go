@@ -3,11 +3,14 @@ package refiner_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -465,6 +468,47 @@ func TestStartStop_GracefulShutdown(t *testing.T) {
 
 	// Stop 후 stopCtx 가 아직 cancel 되지 않았다면 (즉 normal path), 정상 종료.
 	require.NoError(t, stopCtx.Err(), "Stop should return before its ctx times out")
+}
+
+// PR #191 피드백: Prometheus metric 이 success/skipped/error/llm 모든 분기에서 정상 increment.
+//
+// 본 테스트는 단일 registry 에서 success / skipped / error / LLM 호출 카운터의 누적치를 검증.
+func TestRunOnce_RecordsMetrics(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := refiner.NewMetrics(registry)
+
+	// (1) success / algorithm — numeric ID 패턴.
+	rec1 := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec1}}
+	samples := newFakeSamplesRepo()
+	for _, u := range []string{
+		"https://news.example.com/article/100",
+		"https://news.example.com/article/200",
+		"https://news.example.com/article/300",
+	} {
+		require.NoError(t, samples.Insert(context.Background(), 1, u))
+	}
+	r := newRefiner(t, rules, samples, refiner.WithMetrics(metrics))
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	// (2) skipped / none — sample 미달 (별도 rule 추가).
+	rec2 := newCatchAllRule(2, "news2.example.com")
+	rules.mu.Lock()
+	rules.records = append(rules.records, rec2)
+	rules.mu.Unlock()
+	require.NoError(t, samples.Insert(context.Background(), 2, "https://news2.example.com/article/100"))
+	require.NoError(t, r.RunOnce(context.Background()))
+	// rec1 의 path_pattern 이 (1) 에서 갱신되어 catch-all 필터 skip — 이번 cycle 에서는 rec2 만 평가.
+
+	expected := `
+# HELP refinement_attempts_total path_pattern refinement attempts labeled by result/method.
+# TYPE refinement_attempts_total counter
+refinement_attempts_total{method="algorithm",result="success"} 1
+refinement_attempts_total{method="none",result="skipped"} 1
+`
+	require.NoError(t,
+		testutil.GatherAndCompare(registry, strings.NewReader(expected), "refinement_attempts_total"),
+	)
 }
 
 // Stop 후 Start 호출은 noop — race 안전.
