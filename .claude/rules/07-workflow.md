@@ -178,9 +178,21 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 이슈 / PR 생성 시 **항상 Label 부여** (필수). 이슈는 추가로 **Issue Type 부여** (필수).
 분류·필터링·자동화 (예: hotfix 라벨로 우선순위 알림) 가 누락되지 않도록 일관 매핑 적용.
 
-#### Label 매핑 (이슈 + PR 공통)
+#### Prefix 표기 체계 (commit / PR / 이슈 — 3 분리 설계)
 
-| Commit prefix | 기본 Label | 추가 Label (조건부) |
+본 repo 는 commit / PR / 이슈 제목의 prefix 를 **의도적으로 다른 표기** 로 운용한다.
+
+| 위치 | 형식 | 예시 | 강제 |
+|---|---|---|---|
+| Commit message | `[FEAT]:` / `[FIX]:` / `[REFAC]:` / `[DOCS]:` / `[CHORE]:` (축약 + 콜론) | `[FIX]: 인덱스 누락 보정` | GitHub Actions Commit Lint |
+| PR title | `[FEAT#N]` / `[FIX#N]` / `[REFAC#N]` / `[DOCS#N]` / `[CHORE#N]` (commit 카테고리 + #이슈번호, 콜론 없음) | `[DOCS#212] 규약 6 정정` | GitHub Actions PR Title Lint |
+| **Issue title** | **`[FEATURE]` / `[FIX]` / `[REFACTOR]` / `[DOCS]` / `[CHORE]` / `[HOTFIX]`** (full-word, 콜론 없음) | `[FEATURE] 새 크롤러 추가` | (lint 미강제, 규약 6 운영) |
+
+**핵심 차이**: 이슈 prefix 는 commit prefix 의 축약형이 아니라 **원본 단어** 를 그대로 쓴다. 또한 commit/PR 에는 없는 `[HOTFIX]` 가 이슈 prefix 에만 존재 — 배포 중 긴급 대응이라는 별도 카테고리. 이 표기 차이는 의도된 설계이며, 본 규약 6 의 매핑 표는 **이슈 prefix → Label/Type** 매핑이다.
+
+#### Label 매핑 (이슈 prefix 기준)
+
+| Issue prefix | 기본 Label | 추가 Label (조건부) |
 |---|---|---|
 | `[FEATURE]` | `enhancement` | — |
 | `[REFACTOR]` | `refactor` | — |
@@ -189,14 +201,16 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 | `[FIX]` (일반 에러 이슈) | `bug` | — |
 | `[HOTFIX]` (배포 중 긴급) | `bug` | + `hotfix` |
 
+PR 의 Label 은 그 PR 이 닫는 이슈 (`Closes #N`) 의 Label 과 동일하게 부여한다.
+
 #### Issue Type 매핑 (이슈 전용)
 
 GitHub Issue Type 은 라벨과 별개의 native 분류 — `gh api graphql` 의 `updateIssueIssueType` mutation 으로 부여.
 
-| Commit prefix | Issue Type |
+| Issue prefix | Issue Type |
 |---|---|
 | `[FEATURE]` | `Feature` |
-| `[FIX]` | `Bug` |
+| `[FIX]` / `[HOTFIX]` | `Bug` |
 | `[REFACTOR]` / `[CHORE]` / `[DOCS]` | `Task` |
 
 본 repo 의 Issue Type ID:
@@ -206,13 +220,15 @@ GitHub Issue Type 은 라벨과 별개의 native 분류 — `gh api graphql` 의
 
 #### 부여 명령 예시
 
-**이슈 생성 시 Label**:
+**이슈 생성 시 Label** (title 은 issue prefix 사용 — full-word, 콜론 없음):
 ```bash
 gh issue create --repo EinSofINTEREST/IssueTracker \
   --title "[DOCS] 제목" \
   --label documentation \
   --body "..."
 ```
+
+다른 issue prefix 예: `[FEATURE] 새 크롤러`, `[REFACTOR] 모듈 분리`, `[HOTFIX] 배포 직후 데드락`.
 
 **이슈 Type 부여 (생성 직후)**:
 ```bash
@@ -270,4 +286,5 @@ gh pr edit <PR_NUMBER> --add-label documentation
   - 이슈 #129 — PR 생성 직후 cron 자동 등록
   - 이슈 #199 — 이슈 먼저 (issue-first) 워크플로 명문화 (규약 1 도입)
   - 이슈 #210 — Label · Issue Type · Sub-issue Relation 정책 명문화 (규약 6 도입)
+  - 이슈 #212 — 규약 6 의 prefix 표기 체계 3분리 (commit / PR / 이슈) 명문화
 - 관련 문서: [.github/PULL_REQUEST_TEMPLATE.md](../../.github/PULL_REQUEST_TEMPLATE.md)
