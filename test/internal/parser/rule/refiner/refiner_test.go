@@ -439,3 +439,48 @@ func TestRun_RespectsCancellation(t *testing.T) {
 		t.Fatal("Run did not return after cancel")
 	}
 }
+
+// PR #191 피드백: Start + Stop 의 graceful shutdown 동작.
+//
+// Start 가 goroutine 을 띄운 뒤 ctx cancel + Stop 호출 시 polling loop 가 종료될 때까지
+// Stop 이 대기. Stop 의 ctx 가 충분히 길면 (1s) 정상 경로로 반환.
+func TestStartStop_GracefulShutdown(t *testing.T) {
+	rules := &fakeRulesRepo{}
+	samples := newFakeSamplesRepo()
+
+	r := newRefiner(t, rules, samples, refiner.WithInterval(50*time.Millisecond))
+
+	rootCtx, cancel := context.WithCancel(context.Background())
+	r.Start(rootCtx)
+
+	// ticker 등록 시간 부여.
+	time.Sleep(20 * time.Millisecond)
+
+	// Start 의 ctx cancel 후 Stop 으로 in-flight cycle 완료 대기.
+	cancel()
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer stopCancel()
+	r.Stop(stopCtx)
+
+	// Stop 후 stopCtx 가 아직 cancel 되지 않았다면 (즉 normal path), 정상 종료.
+	require.NoError(t, stopCtx.Err(), "Stop should return before its ctx times out")
+}
+
+// Stop 후 Start 호출은 noop — race 안전.
+func TestStart_AfterStop_NoOp(t *testing.T) {
+	rules := &fakeRulesRepo{}
+	samples := newFakeSamplesRepo()
+
+	r := newRefiner(t, rules, samples, refiner.WithInterval(50*time.Millisecond))
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer stopCancel()
+	r.Stop(stopCtx) // Start 호출 없이 바로 Stop — noop 이어야 함
+
+	// Stop 후 Start 는 goroutine 을 띄우면 안 됨.
+	r.Start(context.Background())
+
+	// goroutine 이 띄워지지 않았다면 추가 Stop 도 즉시 반환 (idempotent).
+	r.Stop(context.Background())
+}

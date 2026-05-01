@@ -251,7 +251,7 @@ func main() {
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
 	pathRefiner := buildRefiner(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, log)
 	if pathRefiner != nil {
-		go pathRefiner.Run(ctx)
+		pathRefiner.Start(ctx)
 	}
 
 	// Cleanup cron — parser worker 가 처리하지 못한 채 잔존한 raw_contents row 정리.
@@ -359,6 +359,12 @@ func main() {
 	// in-flight LLM 호출 완료 대기 (graceful shutdown, 이슈 #149 gemini 피드백).
 	if llmGen != nil {
 		llmGen.Stop(shutdownCtx)
+	}
+	// refiner.Stop 은 in-flight polling cycle 의 완료를 대기 (PR #191 피드백).
+	// rootCtx (위 cancel()) 가 이미 cancel 된 상태이므로 cycle 안의 RunOnce 가 즉시 종료됨 —
+	// 본 호출은 cycle 종료 + goroutine drain 보장.
+	if pathRefiner != nil {
+		pathRefiner.Stop(shutdownCtx)
 	}
 	cleaner.Stop()
 	if err := validateWorker.Stop(shutdownCtx); err != nil {

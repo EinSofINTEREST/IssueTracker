@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"issuetracker/internal/crawler/parser/rule"
@@ -44,6 +46,14 @@ const DefaultMinSamples = 5
 //
 // LLMClient 는 nil 허용 — nil 이면 InferLLM 단계 skip (algorithm-only).
 // 운영자가 LLM 비활성 환경 (REFINEMENT 활성 + LLM_ENABLE=false) 도 동작.
+//
+// Lifecycle (PR #191 피드백):
+//   - Start(ctx) 가 background goroutine 으로 polling 시작 — sync.WaitGroup 으로 추적
+//   - Stop(ctx) 호출 시 in-flight cycle 의 완료 대기 (graceful shutdown). ctx cancel 시
+//     대기 timeout — in-flight 호출은 background ctx 가 아니라 Start 의 ctx 를 사용하므로
+//     Start ctx 가 cancel 된 상태라면 즉시 정리됨.
+//   - Start 두 번 호출은 두 번째가 noop, Stop 후 Start 는 noop (race 안전).
+//   - 테스트 친화 — Run / RunOnce 는 그대로 유지하여 외부에서 단일 cycle 호출 가능.
 type Refiner struct {
 	rules    storage.ParsingRuleRepository
 	samples  storage.SampleURLRepository
@@ -53,6 +63,10 @@ type Refiner struct {
 
 	interval   time.Duration
 	minSamples int
+
+	wg      sync.WaitGroup
+	started atomic.Bool
+	stopped atomic.Bool
 }
 
 // Option 은 Refiner 생성 옵션입니다.
@@ -117,10 +131,67 @@ func New(
 	return r
 }
 
+// Start 는 background goroutine 으로 polling 을 시작하고 즉시 반환합니다 (PR #191 피드백).
+//
+// 첫 호출만 goroutine 을 spawn — 이후 호출은 noop (atomic CAS). Stop 후 호출도 noop.
+// 호출자는 Stop(ctx) 으로 in-flight cycle 의 완료를 대기 가능.
+func (r *Refiner) Start(ctx context.Context) {
+	if r.stopped.Load() {
+		return
+	}
+	if !r.started.CompareAndSwap(false, true) {
+		return
+	}
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.Run(ctx)
+	}()
+}
+
+// Stop 은 in-flight polling cycle 의 완료를 대기합니다 (graceful shutdown, PR #191 피드백).
+//
+// Start 의 ctx 가 이미 cancel 된 상태라면 in-flight RunOnce 가 ctx 전파로 빠르게 종료되어
+// Stop 도 즉시 반환. ctx (Stop 인자) 가 cancel 되면 대기 timeout — in-flight 가 길게 걸리는
+// 경우 강제 반환. Stop 자체는 idempotent — 두 번째 호출은 즉시 반환.
+//
+// 호출자는 Start 의 ctx 를 먼저 cancel 한 후 Stop 을 호출해야 함 — 그래야 polling loop 가
+// 종료 신호를 받음. 일반 패턴:
+//
+//	rootCtx, cancel := context.WithCancel(ctx)
+//	refiner.Start(rootCtx)
+//	// ... 실행 ...
+//	cancel()  // signal stop
+//	refiner.Stop(shutdownCtx)  // wait for in-flight cycle
+func (r *Refiner) Stop(ctx context.Context) {
+	if !r.stopped.CompareAndSwap(false, true) {
+		return
+	}
+	if !r.started.Load() {
+		return // Start 호출 안 됨 — 대기할 goroutine 없음
+	}
+
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		r.log.Info("refiner stopped — in-flight cycle completed")
+	case <-ctx.Done():
+		r.log.Warn("refiner stop timeout — in-flight cycle may still be running")
+	}
+}
+
 // Run 은 ctx 가 끝날 때까지 interval 주기로 한 번씩 RunOnce 를 호출합니다.
 //
 // 첫 cycle 은 interval 만큼 대기 후 시작 — 시작 직후 burst 회피.
 // ctx.Done 시 정상 반환 (in-flight RunOnce 는 ctx 전파로 자체 종료).
+//
+// 일반 운영 코드는 Start(ctx) + Stop(ctx) 사용 권장 — Run 은 직접 단일 goroutine 으로
+// 띄우는 테스트 / 임베디드 시나리오용.
 func (r *Refiner) Run(ctx context.Context) {
 	r.log.WithFields(map[string]interface{}{
 		"interval":    r.interval.String(),
