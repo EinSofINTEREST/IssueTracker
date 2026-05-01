@@ -3,7 +3,7 @@
 //
 // Package general provides domain-neutral abstractions for crawling arbitrary web pages
 // (news, blogs, product pages, generic documents). 기존 news 도메인을 흡수합니다 —
-// 모든 사이트는 본 패키지의 인터페이스를 구현하고, 파싱은 internal/parser/rule
+// 모든 사이트는 본 패키지의 인터페이스를 구현하고, 파싱은 internal/processor/parser/rule
 // 의 단일 DB 규칙 기반 엔진이 처리합니다.
 //
 // Source-specific parsers (NaverParser/CNNParser/...) 는 더 이상 존재하지 않습니다.

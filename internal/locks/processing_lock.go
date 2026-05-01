@@ -42,7 +42,7 @@ type ProcessingLock interface {
 // ProcessingLock stage 표준 상수 — 호출자가 stage 를 직접 string literal 로 쓰지 않고
 // 이 상수를 통해 일관된 키를 만들도록 강제 (typo 방지 + 검색 용이).
 //
-// 외부 패키지 (internal/parser/worker, internal/processor/validate) 도 import 후 사용.
+// 외부 패키지 (internal/processor/parser/worker, internal/processor/validate) 도 import 후 사용.
 const (
 	StageFetcher   = "fetcher"
 	StageParser    = "parser"
@@ -56,7 +56,7 @@ const (
 //
 // stage 표준 값 (StageFetcher / StageParser / StageValidator 상수를 통해 일관된 키 생성 보장):
 //   - "fetcher" — crawler worker (raw HTML fetch, internal/processor/fetcher/worker)
-//   - "parser"  — parser worker (rule.Parser.ParsePage / ParseLinks, internal/parser/worker)
+//   - "parser"  — parser worker (rule.Parser.ParsePage / ParseLinks, internal/processor/parser/worker)
 //   - "validator" — validate worker (Content 검증, internal/processor/validate)
 //
 // 외부 패키지도 본 worker 패키지를 import 하여 동일 상수와 ProcessingKey 헬퍼를 사용 —

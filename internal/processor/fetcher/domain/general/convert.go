@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"issuetracker/internal/parser"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/parser"
 )
 
 // ConvertPage 는 parser.Page + RawContent 를 core.Content 로 변환합니다.

@@ -29,9 +29,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"issuetracker/internal/parser/rule"
-	"issuetracker/internal/parser/rule/llmgen"
-	"issuetracker/internal/parser/rule/pathinfer"
+	"issuetracker/internal/processor/parser/rule"
+	"issuetracker/internal/processor/parser/rule/llmgen"
+	"issuetracker/internal/processor/parser/rule/pathinfer"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 )

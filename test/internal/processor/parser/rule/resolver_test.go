@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/parser/rule"
+	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/storage"
 )
 
