@@ -11,6 +11,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"issuetracker/internal/locks"
+	"issuetracker/internal/processor"
+	"issuetracker/internal/processor/fetcher"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general/sources/kr"
 	"issuetracker/internal/processor/fetcher/domain/general/sources/us"
@@ -19,6 +21,7 @@ import (
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/rule/refiner"
+	parserStage "issuetracker/internal/processor/parser/stage"
 	parserWorker "issuetracker/internal/processor/parser/worker"
 	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/publisher"
@@ -204,13 +207,12 @@ func main() {
 	}
 
 	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, contentSvc, resolver, log)
-	manager.Start(ctx)
 
 	log.WithFields(map[string]interface{}{
 		"high_workers":   managerCfg.High.WorkerCount,
 		"normal_workers": managerCfg.Normal.WorkerCount,
 		"low_workers":    managerCfg.Low.WorkerCount,
-	}).Info("crawler pool manager started")
+	}).Info("fetcher pool manager constructed")
 
 	// ── LLM rule generator (이슈 #149) ──────────────────────────────────────────
 	// rule.ErrNoRule (host 매칭 활성 규칙 없음) fallback 으로 LLM 이 selector 를 자동 생성합니다.
@@ -247,21 +249,16 @@ func main() {
 		parserWorkerCount,
 		log,
 	)
-	pw.Start(ctx)
 
 	// ── Refiner (이슈 #173 단계 4-2) ──────────────────────────────────────────
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
 	// metricsRegistry 는 nil 허용 — Record* 호출이 noop (PR #191 피드백).
 	pathRefiner := buildRefiner(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
-	if pathRefiner != nil {
-		pathRefiner.Start(ctx)
-	}
 
 	// Cleanup cron — parser worker 가 처리하지 못한 채 잔존한 raw_contents row 정리.
 	// 정상 흐름에서는 거의 동작 안 함. crash / rule.Error 잔존 / LLM 재처리 윈도우 만료된 row 만 대상.
 	cleaner := parserWorker.NewRawContentCleaner(rawSvc, parserWorker.CleanupConfig{}, log)
-	cleaner.Start(ctx)
 
 	// ── Scheduler (시드 Job 발행) ─────────────────────────────────────────────
 	schedulerCfg, err := config.LoadScheduler()
@@ -315,13 +312,26 @@ func main() {
 	defer validateProducer.Close()
 
 	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, procLock, validateWorkerCount, validateCfg)
-	validateWorker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": validateWorkerCount,
 		"input_topic":  queue.TopicNormalized,
 		"output_topic": queue.TopicValidated,
-	}).Info("validate worker started")
+	}).Info("validate worker constructed")
+
+	// ══════════════════════════════════════════════════════════════════════════
+	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리 (이슈 #206)
+	// ══════════════════════════════════════════════════════════════════════════
+
+	stages := []processor.Stage{
+		fetcher.NewStage(manager),
+		parserStage.NewStage(pw, cleaner, llmGen, pathRefiner, log),
+		validate.NewStage(validateWorker),
+	}
+	for _, s := range stages {
+		s.Start(ctx)
+		log.WithField("stage", s.Name()).Info("pipeline stage started")
+	}
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// 종료 시그널 대기
@@ -353,26 +363,16 @@ func main() {
 
 	sched.Stop()
 
-	if err := manager.Stop(shutdownCtx); err != nil {
-		log.WithError(err).Error("error during crawler shutdown")
-	}
-	if err := pw.Stop(shutdownCtx); err != nil {
-		log.WithError(err).Error("error during parser worker shutdown")
-	}
-	// llmGen.Stop 은 parser worker 정지 후 호출 — 새 Enqueue source 가 차단된 시점에
-	// in-flight LLM 호출 완료 대기 (graceful shutdown, 이슈 #149 gemini 피드백).
-	if llmGen != nil {
-		llmGen.Stop(shutdownCtx)
-	}
-	// refiner.Stop 은 in-flight polling cycle 의 완료를 대기 (PR #191 피드백).
-	// rootCtx (위 cancel()) 가 이미 cancel 된 상태이므로 cycle 안의 RunOnce 가 즉시 종료됨 —
-	// 본 호출은 cycle 종료 + goroutine drain 보장.
-	if pathRefiner != nil {
-		pathRefiner.Stop(shutdownCtx)
-	}
-	cleaner.Stop()
-	if err := validateWorker.Stop(shutdownCtx); err != nil {
-		log.WithError(err).Error("error during validate worker shutdown")
+	// Stage 들을 정의 순서대로 stop — fetcher → parser → validate 순서로 정리.
+	// 데이터 파이프라인 source-first 원칙: fetcher 가 먼저 Kafka 발행을 멈추면 downstream
+	// stage 가 in-flight 메시지를 graceful drain 가능. parser.Stage 내부에서 lifecycle
+	// 의존성 (worker → llmGen → refiner → cleaner) 이 처리됨.
+	for _, s := range stages {
+		if err := s.Stop(shutdownCtx); err != nil {
+			log.WithFields(map[string]interface{}{"stage": s.Name()}).WithError(err).Error("error during stage shutdown")
+		} else {
+			log.WithField("stage", s.Name()).Info("pipeline stage stopped")
+		}
 	}
 
 	log.Info("shutdown completed")

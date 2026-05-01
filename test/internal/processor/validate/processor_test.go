@@ -8,17 +8,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/processor"
 	core "issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate"
+	"issuetracker/internal/processor/validate/types"
 )
 
 // stubValidator는 입력에 관계없이 고정된 ValidationResult 를 반환합니다.
 type stubValidator struct {
-	result processor.ValidationResult
+	result types.ValidationResult
 }
 
-func (s *stubValidator) Validate(_ context.Context, _ *core.Content) processor.ValidationResult {
+func (s *stubValidator) Validate(_ context.Context, _ *core.Content) types.ValidationResult {
 	return s.result
 }
 
@@ -27,42 +27,42 @@ func (s *stubValidator) Validate(_ context.Context, _ *core.Content) processor.V
 func TestContentProcessor_Process_AssignsCodeFromFirstRule(t *testing.T) {
 	tests := []struct {
 		name     string
-		errors   []processor.ValidationError
+		errors   []types.ValidationError
 		wantCode string
 	}{
 		{
 			name:     "min_length → VAL_003",
-			errors:   []processor.ValidationError{{Field: "Title", Rule: "min_length"}},
+			errors:   []types.ValidationError{{Field: "Title", Rule: "min_length"}},
 			wantCode: core.CodeValContentShort,
 		},
 		{
 			name:     "max_length → VAL_004",
-			errors:   []processor.ValidationError{{Field: "Body", Rule: "max_length"}},
+			errors:   []types.ValidationError{{Field: "Body", Rule: "max_length"}},
 			wantCode: core.CodeValContentLong,
 		},
 		{
 			name:     "required → VAL_001",
-			errors:   []processor.ValidationError{{Field: "PublishedAt", Rule: "required"}},
+			errors:   []types.ValidationError{{Field: "PublishedAt", Rule: "required"}},
 			wantCode: core.CodeValMissingField,
 		},
 		{
 			name:     "spam_caps → VAL_006",
-			errors:   []processor.ValidationError{{Field: "Body", Rule: "spam_caps"}},
+			errors:   []types.ValidationError{{Field: "Body", Rule: "spam_caps"}},
 			wantCode: core.CodeValSpam,
 		},
 		{
 			name:     "spam_punct → VAL_006",
-			errors:   []processor.ValidationError{{Field: "Body", Rule: "spam_punct"}},
+			errors:   []types.ValidationError{{Field: "Body", Rule: "spam_punct"}},
 			wantCode: core.CodeValSpam,
 		},
 		{
 			name:     "spam_flood → VAL_006",
-			errors:   []processor.ValidationError{{Field: "Body", Rule: "spam_flood"}},
+			errors:   []types.ValidationError{{Field: "Body", Rule: "spam_flood"}},
 			wantCode: core.CodeValSpam,
 		},
 		{
 			name:     "unknown rule → VAL_002 (default fallback)",
-			errors:   []processor.ValidationError{{Field: "Body", Rule: "weird_rule_xyz"}},
+			errors:   []types.ValidationError{{Field: "Body", Rule: "weird_rule_xyz"}},
 			wantCode: core.CodeValInvalidFormat,
 		},
 		{
@@ -75,16 +75,14 @@ func TestContentProcessor_Process_AssignsCodeFromFirstRule(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			v := &stubValidator{
-				result: processor.ValidationResult{
+				result: types.ValidationResult{
 					IsValid:      false,
 					QualityScore: 0.1,
 					Errors:       tt.errors,
 				},
 			}
-			cp := validate.NewContentProcessor(v)
-
 			content := &core.Content{ID: "test-id"}
-			out, err := cp.Process(context.Background(), content)
+			out, err := validate.RunValidation(context.Background(), v, content)
 
 			assert.Nil(t, out)
 			require.Error(t, err)
@@ -101,16 +99,14 @@ func TestContentProcessor_Process_AssignsCodeFromFirstRule(t *testing.T) {
 // 검증 통과 시 Reliability 가 QualityScore 로 설정되고 에러 없이 content 가 반환되는지 검증.
 func TestContentProcessor_Process_SuccessSetsReliability(t *testing.T) {
 	v := &stubValidator{
-		result: processor.ValidationResult{
+		result: types.ValidationResult{
 			IsValid:      true,
 			QualityScore: 0.85,
 			Errors:       nil,
 		},
 	}
-	cp := validate.NewContentProcessor(v)
-
 	content := &core.Content{ID: "ok-id"}
-	out, err := cp.Process(context.Background(), content)
+	out, err := validate.RunValidation(context.Background(), v, content)
 
 	require.NoError(t, err)
 	assert.Equal(t, content, out)

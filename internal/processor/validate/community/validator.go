@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/validate/types"
 	"issuetracker/pkg/config"
 )
 
@@ -30,8 +30,8 @@ func NewValidator(cfg config.ValidateConfig) *Validator {
 }
 
 // Validate는 커뮤니티 컨텐츠의 필드 검증, 품질 점수, 도배 패턴을 검사합니다.
-func (v *Validator) Validate(_ context.Context, content *core.Content) processor.ValidationResult {
-	var errs []processor.ValidationError
+func (v *Validator) Validate(_ context.Context, content *core.Content) types.ValidationResult {
+	var errs []types.ValidationError
 
 	errs = append(errs, v.validateBody(content)...)
 	errs = append(errs, v.detectFlood(content)...)
@@ -44,7 +44,7 @@ func (v *Validator) Validate(_ context.Context, content *core.Content) processor
 	if score < threshold && len(errs) == 0 {
 		bodyScore := v.scoreBody(content.Body)
 		metaScore := scoreMeta(content)
-		errs = append(errs, processor.ValidationError{
+		errs = append(errs, types.ValidationError{
 			Field: "QualityScore",
 			Rule:  "quality_low",
 			Message: fmt.Sprintf(
@@ -56,17 +56,17 @@ func (v *Validator) Validate(_ context.Context, content *core.Content) processor
 
 	isValid := len(errs) == 0 && score >= threshold
 
-	return processor.ValidationResult{
+	return types.ValidationResult{
 		IsValid:      isValid,
 		QualityScore: score,
 		Errors:       errs,
 	}
 }
 
-func (v *Validator) validateBody(c *core.Content) []processor.ValidationError {
+func (v *Validator) validateBody(c *core.Content) []types.ValidationError {
 	length := utf8.RuneCountInString(c.Body)
 	if length < v.cfg.CommunityBodyMinLen {
-		return []processor.ValidationError{{
+		return []types.ValidationError{{
 			Field:   "Body",
 			Rule:    "min_length",
 			Message: fmt.Sprintf("body must be at least %d characters, got %d", v.cfg.CommunityBodyMinLen, length),
@@ -77,7 +77,7 @@ func (v *Validator) validateBody(c *core.Content) []processor.ValidationError {
 
 // detectFlood는 동일 문자 반복(도배) 패턴을 탐지합니다.
 // 예: "ㅋㅋㅋㅋㅋ", "aaaaa", "!!!!!"
-func (v *Validator) detectFlood(c *core.Content) []processor.ValidationError {
+func (v *Validator) detectFlood(c *core.Content) []types.ValidationError {
 	text := c.Body
 	runes := []rune(text)
 	total := len(runes)
@@ -87,7 +87,7 @@ func (v *Validator) detectFlood(c *core.Content) []processor.ValidationError {
 
 	repeatCount := v.countRepeatRunes(runes)
 	if float64(repeatCount)/float64(total) > v.cfg.CommunityMaxRepeatRatio {
-		return []processor.ValidationError{{
+		return []types.ValidationError{{
 			Field:   "Body",
 			Rule:    "spam_flood",
 			Message: fmt.Sprintf("flood pattern detected (%.0f%% repetitive characters)", float64(repeatCount)/float64(total)*100),
