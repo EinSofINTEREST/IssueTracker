@@ -206,13 +206,19 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 		return
 	}
 
-	// 1) algorithm 우선 시도.
-	pattern, method := inferPattern(ctx, paths, r.llm, r.minSamples)
+	// 1) algorithm 우선 시도 → 실패 시 LLM fallback. LLM 호출 에러는 별도 분기 (PR #191 gemini 피드백).
+	pattern, method, inferErr := inferPattern(ctx, paths, r.llm, r.minSamples)
+	if inferErr != nil {
+		rlog.WithFields(map[string]interface{}{
+			"sample_count": len(paths),
+		}).WithError(inferErr).Warn("llm inference call failed (non-fatal — next cycle will retry)")
+		return
+	}
 	if pattern == "" {
 		rlog.WithFields(map[string]interface{}{
 			"sample_count": len(paths),
 			"llm_enabled":  r.llm != nil,
-		}).Debug("no pattern inferred (algorithm + llm both failed)")
+		}).Debug("no pattern inferred (algorithm + llm both rejected)")
 		return
 	}
 
@@ -241,32 +247,33 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 }
 
 // inferPattern 은 algorithm 우선 → LLM fallback hybrid 흐름을 수행합니다.
-// 반환값: (pattern, method). pattern 빈 문자열이면 모든 추론 실패.
 //
-// method:
-//   - "algorithm" : InferHeuristic 성공
-//   - "llm"       : InferLLM 성공
-//   - ""          : 모두 실패
-func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, minSamples int) (string, string) {
+// 반환값: (pattern, method, err)
+//   - 정상 추론 성공  : (regex, "algorithm" 또는 "llm", nil)
+//   - 추론 거부       : ("", "", nil) — algorithm 휴리스틱 실패 + LLM 검증 거부 (호출자가 Debug 로그)
+//   - LLM 호출 에러   : ("", "", err) — network / API 에러 (호출자가 Warn 로그, 다음 cycle 재시도)
+//
+// PR #191 gemini 피드백: LLM 에러를 삼키지 않고 호출자에게 전달 — 운영자가 LLM 장애 / 할당량
+// 초과 등을 로그로 즉시 인지 가능.
+func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, minSamples int) (string, string, error) {
 	opt := pathinfer.WithMinSamples(minSamples)
 
 	if pattern, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: paths}, opt); ok {
-		return pattern, "algorithm"
+		return pattern, "algorithm", nil
 	}
 
 	if llm == nil {
-		return "", ""
+		return "", "", nil
 	}
 
 	pattern, ok, err := pathinfer.InferLLM(ctx, pathinfer.LLMSamples{Articles: paths}, llm, opt)
 	if err != nil {
-		// LLM 호출 자체 에러 — 다음 cycle 에 재시도.
-		return "", ""
+		return "", "", err
 	}
 	if !ok || pattern == "" {
-		return "", ""
+		return "", "", nil
 	}
-	return pattern, "llm"
+	return pattern, "llm", nil
 }
 
 // extractPaths 는 SampleURL 슬라이스의 URL 들에서 path 부분만 추출합니다.
