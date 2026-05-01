@@ -11,14 +11,24 @@
 
 | 위치                                                                  | 역할                                                |
 |----------------------------------------------------------------------|-----------------------------------------------------|
-| [handler.go](../../../../internal/crawler/handler/handler.go)         | `Handler` 인터페이스 + `Registry` (map + RWMutex)   |
+| [handler.go](../../../../internal/crawler/handler/handler.go)         | `Handler` 인터페이스 + `Registry` (map + fallback)  |
 | [noop.go](../../../../internal/crawler/handler/noop.go)               | unknown crawler_name 에 대한 fallback (Warn 로그)   |
 
 ```go
 type Handler interface {
-    Handle(ctx context.Context, job core.CrawlJob) ([]*core.Content, error)
+    Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error)
+}
+
+type Registry struct {
+    handlers map[string]Handler
+    fallback Handler
+    log      *logger.Logger
 }
 ```
+
+`Registry` 는 mutex 가 없습니다 — 등록은 entry point ([`cmd/issuetracker`](../../cmd/issuetracker.md))
+의 wiring 단계에서 단일 goroutine 으로 일괄 수행되고, 그 후 worker 들의 read-only lookup 만 발생하므로
+race 가 없습니다 (등록/조회 동시성을 도입한다면 별도 mutex 필요).
 
 <br>
 

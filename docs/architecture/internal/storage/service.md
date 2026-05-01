@@ -21,7 +21,10 @@ type ContentService interface {
     Delete(ctx, id string) error
 
     // validation_status 업데이트 (이슈 #135 / #161)
-    UpdateValidationStatus(ctx, id string, status storage.ValidationStatus) error
+    // status: "passed" / "rejected" 등 storage.ValidationStatus 의 string 표현
+    // code:   분류 코드 (예: "VAL_001"); 빈 문자열 허용
+    // detail: 자유 형식 사유 (예: "title length < 10"); 빈 문자열 허용
+    UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error
 }
 ```
 

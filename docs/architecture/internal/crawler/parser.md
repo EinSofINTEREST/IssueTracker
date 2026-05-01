@@ -70,9 +70,11 @@ DB 에 INSERT (운영자 검토 후 활성).
 | [prompt.go](../../../../internal/crawler/parser/rule/llmgen/prompt.go)                            | LLM 프롬프트 템플릿 (HTML 샘플 + 출력 스키마)          |
 | [dedup.go](../../../../internal/crawler/parser/rule/llmgen/dedup.go)                              | in-flight set — 동일 host 중복 enqueue 방지            |
 
-**동작**: ParserWorker 가 `ErrNoRule` 받으면 `llmGen.Enqueue(host, sampleHTML)` 호출. Generator 는
-별도 goroutine 에서 LLM 호출 → 결과 검증 (selector 가 실제 매칭되는지 확인) → INSERT (enabled=false) →
-[`Resolver.Invalidate(host)`](../../../../internal/crawler/parser/rule/resolver.go) 로 캐시 무효화.
+**동작**: ParserWorker 가 `ErrNoRule` 받으면 `llmGen.Enqueue(ctx, host, targetType, raw)` 호출 —
+`targetType` (`page`/`list`) 별로 별도 in-flight set 으로 dedup 됩니다. Generator 는 별도 goroutine 에서
+LLM 호출 → 결과 검증 (selector 가 실제 매칭되는지 확인) → INSERT (enabled=false) →
+[`Resolver.Invalidate(host, targetType)`](../../../../internal/crawler/parser/rule/resolver.go) 로
+해당 (host, targetType) 캐시 항목 무효화 (전체 invalidation 은 `Resolver.InvalidateAll()`).
 
 <br>
 

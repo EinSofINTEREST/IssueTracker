@@ -93,11 +93,18 @@ GroupEmbedders      = "issuetracker-embedders"
 [backlog.go](../../../pkg/queue/backlog.go):
 
 ```go
-checker := queue.NewBacklogChecker(brokers, timeout)
-lag, err := checker.GetLag(ctx, GroupCrawlerWorkers)
+type BacklogChecker interface {
+    Backlog(ctx context.Context, topic, group string) (int64, error)
+}
+
+checker := queue.NewBacklogChecker(brokers, timeout)  // *KafkaBacklogChecker
+lag, err := checker.Backlog(ctx, queue.TopicCrawlNormal, queue.GroupCrawlerWorkers)
 ```
 
-[`internal/scheduler.BacklogThrottler`](../internal/scheduler.md) 가 사용 — lag 가 임계값 초과 시
+내부에서 토픽의 partition 목록을 metadata 로 조회한 뒤 각 partition 의 latest offset 과 consumer-group
+committed offset 의 차이를 합산합니다.
+
+[`internal/scheduler.BacklogThrottler`](../internal/scheduler.md) 가 사용 — backlog 가 임계값 초과 시
 seed publish 차단.
 
 <br>

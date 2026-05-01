@@ -14,9 +14,9 @@ fallback** 의 dual-protocol Handler 를 제공합니다.
 
 ```go
 type Classifier interface {
-    Classify(ctx, text, []CategoryInput) (*ClassifyResponse, error)
-    ClassifyBatch(ctx, []string, []CategoryInput) (*BatchClassifyResponse, error)
-    Health(ctx) (*HealthResponse, error)
+    Classify(ctx context.Context, text string, categories []CategoryInput) (*ClassifyResponse, error)
+    ClassifyBatch(ctx context.Context, texts []string, categories []CategoryInput) (*BatchClassifyResponse, error)
+    Health(ctx context.Context) (*HealthResponse, error)
     Close() error
 }
 ```

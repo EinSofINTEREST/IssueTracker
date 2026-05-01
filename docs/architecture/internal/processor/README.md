@@ -17,13 +17,13 @@ type ContentProcessor interface {
 }
 
 type Validator interface {
-    Validate(ctx context.Context, c *core.Content) ValidationResult
+    Validate(ctx context.Context, content *core.Content) ValidationResult
 }
 
 type ValidationResult struct {
-    Valid       bool
-    Errors      []ValidationError
-    Reliability float64
+    IsValid      bool
+    QualityScore float32  // 0.0 ~ 1.0; 0.5 미만이면 DLQ 라우팅 대상
+    Errors       []ValidationError
 }
 ```
 

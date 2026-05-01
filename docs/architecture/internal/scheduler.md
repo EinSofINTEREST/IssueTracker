@@ -32,7 +32,7 @@ type ScheduleEntry struct {
 }
 
 type Throttler interface {
-    ShouldThrottle(ctx) (bool, error)
+    ShouldThrottle(ctx context.Context, job *core.CrawlJob) bool
 }
 
 type JobEmitter interface {
@@ -58,6 +58,9 @@ Start(ctx):
 ```
 
 옵션 의존성 (Gate, Throttler) 은 atomic.Pointer 로 lock-free 하게 주입/조회.
+
+`ShouldThrottle` 이 `error` 를 반환하지 않는 이유: throttle 결정은 best-effort 운영 신호이며 실패 시 통과
+정책 (false 반환) 으로 graceful degrade — 구현체 (`BacklogThrottler`) 가 내부에서 WARN 로그를 책임집니다.
 
 <br>
 

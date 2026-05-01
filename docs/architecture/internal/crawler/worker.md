@@ -57,14 +57,20 @@ ProcessingLock / IngestionLock / RetryScheduler** 로 다중 인스턴스 환경
 ## ProcessingLock (Redis SETNX 또는 Noop)
 
 이슈 #178. 동일 URL 이 여러 worker / 인스턴스에서 단계별 (fetcher / parser / validator) 중복 처리되는 것을
-차단. Stage prefix (`processing:fetcher:URL`, `processing:parser:URL` 등) 로 단계 구분.
+차단. 인터페이스는 prebuilt key 만 받으며, **stage 분기는 별도 helper `ProcessingKey(stage, url)` 가
+담당** — 호출자가 정규화된 URL 을 hashed key 로 변환해 전달.
 
 ```go
 type ProcessingLock interface {
-    Acquire(ctx context.Context, stage, url string) (acquired bool, err error)
-    Release(ctx context.Context, stage, url string) error
+    Acquire(ctx context.Context, key string) (acquired bool, err error)
+    Release(ctx context.Context, key string) error
 }
+
+// helper — (stage, normalized_url) → Redis key
+func ProcessingKey(stage, url string) string
 ```
+
+stage 상수는 패키지 외부에서도 일관 사용 가능 (예: parser worker 가 `worker.ProcessingKey(StageParser, url)`).
 
 구현:
 - [`NewRedisProcessingLock`](../../../../internal/crawler/worker/processing_lock.go) — Redis `SET NX PX ttl`
