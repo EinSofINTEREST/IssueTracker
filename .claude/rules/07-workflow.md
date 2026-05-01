@@ -182,12 +182,12 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 
 | Commit prefix | 기본 Label | 추가 Label (조건부) |
 |---|---|---|
-| `[FEAT]:` | `enhancement` | — |
-| `[REFAC]:` | `refactor` | — |
-| `[CHORE]:` | `chore` | — |
-| `[DOCS]:` | `documentation` | — |
-| `[FIX]:` (일반 에러 이슈) | `bug` | — |
-| `[FIX]:` (배포 중 긴급) | `bug` | + `hotfix` |
+| `[FEATURE]` | `enhancement` | — |
+| `[REFACTOR]` | `refactor` | — |
+| `[CHORE]` | `chore` | — |
+| `[DOCS]` | `documentation` | — |
+| `[FIX]` (일반 에러 이슈) | `bug` | — |
+| `[HOTFIX]` (배포 중 긴급) | `bug` | + `hotfix` |
 
 #### Issue Type 매핑 (이슈 전용)
 
@@ -195,9 +195,9 @@ GitHub Issue Type 은 라벨과 별개의 native 분류 — `gh api graphql` 의
 
 | Commit prefix | Issue Type |
 |---|---|
-| `[FEAT]:` | `Feature` |
-| `[FIX]:` | `Bug` |
-| `[REFAC]:` / `[CHORE]:` / `[DOCS]:` | `Task` |
+| `[FEATURE]` | `Feature` |
+| `[FIX]` | `Bug` |
+| `[REFACTOR]` / `[CHORE]` / `[DOCS]` | `Task` |
 
 본 repo 의 Issue Type ID:
 - `Feature` → `IT_kwDODsDQh84By0jb`
