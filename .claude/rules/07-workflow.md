@@ -221,11 +221,11 @@ ISSUE_ID=$(gh api graphql -f query='
   --jq '.data.repository.issue.id')
 
 gh api graphql -f query='
-mutation($issueId: ID!, $typeId: ID!) {
-  updateIssueIssueType(input: {issueId: $issueId, issueTypeId: $typeId}) {
+mutation($issueId: ID!, $issueTypeId: ID!) {
+  updateIssueIssueType(input: {issueId: $issueId, issueTypeId: $issueTypeId}) {
     issue { number issueType { name } }
   }
-}' -f issueId="$ISSUE_ID" -f typeId="IT_kwDODsDQh84By0jZ"
+}' -f issueId="$ISSUE_ID" -f issueTypeId="IT_kwDODsDQh84By0jZ"
 ```
 
 **PR 생성 시 Label**:
