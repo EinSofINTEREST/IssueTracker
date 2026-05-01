@@ -7,7 +7,7 @@ import (
 	"regexp"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/parser"
+	"issuetracker/internal/parser"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/links"
 )

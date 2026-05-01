@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/crawler/core"
-	"issuetracker/internal/crawler/parser/rule"
+	"issuetracker/internal/parser/rule"
 	"issuetracker/internal/storage"
 )
 
