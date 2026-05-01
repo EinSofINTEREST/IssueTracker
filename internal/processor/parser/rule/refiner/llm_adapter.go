@@ -19,12 +19,12 @@ type providerAdapter struct {
 
 // NewLLMAdapter 는 pkg/llm.Provider 를 pathinfer.LLMClient 로 변환하는 어댑터를 반환합니다.
 //
-// provider 가 nil 이면 panic — wire 누락 즉시 가시화.
-func NewLLMAdapter(provider llm.Provider) pathinfer.LLMClient {
+// provider 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+func NewLLMAdapter(provider llm.Provider) (pathinfer.LLMClient, error) {
 	if provider == nil {
-		panic("refiner: NewLLMAdapter requires non-nil provider")
+		return nil, errors.New("refiner: NewLLMAdapter requires non-nil provider")
 	}
-	return &providerAdapter{provider: provider}
+	return &providerAdapter{provider: provider}, nil
 }
 
 // Generate 는 llm.Provider.Generate 를 호출하고 응답 텍스트만 반환합니다.

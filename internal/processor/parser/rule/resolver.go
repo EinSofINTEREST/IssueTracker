@@ -7,6 +7,7 @@ package rule
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -105,10 +106,10 @@ func WithMaxCacheEntries(n int) Option {
 }
 
 // NewResolver 는 ParsingRuleRepository 를 사용하는 Resolver 를 생성합니다.
-// repo 가 nil 이면 panic — application 시작 시점 wire 누락 즉시 가시화.
-func NewResolver(repo storage.ParsingRuleRepository, opts ...Option) *Resolver {
+// repo 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+func NewResolver(repo storage.ParsingRuleRepository, opts ...Option) (*Resolver, error) {
 	if repo == nil {
-		panic("rule: NewResolver requires non-nil repo")
+		return nil, errors.New("rule: NewResolver requires non-nil repo")
 	}
 	r := &Resolver{
 		repo:             repo,
@@ -121,7 +122,7 @@ func NewResolver(repo storage.ParsingRuleRepository, opts ...Option) *Resolver {
 	for _, o := range opts {
 		o(r)
 	}
-	return r
+	return r, nil
 }
 
 // ResolveByURL 은 URL 에서 host + path 를 추출해 매칭 활성 규칙을 반환합니다.

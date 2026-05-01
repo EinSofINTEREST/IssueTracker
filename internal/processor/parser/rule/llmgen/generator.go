@@ -72,19 +72,20 @@ type Generator struct {
 
 // New 는 Generator 를 생성합니다.
 //
-// provider / repo / resolver / log 모두 비-nil 필수. 하나라도 nil 이면 panic — wire 누락 즉시 가시화.
-func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, log *logger.Logger) *Generator {
+// provider / repo / resolver / log 모두 비-nil 필수. 하나라도 nil 이면 error —
+// 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, log *logger.Logger) (*Generator, error) {
 	if provider == nil {
-		panic("llmgen: New requires non-nil provider")
+		return nil, errors.New("llmgen: New requires non-nil provider")
 	}
 	if repo == nil {
-		panic("llmgen: New requires non-nil repo")
+		return nil, errors.New("llmgen: New requires non-nil repo")
 	}
 	if resolver == nil {
-		panic("llmgen: New requires non-nil resolver")
+		return nil, errors.New("llmgen: New requires non-nil resolver")
 	}
 	if log == nil {
-		panic("llmgen: New requires non-nil log")
+		return nil, errors.New("llmgen: New requires non-nil log")
 	}
 	return &Generator{
 		provider: provider,
@@ -92,7 +93,7 @@ func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *ru
 		resolver: resolver,
 		log:      log,
 		inflight: newInflightSet(),
-	}
+	}, nil
 }
 
 // Enqueue 는 (host, type) 에 대한 LLM rule 생성을 비동기로 시작합니다.

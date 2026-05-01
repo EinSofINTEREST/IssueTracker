@@ -2,6 +2,7 @@ package urlguard
 
 import (
 	"context"
+	"errors"
 
 	"issuetracker/pkg/logger"
 )
@@ -27,16 +28,17 @@ type Gate struct {
 }
 
 // NewGate 는 주어진 guard 와 log 로 새 Gate 를 생성합니다.
-// guard 가 nil 이면 panic — 비활성화는 AllowAllGuard{} 명시 주입으로 표현.
+// guard 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리. 비활성화는 AllowAllGuard{}
+// 명시 주입으로 표현 (이슈 #208).
 // log 가 nil 이면 logger.FromContext(context.Background()) 의 기본 logger 를 사용.
-func NewGate(guard Guard, log *logger.Logger) *Gate {
+func NewGate(guard Guard, log *logger.Logger) (*Gate, error) {
 	if guard == nil {
-		panic("urlguard: NewGate requires non-nil Guard (use AllowAllGuard{} to disable)")
+		return nil, errors.New("urlguard: NewGate requires non-nil Guard (use AllowAllGuard{} to disable)")
 	}
 	if log == nil {
 		log = logger.FromContext(context.Background())
 	}
-	return &Gate{guard: guard, log: log}
+	return &Gate{guard: guard, log: log}, nil
 }
 
 // Allow 는 단일 URL 이 통과하는지 검사합니다.

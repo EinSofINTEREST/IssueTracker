@@ -16,6 +16,7 @@ package stage
 
 import (
 	"context"
+	"errors"
 
 	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/parser/rule/llmgen"
@@ -44,22 +45,22 @@ type Stage struct {
 }
 
 // NewStage 는 component 들을 받아 parser.Stage 를 반환합니다.
-// worker / cleaner 는 필수 (nil 이면 panic), llmGen / refiner 는 nil 허용.
+// worker / cleaner / log 는 필수 (nil 이면 error), llmGen / refiner 는 nil 허용 (이슈 #208).
 func NewStage(
 	pw *worker.ParserWorker,
 	cleaner *worker.RawContentCleaner,
 	llmGen *llmgen.Generator,
 	pathRefiner *refiner.Refiner,
 	log *logger.Logger,
-) *Stage {
+) (*Stage, error) {
 	if pw == nil {
-		panic("parser: NewStage requires non-nil ParserWorker")
+		return nil, errors.New("parser: NewStage requires non-nil ParserWorker")
 	}
 	if cleaner == nil {
-		panic("parser: NewStage requires non-nil RawContentCleaner")
+		return nil, errors.New("parser: NewStage requires non-nil RawContentCleaner")
 	}
 	if log == nil {
-		panic("parser: NewStage requires non-nil logger")
+		return nil, errors.New("parser: NewStage requires non-nil logger")
 	}
 	return &Stage{
 		worker:  pw,
@@ -67,7 +68,7 @@ func NewStage(
 		llmGen:  llmGen,
 		refiner: pathRefiner,
 		log:     log,
-	}
+	}, nil
 }
 
 // Name 은 stage 식별자 ("parser") 를 반환합니다.
