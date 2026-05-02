@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +12,13 @@ import (
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 )
+
+// canonicalizeHost 는 host_pattern 의 표준형을 강제합니다 (CodeRabbit 피드백).
+// migration 013 의 CHECK 제약 (LOWER(BTRIM(...))) 과 동일한 정규화를 application 측에서 적용해
+// 대소문자 / padding 차이로 인한 silent miss 를 회피.
+func canonicalizeHost(host string) string {
+	return strings.ToLower(strings.TrimSpace(host))
+}
 
 // pgFetcherRuleRepository 는 pgx/v5 기반 FetcherRuleRepository 구현체입니다 (이슈 #175 단계 1).
 type pgFetcherRuleRepository struct {
@@ -46,6 +54,7 @@ DO UPDATE SET
 // Upsert 는 host_pattern 단위 UPSERT 를 수행합니다.
 // host 가 빈 문자열이거나 fetcher 가 유효하지 않으면 storage.ErrInvalid 반환 — DB CHECK 제약과 application 측 검증 이중화.
 func (r *pgFetcherRuleRepository) Upsert(ctx context.Context, host string, fetcher storage.FetcherKind, reason string) error {
+	host = canonicalizeHost(host)
 	if host == "" {
 		return fmt.Errorf("upsert fetcher rule: %w: empty host_pattern", storage.ErrInvalid)
 	}
@@ -67,6 +76,7 @@ WHERE host_pattern = $1
 // GetByHost 는 host_pattern exact match 로 단일 row 를 반환합니다.
 // 매칭 없으면 storage.ErrNotFound — Resolver 가 errors.Is 로 분기 (캐시 negative entry 등).
 func (r *pgFetcherRuleRepository) GetByHost(ctx context.Context, host string) (*storage.FetcherRuleRecord, error) {
+	host = canonicalizeHost(host)
 	rec := &storage.FetcherRuleRecord{}
 	var fetcher string
 	err := r.pool.QueryRow(ctx, sqlGetFetcherRuleByHost, host).Scan(
@@ -116,6 +126,7 @@ const sqlDeleteFetcherRule = `DELETE FROM fetcher_rules WHERE host_pattern = $1`
 
 // Delete 는 host_pattern 으로 row 를 제거합니다. 존재 여부와 무관하게 nil 반환 (idempotent).
 func (r *pgFetcherRuleRepository) Delete(ctx context.Context, host string) error {
+	host = canonicalizeHost(host)
 	if _, err := r.pool.Exec(ctx, sqlDeleteFetcherRule, host); err != nil {
 		return fmt.Errorf("delete fetcher rule %s: %w", host, err)
 	}

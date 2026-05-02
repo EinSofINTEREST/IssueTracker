@@ -15,7 +15,9 @@
 
 CREATE TABLE IF NOT EXISTS fetcher_rules (
   id           BIGSERIAL PRIMARY KEY,
-  host_pattern TEXT      NOT NULL UNIQUE,
+  host_pattern TEXT      NOT NULL UNIQUE
+              CHECK (host_pattern = LOWER(BTRIM(host_pattern)))
+              CHECK (BTRIM(host_pattern) <> ''),
   fetcher      TEXT      NOT NULL CHECK (fetcher IN ('goquery', 'chromedp')),
   reason       TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),

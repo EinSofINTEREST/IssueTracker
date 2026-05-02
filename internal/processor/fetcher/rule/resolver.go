@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 )
@@ -51,11 +53,16 @@ type cacheEntry struct {
 }
 
 // dbResolver 는 fetcher_rules 테이블을 source of truth 로 사용하는 Resolver 입니다.
+//
+// singleflight 로 thundering herd 방지 (gemini 피드백): cache miss / 만료 시점에 동일 host 에
+// 대해 여러 goroutine 이 동시에 진입해도 DB 조회는 단 1회만 발생하고 모든 caller 가 같은 결과를
+// 공유함.
 type dbResolver struct {
-	repo  storage.FetcherRuleRepository
-	log   *logger.Logger
-	ttl   time.Duration
-	cache sync.Map // map[string]cacheEntry
+	repo   storage.FetcherRuleRepository
+	log    *logger.Logger
+	ttl    time.Duration
+	cache  sync.Map // map[string]cacheEntry
+	flight singleflight.Group
 }
 
 // NewResolver 는 새 dbResolver 를 생성합니다.
@@ -74,8 +81,9 @@ func NewResolver(repo storage.FetcherRuleRepository, log *logger.Logger, ttl tim
 
 // Resolve 는 host 의 fetcher_rules row 를 조회합니다.
 //
-// cache hit 시 즉시 반환. miss / 만료 시 DB 조회 후 결과 (positive / negative) 모두 cache.
-// 빈 host 는 ResolveResult{Found: false}, nil 에러 — 핫패스에서 빈 host 도 default 분기.
+// cache hit 시 즉시 반환. miss / 만료 시 singleflight 로 DB 조회를 단일화 (동일 host 동시 진입
+// 시 1회만 hit), 결과 (positive / negative) 모두 cache. 빈 host 는 ResolveResult{Found: false},
+// nil 에러 — 핫패스에서 빈 host 도 default 분기.
 func (r *dbResolver) Resolve(ctx context.Context, host string) (ResolveResult, error) {
 	if host == "" {
 		return ResolveResult{}, nil
@@ -87,19 +95,30 @@ func (r *dbResolver) Resolve(ctx context.Context, host string) (ResolveResult, e
 		}
 	}
 
-	rec, err := r.repo.GetByHost(ctx, host)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			result := ResolveResult{Found: false}
-			r.cache.Store(host, cacheEntry{result: result, cachedAt: time.Now()})
-			return result, nil
+	v, err, _ := r.flight.Do(host, func() (interface{}, error) {
+		// double-check: singleflight leader 가 진입한 사이 다른 leader 가 cache 채웠을 수 있음.
+		if cached, ok := r.cache.Load(host); ok {
+			if e, ok := cached.(cacheEntry); ok && time.Since(e.cachedAt) < r.ttl {
+				return e.result, nil
+			}
 		}
+		rec, err := r.repo.GetByHost(ctx, host)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				result := ResolveResult{Found: false}
+				r.cache.Store(host, cacheEntry{result: result, cachedAt: time.Now()})
+				return result, nil
+			}
+			return ResolveResult{}, err
+		}
+		result := ResolveResult{Found: true, Fetcher: rec.Fetcher}
+		r.cache.Store(host, cacheEntry{result: result, cachedAt: time.Now()})
+		return result, nil
+	})
+	if err != nil {
 		return ResolveResult{}, err
 	}
-
-	result := ResolveResult{Found: true, Fetcher: rec.Fetcher}
-	r.cache.Store(host, cacheEntry{result: result, cachedAt: time.Now()})
-	return result, nil
+	return v.(ResolveResult), nil
 }
 
 // Invalidate 는 host 의 cache entry 를 즉시 제거합니다.
