@@ -419,8 +419,13 @@ func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string
 	// 이슈 #221: 임계값 도달 시 자동 chromedp 전환 + 실패 raw republish trigger.
 	// 비동기 — parser 흐름의 latency 차단 회피. Upgrader 자체가 in-flight dedup / 이미 chromedp
 	// skip 등 안전망 보유.
+	//
+	// context.WithoutCancel: parent ctx 가 worker shutdown 으로 cancel 되어도 trigger 는 끝까지
+	// 실행 (5분 in-flight lock TTL 안에서 자연 종료). logger / trace_id 등 ctx value 는 보존되어
+	// 운영 가시성 확보 — context.Background() 보다 권장 (gemini 피드백).
 	if thresholdReached && w.upgrader != nil {
-		go w.upgrader.Trigger(context.Background(), host)
+		triggerCtx := context.WithoutCancel(ctx)
+		go w.upgrader.Trigger(triggerCtx, host)
 	}
 }
 

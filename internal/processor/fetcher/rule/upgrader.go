@@ -20,9 +20,7 @@ import (
 // MetadataKeyForceFetcher 는 단계 3 의 republish CrawlJob 이 ChainHandler 에 chromedp 강제
 // 사용을 지시할 때 Target.Metadata 에 사용하는 키 (이슈 #221).
 //
-// 같은 키가 internal/processor/fetcher/domain/general/chain_handler.go 에도 정의되어 있으나
-// import cycle 회피를 위해 본 패키지에 별도 const 유지. 두 값이 동일 문자열임을 두 패키지의
-// 경계에서 보장.
+// ChainHandler (general 패키지) 도 본 const 를 참조 — 단일 정의로 정합성 보장.
 const MetadataKeyForceFetcher = "force_fetcher"
 
 const (
