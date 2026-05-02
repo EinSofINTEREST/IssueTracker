@@ -17,6 +17,7 @@ import (
 	"issuetracker/internal/processor/fetcher/domain/general/sources/kr"
 	"issuetracker/internal/processor/fetcher/domain/general/sources/us"
 	"issuetracker/internal/processor/fetcher/handler"
+	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
@@ -140,11 +141,22 @@ func main() {
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
 
+	// host 단위 fetcher 룰 (이슈 #175 단계 1) — fetcher_rules 테이블 + Resolver wiring.
+	// 룰 부재 host 는 default chain (현재 동작 100% 보존).
+	fetcherRuleRepo, err := pgstore.NewFetcherRuleRepository(pool, log)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct fetcher rule repository")
+	}
+	fetcherResolver, err := fetcherRule.NewResolver(fetcherRuleRepo, log, 0)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct fetcher rule resolver")
+	}
+
 	// fetcher 측 등록 (이슈 #134 분리 후): chain handler 가 raw_contents 저장 + RawContentRef 발행만 수행.
-	if err := kr.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, log); err != nil {
+	if err := kr.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, log); err != nil {
 		log.WithError(err).Fatal("failed to register kr crawlers")
 	}
-	if err := us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, log); err != nil {
+	if err := us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, log); err != nil {
 		log.WithError(err).Fatal("failed to register us crawlers")
 	}
 
