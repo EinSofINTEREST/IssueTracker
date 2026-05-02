@@ -234,6 +234,37 @@ func main() {
 		RetryScheduler: retryScheduler,
 	}
 
+	// 이슈 #218: chromedp 전용 worker pool — semaphore 로 Chrome 동시 호출 제한.
+	chromedpPoolCfg, err := config.LoadFetcherChromedpPool()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load fetcher chromedp pool config")
+	}
+	if chromedpPoolCfg.Enabled {
+		chromedpKafkaCfg := queue.DefaultConfig()
+		chromedpKafkaCfg.GroupID = queue.GroupChromedpFetchers
+		chromedpConsumer := queue.NewConsumer(chromedpKafkaCfg, queue.TopicCrawlChromedp)
+		defer chromedpConsumer.Close()
+
+		sem, err := crawlerWorker.NewSemaphore(chromedpPoolCfg.SemaphoreCapacity)
+		if err != nil {
+			log.WithError(err).Fatal("failed to construct chromedp semaphore")
+		}
+		chromedpHandler, err := crawlerWorker.NewChromedpJobHandler(registry, sem, log)
+		if err != nil {
+			log.WithError(err).Fatal("failed to construct chromedp job handler")
+		}
+
+		managerCfg.Chromedp = crawlerWorker.PoolConfig{Consumer: chromedpConsumer, WorkerCount: chromedpPoolCfg.WorkerCount}
+		managerCfg.ChromedpHandler = chromedpHandler
+
+		log.WithFields(map[string]interface{}{
+			"worker_count":       chromedpPoolCfg.WorkerCount,
+			"semaphore_capacity": chromedpPoolCfg.SemaphoreCapacity,
+		}).Info("chromedp pool wiring enabled")
+	} else {
+		log.Info("chromedp pool disabled (FETCHER_CHROMEDP_POOL_ENABLED=false), republished jobs will accumulate")
+	}
+
 	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, contentSvc, resolver, log)
 
 	log.WithFields(map[string]interface{}{

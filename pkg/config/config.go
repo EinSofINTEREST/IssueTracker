@@ -272,6 +272,81 @@ func LoadPathInfer(envFiles ...string) (PathInferConfig, error) {
 	return cfg, nil
 }
 
+// FetcherChromedpPoolConfig 는 chromedp 전용 worker pool 의 wiring 설정입니다 (이슈 #218).
+//
+// goquery worker pool 과 분리된 별도 Kafka consumer group 을 운영하며, worker 의 chromedp 호출
+// 직전에 Semaphore.Acquire 로 Chrome 인스턴스의 동시 navigation 수를 제한해 ResourceScheduler
+// 큐 고갈 (ERR_INSUFFICIENT_RESOURCES) 을 차단.
+type FetcherChromedpPoolConfig struct {
+	// Enabled: false 면 chromedp pool 미기동 — 기존 흐름 (chromedp 호출이 goquery worker 안에서
+	// 발생) 유지. 환경변수 FETCHER_CHROMEDP_POOL_ENABLED (default true).
+	Enabled bool
+
+	// WorkerCount: chromedp pool 의 worker goroutine 수.
+	// 환경변수 FETCHER_CHROMEDP_WORKER_COUNT (default 2).
+	WorkerCount int
+
+	// SemaphoreCapacity: 동시 chromedp 호출 수 상한 — Chrome URLLoader 한계 (보통 30 미만) 의
+	// 안전 마진. 환경변수 FETCHER_CHROMEDP_SEMAPHORE_CAPACITY (default 4).
+	SemaphoreCapacity int
+}
+
+// DefaultFetcherChromedpPoolConfig 는 기본 FetcherChromedpPoolConfig 를 반환합니다.
+func DefaultFetcherChromedpPoolConfig() FetcherChromedpPoolConfig {
+	return FetcherChromedpPoolConfig{
+		Enabled:           true,
+		WorkerCount:       2,
+		SemaphoreCapacity: 4,
+	}
+}
+
+// LoadFetcherChromedpPool 는 .env 를 로드한 후 OS 환경변수로 FetcherChromedpPoolConfig 를 구성합니다.
+//
+// 지원 환경변수:
+//   - FETCHER_CHROMEDP_POOL_ENABLED: true | false (default true)
+//   - FETCHER_CHROMEDP_WORKER_COUNT: 양의 정수 (default 2)
+//   - FETCHER_CHROMEDP_SEMAPHORE_CAPACITY: 양의 정수 (default 4)
+func LoadFetcherChromedpPool(envFiles ...string) (FetcherChromedpPoolConfig, error) {
+	if len(envFiles) == 0 {
+		envFiles = []string{".env"}
+	}
+	if err := godotenv.Load(envFiles...); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return FetcherChromedpPoolConfig{}, fmt.Errorf("failed to load env files %v: %w", envFiles, err)
+	}
+
+	cfg := DefaultFetcherChromedpPoolConfig()
+
+	if v := os.Getenv("FETCHER_CHROMEDP_POOL_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return FetcherChromedpPoolConfig{}, fmt.Errorf("parse FETCHER_CHROMEDP_POOL_ENABLED %q: %w", v, err)
+		}
+		cfg.Enabled = b
+	}
+	if v := os.Getenv("FETCHER_CHROMEDP_WORKER_COUNT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return FetcherChromedpPoolConfig{}, fmt.Errorf("parse FETCHER_CHROMEDP_WORKER_COUNT %q: %w", v, err)
+		}
+		if n < 1 {
+			return FetcherChromedpPoolConfig{}, fmt.Errorf("invalid FETCHER_CHROMEDP_WORKER_COUNT %d: must be 1 or greater", n)
+		}
+		cfg.WorkerCount = n
+	}
+	if v := os.Getenv("FETCHER_CHROMEDP_SEMAPHORE_CAPACITY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return FetcherChromedpPoolConfig{}, fmt.Errorf("parse FETCHER_CHROMEDP_SEMAPHORE_CAPACITY %q: %w", v, err)
+		}
+		if n < 1 {
+			return FetcherChromedpPoolConfig{}, fmt.Errorf("invalid FETCHER_CHROMEDP_SEMAPHORE_CAPACITY %d: must be 1 or greater", n)
+		}
+		cfg.SemaphoreCapacity = n
+	}
+
+	return cfg, nil
+}
+
 // FetcherAutoDowngradeConfig 는 자동 upgrade 된 host 를 주기적으로 goquery 로 되돌리는 안전장치 설정입니다 (이슈 #175 후속, sub-issue #224).
 //
 // upgrade-only 비대칭으로 인해 일시적 트래픽 에러로 잘못 upgrade 된 host 가 영원히 chromedp 로
