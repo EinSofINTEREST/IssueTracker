@@ -420,12 +420,16 @@ func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string
 	// 비동기 — parser 흐름의 latency 차단 회피. Upgrader 자체가 in-flight dedup / 이미 chromedp
 	// skip 등 안전망 보유.
 	//
-	// context.WithoutCancel: parent ctx 가 worker shutdown 으로 cancel 되어도 trigger 는 끝까지
-	// 실행 (5분 in-flight lock TTL 안에서 자연 종료). logger / trace_id 등 ctx value 는 보존되어
-	// 운영 가시성 확보 — context.Background() 보다 권장 (gemini 피드백).
+	// context.WithoutCancel + WithTimeout: parent ctx 의 logger / trace_id 등 value 는 보존하되
+	// (gemini 피드백) parent cancel 과 분리. 다만 unbounded 면 의존성 stall 시 goroutine leak 위험
+	// (CodeRabbit 피드백) — 30s timeout 으로 bound. Upgrader 의 5분 in-flight lock TTL 보다 짧지만
+	// Redis/DB/Kafka 호출 한 사이클은 30s 면 충분.
 	if thresholdReached && w.upgrader != nil {
-		triggerCtx := context.WithoutCancel(ctx)
-		go w.upgrader.Trigger(triggerCtx, host)
+		go func() {
+			triggerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			w.upgrader.Trigger(triggerCtx, host)
+		}()
 	}
 }
 

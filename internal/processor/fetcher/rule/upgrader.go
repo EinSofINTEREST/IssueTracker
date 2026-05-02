@@ -153,37 +153,48 @@ func (u *Upgrader) Trigger(ctx context.Context, host string) {
 		"reason": "auto_upgrade_validation",
 	})
 
-	// 실패 raw_id 수집 + republish
-	rawIDs, err := u.tracker.PopByHost(ctx, host, upgraderMaxRepublishPerCycle)
+	// 실패 raw_id 수집 + republish (Peek-then-Remove 패턴 — CodeRabbit 피드백):
+	//  - Peek: 제거 안 함 → publish 실패 시 잔존 (다음 trigger 가 자연 retry 가능)
+	//  - Publish 성공 후에만 RemoveByHost 로 명시적 제거
+	rawIDs, err := u.tracker.PeekByHost(ctx, host, upgraderMaxRepublishPerCycle)
 	if err != nil {
-		u.logWarn("upgrader tracker PopByHost failed, host upgraded but no raw republished", host, err)
+		u.logWarn("upgrader tracker PeekByHost failed, host upgraded but no raw republished", host, err)
 		return
 	}
 	if len(rawIDs) == 0 {
-		u.logDebug("upgrader: no failed raw to republish (already popped or expired)", host)
+		u.logDebug("upgrader: no failed raw to republish (none tracked or expired)", host)
 		return
 	}
 
 	u.republishRaws(ctx, host, rawIDs)
 }
 
-// republishRaws 는 PopByHost 결과의 raw_id 들을 새 CrawlJob 으로 발행합니다.
+// republishRaws 는 Peek 결과의 raw_id 들을 새 CrawlJob 으로 발행합니다 (Peek-then-Remove).
 //
 // 각 raw 에 대해:
-//   - rawSvc.GetByID 로 URL / Crawler 이름 추출 (실패 시 skip)
-//   - 새 CrawlJob 생성: Target.URL = raw.URL, Target.Metadata["force_fetcher"]="chromedp",
-//     Headers = {retry_reason: validation_upgrade, original_raw_id: ...}
-//   - 단일 PublishBatch 로 Kafka 발행 (priority normal)
+//   - rawSvc.GetByID 로 URL / Crawler 이름 추출
+//   - 성공 → CrawlJob 생성 (force_fetcher + token + retry 메타) → msgs append
+//   - 실패 (raw 없음 / URL 빈 상태) → staleIDs 누적 — publish 후 일괄 정리
+//
+// PublishBatch 결과:
+//   - 성공: republished + stale 모두 RemoveByHost 로 정리
+//   - 실패: RemoveByHost 호출 안 함 — 모든 ID 잔존, 다음 trigger 가 자연 retry (CodeRabbit 피드백)
+//
+// force_fetcher 는 process-local secret token 과 함께 부착 — 외부 source 의 임의 force 차단 (이슈 #221 안전망).
 func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []string) {
 	msgs := make([]queue.Message, 0, len(rawIDs))
+	republishedIDs := make([]string, 0, len(rawIDs))
+	staleIDs := make([]string, 0)
 
 	for _, rawID := range rawIDs {
 		raw, err := u.rawSvc.GetByID(ctx, rawID)
 		if err != nil {
-			u.logWarn("upgrader raw GetByID failed (skipping)", host, err)
+			u.logWarn("upgrader raw GetByID failed — marking stale", host, err)
+			staleIDs = append(staleIDs, rawID)
 			continue
 		}
 		if raw == nil || raw.URL == "" {
+			staleIDs = append(staleIDs, rawID)
 			continue
 		}
 
@@ -194,9 +205,10 @@ func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []stri
 				URL:  raw.URL,
 				Type: core.TargetTypeArticle,
 				Metadata: map[string]interface{}{
-					MetadataKeyForceFetcher: string(storage.FetcherChromedp),
-					"retry_reason":          "validation_upgrade",
-					"original_raw_id":       rawID,
+					MetadataKeyForceFetcher:      string(storage.FetcherChromedp),
+					MetadataKeyForceFetcherToken: ForceFetcherTokenValue(),
+					"retry_reason":               "validation_upgrade",
+					"original_raw_id":            rawID,
 				},
 			},
 			Priority:    core.PriorityNormal,
@@ -206,7 +218,8 @@ func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []stri
 		}
 		data, err := job.Marshal()
 		if err != nil {
-			u.logWarn("upgrader job Marshal failed (skipping)", host, err)
+			u.logWarn("upgrader job Marshal failed — marking stale", host, err)
+			staleIDs = append(staleIDs, rawID)
 			continue
 		}
 		msgs = append(msgs, queue.Message{
@@ -220,21 +233,36 @@ func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []stri
 				"original_raw_id": rawID,
 			},
 		})
+		republishedIDs = append(republishedIDs, rawID)
 	}
 
+	// 발행 대상 0건 — stale 만 정리.
 	if len(msgs) == 0 {
-		u.logDebug("upgrader: all republish candidates skipped (no valid raw)", host)
+		if len(staleIDs) > 0 {
+			if err := u.tracker.RemoveByHost(ctx, host, staleIDs); err != nil {
+				u.logWarn("upgrader RemoveByHost (stale only) failed", host, err)
+			}
+		}
+		u.logDebug("upgrader: no valid raw to publish (all stale)", host)
 		return
 	}
 
 	if err := u.producer.PublishBatch(ctx, msgs); err != nil {
-		u.logWarn("upgrader republish PublishBatch failed", host, err)
+		// Kafka 실패 — 모든 ID 잔존 (다음 trigger 가 자연 retry).
+		u.logWarn("upgrader republish PublishBatch failed, all ids retained for retry", host, err)
 		return
+	}
+
+	// 성공: republished + stale 모두 ZREM 으로 정리.
+	toRemove := append(append([]string{}, republishedIDs...), staleIDs...)
+	if err := u.tracker.RemoveByHost(ctx, host, toRemove); err != nil {
+		u.logWarn("upgrader RemoveByHost after publish failed (best-effort)", host, err)
 	}
 
 	u.logFields("upgrader republish completed", map[string]interface{}{
 		"host":            host,
 		"republish_count": len(msgs),
+		"stale_count":     len(staleIDs),
 	})
 }
 

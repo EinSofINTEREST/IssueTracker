@@ -154,6 +154,12 @@ func main() {
 		log.WithError(err).Fatal("failed to construct fetcher rule resolver")
 	}
 
+	// 이슈 #221: process-local secret token — Upgrader 의 force_fetcher 부착과 ChainHandler 의
+	// 검증이 같은 token 공유. 외부 source 의 임의 force 차단.
+	if err := fetcherRule.InitForceFetcherToken(); err != nil {
+		log.WithError(err).Fatal("failed to init force_fetcher token")
+	}
+
 	// fetcher 측 등록 (이슈 #134 분리 후): chain handler 가 raw_contents 저장 + RawContentRef 발행만 수행.
 	if err := kr.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, log); err != nil {
 		log.WithError(err).Fatal("failed to register kr crawlers")
