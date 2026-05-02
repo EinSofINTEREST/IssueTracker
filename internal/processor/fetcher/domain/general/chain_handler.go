@@ -3,6 +3,7 @@ package general
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -159,14 +160,35 @@ func extractHost(rawURL string) string {
 // Handle 은 chain 통과로 raw HTML 을 fetch 하고 raw_contents 저장 + RawContentRef 발행을 수행합니다.
 //
 // 항상 nil Content slice 를 반환 — 파싱은 parser worker 가 TopicFetched 를 consume 하여 처리.
+//
+// 이슈 #218: chromedp 처리는 별도 worker pool 로 격리. selectChain 결과가 ChromedpChain 이거나
+// DefaultChain 의 GoQuery 가 lazy detect 시 sentinel 반환하면 직접 호출 대신 TopicCrawlChromedp
+// 로 republish — Chrome 자원 동시 호출량을 chromedp pool 의 semaphore 로 제어.
 func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	if h.DefaultChain == nil || h.Log == nil || h.RawSvc == nil || h.Producer == nil {
 		return nil, fmt.Errorf("chain handler is not properly initialized")
 	}
 
 	chain := h.selectChain(ctx, job)
+
+	// 이슈 #218: ChromedpChain 매칭 (force_fetcher 또는 Resolver 룰) → 직접 호출 안 하고 republish.
+	// 같은 인스턴스 비교 (포인터 ID) 로 selectChain 의 ChromedpChain 분기 식별.
+	if h.ChromedpChain != nil && chain == h.ChromedpChain {
+		if err := h.republishToChromedpQueue(ctx, job); err != nil {
+			return nil, fmt.Errorf("republish to chromedp queue for %s: %w", job.Target.URL, err)
+		}
+		return nil, nil
+	}
+
 	raw, err := chain.Handle(ctx, job)
 	if err != nil {
+		// 이슈 #218: GoQuery 의 lazy detect sentinel — chromedp pool 로 republish 후 정상 종료.
+		if errors.Is(err, ErrLazyContentNeedsBrowser) {
+			if pubErr := h.republishToChromedpQueue(ctx, job); pubErr != nil {
+				return nil, fmt.Errorf("republish to chromedp queue (lazy detect) for %s: %w", job.Target.URL, pubErr)
+			}
+			return nil, nil
+		}
 		return nil, err
 	}
 	if raw == nil {
@@ -201,6 +223,38 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 	}).Debug("raw content stored, fetched ref published")
 
 	return nil, nil
+}
+
+// republishToChromedpQueue 는 본 job 을 TopicCrawlChromedp 로 다시 발행합니다 (이슈 #218).
+//
+// chromedp 처리 책임을 본 worker (goquery pool) 에서 분리 — 별도 chromedp worker pool 이 receive
+// 후 semaphore 로 Chrome 자원 보호. force_fetcher metadata + token 은 보존하여 chromedp pool 의
+// ChainHandler 가 분기 일관성 유지.
+//
+// CrawlJob 페이로드는 그대로 재직렬화 — Marshal 실패는 가능한 fatal 이라 caller 에 전파.
+func (h *ChainHandler) republishToChromedpQueue(ctx context.Context, job *core.CrawlJob) error {
+	data, err := job.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal job %s: %w", job.ID, err)
+	}
+	msg := queue.Message{
+		Topic: queue.TopicCrawlChromedp,
+		Key:   []byte(job.ID),
+		Value: data,
+		Headers: map[string]string{
+			"crawler":  job.CrawlerName,
+			"job_id":   job.ID,
+			"original": "goquery_pool",
+		},
+	}
+	if err := h.Producer.Publish(ctx, msg); err != nil {
+		return fmt.Errorf("publish chromedp queue: %w", err)
+	}
+	h.Log.WithFields(map[string]interface{}{
+		"crawler": job.CrawlerName,
+		"url":     job.Target.URL,
+	}).Info("job republished to chromedp queue")
+	return nil
 }
 
 // publishFetchedRef 는 RawContentRef 를 TopicFetched 에 발행합니다.
