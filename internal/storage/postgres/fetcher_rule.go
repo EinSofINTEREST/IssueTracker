@@ -132,3 +132,39 @@ func (r *pgFetcherRuleRepository) Delete(ctx context.Context, host string) error
 	}
 	return nil
 }
+
+// sqlBulkDowngradeAutoUpgraded 는 자동 upgrade 로 chromedp 가 된 모든 host 를 goquery 로 다시 내립니다 (이슈 #224).
+//
+// 매칭 조건은 reason='auto_upgrade_validation' AND fetcher='chromedp' — manual rule 보호 + 미래 자동 reason 영향 차단.
+// DELETE 대신 UPDATE — created_at 등 audit trail 보존.
+// RETURNING host_pattern 으로 변경된 호스트 슬라이스를 application 에 반환 — Resolver cache 동기화에 사용.
+const sqlBulkDowngradeAutoUpgraded = `
+UPDATE fetcher_rules
+SET fetcher    = 'goquery',
+    updated_at = NOW()
+WHERE reason  = 'auto_upgrade_validation'
+  AND fetcher = 'chromedp'
+RETURNING host_pattern
+`
+
+// BulkDowngradeAutoUpgraded 는 auto_upgrade_validation row 를 goquery 로 일괄 변환하고 변경된 host 슬라이스를 반환합니다.
+func (r *pgFetcherRuleRepository) BulkDowngradeAutoUpgraded(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx, sqlBulkDowngradeAutoUpgraded)
+	if err != nil {
+		return nil, fmt.Errorf("bulk downgrade auto-upgraded fetcher rules: %w", err)
+	}
+	defer rows.Close()
+
+	var changed []string
+	for rows.Next() {
+		var host string
+		if err := rows.Scan(&host); err != nil {
+			return nil, fmt.Errorf("scan downgraded host: %w", err)
+		}
+		changed = append(changed, host)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("bulk downgrade iter: %w", err)
+	}
+	return changed, nil
+}
