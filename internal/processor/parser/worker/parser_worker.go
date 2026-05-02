@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
+	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	"issuetracker/internal/processor/parser"
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
@@ -48,16 +50,24 @@ const (
 
 // ParserWorker 는 TopicFetched consumer group 의 worker pool 입니다.
 type ParserWorker struct {
-	consumer    *queue.KafkaConsumer
-	producer    queue.Producer
-	rawSvc      service.RawContentService
-	contentSvc  service.ContentService
-	publisher   general.JobPublisher
-	parser      *rule.Parser
-	resolver    *rule.Resolver              // 이슈 #173 단계 4-1 — sample 누적 시 매칭된 rule lookup
-	sampleSvc   storage.SampleURLRepository // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
-	procLock    locks.ProcessingLock        // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
-	llmGen      *llmgen.Generator           // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
+	consumer   *queue.KafkaConsumer
+	producer   queue.Producer
+	rawSvc     service.RawContentService
+	contentSvc service.ContentService
+	publisher  general.JobPublisher
+	parser     *rule.Parser
+	resolver   *rule.Resolver              // 이슈 #173 단계 4-1 — sample 누적 시 매칭된 rule lookup
+	sampleSvc  storage.SampleURLRepository // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
+	procLock   locks.ProcessingLock        // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
+	llmGen     *llmgen.Generator           // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
+
+	// failureCounter: host 단위 fetcher 실패 카운터 (이슈 #220).
+	// nil 시 noopFailureCounter 로 fallback — 카운팅 자체 비활성.
+	// rule.ErrParseFailure / rule.ErrEmptySelector 또는 빈본문 발생 시 Record 호출.
+	failureCounter      fetcherRule.FailureCounter
+	emptyBodyTitleMin   int
+	emptyBodyContentMin int
+
 	workerCount int
 	log         *logger.Logger
 
@@ -70,6 +80,7 @@ type ParserWorker struct {
 //   - procLock 은 nil 허용 — nil 이면 NoopProcessingLock 으로 fallback (단일 인스턴스 환경에서 dedup 비활성)
 //   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성, 이슈 #149)
 //   - resolver / sampleSvc 는 nil 허용 — nil 이면 sample 누적 skip (이슈 #173 단계 4-1, 정밀화 워크플로 비활성)
+//   - failureCounter 는 nil 허용 — nil 이면 NoopFailureCounter 로 fallback (이슈 #220 카운팅 비활성)
 //
 // 이슈 #161 (도메인 중립화) 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
 // 결과는 contentSvc.Store 로 contents 단일 테이블에 저장됩니다.
@@ -87,6 +98,9 @@ func NewParserWorker(
 	sampleSvc storage.SampleURLRepository,
 	procLock locks.ProcessingLock,
 	llmGen *llmgen.Generator,
+	failureCounter fetcherRule.FailureCounter,
+	emptyBodyTitleMin int,
+	emptyBodyContentMin int,
 	workerCount int,
 	log *logger.Logger,
 ) *ParserWorker {
@@ -96,19 +110,25 @@ func NewParserWorker(
 	if procLock == nil {
 		procLock = locks.NoopProcessingLock{}
 	}
+	if failureCounter == nil {
+		failureCounter = fetcherRule.NewNoopFailureCounter()
+	}
 	return &ParserWorker{
-		consumer:    consumer,
-		producer:    producer,
-		rawSvc:      rawSvc,
-		contentSvc:  contentSvc,
-		publisher:   publisher,
-		parser:      parser,
-		resolver:    resolver,
-		sampleSvc:   sampleSvc,
-		procLock:    procLock,
-		llmGen:      llmGen,
-		workerCount: workerCount,
-		log:         log,
+		consumer:            consumer,
+		producer:            producer,
+		rawSvc:              rawSvc,
+		contentSvc:          contentSvc,
+		publisher:           publisher,
+		parser:              parser,
+		resolver:            resolver,
+		sampleSvc:           sampleSvc,
+		procLock:            procLock,
+		llmGen:              llmGen,
+		failureCounter:      failureCounter,
+		emptyBodyTitleMin:   emptyBodyTitleMin,
+		emptyBodyContentMin: emptyBodyContentMin,
+		workerCount:         workerCount,
+		log:                 log,
 	}
 }
 
@@ -290,6 +310,11 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, mlog)
 	}
 
+	// 이슈 #220: parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달이면
+	// 빈본문 신호로 host 카운터에 누적. 정상 흐름은 차단하지 않음 (downstream validator 가
+	// 별도 정책으로 처리).
+	w.recordEmptyBodyIfApplicable(ctx, raw, page, mlog)
+
 	content := general.ConvertPage(page, raw)
 	if err := w.publishContents(ctx, []*core.Content{content}, crawlerName); err != nil {
 		return fmt.Errorf("publish article content: %w", err)
@@ -308,6 +333,10 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 //   - rule.ErrNoRule + llmGen 활성화 → LLM rule generator 비동기 enqueue (이슈 #149) + raw 잔존 + commit
 //   - 기타 rule.Error → raw 잔존 + commit (warn 로그) — 운영자 review 윈도우
 //   - 기타 → 호출자에게 error 전파 → commit 안 함 → 재시도
+//
+// 이슈 #220 (page 단계 한정): rule.ErrParseFailure / rule.ErrEmptySelector 는 host 단위 카운터로
+// 누적 — 임계값 도달 시 단계 3 (#221) 의 chromedp 자동 전환 트리거 입력. ErrNoRule 은 LLM 자동
+// rule 생성 (이슈 #149) 의 책임 영역이라 카운팅 제외 (다른 정책으로 처리됨).
 func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
@@ -323,12 +352,73 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw)
 		}
 
+		// 이슈 #220: page 단계의 ParseFailure / EmptySelector 만 host 카운터에 누적.
+		// list (category) 는 본질적으로 다른 selector 셋이라 chromedp 전환 신호로 부적절.
+		if targetType == storage.TargetTypePage &&
+			(rerr.Code == rule.ErrParseFailure || rerr.Code == rule.ErrEmptySelector) {
+			w.recordHostFailure(ctx, rerr.Host, fetcherRule.FailureReasonRuleParseFailure, mlog)
+		}
+
 		_ = rawID // 본 시그니처에선 rawID 직접 사용 안 함, 향후 audit log 에서 활용
 		// raw 는 의도적으로 잔존 — cleanup cron 이 TTL (default 1h) 후 정리
 		// 또는 LLM 자동 rule 생성 + 운영자 enable=true flip 후 reprocess 가능
 		return nil
 	}
 	return fmt.Errorf("%s: %w", stage, err)
+}
+
+// recordHostFailure 는 host 단위 fetcher 실패 카운터에 1건 누적합니다 (이슈 #220).
+// 카운팅 자체 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지 (Redis 장애가 parse 실패
+// 처리 흐름을 막지 않도록).
+func (w *ParserWorker) recordHostFailure(ctx context.Context, host string, reason fetcherRule.FailureReason, mlog *logger.Logger) {
+	if w.failureCounter == nil {
+		return
+	}
+	if _, _, err := w.failureCounter.Record(ctx, host, reason); err != nil {
+		mlog.WithFields(map[string]interface{}{
+			"host":   host,
+			"reason": string(reason),
+		}).WithError(err).Warn("failure counter record failed (non-fatal)")
+	}
+}
+
+// hostOf 는 raw.URL 에서 host 만 추출합니다 (port 제거).
+// 파싱 실패 시 빈 문자열 — 호출자가 빈 host 를 noop 으로 흡수.
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// recordEmptyBodyIfApplicable 는 page 의 Title / MainContent 길이가 임계값 미달이면
+// host 카운터에 empty_body 신호로 누적합니다 (이슈 #220).
+//
+// 임계값 어느 한쪽 미달이어도 신호 발신 — chromedp 전환 후 둘 다 정상 추출되는 케이스 가정.
+// 임계값이 0 이면 해당 필드 검증 비활성 (운영 옵션).
+func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawContent, page *parser.Page, mlog *logger.Logger) {
+	if w.emptyBodyTitleMin <= 0 && w.emptyBodyContentMin <= 0 {
+		return
+	}
+	titleLen := len(page.Title)
+	bodyLen := len(page.MainContent)
+	titleShort := w.emptyBodyTitleMin > 0 && titleLen < w.emptyBodyTitleMin
+	bodyShort := w.emptyBodyContentMin > 0 && bodyLen < w.emptyBodyContentMin
+	if !titleShort && !bodyShort {
+		return
+	}
+	host := hostOf(raw.URL)
+	if host == "" {
+		return
+	}
+	mlog.WithFields(map[string]interface{}{
+		"host":         host,
+		"title_length": titleLen,
+		"body_length":  bodyLen,
+		"reason":       string(fetcherRule.FailureReasonEmptyBody),
+	}).Warn("empty body detected — recording host failure")
+	w.recordHostFailure(ctx, host, fetcherRule.FailureReasonEmptyBody, mlog)
 }
 
 // publishContents 는 *core.Content 슬라이스를 contents 저장 + ContentRef 발행 (TopicNormalized).
