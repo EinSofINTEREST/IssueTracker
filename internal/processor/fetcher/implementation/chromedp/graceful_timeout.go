@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -13,11 +14,6 @@ import (
 // timeout 발생으로 graceful capture가 적용된 경우 true가 설정되어,
 // 다운스트림 파이프라인에서 데이터의 완전성 수준을 판단할 수 있다.
 const MetadataKeyPartialLoad = "partial_load"
-
-// gracefulCaptureTimeout: timeout 발생 시 부분 DOM 캡처에 허용하는 최대 시간
-// 너무 길면 전체 응답 시간이 늘어나고, 너무 짧으면 캡처 실패 빈도가 증가하므로
-// 실험적으로 3초가 적정 수준임을 가정한다 (chromedp OuterHTML 평균 < 1초).
-const gracefulCaptureTimeout = 3 * time.Second
 
 // minPartialDOMLength: 부분 로드 DOM으로 인정할 최소 HTML 길이 (바이트)
 // 빈 페이지(`<html><head></head><body></body></html>`)는 약 45바이트이므로
@@ -50,15 +46,28 @@ func IsValidPartialDOM(html string) bool {
 	return strings.Contains(html, "<body") || strings.Contains(html, "<BODY")
 }
 
-// captureOuterHTML: timeout 이후 별도 context로 OuterHTML 추출 시도
+// captureOuterHTML: timeout 이후 별도 context로 OuterHTML 추출 시도 (이슈 #146).
 // browserCtx는 timeout으로 cancel되지 않은 tab context여야 하며,
 // chromedp가 동일 탭에 새 명령을 발행할 수 있어야 한다.
-func captureOuterHTML(browserCtx context.Context) (string, error) {
-	rescueCtx, cancel := context.WithTimeout(browserCtx, gracefulCaptureTimeout)
+//
+// page.StopLoading() 을 OuterHTML 직전에 발행하여 navigation polling 을 즉시 중단,
+// CDP 가 응답할 여유를 확보. analytics / SSE / long-poll 페이지처럼 navigation 이
+// 끝나지 않는 케이스에서 OuterHTML 만 호출하면 응답이 안 와서 context canceled 로
+// 끝나는 현상을 회피한다.
+//
+// captureTimeout 가 0 이하이면 DefaultGracefulCaptureTimeout 을 사용한다.
+func captureOuterHTML(browserCtx context.Context, captureTimeout time.Duration) (string, error) {
+	if captureTimeout <= 0 {
+		captureTimeout = DefaultGracefulCaptureTimeout
+	}
+	rescueCtx, cancel := context.WithTimeout(browserCtx, captureTimeout)
 	defer cancel()
 
 	var html string
-	if err := chromedp.Run(rescueCtx, chromedp.OuterHTML("html", &html)); err != nil {
+	if err := chromedp.Run(rescueCtx,
+		page.StopLoading(),
+		chromedp.OuterHTML("html", &html),
+	); err != nil {
 		return "", err
 	}
 	return html, nil

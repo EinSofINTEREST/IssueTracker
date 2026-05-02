@@ -2,8 +2,6 @@ package chromedp
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -115,35 +113,49 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 			"timeout_ms": c.config.Timeout.Milliseconds(),
 		}).Warn("page render timed out, attempting graceful capture")
 
-		partialHTML, captureErr := captureOuterHTML(browserCtx)
+		// 이슈 #146: timeout = 정상 종료 시그널로 취급. 캡처 실패/검증 실패해도
+		// 에러로 끌어올리지 않고 partial_load=true 의 (가능하면 빈 HTML) 응답으로
+		// downgrade. 호출자(parser)는 빈 HTML 을 받으면 자연스럽게 링크 0건 처리하므로
+		// 시스템이 안정적으로 흘러간다. Navigate 자체가 한 번도 응답을 못 받은 케이스
+		// (statusCode == 0 이면서 capturedHTML 도 빈 상태) 만 진짜 실패로 분류한다.
+		partialHTML, captureErr := captureOuterHTML(browserCtx, c.opts.GracefulCaptureTimeout)
 		if captureErr != nil {
-			// 부분 캡처 자체가 실패 → 빈 페이지/네트워크 불가와 동등한 완전 실패로 분류
-			// runErr(원인 timeout)와 captureErr(캡처 실패 사유 — target closed,
-			// context canceled, CDP 오류 등)를 모두 보존하여 디버깅 가능성 유지
-			return nil, &core.CrawlerError{
-				Category:  core.ErrCategoryTimeout,
-				Code:      "CDP_006",
-				Message:   "render timeout and graceful capture failed",
-				Source:    c.name,
-				URL:       target.URL,
-				Retryable: true,
-				Err:       errors.Join(runErr, captureErr),
-			}
+			log.WithFields(map[string]interface{}{
+				"url":        target.URL,
+				"timeout_ms": c.config.Timeout.Milliseconds(),
+			}).WithError(captureErr).Warn("graceful capture failed, proceeding with empty partial body")
+			partialHTML = ""
+		} else if !IsValidPartialDOM(partialHTML) {
+			log.WithFields(map[string]interface{}{
+				"url":    target.URL,
+				"length": len(partialHTML),
+			}).Warn("partial DOM did not meet validation threshold, retaining anyway")
 		}
 
-		// 부분 로드 DOM 유효성 검증 (최소 body + 길이 충족)
-		if !IsValidPartialDOM(partialHTML) {
-			// runErr(timeout) + DOM 검증 실패 사유(길이 정보 포함)를 함께 보존하여
-			// 에러 체인에서 "어떤 검증이 실패했는지"를 추적할 수 있도록 한다
-			validationErr := fmt.Errorf("partial DOM failed validation: length=%d", len(partialHTML))
+		// Navigate 자체 실패 가드 (CodeRabbit 피드백): main-document 응답이 한 번도
+		// 도착하지 않았고 (statusCode == 0) 캡처도 빈 결과면 페이지가 사실상 미응답.
+		// 이슈 #146 acceptance criteria "Navigate 자체 실패 (네트워크 오류) 는 기존대로
+		// CDP_002 에러" 를 충족하기 위해 명시적으로 CDP_002 에러로 분류한다.
+		statusMu.Lock()
+		preCheckStatus := statusCode
+		statusMu.Unlock()
+		if preCheckStatus == 0 && partialHTML == "" {
+			// gemini 피드백: shutdown 으로 인한 cancel 과 일반 timeout 실패를 구분.
+			// browserCtx 는 c.allocCtx 의 child 이므로, allocCtx 가 cancel 된 셧다운
+			// 상황에서는 browserCtx.Err() 가 non-nil. 이 경우 false-positive alert 회피를
+			// 위해 raw context error 그대로 반환 (Retryable 분류 안 함, 다운스트림이 자체
+			// 종료 흐름에서 처리).
+			if browserErr := browserCtx.Err(); browserErr != nil {
+				return nil, browserErr
+			}
 			return nil, &core.CrawlerError{
-				Category:  core.ErrCategoryTimeout,
-				Code:      "CDP_007",
-				Message:   "render timeout and partial DOM invalid",
+				Category:  core.ErrCategoryNetwork,
+				Code:      "CDP_002",
+				Message:   "failed to render page: navigation produced no main-document response",
 				Source:    c.name,
 				URL:       target.URL,
 				Retryable: true,
-				Err:       errors.Join(runErr, validationErr),
+				Err:       runErr,
 			}
 		}
 
@@ -152,7 +164,7 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		log.WithFields(map[string]interface{}{
 			"url":  target.URL,
 			"size": len(html),
-		}).Info("graceful timeout capture succeeded")
+		}).Info("graceful timeout capture completed")
 	}
 
 	elapsed := time.Since(start)
