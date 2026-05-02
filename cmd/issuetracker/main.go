@@ -278,6 +278,24 @@ func main() {
 		log.Warn("redis unavailable, fetcher failure counter falls back to noop")
 	}
 
+	// 이슈 #221: host 단위 실패 raw_id 추적기 — 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상 수집에 사용.
+	// 카운터와 같은 lifecycle (window TTL 동기화) — Redis 미연결 시 Noop.
+	var rawIDTracker fetcherRule.RawIDTracker = fetcherRule.NewNoopRawIDTracker()
+	if fetcherUpgradeCfg.Enabled && redisClientShared != nil {
+		t, tErr := fetcherRule.NewRedisRawIDTracker(
+			redisClientShared.Raw(),
+			fetcherUpgradeCfg.Window,
+			"", // default keyPrefix "fetcher:failed_raws"
+			log,
+		)
+		if tErr != nil {
+			log.WithError(tErr).Warn("failed to construct redis raw id tracker, falling back to noop")
+		} else {
+			rawIDTracker = t
+			log.Info("fetcher raw id tracker (redis set) enabled")
+		}
+	}
+
 	// ── Parser worker (이슈 #134) ──────────────────────────────────────────────
 	// fetcher 와 분리된 별도 consumer group (issuetracker-parsers) 으로 동작 — 인스턴스 수 독립 스케일.
 	// TopicFetched 의 RawContentRef 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제.
@@ -300,6 +318,7 @@ func main() {
 		procLock,     // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
 		llmGen,
 		failureCounter, // 이슈 #220: host 단위 fetcher 실패 카운터
+		rawIDTracker,   // 이슈 #221: host 별 실패 raw_id 추적기
 		fetcherUpgradeCfg.EmptyBodyTitleMin,
 		fetcherUpgradeCfg.EmptyBodyContentMin,
 		parserWorkerCount,
