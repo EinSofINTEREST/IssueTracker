@@ -72,7 +72,11 @@ func TestSemaphore_Concurrent_RespectsCapacity(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			require.NoError(t, s.Acquire(context.Background()))
-			defer func() { _ = s.Release() }()
+			defer func() {
+				if err := s.Release(); err != nil {
+					t.Errorf("release failed: %v", err)
+				}
+			}()
 
 			n := current.Add(1)
 			defer current.Add(-1)

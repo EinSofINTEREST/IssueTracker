@@ -30,7 +30,7 @@ type Semaphore interface {
 //
 // production panic 금지 (이슈 #208) 에 따라 panic 대신 sentinel error — 호출자가 sentry / log 로
 // contract 위반 알림. 정상 흐름에서는 발생 안 함 (defer Release 패턴 사용).
-var ErrReleaseWithoutAcquire = errors.New("worker: Semaphore.Release called without matching Acquire")
+var ErrReleaseWithoutAcquire = errors.New("worker: release called without matching acquire")
 
 // chanSemaphore 는 buffered channel 기반 Semaphore 구현입니다.
 type chanSemaphore struct {
@@ -43,7 +43,7 @@ type chanSemaphore struct {
 // capacity <= 0 이면 error (이슈 #208 정책).
 func NewSemaphore(capacity int) (Semaphore, error) {
 	if capacity <= 0 {
-		return nil, errors.New("worker: NewSemaphore requires positive capacity")
+		return nil, errors.New("worker: semaphore requires positive capacity")
 	}
 	return &chanSemaphore{
 		slots:    make(chan struct{}, capacity),
@@ -52,7 +52,13 @@ func NewSemaphore(capacity int) (Semaphore, error) {
 }
 
 // Acquire 는 ctx 만료 전까지 슬롯을 대기합니다.
+//
+// ctx 가 이미 cancel 된 상태면 슬롯 가용성과 무관하게 ctx.Err() 즉시 반환 (CodeRabbit 피드백) —
+// 호출자가 give-up 한 후에 슬롯을 소비하지 않도록 deterministic.
 func (s *chanSemaphore) Acquire(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case s.slots <- struct{}{}:
 		return nil
