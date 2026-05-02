@@ -72,11 +72,43 @@ func NewChainHandler(
 
 // selectChain 은 host 단위 fetcher 룰을 조회하여 사용할 chain 을 결정합니다.
 //
+// 우선순위 (위에서부터):
+//  1. Target.Metadata["force_fetcher"] == "chromedp" → ChromedpChain (단계 3 republish 경로)
+//  2. Resolver 의 host 룰 조회 결과
+//  3. fallback → DefaultChain
+//
 // Resolver 가 nil 이거나 host 추출 실패 또는 룰 조회 실패 시 DefaultChain 으로 fallback —
 // fetcher 정책이 부분적으로 망가져도 fetch 자체는 계속 진행 (graceful degrade).
 //
 // chain 선택 외에 룰 결과를 로그에 남겨 운영 가시성 확보.
 func (h *ChainHandler) selectChain(ctx context.Context, job *core.CrawlJob) Handler {
+	// 단계 3 republish 경로 — Resolver 보다 우선. 자동 chromedp 전환 trigger 가 발행한
+	// 새 CrawlJob 이 즉시 chromedp 처리되도록 보장.
+	//
+	// Provenance 검증 (CodeRabbit 피드백): force_fetcher metadata 는 process-local secret token
+	// 과 함께 부착되어야만 honor. 외부 publisher (현재는 없으나 미래 확장 시) 가 token 추측 불가.
+	// token 부재 / 불일치 시 warn 후 default 분기 — fail-safe.
+	if v, ok := job.Target.Metadata[rule.MetadataKeyForceFetcher]; ok {
+		if s, ok := v.(string); ok && s == string(storage.FetcherChromedp) {
+			tokenVal, _ := job.Target.Metadata[rule.MetadataKeyForceFetcherToken].(string)
+			if !rule.ValidateForceFetcherToken(tokenVal) {
+				h.Log.WithFields(map[string]interface{}{
+					"url": job.Target.URL,
+				}).Warn("force_fetcher metadata present but token invalid/absent — falling back to default chain")
+			} else if h.ChromedpChain != nil {
+				h.Log.WithFields(map[string]interface{}{
+					"url":     job.Target.URL,
+					"fetcher": s,
+				}).Debug("force_fetcher metadata applied (republish path)")
+				return h.ChromedpChain
+			} else {
+				h.Log.WithFields(map[string]interface{}{
+					"url": job.Target.URL,
+				}).Warn("force_fetcher=chromedp but no ChromedpChain wired, using default chain")
+			}
+		}
+	}
+
 	if h.Resolver == nil {
 		return h.DefaultChain
 	}

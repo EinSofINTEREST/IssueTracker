@@ -65,7 +65,16 @@ type ParserWorker struct {
 	// failureCounter: host 단위 fetcher 실패 카운터 (이슈 #220).
 	// nil 시 noopFailureCounter 로 fallback — 카운팅 자체 비활성.
 	// rule.ErrParseFailure / rule.ErrEmptySelector 또는 빈본문 발생 시 Record 호출.
-	failureCounter      fetcherRule.FailureCounter
+	failureCounter fetcherRule.FailureCounter
+
+	// rawIDTracker: 같은 실패 시점에 host 별 raw_id 추적 (이슈 #221).
+	// nil 시 noopRawIDTracker — republish 비활성 (단계 3 trigger 가 빈 raw_id 받음).
+	rawIDTracker fetcherRule.RawIDTracker
+
+	// upgrader: 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish 트리거 (이슈 #221).
+	// nil 허용 — nil 이면 thresholdReached 신호 발신만 (자동 전환 비활성).
+	upgrader *fetcherRule.Upgrader
+
 	emptyBodyTitleMin   int
 	emptyBodyContentMin int
 
@@ -82,6 +91,7 @@ type ParserWorker struct {
 //   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성, 이슈 #149)
 //   - resolver / sampleSvc 는 nil 허용 — nil 이면 sample 누적 skip (이슈 #173 단계 4-1, 정밀화 워크플로 비활성)
 //   - failureCounter 는 nil 허용 — nil 이면 NoopFailureCounter 로 fallback (이슈 #220 카운팅 비활성)
+//   - rawIDTracker 는 nil 허용 — nil 이면 NoopRawIDTracker 로 fallback (이슈 #221 republish 비활성)
 //
 // 이슈 #161 (도메인 중립화) 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
 // 결과는 contentSvc.Store 로 contents 단일 테이블에 저장됩니다.
@@ -100,6 +110,8 @@ func NewParserWorker(
 	procLock locks.ProcessingLock,
 	llmGen *llmgen.Generator,
 	failureCounter fetcherRule.FailureCounter,
+	rawIDTracker fetcherRule.RawIDTracker,
+	upgrader *fetcherRule.Upgrader,
 	emptyBodyTitleMin int,
 	emptyBodyContentMin int,
 	workerCount int,
@@ -114,6 +126,9 @@ func NewParserWorker(
 	if failureCounter == nil {
 		failureCounter = fetcherRule.NewNoopFailureCounter()
 	}
+	if rawIDTracker == nil {
+		rawIDTracker = fetcherRule.NewNoopRawIDTracker()
+	}
 	return &ParserWorker{
 		consumer:            consumer,
 		producer:            producer,
@@ -126,6 +141,8 @@ func NewParserWorker(
 		procLock:            procLock,
 		llmGen:              llmGen,
 		failureCounter:      failureCounter,
+		rawIDTracker:        rawIDTracker,
+		upgrader:            upgrader,
 		emptyBodyTitleMin:   emptyBodyTitleMin,
 		emptyBodyContentMin: emptyBodyContentMin,
 		workerCount:         workerCount,
@@ -314,7 +331,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 	// 이슈 #220: parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달이면
 	// 빈본문 신호로 host 카운터에 누적. 정상 흐름은 차단하지 않음 (downstream validator 가
 	// 별도 정책으로 처리).
-	w.recordEmptyBodyIfApplicable(ctx, raw, page, mlog)
+	w.recordEmptyBodyIfApplicable(ctx, raw, rawID, page, mlog)
 
 	content := general.ConvertPage(page, raw)
 	if err := w.publishContents(ctx, []*core.Content{content}, crawlerName); err != nil {
@@ -355,9 +372,10 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 
 		// 이슈 #220: page 단계의 ParseFailure / EmptySelector 만 host 카운터에 누적.
 		// list (category) 는 본질적으로 다른 selector 셋이라 chromedp 전환 신호로 부적절.
+		// 이슈 #221: 같은 시점에 raw_id 를 host 별 추적 — 단계 3 의 republish 대상 수집.
 		if targetType == storage.TargetTypePage &&
 			(rerr.Code == rule.ErrParseFailure || rerr.Code == rule.ErrEmptySelector) {
-			w.recordHostFailure(ctx, rerr.Host, fetcherRule.FailureReasonRuleParseFailure, mlog)
+			w.recordHostFailure(ctx, rerr.Host, rawID, fetcherRule.FailureReasonRuleParseFailure, mlog)
 		}
 
 		_ = rawID // 본 시그니처에선 rawID 직접 사용 안 함, 향후 audit log 에서 활용
@@ -368,18 +386,50 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 	return fmt.Errorf("%s: %w", stage, err)
 }
 
-// recordHostFailure 는 host 단위 fetcher 실패 카운터에 1건 누적합니다 (이슈 #220).
-// 카운팅 자체 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지 (Redis 장애가 parse 실패
-// 처리 흐름을 막지 않도록).
-func (w *ParserWorker) recordHostFailure(ctx context.Context, host string, reason fetcherRule.FailureReason, mlog *logger.Logger) {
+// recordHostFailure 는 host 단위 fetcher 실패 카운터에 1건 누적하고 raw_id 를 host Set 에
+// 추적합니다 (이슈 #220 + #221).
+//
+// 카운팅 / 트래킹 자체 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지 (Redis 장애가
+// parse 실패 처리 흐름을 막지 않도록).
+//
+// 이슈 #221: 카운터가 thresholdReached=true 반환하면 Upgrader.Trigger 를 별도 goroutine 으로
+// 비동기 호출 — parser 본 흐름의 latency 차단 회피. Upgrader 가 nil 이면 신호만 발신.
+//
+// rawID 는 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상으로 사용. 빈 문자열이면
+// Tracker 가 noop.
+func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string, reason fetcherRule.FailureReason, mlog *logger.Logger) {
 	if w.failureCounter == nil {
 		return
 	}
-	if _, _, err := w.failureCounter.Record(ctx, host, reason); err != nil {
+	_, thresholdReached, err := w.failureCounter.Record(ctx, host, reason)
+	if err != nil {
 		mlog.WithFields(map[string]interface{}{
 			"host":   host,
 			"reason": string(reason),
 		}).WithError(err).Warn("failure counter record failed (non-fatal)")
+	}
+	if w.rawIDTracker != nil {
+		if err := w.rawIDTracker.Track(ctx, host, rawID); err != nil {
+			mlog.WithFields(map[string]interface{}{
+				"host":   host,
+				"raw_id": rawID,
+			}).WithError(err).Warn("raw id tracker track failed (non-fatal)")
+		}
+	}
+	// 이슈 #221: 임계값 도달 시 자동 chromedp 전환 + 실패 raw republish trigger.
+	// 비동기 — parser 흐름의 latency 차단 회피. Upgrader 자체가 in-flight dedup / 이미 chromedp
+	// skip 등 안전망 보유.
+	//
+	// context.WithoutCancel + WithTimeout: parent ctx 의 logger / trace_id 등 value 는 보존하되
+	// (gemini 피드백) parent cancel 과 분리. 다만 unbounded 면 의존성 stall 시 goroutine leak 위험
+	// (CodeRabbit 피드백) — 30s timeout 으로 bound. Upgrader 의 5분 in-flight lock TTL 보다 짧지만
+	// Redis/DB/Kafka 호출 한 사이클은 30s 면 충분.
+	if thresholdReached && w.upgrader != nil {
+		go func() {
+			triggerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			w.upgrader.Trigger(triggerCtx, host)
+		}()
 	}
 }
 
@@ -398,7 +448,9 @@ func hostOf(rawURL string) string {
 //
 // 임계값 어느 한쪽 미달이어도 신호 발신 — chromedp 전환 후 둘 다 정상 추출되는 케이스 가정.
 // 임계값이 0 이면 해당 필드 검증 비활성 (운영 옵션).
-func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawContent, page *parser.Page, mlog *logger.Logger) {
+//
+// 이슈 #221: rawID 도 host 별 추적 — 단계 3 의 republish 대상 수집.
+func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawContent, rawID string, page *parser.Page, mlog *logger.Logger) {
 	if w.emptyBodyTitleMin <= 0 && w.emptyBodyContentMin <= 0 {
 		return
 	}
@@ -421,7 +473,7 @@ func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *cor
 		"body_length":  bodyLen,
 		"reason":       string(fetcherRule.FailureReasonEmptyBody),
 	}).Warn("empty body detected — recording host failure")
-	w.recordHostFailure(ctx, host, fetcherRule.FailureReasonEmptyBody, mlog)
+	w.recordHostFailure(ctx, host, rawID, fetcherRule.FailureReasonEmptyBody, mlog)
 }
 
 // publishContents 는 *core.Content 슬라이스를 contents 저장 + ContentRef 발행 (TopicNormalized).
