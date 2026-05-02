@@ -50,6 +50,15 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// Raw 는 내부 *goredis.Client 를 반환합니다 — generic 명령 (ZADD / ZREMRANGEBYSCORE / ZCARD 등)
+// 이 필요한 외부 패키지가 사용. pkg/redis 에 모든 명령을 method 로 wrapping 하지 않고 외부에
+// raw access 를 노출하는 절충 — 본 패키지 내부 (lock.go, retry_queue.go) 는 그대로 c.rdb 사용.
+//
+// 호출자는 반환된 client 를 close 하면 안 됨 (Client.Close() 가 lifecycle 책임).
+func (c *Client) Raw() *goredis.Client {
+	return c.rdb
+}
+
 // Close는 Redis 연결 풀을 닫습니다.
 func (c *Client) Close() error {
 	return c.rdb.Close()
