@@ -47,10 +47,10 @@ func TestSemaphore_Acquire_BlocksUntilRelease(t *testing.T) {
 	assert.Error(t, err, "3번째 Acquire 는 슬롯 부족으로 timeout")
 
 	// Release 후 Acquire 통과
-	s.Release()
+	require.NoError(t, s.Release())
 	require.NoError(t, s.Acquire(ctx))
-	s.Release()
-	s.Release()
+	require.NoError(t, s.Release())
+	require.NoError(t, s.Release())
 }
 
 // TestSemaphore_Concurrent_RespectsCapacity:
@@ -72,7 +72,7 @@ func TestSemaphore_Concurrent_RespectsCapacity(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			require.NoError(t, s.Acquire(context.Background()))
-			defer s.Release()
+			defer func() { _ = s.Release() }()
 
 			n := current.Add(1)
 			defer current.Add(-1)
@@ -108,7 +108,7 @@ func TestSemaphore_Acquire_ContextCanceled_ReturnsError(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 
 	// 점유 안 됐으니 Release 1번만 가능.
-	s.Release()
+	require.NoError(t, s.Release())
 }
 
 // TestSemaphore_Release_WithoutAcquire_ReturnsError:
