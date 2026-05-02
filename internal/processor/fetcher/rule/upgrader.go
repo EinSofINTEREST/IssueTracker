@@ -116,15 +116,17 @@ func (u *Upgrader) Trigger(ctx context.Context, host string) {
 		return
 	}
 
-	// in-flight dedup
+	// in-flight dedup — SetArgs(NX, TTL) 으로 atomic SET … NX PX. SetNX 는 go-redis v9 에서 deprecated.
+	// (goredis.Nil 은 NX 조건 불충족 = 이미 lock 보유 중을 의미하는 정상 신호.)
 	if u.redis != nil {
 		key := "fetcher:upgrader:lock:" + host
-		ok, err := u.redis.SetNX(ctx, key, 1, upgraderInflightTTL).Result()
-		if err != nil {
-			u.logWarn("upgrader inflight lock failed, proceeding without dedup", host, err)
-		} else if !ok {
+		err := u.redis.SetArgs(ctx, key, 1, goredis.SetArgs{Mode: "NX", TTL: upgraderInflightTTL}).Err()
+		if errors.Is(err, goredis.Nil) {
 			u.logDebug("upgrader skipped — another trigger in flight for host", host)
 			return
+		}
+		if err != nil {
+			u.logWarn("upgrader inflight lock failed, proceeding without dedup", host, err)
 		}
 	}
 
