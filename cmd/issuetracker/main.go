@@ -169,6 +169,7 @@ func main() {
 	var ingestionLock locks.IngestionLock
 	var retryScheduler crawlerWorker.RetryScheduler
 	var retrySchedulerStop func()
+	var redisClientShared *redis.Client // 이슈 #220: failure counter wiring 에서 재사용
 	redisCfg, err := config.LoadRedis()
 	if err != nil {
 		log.WithError(err).Warn("failed to load redis config, falling back to noop processing lock and ingestion lock")
@@ -178,6 +179,7 @@ func main() {
 			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop processing lock and ingestion lock")
 		} else {
 			defer redisClient.Close()
+			redisClientShared = redisClient
 			log.WithFields(map[string]interface{}{
 				"host": redisCfg.Host,
 				"port": redisCfg.Port,
@@ -243,6 +245,39 @@ func main() {
 	llmProvider := buildLLMProvider(log)
 	llmGen := buildLLMGenerator(llmProvider, parsingRuleRepo, ruleResolver, log)
 
+	// ── Fetcher 실패 카운터 (이슈 #220) ────────────────────────────────────────
+	// host 단위 fetcher 실패를 sliding window 로 누적 — 단계 3 (#221) 의 chromedp 자동 전환
+	// 트리거 입력. ENABLED=false 또는 Redis 미연결 시 Noop (성능 저하 0).
+	fetcherUpgradeCfg, err := config.LoadFetcherAutoUpgrade()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load fetcher auto-upgrade config")
+	}
+	var failureCounter fetcherRule.FailureCounter = fetcherRule.NewNoopFailureCounter()
+	if fetcherUpgradeCfg.Enabled && redisClientShared != nil {
+		fc, fcErr := fetcherRule.NewRedisFailureCounter(
+			redisClientShared.Raw(),
+			fetcherUpgradeCfg.Threshold,
+			fetcherUpgradeCfg.Window,
+			"", // default keyPrefix "fetcher:fail"
+			log,
+		)
+		if fcErr != nil {
+			log.WithError(fcErr).Warn("failed to construct redis failure counter, falling back to noop")
+		} else {
+			failureCounter = fc
+			log.WithFields(map[string]interface{}{
+				"threshold":              fetcherUpgradeCfg.Threshold,
+				"window":                 fetcherUpgradeCfg.Window.String(),
+				"empty_body_title_min":   fetcherUpgradeCfg.EmptyBodyTitleMin,
+				"empty_body_content_min": fetcherUpgradeCfg.EmptyBodyContentMin,
+			}).Info("fetcher failure counter (redis sliding window) enabled")
+		}
+	} else if !fetcherUpgradeCfg.Enabled {
+		log.Info("fetcher auto-upgrade disabled (FETCHER_AUTO_UPGRADE_ENABLED=false), failure counter is noop")
+	} else {
+		log.Warn("redis unavailable, fetcher failure counter falls back to noop")
+	}
+
 	// ── Parser worker (이슈 #134) ──────────────────────────────────────────────
 	// fetcher 와 분리된 별도 consumer group (issuetracker-parsers) 으로 동작 — 인스턴스 수 독립 스케일.
 	// TopicFetched 의 RawContentRef 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제.
@@ -264,6 +299,9 @@ func main() {
 		sampleRepo,   // 이슈 #173 단계 4-1
 		procLock,     // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
 		llmGen,
+		failureCounter, // 이슈 #220: host 단위 fetcher 실패 카운터
+		fetcherUpgradeCfg.EmptyBodyTitleMin,
+		fetcherUpgradeCfg.EmptyBodyContentMin,
 		parserWorkerCount,
 		log,
 	)
