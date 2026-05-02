@@ -120,9 +120,10 @@ services:
         echo '=== IssueTracker Kafka Topic Initialization ==='
 
         echo '[crawl topics]'
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.high   --partitions ${KAFKA_PARTITIONS_HIGH:-6} --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.normal --partitions ${KAFKA_PARTITIONS_NORMAL:-8} --replication-factor 1
-        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.low    --partitions ${KAFKA_PARTITIONS_LOW:-4} --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.high     --partitions ${KAFKA_PARTITIONS_HIGH:-6} --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.normal   --partitions ${KAFKA_PARTITIONS_NORMAL:-8} --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.low      --partitions ${KAFKA_PARTITIONS_LOW:-4} --replication-factor 1
+        $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.crawl.chromedp --partitions ${KAFKA_PARTITIONS_CHROMEDP:-4} --replication-factor 1
 
         echo '[raw topics]'
         $$T --bootstrap-server $$KAFKA --create --if-not-exists --topic issuetracker.raw.us       --partitions 8 --replication-factor 1

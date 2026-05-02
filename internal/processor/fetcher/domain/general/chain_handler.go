@@ -3,6 +3,7 @@ package general
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -159,24 +160,52 @@ func extractHost(rawURL string) string {
 // Handle 은 chain 통과로 raw HTML 을 fetch 하고 raw_contents 저장 + RawContentRef 발행을 수행합니다.
 //
 // 항상 nil Content slice 를 반환 — 파싱은 parser worker 가 TopicFetched 를 consume 하여 처리.
+//
+// 이슈 #218: chromedp 처리는 별도 worker pool 로 격리. selectChain 결과가 ChromedpChain 이거나
+// DefaultChain 의 GoQuery 가 lazy detect 시 sentinel 반환하면 직접 호출 대신 TopicCrawlChromedp
+// 로 republish — Chrome 자원 동시 호출량을 chromedp pool 의 semaphore 로 제어.
 func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	if h.DefaultChain == nil || h.Log == nil || h.RawSvc == nil || h.Producer == nil {
 		return nil, fmt.Errorf("chain handler is not properly initialized")
 	}
 
 	chain := h.selectChain(ctx, job)
+
+	// 이슈 #218: ChromedpChain 매칭 (force_fetcher 또는 Resolver 룰) → 직접 호출 안 하고 republish.
+	// 같은 인스턴스 비교 (포인터 ID) 로 selectChain 의 ChromedpChain 분기 식별.
+	if h.ChromedpChain != nil && chain == h.ChromedpChain {
+		if err := h.republishToChromedpQueue(ctx, job); err != nil {
+			return nil, fmt.Errorf("republish to chromedp queue for %s: %w", job.Target.URL, err)
+		}
+		return nil, nil
+	}
+
 	raw, err := chain.Handle(ctx, job)
 	if err != nil {
+		// 이슈 #218: GoQuery 의 lazy detect sentinel — chromedp pool 로 republish 후 정상 종료.
+		if errors.Is(err, ErrLazyContentNeedsBrowser) {
+			if pubErr := h.republishToChromedpQueue(ctx, job); pubErr != nil {
+				return nil, fmt.Errorf("republish to chromedp queue (lazy detect) for %s: %w", job.Target.URL, pubErr)
+			}
+			return nil, nil
+		}
 		return nil, err
 	}
 	if raw == nil {
 		return nil, fmt.Errorf("chain returned nil raw content for %s", job.Target.URL)
 	}
 
-	// raw_contents 저장 (중복 시 기존 ID 재사용 — RawContentService 책임)
+	return nil, h.processFetchedRaw(ctx, job, raw, "default")
+}
+
+// processFetchedRaw 는 fetch 된 raw 를 raw_contents 에 저장하고 RawContentRef 를 TopicFetched 에
+// 발행하는 공통 흐름입니다 (gemini 피드백 — Handle / HandleChromedpOnly 중복 추출).
+//
+// pool 인자는 로그 차원의 식별자 ("default" / "chromedp") — 운영 가시성용.
+func (h *ChainHandler) processFetchedRaw(ctx context.Context, job *core.CrawlJob, raw *core.RawContent, pool string) error {
 	rawID, dup, err := h.RawSvc.Store(ctx, raw)
 	if err != nil {
-		return nil, fmt.Errorf("store raw content for %s: %w", job.Target.URL, err)
+		return fmt.Errorf("store raw content for %s: %w", job.Target.URL, err)
 	}
 	if dup {
 		// 동일 URL 의 이전 raw 가 이미 존재 — 새 fetch 가 의미 없음 (parser 가 이전 raw 를 처리 중이거나 처리 완료).
@@ -186,11 +215,12 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 			"crawler":     job.CrawlerName,
 			"url":         raw.URL,
 			"existing_id": rawID,
+			"pool":        pool,
 		}).Debug("raw content already exists for url, republishing ref")
 	}
 
 	if err := h.publishFetchedRef(ctx, job, raw, rawID); err != nil {
-		return nil, fmt.Errorf("publish fetched ref for %s: %w", job.Target.URL, err)
+		return fmt.Errorf("publish fetched ref for %s: %w", job.Target.URL, err)
 	}
 
 	h.Log.WithFields(map[string]interface{}{
@@ -198,9 +228,68 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 		"url":         raw.URL,
 		"raw_id":      rawID,
 		"target_type": string(job.Target.Type),
+		"pool":        pool,
 	}).Debug("raw content stored, fetched ref published")
+	return nil
+}
 
-	return nil, nil
+// HandleChromedpOnly 는 ChromedpChain 만 호출하여 chromedp 단독 fetch 를 수행합니다 (이슈 #218).
+//
+// chromedp pool 의 ChromedpJobHandler 가 같은 ChainHandler 인스턴스를 Registry 에서 lookup 하여
+// 본 메소드 호출 — Resolver / force_fetcher / republish 분기 skip 하고 ChromedpChain 직접 호출.
+// 그 외 처리 흐름 (raw_contents 저장 + RawContentRef publish) 은 일반 Handle 과 동일.
+//
+// ChromedpChain 미wiring 사이트 (예: yonhap) 에 대해서는 정의상 chromedp pool 이 큐 메시지를
+// 받지 않아야 하지만, 안전장치로 nil 일 때 graceful error.
+func (h *ChainHandler) HandleChromedpOnly(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
+	if h.Log == nil || h.RawSvc == nil || h.Producer == nil {
+		return nil, fmt.Errorf("chain handler is not properly initialized")
+	}
+	if h.ChromedpChain == nil {
+		return nil, fmt.Errorf("crawler %s has no chromedp chain wired", job.CrawlerName)
+	}
+
+	raw, err := h.ChromedpChain.Handle(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("chromedp chain returned nil raw content for %s", job.Target.URL)
+	}
+
+	return nil, h.processFetchedRaw(ctx, job, raw, "chromedp")
+}
+
+// republishToChromedpQueue 는 본 job 을 TopicCrawlChromedp 로 다시 발행합니다 (이슈 #218).
+//
+// chromedp 처리 책임을 본 worker (goquery pool) 에서 분리 — 별도 chromedp worker pool 이 receive
+// 후 semaphore 로 Chrome 자원 보호. force_fetcher metadata + token 은 보존하여 chromedp pool 의
+// ChainHandler 가 분기 일관성 유지.
+//
+// CrawlJob 페이로드는 그대로 재직렬화 — Marshal 실패는 가능한 fatal 이라 caller 에 전파.
+func (h *ChainHandler) republishToChromedpQueue(ctx context.Context, job *core.CrawlJob) error {
+	data, err := job.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal job %s: %w", job.ID, err)
+	}
+	msg := queue.Message{
+		Topic: queue.TopicCrawlChromedp,
+		Key:   []byte(job.ID),
+		Value: data,
+		Headers: map[string]string{
+			"crawler":  job.CrawlerName,
+			"job_id":   job.ID,
+			"original": "goquery_pool",
+		},
+	}
+	if err := h.Producer.Publish(ctx, msg); err != nil {
+		return fmt.Errorf("publish chromedp queue: %w", err)
+	}
+	h.Log.WithFields(map[string]interface{}{
+		"crawler": job.CrawlerName,
+		"url":     job.Target.URL,
+	}).Info("job republished to chromedp queue")
+	return nil
 }
 
 // publishFetchedRef 는 RawContentRef 를 TopicFetched 에 발행합니다.

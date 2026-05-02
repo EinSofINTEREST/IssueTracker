@@ -19,6 +19,13 @@ type Handler interface {
 	SetNext(h Handler)
 }
 
+// ErrLazyContentNeedsBrowser 는 GoQueryFetchHandler 가 lazy-load 감지 시 반환하는 sentinel 입니다 (이슈 #218).
+//
+// 기존 동작 — chain next 위임으로 같은 worker 에서 chromedp 호출 — 은 단일 Chrome 자원 풀
+// 고갈을 초래. 본 sentinel 을 받은 ChainHandler 는 next 위임 대신 TopicCrawlChromedp 로
+// republish — chromedp 호출이 별도 worker pool 에서 격리.
+var ErrLazyContentNeedsBrowser = errors.New("lazy loading content detected — chromedp pool republish required")
+
 // baseHandler 는 체인 위임 메커니즘을 제공하는 공통 구조체입니다.
 type baseHandler struct {
 	next Handler
@@ -68,11 +75,13 @@ func (h *GoQueryFetchHandler) Handle(ctx context.Context, job *core.CrawlJob) (*
 	}
 
 	if h.hasLazyContent(raw.HTML) {
+		// 이슈 #218: chain next 위임 대신 sentinel 반환. ChainHandler 가 받아 TopicCrawlChromedp
+		// 로 republish — chromedp 호출이 별도 worker pool 에서 격리되어 Chrome 자원 안정.
 		h.log.WithFields(map[string]interface{}{
 			"handler": "goquery",
 			"url":     job.Target.URL,
-		}).Warn("lazy loading detected, delegating to browser handler")
-		return h.delegateToNext(ctx, job, fmt.Errorf("lazy loading content detected"))
+		}).Warn("lazy loading detected, signaling chromedp republish")
+		return nil, ErrLazyContentNeedsBrowser
 	}
 
 	h.log.WithFields(map[string]interface{}{

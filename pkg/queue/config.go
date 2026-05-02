@@ -9,6 +9,13 @@ const (
 	TopicCrawlNormal = "issuetracker.crawl.normal"
 	TopicCrawlLow    = "issuetracker.crawl.low"
 
+	// TopicCrawlChromedp: chromedp 전용 fetch 큐 (이슈 #218).
+	// goquery worker 가 lazy-load 감지 / fetch 실패 시 재발행하거나, 단계 3 의 자동 upgrade
+	// trigger / force_fetcher metadata path 가 직접 enqueue. 별도 consumer group
+	// (GroupChromedpFetchers) 의 chromedp worker 가 consume 하여 worker 단위 semaphore 로
+	// Chrome 인스턴스 동시 호출 수를 제어. 우선순위 분리는 본 sub scope 외 (단일 토픽).
+	TopicCrawlChromedp = "issuetracker.crawl.chromedp"
+
 	// 원본 데이터 토픽 (국가별)
 	TopicRawUS = "issuetracker.raw.us"
 	TopicRawKR = "issuetracker.raw.kr"
@@ -32,6 +39,10 @@ const (
 // Consumer group 상수
 const (
 	GroupCrawlerWorkers = "issuetracker-crawler-workers"
+	// GroupChromedpFetchers: TopicCrawlChromedp 를 consume 하여 chromedp 만 사용하는 fetcher worker
+	// pool 의 consumer group (이슈 #218). 일반 crawler worker (GroupCrawlerWorkers) 와 분리되어
+	// Chrome 자원과 1:1 매핑된 worker 수 + semaphore 로 동시 호출량 제한.
+	GroupChromedpFetchers = "issuetracker-chromedp-fetchers"
 	// GroupParsers: TopicFetched 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제 (이슈 #134).
 	GroupParsers     = "issuetracker-parsers"
 	GroupNormalizers = "issuetracker-normalizers"

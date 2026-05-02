@@ -64,7 +64,8 @@ func registerNaver(registry *handler.Registry, _ core.Config, rawSvc service.Raw
 	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
 	crawler := general.NewGenericCrawler("naver", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	defaultChain, err := general.BuildChain(gqFetcher, brFetcher, log,
+	// 이슈 #218: DefaultChain 은 goquery only — lazy detect 시 sentinel 반환 → ChainHandler 가 chromedp pool 로 republish.
+	defaultChain, err := general.BuildChain(gqFetcher, nil, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
 	if err != nil {
@@ -109,7 +110,8 @@ func registerDaum(registry *handler.Registry, _ core.Config, rawSvc service.RawC
 	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
 	crawler := general.NewGenericCrawler("daum", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	defaultChain, err := general.BuildChain(gqFetcher, brFetcher, log,
+	// 이슈 #218: DefaultChain = goquery only.
+	defaultChain, err := general.BuildChain(gqFetcher, nil, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
 	if err != nil {
