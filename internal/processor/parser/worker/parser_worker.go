@@ -71,6 +71,10 @@ type ParserWorker struct {
 	// nil 시 noopRawIDTracker — republish 비활성 (단계 3 trigger 가 빈 raw_id 받음).
 	rawIDTracker fetcherRule.RawIDTracker
 
+	// upgrader: 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish 트리거 (이슈 #221).
+	// nil 허용 — nil 이면 thresholdReached 신호 발신만 (자동 전환 비활성).
+	upgrader *fetcherRule.Upgrader
+
 	emptyBodyTitleMin   int
 	emptyBodyContentMin int
 
@@ -107,6 +111,7 @@ func NewParserWorker(
 	llmGen *llmgen.Generator,
 	failureCounter fetcherRule.FailureCounter,
 	rawIDTracker fetcherRule.RawIDTracker,
+	upgrader *fetcherRule.Upgrader,
 	emptyBodyTitleMin int,
 	emptyBodyContentMin int,
 	workerCount int,
@@ -137,6 +142,7 @@ func NewParserWorker(
 		llmGen:              llmGen,
 		failureCounter:      failureCounter,
 		rawIDTracker:        rawIDTracker,
+		upgrader:            upgrader,
 		emptyBodyTitleMin:   emptyBodyTitleMin,
 		emptyBodyContentMin: emptyBodyContentMin,
 		workerCount:         workerCount,
@@ -386,13 +392,17 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 // 카운팅 / 트래킹 자체 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지 (Redis 장애가
 // parse 실패 처리 흐름을 막지 않도록).
 //
+// 이슈 #221: 카운터가 thresholdReached=true 반환하면 Upgrader.Trigger 를 별도 goroutine 으로
+// 비동기 호출 — parser 본 흐름의 latency 차단 회피. Upgrader 가 nil 이면 신호만 발신.
+//
 // rawID 는 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상으로 사용. 빈 문자열이면
 // Tracker 가 noop.
 func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string, reason fetcherRule.FailureReason, mlog *logger.Logger) {
 	if w.failureCounter == nil {
 		return
 	}
-	if _, _, err := w.failureCounter.Record(ctx, host, reason); err != nil {
+	_, thresholdReached, err := w.failureCounter.Record(ctx, host, reason)
+	if err != nil {
 		mlog.WithFields(map[string]interface{}{
 			"host":   host,
 			"reason": string(reason),
@@ -405,6 +415,12 @@ func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string
 				"raw_id": rawID,
 			}).WithError(err).Warn("raw id tracker track failed (non-fatal)")
 		}
+	}
+	// 이슈 #221: 임계값 도달 시 자동 chromedp 전환 + 실패 raw republish trigger.
+	// 비동기 — parser 흐름의 latency 차단 회피. Upgrader 자체가 in-flight dedup / 이미 chromedp
+	// skip 등 안전망 보유.
+	if thresholdReached && w.upgrader != nil {
+		go w.upgrader.Trigger(context.Background(), host)
 	}
 }
 

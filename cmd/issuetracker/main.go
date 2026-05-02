@@ -10,6 +10,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	goredis "github.com/redis/go-redis/v9"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/fetcher"
@@ -39,6 +40,7 @@ import (
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/metrics"
 	"issuetracker/pkg/queue"
+
 	"issuetracker/pkg/redis"
 )
 
@@ -296,6 +298,31 @@ func main() {
 		}
 	}
 
+	// 이슈 #221: 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish trigger.
+	// ENABLED=false 또는 의존성 부재 시 nil — parser_worker 가 thresholdReached 신호만 받고 실제 전환 발생 안 함.
+	var fetcherUpgrader *fetcherRule.Upgrader
+	if fetcherUpgradeCfg.Enabled {
+		var redisRaw *goredis.Client
+		if redisClientShared != nil {
+			redisRaw = redisClientShared.Raw()
+		}
+		up, upErr := fetcherRule.NewUpgrader(
+			fetcherRuleRepo,
+			fetcherResolver,
+			rawIDTracker,
+			rawSvc,
+			crawlerProducer,
+			redisRaw, // nil 허용 — in-flight lock 비활성 (단일 인스턴스)
+			log,
+		)
+		if upErr != nil {
+			log.WithError(upErr).Warn("failed to construct fetcher upgrader, auto-upgrade disabled at runtime")
+		} else {
+			fetcherUpgrader = up
+			log.Info("fetcher auto-upgrade trigger (chromedp + republish) enabled")
+		}
+	}
+
 	// ── Parser worker (이슈 #134) ──────────────────────────────────────────────
 	// fetcher 와 분리된 별도 consumer group (issuetracker-parsers) 으로 동작 — 인스턴스 수 독립 스케일.
 	// TopicFetched 의 RawContentRef 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제.
@@ -317,8 +344,9 @@ func main() {
 		sampleRepo,   // 이슈 #173 단계 4-1
 		procLock,     // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
 		llmGen,
-		failureCounter, // 이슈 #220: host 단위 fetcher 실패 카운터
-		rawIDTracker,   // 이슈 #221: host 별 실패 raw_id 추적기
+		failureCounter,  // 이슈 #220: host 단위 fetcher 실패 카운터
+		rawIDTracker,    // 이슈 #221: host 별 실패 raw_id 추적기
+		fetcherUpgrader, // 이슈 #221: 임계값 도달 시 chromedp 자동 전환 + republish
 		fetcherUpgradeCfg.EmptyBodyTitleMin,
 		fetcherUpgradeCfg.EmptyBodyContentMin,
 		parserWorkerCount,
