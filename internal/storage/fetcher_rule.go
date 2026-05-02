@@ -53,4 +53,17 @@ type FetcherRuleRepository interface {
 
 	// Delete 는 host_pattern 으로 row 를 제거합니다. 존재하지 않아도 nil 반환 (idempotent).
 	Delete(ctx context.Context, host string) error
+
+	// BulkDowngradeAutoUpgraded 는 자동 upgrade (reason='auto_upgrade_validation') 로 chromedp 가
+	// 된 모든 host 를 goquery 로 일괄 다운그레이드합니다 (이슈 #224, sub of #175).
+	//
+	// 정책:
+	//   - WHERE 조건: reason='auto_upgrade_validation' AND fetcher='chromedp'
+	//   - reason='manual' 룰은 건드리지 않음 — 운영자 의도 보존
+	//   - 다른 자동 reason (미래 확장) 도 영향 없음 — 매칭 reason 명시
+	//   - DELETE 대신 UPDATE — created_at / id 보존 (audit trail)
+	//
+	// 변경된 host_pattern 슬라이스를 반환 — 호출자 (Downgrader) 가 Resolver cache invalidate.
+	// 변경 0건이면 빈 슬라이스 + nil 에러.
+	BulkDowngradeAutoUpgraded(ctx context.Context) ([]string, error)
 }

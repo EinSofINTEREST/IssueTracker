@@ -53,6 +53,9 @@ func (s *stubFetcherRuleRepo) Delete(ctx context.Context, host string) error {
 	delete(s.rules, host)
 	return nil
 }
+func (s *stubFetcherRuleRepo) BulkDowngradeAutoUpgraded(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
 
 func newTestLogger() *logger.Logger {
 	return logger.New(logger.DefaultConfig())

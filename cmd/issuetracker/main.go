@@ -444,7 +444,24 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct validate stage")
 	}
+
+	// 이슈 #224: chromedp 자동 upgrade 의 자가 회복 안전장치 — interval 마다 reason='auto_upgrade_validation'
+	// row 를 goquery 로 reset. ENABLED=false 시 stage 미등록 (단계 3 의 upgrade-only 동작 유지).
 	stages := []processor.Stage{fetcherStage, parserStg, validateStage}
+	downgradeCfg, err := config.LoadFetcherAutoDowngrade()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load fetcher auto-downgrade config")
+	}
+	if downgradeCfg.Enabled {
+		downgrader, err := fetcherRule.NewDowngrader(fetcherRuleRepo, fetcherResolver, downgradeCfg.Interval, log)
+		if err != nil {
+			log.WithError(err).Fatal("failed to construct fetcher auto-downgrade stage")
+		}
+		stages = append(stages, downgrader)
+		log.WithField("interval", downgradeCfg.Interval.String()).Info("fetcher auto-downgrade enabled")
+	} else {
+		log.Info("fetcher auto-downgrade disabled (FETCHER_AUTO_DOWNGRADE_ENABLED=false)")
+	}
 	for _, s := range stages {
 		s.Start(ctx)
 		log.WithField("stage", s.Name()).Info("pipeline stage started")
