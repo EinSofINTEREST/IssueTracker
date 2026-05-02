@@ -70,13 +70,43 @@ func NewChainHandler(
 	}
 }
 
+// MetadataKeyForceFetcher 는 단계 3 의 자동 republish job 이 ChainHandler 에 chromedp 강제
+// 사용을 지시할 때 Target.Metadata 에 사용하는 키입니다 (이슈 #175 단계 3, sub-issue #221).
+//
+// 값 "chromedp" 가 설정되면 Resolver / fetcher_rules 조회를 건너뛰고 즉시 ChromedpChain 사용.
+// 외부 source 가 임의로 force 지정하지 못하도록 publisher 측에서 internal-only 로 제한해야 함
+// (이슈 #221 본문 안전망).
+const MetadataKeyForceFetcher = "force_fetcher"
+
 // selectChain 은 host 단위 fetcher 룰을 조회하여 사용할 chain 을 결정합니다.
+//
+// 우선순위 (위에서부터):
+//  1. Target.Metadata["force_fetcher"] == "chromedp" → ChromedpChain (단계 3 republish 경로)
+//  2. Resolver 의 host 룰 조회 결과
+//  3. fallback → DefaultChain
 //
 // Resolver 가 nil 이거나 host 추출 실패 또는 룰 조회 실패 시 DefaultChain 으로 fallback —
 // fetcher 정책이 부분적으로 망가져도 fetch 자체는 계속 진행 (graceful degrade).
 //
 // chain 선택 외에 룰 결과를 로그에 남겨 운영 가시성 확보.
 func (h *ChainHandler) selectChain(ctx context.Context, job *core.CrawlJob) Handler {
+	// 단계 3 republish 경로 — Resolver 보다 우선. 자동 chromedp 전환 trigger 가 발행한
+	// 새 CrawlJob 이 즉시 chromedp 처리되도록 보장.
+	if v, ok := job.Target.Metadata[MetadataKeyForceFetcher]; ok {
+		if s, ok := v.(string); ok && s == string(storage.FetcherChromedp) {
+			if h.ChromedpChain != nil {
+				h.Log.WithFields(map[string]interface{}{
+					"url":     job.Target.URL,
+					"fetcher": s,
+				}).Debug("force_fetcher metadata applied (republish path)")
+				return h.ChromedpChain
+			}
+			h.Log.WithFields(map[string]interface{}{
+				"url": job.Target.URL,
+			}).Warn("force_fetcher=chromedp but no ChromedpChain wired, using default chain")
+		}
+	}
+
 	if h.Resolver == nil {
 		return h.DefaultChain
 	}
