@@ -117,8 +117,14 @@ func (r *redisRawIDTracker) PeekByHost(ctx context.Context, host string, limit i
 		return nil, nil
 	}
 	key := r.keyFor(host)
-	// ZREVRANGE 0 limit-1 — score DESC 순으로 N 개 (가장 최근 우선).
-	res, err := r.client.ZRevRange(ctx, key, 0, int64(limit-1)).Result()
+	// ZRangeArgs with Rev — score DESC 순으로 N 개 (가장 최근 우선).
+	// ZRevRange 는 go-redis v9 에서 deprecated (Redis 6.2.0+ 권장 API).
+	res, err := r.client.ZRangeArgs(ctx, goredis.ZRangeArgs{
+		Key:   key,
+		Start: 0,
+		Stop:  int64(limit - 1),
+		Rev:   true,
+	}).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
 			return nil, nil
