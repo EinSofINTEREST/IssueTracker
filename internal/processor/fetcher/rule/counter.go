@@ -2,6 +2,8 @@ package rule
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -11,6 +13,21 @@ import (
 
 	"issuetracker/pkg/logger"
 )
+
+// memberNonceLen 은 ZADD member 에 추가하는 random suffix 의 byte 길이입니다.
+// 8 bytes hex (16 char) — 같은 nano + reason 조합이 동시 발생해도 충돌 확률 사실상 0.
+// crypto/rand 실패 시 fallback 으로 빈 nonce — 그 경우 nano 정밀도에 의존하나 운영 영향 무시 가능.
+const memberNonceLen = 8
+
+// randNonce 는 ZADD member 의 unique 변별자로 사용할 random hex 문자열을 반환합니다.
+// crypto/rand 실패는 매우 드물지만 발생 시 빈 문자열로 fallback (panic 회피).
+func randNonce() string {
+	b := make([]byte, memberNonceLen)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
 
 // FailureReason 은 카운터에 INCR 되는 실패의 분류입니다 (이슈 #220).
 //
@@ -114,9 +131,12 @@ func (r *redisFailureCounter) Record(ctx context.Context, host string, reason Fa
 	key := r.keyFor(host)
 	cutoff := now.Add(-r.window)
 
-	// member 는 timestamp + reason — Redis sorted set 의 member 가 unique 해야 같은 timestamp 의
-	// 동시 INCR 이 모두 보존됨. nano 까지 갈리지만 worst-case 동시 record 충돌 회피용 reason 부착.
-	member := strconv.FormatInt(now.UnixNano(), 10) + ":" + string(reason)
+	// member 는 timestamp + reason + random nonce — Redis sorted set 은 (score, member) 의
+	// member 가 unique 해야 ZADD 가 새 entry 로 인정됨. nano 정밀도가 보장되지 않는 환경 (Windows
+	// 일부 / 가상화 환경 etc.) 에서 같은 ns + reason 조합이 동시 발생하면 ZADD 가 중복 처리하여
+	// 카운트가 누락될 수 있으므로 crypto/rand 의 8 bytes hex nonce 를 추가해 충돌 확률을 사실상
+	// 0 으로 낮춘다 (gemini 피드백).
+	member := strconv.FormatInt(now.UnixNano(), 10) + ":" + string(reason) + ":" + randNonce()
 	score := float64(now.UnixNano())
 
 	// PIPELINE — atomic 단일 RTT.

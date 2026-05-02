@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
@@ -401,8 +402,10 @@ func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *cor
 	if w.emptyBodyTitleMin <= 0 && w.emptyBodyContentMin <= 0 {
 		return
 	}
-	titleLen := len(page.Title)
-	bodyLen := len(page.MainContent)
+	// gemini 피드백: byte 길이 대신 rune count — 한글 (multibyte) 페이지 다수라 byte 기준이면
+	// 같은 임계값에서 의도보다 훨씬 짧은 본문이 통과됨. 임계값은 글자 수 의미로 통일.
+	titleLen := utf8.RuneCountInString(page.Title)
+	bodyLen := utf8.RuneCountInString(page.MainContent)
 	titleShort := w.emptyBodyTitleMin > 0 && titleLen < w.emptyBodyTitleMin
 	bodyShort := w.emptyBodyContentMin > 0 && bodyLen < w.emptyBodyContentMin
 	if !titleShort && !bodyShort {
