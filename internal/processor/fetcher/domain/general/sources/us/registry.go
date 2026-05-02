@@ -44,7 +44,8 @@ func registerCNN(registry *handler.Registry, _ core.Config, rawSvc service.RawCo
 	brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg.CrawlerConfig)
 
 	crawler := general.NewGenericCrawler("cnn", cfg.CrawlerConfig.SourceInfo, gqFetcher, cfg.BaseURL, cfg.CrawlerConfig)
-	defaultChain, err := general.BuildChain(gqFetcher, brFetcher, log,
+	// 이슈 #218: DefaultChain = goquery only.
+	defaultChain, err := general.BuildChain(gqFetcher, nil, log,
 		"data-lazy-src", "lazyload", "data-lazy",
 	)
 	if err != nil {
