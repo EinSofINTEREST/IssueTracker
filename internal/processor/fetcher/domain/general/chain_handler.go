@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/fetcher/rule"
+	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -22,46 +25,115 @@ import (
 // consumer group) 의 책임으로 이전됨. 본 핸들러는 nil Content slice 를 반환하여 worker pool 의
 // publishNormalized 단계를 스킵하도록 함.
 //
+// host 단위 fetcher 정책 (이슈 #175 단계 1):
+//   - Resolver 가 nil 이거나 룰 미등록 host: DefaultChain 사용 (gq → browser fallback)
+//   - 룰 = 'chromedp': ChromedpChain 사용 (browser only) — goquery 시도 skip
+//   - 룰 = 'goquery':  DefaultChain 사용 (gq → browser fallback) — 현재로선 default 와 동일.
+//     단계 3 의 자동 downgrade 정책이 도입되면 GoQueryOnly chain 으로 분기 가능.
+//
 // 본 분리의 핵심 가치:
 //   - parser 가 무거워져도 (chromedp 가 큰 HTML 처리, LLM 호출 등) fetcher worker 슬롯 점유 X
 //   - parser worker 인스턴스 수를 fetcher 와 독립으로 스케일 가능
 //   - raw HTML 이 DB 에 보존되어 worker crash 시에도 복구 가능
 //   - 파싱 실패한 raw 가 잔존 → LLM 으로 새 rule 생성 (이슈 #149) 후 재처리 가능
 type ChainHandler struct {
-	Crawler  SourceCrawler
-	Chain    Handler
-	RawSvc   service.RawContentService
-	Producer queue.Producer
-	Log      *logger.Logger
+	Crawler       SourceCrawler
+	DefaultChain  Handler       // gq → browser (현재 동작 — 룰 미등록 host 의 기본)
+	ChromedpChain Handler       // browser only (룰 = chromedp 인 host 전용)
+	Resolver      rule.Resolver // optional. nil 이면 항상 DefaultChain 사용
+	RawSvc        service.RawContentService
+	Producer      queue.Producer
+	Log           *logger.Logger
 }
 
 // NewChainHandler 는 새 ChainHandler 를 생성합니다.
-// Chain / RawSvc / Producer / Log 모두 비-nil 필수.
+// DefaultChain / RawSvc / Producer / Log 모두 비-nil 필수.
+// ChromedpChain 이 nil 이면 룰 = 'chromedp' 매칭이어도 DefaultChain fallback (warn 로그).
+// Resolver 가 nil 이면 룰 조회 없이 항상 DefaultChain — 기존 동작 100% 보존.
 func NewChainHandler(
 	crawler SourceCrawler,
-	chain Handler,
+	defaultChain Handler,
+	chromedpChain Handler,
+	resolver rule.Resolver,
 	rawSvc service.RawContentService,
 	producer queue.Producer,
 	log *logger.Logger,
 ) *ChainHandler {
 	return &ChainHandler{
-		Crawler:  crawler,
-		Chain:    chain,
-		RawSvc:   rawSvc,
-		Producer: producer,
-		Log:      log,
+		Crawler:       crawler,
+		DefaultChain:  defaultChain,
+		ChromedpChain: chromedpChain,
+		Resolver:      resolver,
+		RawSvc:        rawSvc,
+		Producer:      producer,
+		Log:           log,
 	}
+}
+
+// selectChain 은 host 단위 fetcher 룰을 조회하여 사용할 chain 을 결정합니다.
+//
+// Resolver 가 nil 이거나 host 추출 실패 또는 룰 조회 실패 시 DefaultChain 으로 fallback —
+// fetcher 정책이 부분적으로 망가져도 fetch 자체는 계속 진행 (graceful degrade).
+//
+// chain 선택 외에 룰 결과를 로그에 남겨 운영 가시성 확보.
+func (h *ChainHandler) selectChain(ctx context.Context, job *core.CrawlJob) Handler {
+	if h.Resolver == nil {
+		return h.DefaultChain
+	}
+	host := extractHost(job.Target.URL)
+	if host == "" {
+		return h.DefaultChain
+	}
+	res, err := h.Resolver.Resolve(ctx, host)
+	if err != nil {
+		h.Log.WithFields(map[string]interface{}{
+			"url":  job.Target.URL,
+			"host": host,
+		}).WithError(err).Warn("fetcher rule resolve failed, falling back to default chain")
+		return h.DefaultChain
+	}
+	if !res.Found {
+		return h.DefaultChain
+	}
+	if res.Fetcher == storage.FetcherChromedp {
+		if h.ChromedpChain == nil {
+			h.Log.WithFields(map[string]interface{}{
+				"url":  job.Target.URL,
+				"host": host,
+			}).Warn("rule selected chromedp but no ChromedpChain wired, using default chain")
+			return h.DefaultChain
+		}
+		h.Log.WithFields(map[string]interface{}{
+			"url":     job.Target.URL,
+			"host":    host,
+			"fetcher": string(res.Fetcher),
+		}).Debug("fetcher rule applied")
+		return h.ChromedpChain
+	}
+	// FetcherGoQuery — 현재는 DefaultChain 과 동작이 같음. 단계 3 자동 downgrade 도입 시 분기.
+	return h.DefaultChain
+}
+
+// extractHost 는 URL 에서 host 만 뽑습니다 (port 제거 포함).
+// 파싱 실패 시 빈 문자열 — 호출자가 default chain 으로 fallback 분기.
+func extractHost(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // Handle 은 chain 통과로 raw HTML 을 fetch 하고 raw_contents 저장 + RawContentRef 발행을 수행합니다.
 //
 // 항상 nil Content slice 를 반환 — 파싱은 parser worker 가 TopicFetched 를 consume 하여 처리.
 func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
-	if h.Chain == nil || h.Log == nil || h.RawSvc == nil || h.Producer == nil {
+	if h.DefaultChain == nil || h.Log == nil || h.RawSvc == nil || h.Producer == nil {
 		return nil, fmt.Errorf("chain handler is not properly initialized")
 	}
 
-	raw, err := h.Chain.Handle(ctx, job)
+	chain := h.selectChain(ctx, job)
+	raw, err := chain.Handle(ctx, job)
 	if err != nil {
 		return nil, err
 	}
