@@ -53,10 +53,17 @@ func NewChromedpJobHandler(registry *handler.Registry, sem Semaphore, log *logge
 //
 // Semaphore Acquire 가 ctx 만료로 실패하면 ctx.Err 반환 — KafkaConsumerPool 이 재시도 정책 적용.
 func (h *ChromedpJobHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
+	if job == nil {
+		return nil, errors.New("chromedp handler received nil job")
+	}
 	if err := h.sem.Acquire(ctx); err != nil {
 		return nil, fmt.Errorf("chromedp semaphore acquire: %w", err)
 	}
-	defer h.sem.Release()
+	defer func() {
+		if relErr := h.sem.Release(); relErr != nil && h.log != nil {
+			h.log.WithError(relErr).Warn("chromedp semaphore release contract violation (non-fatal)")
+		}
+	}()
 
 	regHandler, ok := h.registry.Lookup(job.CrawlerName)
 	if !ok {

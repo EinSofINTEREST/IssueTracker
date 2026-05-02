@@ -195,10 +195,17 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 		return nil, fmt.Errorf("chain returned nil raw content for %s", job.Target.URL)
 	}
 
-	// raw_contents 저장 (중복 시 기존 ID 재사용 — RawContentService 책임)
+	return nil, h.processFetchedRaw(ctx, job, raw, "default")
+}
+
+// processFetchedRaw 는 fetch 된 raw 를 raw_contents 에 저장하고 RawContentRef 를 TopicFetched 에
+// 발행하는 공통 흐름입니다 (gemini 피드백 — Handle / HandleChromedpOnly 중복 추출).
+//
+// pool 인자는 로그 차원의 식별자 ("default" / "chromedp") — 운영 가시성용.
+func (h *ChainHandler) processFetchedRaw(ctx context.Context, job *core.CrawlJob, raw *core.RawContent, pool string) error {
 	rawID, dup, err := h.RawSvc.Store(ctx, raw)
 	if err != nil {
-		return nil, fmt.Errorf("store raw content for %s: %w", job.Target.URL, err)
+		return fmt.Errorf("store raw content for %s: %w", job.Target.URL, err)
 	}
 	if dup {
 		// 동일 URL 의 이전 raw 가 이미 존재 — 새 fetch 가 의미 없음 (parser 가 이전 raw 를 처리 중이거나 처리 완료).
@@ -208,11 +215,12 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 			"crawler":     job.CrawlerName,
 			"url":         raw.URL,
 			"existing_id": rawID,
+			"pool":        pool,
 		}).Debug("raw content already exists for url, republishing ref")
 	}
 
 	if err := h.publishFetchedRef(ctx, job, raw, rawID); err != nil {
-		return nil, fmt.Errorf("publish fetched ref for %s: %w", job.Target.URL, err)
+		return fmt.Errorf("publish fetched ref for %s: %w", job.Target.URL, err)
 	}
 
 	h.Log.WithFields(map[string]interface{}{
@@ -220,9 +228,9 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 		"url":         raw.URL,
 		"raw_id":      rawID,
 		"target_type": string(job.Target.Type),
+		"pool":        pool,
 	}).Debug("raw content stored, fetched ref published")
-
-	return nil, nil
+	return nil
 }
 
 // HandleChromedpOnly 는 ChromedpChain 만 호출하여 chromedp 단독 fetch 를 수행합니다 (이슈 #218).
@@ -249,31 +257,7 @@ func (h *ChainHandler) HandleChromedpOnly(ctx context.Context, job *core.CrawlJo
 		return nil, fmt.Errorf("chromedp chain returned nil raw content for %s", job.Target.URL)
 	}
 
-	rawID, dup, err := h.RawSvc.Store(ctx, raw)
-	if err != nil {
-		return nil, fmt.Errorf("store raw content for %s: %w", job.Target.URL, err)
-	}
-	if dup {
-		h.Log.WithFields(map[string]interface{}{
-			"crawler":     job.CrawlerName,
-			"url":         raw.URL,
-			"existing_id": rawID,
-		}).Debug("raw content already exists for url, republishing ref")
-	}
-
-	if err := h.publishFetchedRef(ctx, job, raw, rawID); err != nil {
-		return nil, fmt.Errorf("publish fetched ref for %s: %w", job.Target.URL, err)
-	}
-
-	h.Log.WithFields(map[string]interface{}{
-		"crawler":     job.CrawlerName,
-		"url":         raw.URL,
-		"raw_id":      rawID,
-		"target_type": string(job.Target.Type),
-		"pool":        "chromedp",
-	}).Debug("raw content stored via chromedp pool, fetched ref published")
-
-	return nil, nil
+	return nil, h.processFetchedRaw(ctx, job, raw, "chromedp")
 }
 
 // republishToChromedpQueue 는 본 job 을 TopicCrawlChromedp 로 다시 발행합니다 (이슈 #218).

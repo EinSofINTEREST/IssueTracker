@@ -278,8 +278,12 @@ func LoadPathInfer(envFiles ...string) (PathInferConfig, error) {
 // 직전에 Semaphore.Acquire 로 Chrome 인스턴스의 동시 navigation 수를 제한해 ResourceScheduler
 // 큐 고갈 (ERR_INSUFFICIENT_RESOURCES) 을 차단.
 type FetcherChromedpPoolConfig struct {
-	// Enabled: false 면 chromedp pool 미기동 — 기존 흐름 (chromedp 호출이 goquery worker 안에서
-	// 발생) 유지. 환경변수 FETCHER_CHROMEDP_POOL_ENABLED (default true).
+	// Enabled: false 면 chromedp pool 미기동. **주의**: goquery worker 의 ChainHandler 가 lazy
+	// detect / chromedp 룰 / force_fetcher 분기에서 항상 TopicCrawlChromedp 로 republish 하므로
+	// pool 미기동 상태에서는 그 메시지가 처리되지 않고 누적된다 — main.go 가 fail-fast.
+	// 운영자가 chromedp 처리를 진정으로 비활성화하려면 chain_handler 의 republish 분기도 함께
+	// fork 해야 함 (별도 PR).
+	// 환경변수 FETCHER_CHROMEDP_POOL_ENABLED (default true).
 	Enabled bool
 
 	// WorkerCount: chromedp pool 의 worker goroutine 수.

@@ -111,13 +111,12 @@ func TestSemaphore_Acquire_ContextCanceled_ReturnsError(t *testing.T) {
 	s.Release()
 }
 
-// TestSemaphore_Release_WithoutAcquire_Panics:
-// 매칭 Acquire 없이 Release 호출 시 panic — 호출자 contract 위반 조기 발견.
-func TestSemaphore_Release_WithoutAcquire_Panics(t *testing.T) {
+// TestSemaphore_Release_WithoutAcquire_ReturnsError:
+// 매칭 Acquire 없이 Release 호출 시 ErrReleaseWithoutAcquire — production panic 금지 (이슈 #208).
+func TestSemaphore_Release_WithoutAcquire_ReturnsError(t *testing.T) {
 	s, err := worker.NewSemaphore(2)
 	require.NoError(t, err)
 
-	assert.Panics(t, func() {
-		s.Release()
-	})
+	err = s.Release()
+	assert.ErrorIs(t, err, worker.ErrReleaseWithoutAcquire)
 }

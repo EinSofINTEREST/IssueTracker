@@ -262,7 +262,10 @@ func main() {
 			"semaphore_capacity": chromedpPoolCfg.SemaphoreCapacity,
 		}).Info("chromedp pool wiring enabled")
 	} else {
-		log.Info("chromedp pool disabled (FETCHER_CHROMEDP_POOL_ENABLED=false), republished jobs will accumulate")
+		// 이슈 #218 (CodeRabbit 피드백): goquery worker 의 ChainHandler 가 lazy detect / chromedp
+		// 룰 / force_fetcher 분기에서 항상 TopicCrawlChromedp 로 republish 함. consumer 가 없으면
+		// 메시지가 영구 누적되어 운영 장애로 이어짐 — fail-fast 로 운영자가 명시적 의사결정 강제.
+		log.Fatal("chromedp pool disabled (FETCHER_CHROMEDP_POOL_ENABLED=false) but goquery republish path is unconditional — enable pool or fork republish behavior in chain_handler")
 	}
 
 	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, contentSvc, resolver, log)

@@ -18,11 +18,19 @@ type Semaphore interface {
 	Acquire(ctx context.Context) error
 
 	// Release 는 슬롯 1개를 반납합니다. Acquire 와 1:1 매핑.
-	Release()
+	// 매칭 Acquire 없이 호출 시 ErrReleaseWithoutAcquire — 호출자가 contract 위반을 log/audit.
+	// (production panic 금지 정책 — 이슈 #208 / 04-error-handling.md.)
+	Release() error
 
 	// Capacity 는 동시 보유 가능한 최대 슬롯 수를 반환합니다.
 	Capacity() int
 }
+
+// ErrReleaseWithoutAcquire 는 Release() 가 매칭 Acquire 없이 호출됐을 때 반환됩니다.
+//
+// production panic 금지 (이슈 #208) 에 따라 panic 대신 sentinel error — 호출자가 sentry / log 로
+// contract 위반 알림. 정상 흐름에서는 발생 안 함 (defer Release 패턴 사용).
+var ErrReleaseWithoutAcquire = errors.New("worker: Semaphore.Release called without matching Acquire")
 
 // chanSemaphore 는 buffered channel 기반 Semaphore 구현입니다.
 type chanSemaphore struct {
@@ -55,13 +63,14 @@ func (s *chanSemaphore) Acquire(ctx context.Context) error {
 
 // Release 는 슬롯 1개를 반납합니다 (Acquire 후 1:1 매핑).
 //
-// 슬롯 반납 시 점유 중이지 않으면 panic — 호출자가 Acquire 와 1:1 매칭 보장 책임.
-// (Go 의 nil send-on-closed-channel 같은 panic 보다 일찍 발견 가능.)
-func (s *chanSemaphore) Release() {
+// 매칭 Acquire 없이 호출되면 ErrReleaseWithoutAcquire 반환 — 호출자가 log 로 contract 위반
+// 알림. production panic 금지 (이슈 #208) 에 따라 panic 대신 error.
+func (s *chanSemaphore) Release() error {
 	select {
 	case <-s.slots:
+		return nil
 	default:
-		panic("worker: Semaphore.Release called without matching Acquire")
+		return ErrReleaseWithoutAcquire
 	}
 }
 
