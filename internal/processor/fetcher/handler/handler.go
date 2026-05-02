@@ -56,6 +56,18 @@ func (r *Registry) Register(name string, h Handler) {
 	r.handlers[name] = h
 }
 
+// Lookup 은 crawler name 으로 등록된 Handler 를 반환합니다.
+//
+// Lookup returns the registered Handler for crawler name. ok=false 면 미등록 — 호출자는
+// fallback (예: 별도 에러 처리) 결정. Handle 과 달리 noop fallback 자동 적용 안 함.
+//
+// 이슈 #218: ChromedpJobHandler 가 Registry 에서 *ChainHandler 를 직접 가져와
+// HandleChromedpOnly 호출하기 위해 사용.
+func (r *Registry) Lookup(name string) (Handler, bool) {
+	h, ok := r.handlers[name]
+	return h, ok
+}
+
 // Handle은 job.CrawlerName에 등록된 Handler를 찾아 실행합니다.
 // 등록된 Handler가 없으면 noop fallback을 실행합니다.
 //

@@ -225,6 +225,57 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 	return nil, nil
 }
 
+// HandleChromedpOnly 는 ChromedpChain 만 호출하여 chromedp 단독 fetch 를 수행합니다 (이슈 #218).
+//
+// chromedp pool 의 ChromedpJobHandler 가 같은 ChainHandler 인스턴스를 Registry 에서 lookup 하여
+// 본 메소드 호출 — Resolver / force_fetcher / republish 분기 skip 하고 ChromedpChain 직접 호출.
+// 그 외 처리 흐름 (raw_contents 저장 + RawContentRef publish) 은 일반 Handle 과 동일.
+//
+// ChromedpChain 미wiring 사이트 (예: yonhap) 에 대해서는 정의상 chromedp pool 이 큐 메시지를
+// 받지 않아야 하지만, 안전장치로 nil 일 때 graceful error.
+func (h *ChainHandler) HandleChromedpOnly(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
+	if h.Log == nil || h.RawSvc == nil || h.Producer == nil {
+		return nil, fmt.Errorf("chain handler is not properly initialized")
+	}
+	if h.ChromedpChain == nil {
+		return nil, fmt.Errorf("crawler %s has no chromedp chain wired", job.CrawlerName)
+	}
+
+	raw, err := h.ChromedpChain.Handle(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("chromedp chain returned nil raw content for %s", job.Target.URL)
+	}
+
+	rawID, dup, err := h.RawSvc.Store(ctx, raw)
+	if err != nil {
+		return nil, fmt.Errorf("store raw content for %s: %w", job.Target.URL, err)
+	}
+	if dup {
+		h.Log.WithFields(map[string]interface{}{
+			"crawler":     job.CrawlerName,
+			"url":         raw.URL,
+			"existing_id": rawID,
+		}).Debug("raw content already exists for url, republishing ref")
+	}
+
+	if err := h.publishFetchedRef(ctx, job, raw, rawID); err != nil {
+		return nil, fmt.Errorf("publish fetched ref for %s: %w", job.Target.URL, err)
+	}
+
+	h.Log.WithFields(map[string]interface{}{
+		"crawler":     job.CrawlerName,
+		"url":         raw.URL,
+		"raw_id":      rawID,
+		"target_type": string(job.Target.Type),
+		"pool":        "chromedp",
+	}).Debug("raw content stored via chromedp pool, fetched ref published")
+
+	return nil, nil
+}
+
 // republishToChromedpQueue 는 본 job 을 TopicCrawlChromedp 로 다시 발행합니다 (이슈 #218).
 //
 // chromedp 처리 책임을 본 worker (goquery pool) 에서 분리 — 별도 chromedp worker pool 이 receive

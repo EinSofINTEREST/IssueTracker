@@ -33,12 +33,22 @@ type PoolConfig struct {
 //
 // URL dedup 은 이슈 #178 의 Ingestion Lock (Publisher 단) 으로 단일화 — worker 측 별도 cache 없음.
 // 단계별 worker 간 동시처리 차단은 ProcessingLock 으로 일원화 (구 JobLocker 의 명칭 변경).
+//
+// 이슈 #218: Chromedp 필드는 chromedp 전용 worker pool 의 PoolConfig + ChromedpHandler.
+// nil 이면 chromedp pool 미기동 (fetcher pool split 비활성 — 기존 동작 유지). Consumer 와
+// Handler 둘 다 non-nil 이어야 wiring 됨.
 type ManagerConfig struct {
 	High           PoolConfig
 	Normal         PoolConfig
 	Low            PoolConfig
 	ProcessingLock locks.ProcessingLock
 	RetryScheduler RetryScheduler
+
+	// Chromedp 는 chromedp 전용 pool 의 Consumer + WorkerCount.
+	// Consumer.nil 이면 chromedp pool 비활성.
+	Chromedp PoolConfig
+	// ChromedpHandler 는 chromedp pool 의 JobHandler. nil 이면 chromedp pool 비활성.
+	ChromedpHandler JobHandler
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -61,6 +71,9 @@ type PoolManager struct {
 	producer queue.Producer
 	resolver PriorityResolver
 	log      *logger.Logger
+
+	// chromedpPool 은 chromedp 전용 worker pool (이슈 #218). nil 이면 비활성.
+	chromedpPool *KafkaConsumerPool
 }
 
 // NewPoolManager는 설정에 따라 우선순위별 KafkaConsumerPool을 생성하고 PoolManager를 반환합니다.
@@ -99,7 +112,7 @@ func NewPoolManager(
 		return pool
 	}
 
-	return &PoolManager{
+	mgr := &PoolManager{
 		pools: map[core.Priority]*KafkaConsumerPool{
 			core.PriorityHigh:   newPool(cfg.High, "high"),
 			core.PriorityNormal: newPool(cfg.Normal, "normal"),
@@ -109,6 +122,21 @@ func NewPoolManager(
 		resolver: resolver,
 		log:      log,
 	}
+
+	// 이슈 #218: chromedp 전용 pool wiring (Consumer + Handler 둘 다 있을 때만 활성).
+	if cfg.Chromedp.Consumer != nil && cfg.ChromedpHandler != nil {
+		chromedpPool := NewKafkaConsumerPoolWithOptions(
+			cfg.Chromedp.Consumer, producer, cfg.ChromedpHandler, contentSvc, cfg.Chromedp.WorkerCount,
+			cbRegistry, procLock,
+		)
+		chromedpPool.SetPriority("chromedp")
+		if cfg.RetryScheduler != nil {
+			chromedpPool.SetRetryScheduler(cfg.RetryScheduler)
+		}
+		mgr.chromedpPool = chromedpPool
+	}
+
+	return mgr
 }
 
 // Publish는 CrawlJob을 PriorityResolver로 우선순위를 결정한 후 해당 Kafka crawl 토픽에 발행합니다.
@@ -148,6 +176,7 @@ func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 }
 
 // Start는 high/normal/low 모든 Pool의 goroutine을 시작합니다.
+// chromedp pool 이 wiring 되어 있으면 함께 시작 (이슈 #218).
 func (m *PoolManager) Start(ctx context.Context) {
 	// 우선순위 순서대로 시작 (로그 가독성)
 	for _, p := range []core.Priority{core.PriorityHigh, core.PriorityNormal, core.PriorityLow} {
@@ -157,12 +186,20 @@ func (m *PoolManager) Start(ctx context.Context) {
 		}).Info("starting worker pool")
 		m.pools[p].Start(ctx)
 	}
+	if m.chromedpPool != nil {
+		m.log.WithFields(map[string]interface{}{
+			"priority":     "chromedp",
+			"worker_count": m.chromedpPool.workerCount,
+		}).Info("starting worker pool")
+		m.chromedpPool.Start(ctx)
+	}
 }
 
 // Stop은 모든 Pool을 동시에 graceful shutdown합니다.
 //
 // Stop stops all pools concurrently so they drain in parallel within the
 // shared context timeout. 첫 번째로 발생한 에러를 반환하며 나머지 Pool 종료도 계속 시도합니다.
+// chromedp pool 이 wiring 되어 있으면 함께 종료 (이슈 #218).
 func (m *PoolManager) Stop(ctx context.Context) error {
 	var (
 		mu       sync.Mutex
@@ -170,22 +207,25 @@ func (m *PoolManager) Stop(ctx context.Context) error {
 		wg       sync.WaitGroup
 	)
 
+	stopPool := func(name string, pool *KafkaConsumerPool) {
+		defer wg.Done()
+		if err := pool.Stop(ctx); err != nil {
+			m.log.WithField("pool", name).WithError(err).Error("pool stop error")
+			mu.Lock()
+			if firstErr == nil {
+				firstErr = err
+			}
+			mu.Unlock()
+		}
+	}
+
 	for p, pool := range m.pools {
 		wg.Add(1)
-		go func(priority core.Priority, pool *KafkaConsumerPool) {
-			defer wg.Done()
-			if err := pool.Stop(ctx); err != nil {
-				m.log.WithFields(map[string]interface{}{
-					"priority": priority,
-				}).WithError(err).Error("pool stop error")
-
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
-			}
-		}(p, pool)
+		go stopPool(fmt.Sprintf("priority_%d", p), pool)
+	}
+	if m.chromedpPool != nil {
+		wg.Add(1)
+		go stopPool("chromedp", m.chromedpPool)
 	}
 
 	wg.Wait()
