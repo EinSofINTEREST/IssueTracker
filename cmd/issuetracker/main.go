@@ -160,11 +160,23 @@ func main() {
 		log.WithError(err).Fatal("failed to init force_fetcher token")
 	}
 
+	// 이슈 #230: chromedp pool config 를 사이트 등록 전에 로드 — 사이트별 chromedp chain 이
+	// worker_id 별 RemoteURL 로 N 개 build 되어야 ChainHandler 가 worker:Chrome 1:1 매핑 활성화.
+	chromedpPoolCfg, err := config.LoadFetcherChromedpPool()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load fetcher chromedp pool config")
+	}
+	chromedpRemoteURLs := chromedpPoolCfg.RemoteURLs
+	if !chromedpPoolCfg.Enabled {
+		// pool 비활성 시 사이트 chromedp chain 도 미wiring — fail-fast 로직은 별도 분기 (아래).
+		chromedpRemoteURLs = nil
+	}
+
 	// fetcher 측 등록 (이슈 #134 분리 후): chain handler 가 raw_contents 저장 + RawContentRef 발행만 수행.
-	if err := kr.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, log); err != nil {
+	if err := kr.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
 		log.WithError(err).Fatal("failed to register kr crawlers")
 	}
-	if err := us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, log); err != nil {
+	if err := us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
 		log.WithError(err).Fatal("failed to register us crawlers")
 	}
 
@@ -235,10 +247,8 @@ func main() {
 	}
 
 	// 이슈 #218: chromedp 전용 worker pool — semaphore 로 Chrome 동시 호출 제한.
-	chromedpPoolCfg, err := config.LoadFetcherChromedpPool()
-	if err != nil {
-		log.WithError(err).Fatal("failed to load fetcher chromedp pool config")
-	}
+	// chromedpPoolCfg 는 사이트 등록 단계에서 미리 로드됨 (이슈 #230 — RemoteURLs 가 사이트
+	// chromedp chain build 에 필요).
 	if chromedpPoolCfg.Enabled {
 		chromedpKafkaCfg := queue.DefaultConfig()
 		chromedpKafkaCfg.GroupID = queue.GroupChromedpFetchers
