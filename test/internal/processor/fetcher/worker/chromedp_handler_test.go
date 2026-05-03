@@ -125,7 +125,7 @@ func TestChromedpJobHandler_PerWorkerSemaphores_AcquireOnlyAssignedSlot(t *testi
 
 	// worker 1 ctx 로 Handle 호출 — Registry 미등록이라 lookup 단계에서 실패하지만,
 	// 그 전에 sem1 은 정상 Acquire 후 Release 되어야 함.
-	ctx := worker.WithWorkerID(context.Background(), 1)
+	ctx := core.WithWorkerID(context.Background(), 1)
 	job := &core.CrawlJob{ID: "j1", CrawlerName: "missing", Target: core.Target{URL: "https://example.com"}}
 	_, err = h.Handle(ctx, job)
 	assert.Error(t, err) // unregistered → error
@@ -152,7 +152,7 @@ func TestChromedpJobHandler_OutOfRangeWorkerID_FallbackToSlot0(t *testing.T) {
 	require.NoError(t, err)
 
 	// worker_id=99 → sems 길이 1 → fallback to slot 0
-	ctx := worker.WithWorkerID(context.Background(), 99)
+	ctx := core.WithWorkerID(context.Background(), 99)
 	job := &core.CrawlJob{ID: "j1", CrawlerName: "missing", Target: core.Target{URL: "https://example.com"}}
 	_, err = h.Handle(ctx, job)
 	assert.Error(t, err) // unregistered → error

@@ -164,3 +164,34 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ─────────────────────────────────────────────────────────────
+  # Chrome (chromedp) – worker:Chrome 1:1 매핑 (이슈 #230)
+  #
+  # 단일 서비스 + scale 패턴: 운영자가 `docker compose up --scale chrome=N` 으로 N개 replica 기동.
+  # compose 가 자동으로 chrome-1, chrome-2, ..., chrome-N 호스트명 부여 (compose v2 + DNS 등록).
+  #
+  # 호스트 포트는 range 로 매핑 — N replica 까지 자동 할당 (default 9222-9229 = 8개까지).
+  # range 가 부족하면 .env 의 FETCHER_CHROMEDP_HOST_PORT_RANGE 로 확장 (예: 9222-9239).
+  #
+  # 앱 측 RemoteURLs 도 동기화: .env 의 FETCHER_CHROMEDP_REMOTE_URL_PATTERN 이 {n} placeholder 를
+  # 1..WorkerCount 로 치환하여 자동 생성 — WorkerCount 와 scale 만 일치시키면 됨.
+  #
+  # 운영 워크플로:
+  #   1. .env 의 FETCHER_CHROMEDP_WORKER_COUNT 조정
+  #   2. docker compose up -d --scale chrome=$WORKER_COUNT
+  #   (PATTERN 이 ws://chrome-{n}:9222 default 라 자동 매핑)
+  # ─────────────────────────────────────────────────────────────
+  chrome:
+    image: chromedp/headless-shell:latest
+    # container_name 은 scale 시 충돌 → 미설정. compose 가 <project>-chrome-{n} 형태로 자동 부여.
+    ports:
+      - "${FETCHER_CHROMEDP_HOST_PORT_RANGE:-9222-9229}:9222"
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9222/json/version > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+

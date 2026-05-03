@@ -375,7 +375,8 @@ func (p *KafkaConsumerPool) worker(ctx context.Context, workerID int) {
 
 	// 이슈 #229 — worker_id 를 ctx 에 첨부. ChromedpJobHandler 가 per-worker Semaphore
 	// 슬롯을 선택하는 데 사용. priority pool 에서는 handler 가 ID 를 무시.
-	ctx = WithWorkerID(ctx, workerID)
+	// 이슈 #230 — general.ChainHandler 의 chromedpChains slice lookup 에도 동일 키 재사용.
+	ctx = core.WithWorkerID(ctx, workerID)
 
 	log := logger.FromContext(ctx)
 
