@@ -508,3 +508,89 @@ func TestLoadPathInfer_InvalidZeroOrNegative(t *testing.T) {
 		})
 	}
 }
+
+// 이슈 #229 — chromedp pool config 테스트.
+// SemaphoreCapacity 의미가 글로벌 → per-worker 로 변경되었으며 default 가 4 → 2 로 조정됨.
+
+func unsetFetcherChromedpPoolEnvVars(t *testing.T) {
+	t.Helper()
+	vars := []string{
+		"FETCHER_CHROMEDP_POOL_ENABLED",
+		"FETCHER_CHROMEDP_WORKER_COUNT",
+		"FETCHER_CHROMEDP_SEMAPHORE_CAPACITY",
+	}
+	for _, v := range vars {
+		t.Setenv(v, "")
+	}
+}
+
+func TestLoadFetcherChromedpPool_DefaultValues(t *testing.T) {
+	unsetFetcherChromedpPoolEnvVars(t)
+
+	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("기본값 로드 실패: %v", err)
+	}
+
+	def := config.DefaultFetcherChromedpPoolConfig()
+	if cfg.Enabled != def.Enabled {
+		t.Errorf("Enabled: got %v, want %v", cfg.Enabled, def.Enabled)
+	}
+	if cfg.WorkerCount != def.WorkerCount {
+		t.Errorf("WorkerCount: got %d, want %d", cfg.WorkerCount, def.WorkerCount)
+	}
+	// 이슈 #229 — per-worker 의미 변경에 맞춰 default 2 로 낮춤.
+	if def.SemaphoreCapacity != 2 {
+		t.Errorf("DefaultFetcherChromedpPoolConfig.SemaphoreCapacity: got %d, want 2 (per-worker 의미 default)", def.SemaphoreCapacity)
+	}
+	if cfg.SemaphoreCapacity != def.SemaphoreCapacity {
+		t.Errorf("SemaphoreCapacity: got %d, want %d", cfg.SemaphoreCapacity, def.SemaphoreCapacity)
+	}
+}
+
+func TestLoadFetcherChromedpPool_EnvOverride(t *testing.T) {
+	unsetFetcherChromedpPoolEnvVars(t)
+	t.Setenv("FETCHER_CHROMEDP_POOL_ENABLED", "true")
+	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "4")
+	t.Setenv("FETCHER_CHROMEDP_SEMAPHORE_CAPACITY", "3")
+
+	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("환경변수 override 실패: %v", err)
+	}
+	if !cfg.Enabled {
+		t.Errorf("Enabled: got false, want true")
+	}
+	if cfg.WorkerCount != 4 {
+		t.Errorf("WorkerCount: got %d, want 4", cfg.WorkerCount)
+	}
+	if cfg.SemaphoreCapacity != 3 {
+		t.Errorf("SemaphoreCapacity: got %d, want 3", cfg.SemaphoreCapacity)
+	}
+}
+
+func TestLoadFetcherChromedpPool_InvalidWorkerCount(t *testing.T) {
+	for _, v := range []string{"0", "-1", "abc"} {
+		t.Run(v, func(t *testing.T) {
+			unsetFetcherChromedpPoolEnvVars(t)
+			t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", v)
+			_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+			if err == nil {
+				t.Fatalf("FETCHER_CHROMEDP_WORKER_COUNT=%q 는 거부되어야 함", v)
+			}
+		})
+	}
+}
+
+func TestLoadFetcherChromedpPool_InvalidSemaphoreCapacity(t *testing.T) {
+	for _, v := range []string{"0", "-1", "abc"} {
+		t.Run(v, func(t *testing.T) {
+			unsetFetcherChromedpPoolEnvVars(t)
+			t.Setenv("FETCHER_CHROMEDP_SEMAPHORE_CAPACITY", v)
+			_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+			if err == nil {
+				t.Fatalf("FETCHER_CHROMEDP_SEMAPHORE_CAPACITY=%q 는 거부되어야 함", v)
+			}
+		})
+	}
+}

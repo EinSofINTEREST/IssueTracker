@@ -277,6 +277,12 @@ func LoadPathInfer(envFiles ...string) (PathInferConfig, error) {
 // goquery worker pool 과 분리된 별도 Kafka consumer group 을 운영하며, worker 의 chromedp 호출
 // 직전에 Semaphore.Acquire 로 Chrome 인스턴스의 동시 navigation 수를 제한해 ResourceScheduler
 // 큐 고갈 (ERR_INSUFFICIENT_RESOURCES) 을 차단.
+//
+// 이슈 #229 — Semaphore 의미 변경:
+// PR #227 의 글로벌 Semaphore 1 개 (전체 worker 공유) 모델에서, worker_id 별 Semaphore 1 개
+// (per-worker capacity) 로 분리. SemaphoreCapacity 는 한 worker 가 같은 Chrome 에 동시 띄울
+// tab 수 — 다음 sub-issue (#230) 에서 RemoteURL 매핑까지 N 개로 확장하면 worker:Chrome 1:1
+// 모델 활성화.
 type FetcherChromedpPoolConfig struct {
 	// Enabled: false 면 chromedp pool 미기동. **주의**: goquery worker 의 ChainHandler 가 lazy
 	// detect / chromedp 룰 / force_fetcher 분기에서 항상 TopicCrawlChromedp 로 republish 하므로
@@ -290,17 +296,25 @@ type FetcherChromedpPoolConfig struct {
 	// 환경변수 FETCHER_CHROMEDP_WORKER_COUNT (default 2).
 	WorkerCount int
 
-	// SemaphoreCapacity: 동시 chromedp 호출 수 상한 — Chrome URLLoader 한계 (보통 30 미만) 의
-	// 안전 마진. 환경변수 FETCHER_CHROMEDP_SEMAPHORE_CAPACITY (default 4).
+	// SemaphoreCapacity: per-worker 동시 chromedp 호출 수 상한 (이슈 #229).
+	// 의미: 한 worker 가 자기 전용 Chrome 에 동시 띄울 tab 수.
+	// 글로벌 capacity 가 아님 — 전체 동시성은 WorkerCount × SemaphoreCapacity.
+	// Chrome URLLoader 한계 (보통 6 미만 권장) 안에서 운영 튜닝.
+	// 환경변수 FETCHER_CHROMEDP_SEMAPHORE_CAPACITY (default 2).
 	SemaphoreCapacity int
 }
 
 // DefaultFetcherChromedpPoolConfig 는 기본 FetcherChromedpPoolConfig 를 반환합니다.
+//
+// 이슈 #229 — default 재조정:
+// SemaphoreCapacity 의미가 글로벌 → per-worker 로 변경되었으므로 기본값을 4 → 2 로 낮춤.
+// 기존 운영자가 환경변수로 4 를 명시했다면 worker 당 4 tab → worker 2 × 4 = 8 tab 동시
+// 호출이 됨 — 명시적 의사결정으로 처리. default 운영자는 4 → 2 × 2 = 4 tab 으로 동일 수준.
 func DefaultFetcherChromedpPoolConfig() FetcherChromedpPoolConfig {
 	return FetcherChromedpPoolConfig{
 		Enabled:           true,
 		WorkerCount:       2,
-		SemaphoreCapacity: 4,
+		SemaphoreCapacity: 2,
 	}
 }
 
@@ -309,7 +323,7 @@ func DefaultFetcherChromedpPoolConfig() FetcherChromedpPoolConfig {
 // 지원 환경변수:
 //   - FETCHER_CHROMEDP_POOL_ENABLED: true | false (default true)
 //   - FETCHER_CHROMEDP_WORKER_COUNT: 양의 정수 (default 2)
-//   - FETCHER_CHROMEDP_SEMAPHORE_CAPACITY: 양의 정수 (default 4)
+//   - FETCHER_CHROMEDP_SEMAPHORE_CAPACITY: 양의 정수, per-worker (default 2)
 func LoadFetcherChromedpPool(envFiles ...string) (FetcherChromedpPoolConfig, error) {
 	if len(envFiles) == 0 {
 		envFiles = []string{".env"}

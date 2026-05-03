@@ -245,11 +245,18 @@ func main() {
 		chromedpConsumer := queue.NewConsumer(chromedpKafkaCfg, queue.TopicCrawlChromedp)
 		defer chromedpConsumer.Close()
 
-		sem, err := crawlerWorker.NewSemaphore(chromedpPoolCfg.SemaphoreCapacity)
-		if err != nil {
-			log.WithError(err).Fatal("failed to construct chromedp semaphore")
+		// 이슈 #229: per-worker Semaphore 모델 — worker_id 별 1 개씩, 길이 = WorkerCount.
+		// 한 worker 가 자기 전용 Chrome 에 동시 띄울 tab 수만 제한 (글로벌이 아님).
+		// 다음 sub-issue (#230) 에서 worker_id 별 RemoteURL 까지 매핑하면 1:1 활성화.
+		sems := make([]crawlerWorker.Semaphore, chromedpPoolCfg.WorkerCount)
+		for i := 0; i < chromedpPoolCfg.WorkerCount; i++ {
+			sem, semErr := crawlerWorker.NewSemaphore(chromedpPoolCfg.SemaphoreCapacity)
+			if semErr != nil {
+				log.WithError(semErr).Fatal("failed to construct chromedp semaphore")
+			}
+			sems[i] = sem
 		}
-		chromedpHandler, err := crawlerWorker.NewChromedpJobHandler(registry, sem, log)
+		chromedpHandler, err := crawlerWorker.NewChromedpJobHandler(registry, sems, log)
 		if err != nil {
 			log.WithError(err).Fatal("failed to construct chromedp job handler")
 		}
@@ -258,9 +265,9 @@ func main() {
 		managerCfg.ChromedpHandler = chromedpHandler
 
 		log.WithFields(map[string]interface{}{
-			"worker_count":       chromedpPoolCfg.WorkerCount,
-			"semaphore_capacity": chromedpPoolCfg.SemaphoreCapacity,
-		}).Info("chromedp pool wiring enabled")
+			"worker_count":                  chromedpPoolCfg.WorkerCount,
+			"per_worker_semaphore_capacity": chromedpPoolCfg.SemaphoreCapacity,
+		}).Info("chromedp pool wiring enabled (per-worker semaphores)")
 	} else {
 		// 이슈 #218 (CodeRabbit 피드백): goquery worker 의 ChainHandler 가 lazy detect / chromedp
 		// 룰 / force_fetcher 분기에서 항상 TopicCrawlChromedp 로 republish 함. consumer 가 없으면
