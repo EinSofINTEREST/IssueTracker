@@ -10,13 +10,9 @@
 #   Bug      → IT_kwDODsDQh84By0ja
 #   Task     → IT_kwDODsDQh84By0jZ
 #
-# Issue prefix → label / type 매핑 (07-workflow.md 규약 6):
-#   [FEATURE]  → enhancement  / Feature
-#   [FIX]      → bug          / Bug
-#   [HOTFIX]   → bug + hotfix / Bug
-#   [REFACTOR] → refactor     / Task
-#   [CHORE]    → chore        / Task
-#   [DOCS]     → documentation / Task
+# prefix → label / type 매핑 (07-workflow.md 규약 6):
+#   이슈 title:  [FEATURE] / [FIX] / [HOTFIX] / [REFACTOR] / [CHORE] / [DOCS]
+#   PR title:   [FEAT#N]  / [FIX#N] 등 — prefix 부분([A-Z]+)만 추출해 매핑
 
 set -euo pipefail
 
@@ -32,18 +28,20 @@ usage() {
 }
 
 # prefix → (label, type_id) 반환
+# 이슈 [FEATURE] 와 PR [FEAT#N] 양쪽을 모두 처리 (gemini 피드백 반영 — PR #239)
 resolve_label_and_type() {
   local title="$1"
   local prefix
-  prefix=$(echo "$title" | grep -oP '^\[[A-Z]+\]' || true)
+  # [FEATURE], [FEAT#123] 등에서 대괄호 안의 알파벳 부분만 추출
+  prefix=$(echo "$title" | grep -oP '^\[\K[A-Z]+(?=#|\])' || true)
 
   case "$prefix" in
-    "[FEATURE]")  echo "enhancement $FEATURE_TYPE_ID" ;;
-    "[FIX]")      echo "bug $BUG_TYPE_ID" ;;
-    "[HOTFIX]")   echo "bug+hotfix $BUG_TYPE_ID" ;;
-    "[REFACTOR]") echo "refactor $TASK_TYPE_ID" ;;
-    "[CHORE]")    echo "chore $TASK_TYPE_ID" ;;
-    "[DOCS]")     echo "documentation $TASK_TYPE_ID" ;;
+    FEATURE|FEAT)    echo "enhancement $FEATURE_TYPE_ID" ;;
+    FIX)             echo "bug $BUG_TYPE_ID" ;;
+    HOTFIX)          echo "bug+hotfix $BUG_TYPE_ID" ;;
+    REFACTOR|REFAC)  echo "refactor $TASK_TYPE_ID" ;;
+    CHORE)           echo "chore $TASK_TYPE_ID" ;;
+    DOCS)            echo "documentation $TASK_TYPE_ID" ;;
     *)
       echo "ERROR: unrecognized prefix '$prefix' in title: $title" >&2
       exit 1
@@ -62,16 +60,9 @@ apply_issue_label_and_type() {
   local label="${meta%% *}"
   local type_id="${meta##* }"
 
-  # label 적용 (복수 label 지원 — hotfix 경우 bug+hotfix)
-  if [[ "$label" == *"+"* ]]; then
-    local l1="${label%%+*}"
-    local l2="${label##*+}"
-    gh issue edit "$number" --repo "$REPO" --add-label "$l1" --add-label "$l2"
-    echo "  label: $l1, $l2"
-  else
-    gh issue edit "$number" --repo "$REPO" --add-label "$label"
-    echo "  label: $label"
-  fi
+  # label 적용 — +를 ,로 변환해 한 번에 전달 (gemini 피드백 반영 — PR #239)
+  gh issue edit "$number" --repo "$REPO" --add-label "${label//+/,}"
+  echo "  label: ${label//+/,}"
 
   # Issue Type 적용
   local issue_id
@@ -91,10 +82,10 @@ apply_pr_label() {
   pr_title=$(gh pr view "$number" --repo "$REPO" --json title --jq .title)
   echo "PR #$number: $pr_title"
 
-  # PR 이 닫는 이슈 번호 추출 (Closes #N)
+  # PR 이 닫는 이슈 번호 추출 — closingIssuesReferences 활용 (gemini 피드백 반영 — PR #239)
   local closing_issue
-  closing_issue=$(gh pr view "$number" --repo "$REPO" --json body --jq '.body' \
-    | grep -oiP '(?:closes|fixes|resolves)\s+#\K[0-9]+' | head -1 || true)
+  closing_issue=$(gh pr view "$number" --repo "$REPO" \
+    --json closingIssuesReferences --jq '.closingIssuesReferences[0].number // empty')
 
   local label
   if [[ -n "$closing_issue" ]]; then
@@ -112,15 +103,9 @@ apply_pr_label() {
     label="${meta%% *}"
   fi
 
-  if [[ "$label" == *"+"* ]]; then
-    local l1="${label%%+*}"
-    local l2="${label##*+}"
-    gh pr edit "$number" --repo "$REPO" --add-label "$l1" --add-label "$l2"
-    echo "  label: $l1, $l2"
-  else
-    gh pr edit "$number" --repo "$REPO" --add-label "$label"
-    echo "  label: $label"
-  fi
+  # label 적용 — +를 ,로 변환해 한 번에 전달 (gemini 피드백 반영 — PR #239)
+  gh pr edit "$number" --repo "$REPO" --add-label "${label//+/,}"
+  echo "  label: ${label//+/,}"
 }
 
 [[ $# -lt 2 ]] && usage
