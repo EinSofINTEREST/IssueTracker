@@ -55,7 +55,9 @@ func buildChromedpChainsForCNN(
 		brFetcher := fetcher.NewBrowserFetcher(cdpCrawler, cfg)
 		chain, err := general.BuildChain(nil, brFetcher, log)
 		if err != nil {
-			return nil, fmt.Errorf("cnn chromedp chain wiring (worker_id=%d, remote_url=%s): %w", i, url, err)
+			// CodeRabbit 피드백: error message 에 RemoteURL 포함 시 ws://user:pass@... 같은
+			// 인증 토큰이 로그에 누출. worker_id 만으로 triage 충분.
+			return nil, fmt.Errorf("cnn chromedp chain wiring (worker_id=%d): %w", i, err)
 		}
 		chains[i] = chain
 	}
