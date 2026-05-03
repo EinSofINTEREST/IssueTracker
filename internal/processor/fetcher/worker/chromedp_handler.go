@@ -15,15 +15,20 @@ import (
 //
 // 책임:
 //
-//  1. worker_id 별 Semaphore.Acquire — 같은 Chrome 인스턴스에 동시 띄울 tab 수 제한
+//  1. worker_id 별 Semaphore.Acquire — worker 자원 격리 guard
 //  2. handler.Registry 에서 crawler_name 으로 ChainHandler lookup
 //  3. ChainHandler.HandleChromedpOnly 호출 — ChromedpChain 으로 raw fetch + 저장 + RawContentRef publish
 //  4. Semaphore.Release (defer)
 //
-// 이슈 #229 — per-worker Semaphore 모델:
+// 이슈 #229 — per-worker Semaphore 모델 + 실효 동시성 정정 (gemini 피드백):
 // 글로벌 Semaphore 1 개를 모든 worker 가 공유하던 PR #227 의 모델을, worker_id 별 Semaphore
-// 1 개로 분리. 한 worker 가 자기 전용 Chrome 에 동시 띄울 tab 수만 제한 — 이후 sub-issue
-// #230 에서 RemoteURL 매핑까지 N 개로 확장하면 worker:Chrome 1:1 활성화.
+// 1 개로 분리. **단, KafkaConsumerPool 의 worker goroutine 은 메시지를 순차 처리** 하므로 같은
+// worker 가 동시 2 개 이상의 Handle 을 호출할 수 없음 → per-worker Semaphore 의 capacity > 1 은
+// 현 모델에서 추가 동시성 이득 없음 (default 1 권장).
+//
+// 본 핸들러의 Semaphore 는 처리량 throttle 이 아닌 worker 자원 격리 guard 역할 — 다음 sub-issue
+// #230 에서 worker_id 별 Chrome RemoteURL 까지 매핑하면 worker:Chrome 1:1 활성화. 처리량 조정은
+// WorkerCount + RemoteURLs 수로 수행.
 //
 // goquery worker pool 의 ChainHandler.republishToChromedpQueue 가 발행한 메시지가 본 핸들러로
 // 흐름.

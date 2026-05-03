@@ -539,9 +539,10 @@ func TestLoadFetcherChromedpPool_DefaultValues(t *testing.T) {
 	if cfg.WorkerCount != def.WorkerCount {
 		t.Errorf("WorkerCount: got %d, want %d", cfg.WorkerCount, def.WorkerCount)
 	}
-	// 이슈 #229 — per-worker 의미 변경에 맞춰 default 2 로 낮춤.
-	if def.SemaphoreCapacity != 2 {
-		t.Errorf("DefaultFetcherChromedpPoolConfig.SemaphoreCapacity: got %d, want 2 (per-worker 의미 default)", def.SemaphoreCapacity)
+	// 이슈 #229 — per-worker 의미 + KafkaConsumerPool 순차 처리 모델 정정 (gemini 피드백):
+	// capacity > 1 은 추가 동시성 이득 없으므로 default 1.
+	if def.SemaphoreCapacity != 1 {
+		t.Errorf("DefaultFetcherChromedpPoolConfig.SemaphoreCapacity: got %d, want 1 (per-worker, 1 이상 의미 없음)", def.SemaphoreCapacity)
 	}
 	if cfg.SemaphoreCapacity != def.SemaphoreCapacity {
 		t.Errorf("SemaphoreCapacity: got %d, want %d", cfg.SemaphoreCapacity, def.SemaphoreCapacity)

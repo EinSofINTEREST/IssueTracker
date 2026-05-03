@@ -246,8 +246,10 @@ func main() {
 		defer chromedpConsumer.Close()
 
 		// 이슈 #229: per-worker Semaphore 모델 — worker_id 별 1 개씩, 길이 = WorkerCount.
-		// 한 worker 가 자기 전용 Chrome 에 동시 띄울 tab 수만 제한 (글로벌이 아님).
-		// 다음 sub-issue (#230) 에서 worker_id 별 RemoteURL 까지 매핑하면 1:1 활성화.
+		// 본 Semaphore 는 worker 자원 격리 guard 역할 — KafkaConsumerPool 의 worker 는 메시지를
+		// 순차 처리하므로 capacity > 1 은 현 모델에서 추가 동시성 이득 없음 (gemini 피드백).
+		// 실질 전체 동시 navigate 수 = WorkerCount. 다음 sub-issue (#230) 에서 worker_id 별
+		// RemoteURL 까지 매핑하면 worker:Chrome 1:1 활성화.
 		sems := make([]crawlerWorker.Semaphore, chromedpPoolCfg.WorkerCount)
 		for i := 0; i < chromedpPoolCfg.WorkerCount; i++ {
 			sem, semErr := crawlerWorker.NewSemaphore(chromedpPoolCfg.SemaphoreCapacity)
@@ -267,7 +269,8 @@ func main() {
 		log.WithFields(map[string]interface{}{
 			"worker_count":                  chromedpPoolCfg.WorkerCount,
 			"per_worker_semaphore_capacity": chromedpPoolCfg.SemaphoreCapacity,
-		}).Info("chromedp pool wiring enabled (per-worker semaphores)")
+			"effective_concurrency":         chromedpPoolCfg.WorkerCount,
+		}).Info("chromedp pool wiring enabled (per-worker semaphores; effective concurrency = worker_count)")
 	} else {
 		// 이슈 #218 (CodeRabbit 피드백): goquery worker 의 ChainHandler 가 lazy detect / chromedp
 		// 룰 / force_fetcher 분기에서 항상 TopicCrawlChromedp 로 republish 함. consumer 가 없으면

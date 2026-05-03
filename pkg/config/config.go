@@ -278,11 +278,17 @@ func LoadPathInfer(envFiles ...string) (PathInferConfig, error) {
 // 직전에 Semaphore.Acquire 로 Chrome 인스턴스의 동시 navigation 수를 제한해 ResourceScheduler
 // 큐 고갈 (ERR_INSUFFICIENT_RESOURCES) 을 차단.
 //
-// 이슈 #229 — Semaphore 의미 변경:
-// PR #227 의 글로벌 Semaphore 1 개 (전체 worker 공유) 모델에서, worker_id 별 Semaphore 1 개
-// (per-worker capacity) 로 분리. SemaphoreCapacity 는 한 worker 가 같은 Chrome 에 동시 띄울
-// tab 수 — 다음 sub-issue (#230) 에서 RemoteURL 매핑까지 N 개로 확장하면 worker:Chrome 1:1
-// 모델 활성화.
+// 이슈 #229 — Semaphore 의미 변경 + 실효 동시성 정정 (gemini 피드백):
+// PR #227 의 글로벌 Semaphore 1 개 (전체 worker 공유) 모델에서, worker_id 별 Semaphore 1 개로
+// 분리. **단, KafkaConsumerPool 의 worker goroutine 은 jobs 채널에서 메시지를 1 개씩 꺼내
+// 순차 처리** 하므로 (pool.go 의 worker 루프 참조), 같은 worker 가 동시 2 개 이상의 Handle 을
+// 호출할 수 없음 → per-worker SemaphoreCapacity > 1 은 현 모델에서 추가 동시성 이득 없음.
+//
+// 실질 전체 동시성 = WorkerCount (NOT WorkerCount × SemaphoreCapacity).
+// SemaphoreCapacity > 1 옵션은 미래 worker-내 동시 분기 (예: 한 워커가 받은 메시지를 여러 tab
+// 으로 분할 처리) 시나리오 대비 보존 — 현 운영에서는 default 1 권장.
+//
+// 다음 sub-issue (#230) 에서 RemoteURL 매핑까지 N 개로 확장하면 worker:Chrome 1:1 모델 활성화.
 type FetcherChromedpPoolConfig struct {
 	// Enabled: false 면 chromedp pool 미기동. **주의**: goquery worker 의 ChainHandler 가 lazy
 	// detect / chromedp 룰 / force_fetcher 분기에서 항상 TopicCrawlChromedp 로 republish 하므로
@@ -293,28 +299,33 @@ type FetcherChromedpPoolConfig struct {
 	Enabled bool
 
 	// WorkerCount: chromedp pool 의 worker goroutine 수.
+	// **실질 전체 동시 navigate 수 = WorkerCount** (per-worker 순차 처리 모델). 처리량 튜닝의
+	// 단일 lever 이므로 운영 부하에 맞춰 조정 — sub-issue #230 머지 후에는 RemoteURLs 수와
+	// 일치시켜야 함 (worker:Chrome 1:1 매핑 보장).
 	// 환경변수 FETCHER_CHROMEDP_WORKER_COUNT (default 2).
 	WorkerCount int
 
-	// SemaphoreCapacity: per-worker 동시 chromedp 호출 수 상한 (이슈 #229).
-	// 의미: 한 worker 가 자기 전용 Chrome 에 동시 띄울 tab 수.
-	// 글로벌 capacity 가 아님 — 전체 동시성은 WorkerCount × SemaphoreCapacity.
-	// Chrome URLLoader 한계 (보통 6 미만 권장) 안에서 운영 튜닝.
-	// 환경변수 FETCHER_CHROMEDP_SEMAPHORE_CAPACITY (default 2).
+	// SemaphoreCapacity: per-worker Semaphore 슬롯 수 (이슈 #229).
+	// **현 KafkaConsumerPool 모델에서는 1 이상 의미 없음** — worker 가 메시지를 순차 처리하므로
+	// 같은 worker 의 동시 Acquire 가 발생하지 않음. 옵션은 미래 worker-내 동시 분기 시나리오
+	// (예: 한 worker 가 메시지 1건을 여러 sub-tab 으로 분할) 대비 보존.
+	// 운영 처리량 조정은 SemaphoreCapacity 가 아닌 WorkerCount 로 수행.
+	// 환경변수 FETCHER_CHROMEDP_SEMAPHORE_CAPACITY (default 1).
 	SemaphoreCapacity int
 }
 
 // DefaultFetcherChromedpPoolConfig 는 기본 FetcherChromedpPoolConfig 를 반환합니다.
 //
-// 이슈 #229 — default 재조정:
-// SemaphoreCapacity 의미가 글로벌 → per-worker 로 변경되었으므로 기본값을 4 → 2 로 낮춤.
-// 기존 운영자가 환경변수로 4 를 명시했다면 worker 당 4 tab → worker 2 × 4 = 8 tab 동시
-// 호출이 됨 — 명시적 의사결정으로 처리. default 운영자는 4 → 2 × 2 = 4 tab 으로 동일 수준.
+// 이슈 #229 — default 재조정 (gemini 피드백 반영):
+// SemaphoreCapacity 가 현 KafkaConsumerPool 순차 처리 모델에서 1 이상 의미 없으므로 default 1.
+// 기존 운영자가 환경변수로 4 를 명시했다면 — 그 값은 무시되지 않고 그대로 적용되지만 (slot 수
+// 4 의 sem 이 worker 별로 만들어짐) 실효 동시성은 변하지 않음 (worker 1 + slot 4 = 동시 1건).
+// 처리량 변경은 WorkerCount 환경변수로만 조정 가능.
 func DefaultFetcherChromedpPoolConfig() FetcherChromedpPoolConfig {
 	return FetcherChromedpPoolConfig{
 		Enabled:           true,
 		WorkerCount:       2,
-		SemaphoreCapacity: 2,
+		SemaphoreCapacity: 1,
 	}
 }
 
@@ -322,8 +333,8 @@ func DefaultFetcherChromedpPoolConfig() FetcherChromedpPoolConfig {
 //
 // 지원 환경변수:
 //   - FETCHER_CHROMEDP_POOL_ENABLED: true | false (default true)
-//   - FETCHER_CHROMEDP_WORKER_COUNT: 양의 정수 (default 2)
-//   - FETCHER_CHROMEDP_SEMAPHORE_CAPACITY: 양의 정수, per-worker (default 2)
+//   - FETCHER_CHROMEDP_WORKER_COUNT: 양의 정수 (default 2) — 실질 전체 동시 navigate 수
+//   - FETCHER_CHROMEDP_SEMAPHORE_CAPACITY: 양의 정수, per-worker (default 1, 1 이상 의미 없음)
 func LoadFetcherChromedpPool(envFiles ...string) (FetcherChromedpPoolConfig, error) {
 	if len(envFiles) == 0 {
 		envFiles = []string{".env"}
