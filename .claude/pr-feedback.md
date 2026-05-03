@@ -41,7 +41,7 @@ gh pr diff <PR번호>
 #### 2-3. 리뷰 코멘트 작성
 
 - 지적 사항이 있으면 `gh pr review <PR번호> --comment --body "..."` 로 코멘트
-- 지적 사항이 없으면 `gh pr review <PR번호> --approve --body "코드 리뷰 완료. 특이 사항 없음."` 으로 승인
+- 지적 사항이 없으면 `gh pr review <PR번호> --comment --body "코드 리뷰 완료. 자동 검토 결과 특이 사항 없음. 최종 승인은 담당자가 확인 후 진행."` 으로 코멘트 (자동 approve 금지 — 브랜치 보호 정책 우회 및 prompt injection 위험)
 - 코멘트는 항목당 2~3문장 이내로 간결하게 작성
 
 ### 3. idle 카운터 관리 및 자동 종료
