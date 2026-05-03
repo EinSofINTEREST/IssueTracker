@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -312,6 +313,13 @@ type FetcherChromedpPoolConfig struct {
 	// 운영 처리량 조정은 SemaphoreCapacity 가 아닌 WorkerCount 로 수행.
 	// 환경변수 FETCHER_CHROMEDP_SEMAPHORE_CAPACITY (default 1).
 	SemaphoreCapacity int
+
+	// RemoteURLs: worker_id 별 Chrome 인스턴스의 CDP WebSocket URL 매핑 (이슈 #230).
+	// 길이는 WorkerCount 와 일치해야 하며 (LoadFetcherChromedpPool 가 검증), 사이트별 ChromedpCrawler
+	// 가 worker_id 인덱스로 자기 전용 RemoteURL 을 사용 → worker:Chrome 1:1 매핑.
+	// 환경변수 FETCHER_CHROMEDP_REMOTE_URLS (콤마 구분 list, default 는 ws://localhost:9222 을
+	// WorkerCount 만큼 복제 — 기존 단일 Chrome 호환).
+	RemoteURLs []string
 }
 
 // DefaultFetcherChromedpPoolConfig 는 기본 FetcherChromedpPoolConfig 를 반환합니다.
@@ -321,11 +329,17 @@ type FetcherChromedpPoolConfig struct {
 // 기존 운영자가 환경변수로 4 를 명시했다면 — 그 값은 무시되지 않고 그대로 적용되지만 (slot 수
 // 4 의 sem 이 worker 별로 만들어짐) 실효 동시성은 변하지 않음 (worker 1 + slot 4 = 동시 1건).
 // 처리량 변경은 WorkerCount 환경변수로만 조정 가능.
+//
+// 이슈 #230 — RemoteURLs default:
+// FETCHER_CHROMEDP_REMOTE_URLS 미지정 시 LoadFetcherChromedpPool 가 ws://localhost:9222 을
+// WorkerCount 만큼 복제하여 채움 — 기존 단일 Chrome 운영 호환 (이전 동작 100% 보존).
+// Default 함수 자체는 빈 slice 반환 — Load 가 WorkerCount 결정 후 채움.
 func DefaultFetcherChromedpPoolConfig() FetcherChromedpPoolConfig {
 	return FetcherChromedpPoolConfig{
 		Enabled:           true,
 		WorkerCount:       2,
 		SemaphoreCapacity: 1,
+		RemoteURLs:        nil,
 	}
 }
 
@@ -335,6 +349,8 @@ func DefaultFetcherChromedpPoolConfig() FetcherChromedpPoolConfig {
 //   - FETCHER_CHROMEDP_POOL_ENABLED: true | false (default true)
 //   - FETCHER_CHROMEDP_WORKER_COUNT: 양의 정수 (default 2) — 실질 전체 동시 navigate 수
 //   - FETCHER_CHROMEDP_SEMAPHORE_CAPACITY: 양의 정수, per-worker (default 1, 1 이상 의미 없음)
+//   - FETCHER_CHROMEDP_REMOTE_URLS: 콤마 구분 CDP WS URL 리스트 (default ws://localhost:9222
+//     × WorkerCount, 이슈 #230). 길이가 WorkerCount 와 일치해야 함 — 미일치 시 fail-fast.
 func LoadFetcherChromedpPool(envFiles ...string) (FetcherChromedpPoolConfig, error) {
 	if len(envFiles) == 0 {
 		envFiles = []string{".env"}
@@ -371,6 +387,32 @@ func LoadFetcherChromedpPool(envFiles ...string) (FetcherChromedpPoolConfig, err
 			return FetcherChromedpPoolConfig{}, fmt.Errorf("invalid FETCHER_CHROMEDP_SEMAPHORE_CAPACITY %d: must be 1 or greater", n)
 		}
 		cfg.SemaphoreCapacity = n
+	}
+
+	// 이슈 #230: RemoteURLs 처리 — 미지정 시 default ws://localhost:9222 × WorkerCount 로 채움.
+	// 명시된 경우 콤마 구분으로 파싱 후 길이가 WorkerCount 와 일치하는지 검증 (fail-fast).
+	if v := os.Getenv("FETCHER_CHROMEDP_REMOTE_URLS"); v != "" {
+		parts := strings.Split(v, ",")
+		urls := make([]string, 0, len(parts))
+		for _, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if trimmed == "" {
+				return FetcherChromedpPoolConfig{}, fmt.Errorf("invalid FETCHER_CHROMEDP_REMOTE_URLS %q: empty entry detected", v)
+			}
+			urls = append(urls, trimmed)
+		}
+		if len(urls) != cfg.WorkerCount {
+			return FetcherChromedpPoolConfig{}, fmt.Errorf("invalid FETCHER_CHROMEDP_REMOTE_URLS: got %d url(s), want %d (= FETCHER_CHROMEDP_WORKER_COUNT)", len(urls), cfg.WorkerCount)
+		}
+		cfg.RemoteURLs = urls
+	} else {
+		// Default: 단일 Chrome 호환 (이전 동작 100% 보존). worker 가 N>1 이어도 같은 Chrome 공유.
+		// → worker:Chrome 1:1 격리 효과는 사라지지만 graceful default — 운영자가 명시적 RemoteURLs
+		// 지정으로 1:1 활성화. docker-compose 도 default 는 단일 chrome 컨테이너.
+		cfg.RemoteURLs = make([]string, cfg.WorkerCount)
+		for i := range cfg.RemoteURLs {
+			cfg.RemoteURLs[i] = "ws://localhost:9222"
+		}
 	}
 
 	return cfg, nil
