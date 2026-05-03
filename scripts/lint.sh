@@ -16,9 +16,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# CI 고정 버전과 로컬 버전을 일치시켜 lint drift 방지 (CodeRabbit 피드백 반영 — PR #239)
+LINT_VERSION="v1.64.8"
+
 if ! command -v golangci-lint &>/dev/null; then
   echo "golangci-lint not found. Install with:" >&2
-  echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" >&2
+  echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@${LINT_VERSION}" >&2
   exit 1
 fi
 

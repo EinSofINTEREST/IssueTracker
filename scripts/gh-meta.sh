@@ -32,12 +32,12 @@ usage() {
 resolve_label_and_type() {
   local title="$1"
   local prefix
-  # [FEATURE], [FEAT#123] 등에서 대괄호 안의 알파벳 부분만 추출
-  prefix=$(echo "$title" | grep -oP '^\[\K[A-Z]+(?=#|\])' || true)
+  # [FEATURE], [FEAT#123] 등에서 대괄호 안의 알파벳 부분만 추출 (POSIX 호환 sed — grep -P 제거)
+  prefix=$(echo "$title" | sed -En 's/^\[([A-Z]+)[#\]].*/\1/p' || true)
 
   case "$prefix" in
     FEATURE|FEAT)    echo "enhancement $FEATURE_TYPE_ID" ;;
-    FIX)             echo "bug $BUG_TYPE_ID" ;;
+    BUG|FIX)         echo "bug $BUG_TYPE_ID" ;;
     HOTFIX)          echo "bug+hotfix $BUG_TYPE_ID" ;;
     REFACTOR|REFAC)  echo "refactor $TASK_TYPE_ID" ;;
     CHORE)           echo "chore $TASK_TYPE_ID" ;;
