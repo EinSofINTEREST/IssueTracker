@@ -164,3 +164,41 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ─────────────────────────────────────────────────────────────
+  # Chrome (chromedp) – worker:Chrome 1:1 매핑 (이슈 #230)
+  # 기본 FETCHER_CHROMEDP_WORKER_COUNT=2 와 일치하도록 컨테이너 2개 정의.
+  # 운영 worker 수 조정 시:
+  #   1. .env 의 FETCHER_CHROMEDP_WORKER_COUNT / FETCHER_CHROMEDP_REMOTE_URLS 수정
+  #   2. 본 파일에 chrome-N 서비스 추가/제거
+  # 각 컨테이너는 host 에 다른 포트 (9222, 9223, ...) 로 노출 — 디버깅용.
+  # 컨테이너 내부 통신은 ws://issuetracker-chrome-{N}:9222 (모두 9222 동일).
+  # ─────────────────────────────────────────────────────────────
+  chrome-1:
+    image: chromedp/headless-shell:latest
+    container_name: issuetracker-chrome-1
+    ports:
+      - "9222:9222"
+    # headless-shell 은 default 가 0.0.0.0:9222 listen + no-sandbox 비활성. 컨테이너 한정 안전.
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9222/json/version > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  chrome-2:
+    image: chromedp/headless-shell:latest
+    container_name: issuetracker-chrome-2
+    ports:
+      - "9223:9222"
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9222/json/version > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
