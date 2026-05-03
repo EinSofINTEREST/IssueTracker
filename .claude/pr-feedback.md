@@ -3,7 +3,7 @@
 모델: claude-sonnet-4-6
 
 ## 목적
-3분마다 최신 열린 PR 3개를 폴링하여 신규 PR이 등장하면 자동으로 코드 리뷰 피드백을 남긴다.
+3분마다 최신 열린 PR 20개를 폴링하여 신규 PR이 등장하면 자동으로 코드 리뷰 피드백을 남긴다.
 
 ## 절차
 
@@ -66,7 +66,7 @@ gh pr diff <PR번호>
 1. `CronList` 로 활성 cron 조회
 2. prompt 에 `pr-feedback.md` 가 포함된 cron 식별
 3. 매칭된 cron ID 로 `CronDelete` 호출
-4. 상태 파일 삭제: `rm -f /tmp/issuetracker-pr-feedback-loop.json /tmp/issuetracker-pr-watch-state.json`
+4. 루프 상태 파일만 삭제: `rm -f /tmp/issuetracker-pr-feedback-loop.json` (pr-watch-state.json 은 유지 — 재시작 시 기존 리뷰 PR 재감지 방지)
 5. 사용자에게 알림: `"신규 PR 없음 20회 연속 (약 1시간) — pr-feedback loop 자동 종료 (cron <id>)"`
 
 ### 4. 상태 파일 갱신
