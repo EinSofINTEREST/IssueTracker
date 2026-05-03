@@ -15,38 +15,69 @@ import (
 //
 // 책임:
 //
-//  1. Semaphore.Acquire — Chrome 인스턴스의 동시 navigation 수 제한
+//  1. worker_id 별 Semaphore.Acquire — 같은 Chrome 인스턴스에 동시 띄울 tab 수 제한
 //  2. handler.Registry 에서 crawler_name 으로 ChainHandler lookup
 //  3. ChainHandler.HandleChromedpOnly 호출 — ChromedpChain 으로 raw fetch + 저장 + RawContentRef publish
 //  4. Semaphore.Release (defer)
 //
+// 이슈 #229 — per-worker Semaphore 모델:
+// 글로벌 Semaphore 1 개를 모든 worker 가 공유하던 PR #227 의 모델을, worker_id 별 Semaphore
+// 1 개로 분리. 한 worker 가 자기 전용 Chrome 에 동시 띄울 tab 수만 제한 — 이후 sub-issue
+// #230 에서 RemoteURL 매핑까지 N 개로 확장하면 worker:Chrome 1:1 활성화.
+//
 // goquery worker pool 의 ChainHandler.republishToChromedpQueue 가 발행한 메시지가 본 핸들러로
-// 흐름. ChromedpChain 이 같은 인스턴스라 chromedp 호출 자체는 동일 — 격리된 worker pool 에서
-// semaphore 로 동시성만 제한.
+// 흐름.
 type ChromedpJobHandler struct {
 	registry *handler.Registry
-	sem      Semaphore
-	log      *logger.Logger
+	// sems 는 worker_id 별 Semaphore. 길이 N — KafkaConsumerPool 의 chromedp pool worker 수와 동일.
+	// Handle 진입 시 ctx 의 worker_id 로 슬롯 선택. ID 가 범위 밖이면 0번 슬롯 fallback (방어).
+	sems []Semaphore
+	log  *logger.Logger
 }
 
-// NewChromedpJobHandler 는 새 ChromedpJobHandler 를 생성합니다.
+// NewChromedpJobHandler 는 새 ChromedpJobHandler 를 생성합니다 (이슈 #229).
 //
-// registry / sem 은 nil 허용 안 함 (이슈 #208 정책).
-func NewChromedpJobHandler(registry *handler.Registry, sem Semaphore, log *logger.Logger) (*ChromedpJobHandler, error) {
+// sems 는 worker_id 인덱스의 Semaphore slice — 길이는 chromedp pool 의 worker 수와 동일해야
+// 합니다. 호출자(main.go) 가 cfg.WorkerCount 만큼 NewSemaphore 를 만들어 전달합니다.
+//
+// registry / sems 는 nil/empty 허용 안 함 (이슈 #208 정책).
+func NewChromedpJobHandler(registry *handler.Registry, sems []Semaphore, log *logger.Logger) (*ChromedpJobHandler, error) {
 	if registry == nil {
 		return nil, errors.New("worker: NewChromedpJobHandler requires non-nil handler Registry")
 	}
-	if sem == nil {
-		return nil, errors.New("worker: NewChromedpJobHandler requires non-nil Semaphore")
+	if len(sems) == 0 {
+		return nil, errors.New("worker: NewChromedpJobHandler requires at least one Semaphore")
+	}
+	for i, s := range sems {
+		if s == nil {
+			return nil, fmt.Errorf("worker: NewChromedpJobHandler sems[%d] is nil", i)
+		}
 	}
 	return &ChromedpJobHandler{
 		registry: registry,
-		sem:      sem,
+		sems:     sems,
 		log:      log,
 	}, nil
 }
 
-// Handle 은 semaphore 보호 하에 chromedp fetch 를 실행합니다.
+// resolveSemaphore 는 ctx 의 worker_id 로 자기 전용 Semaphore 를 반환합니다.
+// worker_id 미설정 또는 범위 밖이면 0번 슬롯 fallback + WARN 로그 (방어 + 가시성).
+func (h *ChromedpJobHandler) resolveSemaphore(ctx context.Context) (Semaphore, int) {
+	id := WorkerIDFromContext(ctx)
+	if id < 0 || id >= len(h.sems) {
+		if h.log != nil {
+			h.log.WithFields(map[string]interface{}{
+				"worker_id":   id,
+				"slot_count":  len(h.sems),
+				"fallback_id": 0,
+			}).Warn("chromedp handler received out-of-range worker_id, using slot 0 fallback")
+		}
+		return h.sems[0], 0
+	}
+	return h.sems[id], id
+}
+
+// Handle 은 per-worker semaphore 보호 하에 chromedp fetch 를 실행합니다.
 //
 // Registry 에서 crawler_name 으로 등록된 Handler 를 lookup. 등록된 Handler 가 *general.ChainHandler
 // 가 아니면 (테스트/noop fallback 등) error — chromedp pool 은 정의상 ChainHandler 만 처리.
@@ -56,12 +87,16 @@ func (h *ChromedpJobHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]
 	if job == nil {
 		return nil, errors.New("chromedp handler received nil job")
 	}
-	if err := h.sem.Acquire(ctx); err != nil {
-		return nil, fmt.Errorf("chromedp semaphore acquire: %w", err)
+
+	sem, workerID := h.resolveSemaphore(ctx)
+	if err := sem.Acquire(ctx); err != nil {
+		return nil, fmt.Errorf("chromedp semaphore acquire (worker_id=%d): %w", workerID, err)
 	}
 	defer func() {
-		if relErr := h.sem.Release(); relErr != nil && h.log != nil {
-			h.log.WithError(relErr).Warn("chromedp semaphore release contract violation (non-fatal)")
+		if relErr := sem.Release(); relErr != nil && h.log != nil {
+			h.log.WithFields(map[string]interface{}{
+				"worker_id": workerID,
+			}).WithError(relErr).Warn("chromedp semaphore release contract violation (non-fatal)")
 		}
 	}()
 
@@ -76,9 +111,10 @@ func (h *ChromedpJobHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]
 
 	if h.log != nil {
 		h.log.WithFields(map[string]interface{}{
-			"crawler":  job.CrawlerName,
-			"url":      job.Target.URL,
-			"capacity": h.sem.Capacity(),
+			"crawler":   job.CrawlerName,
+			"url":       job.Target.URL,
+			"worker_id": workerID,
+			"capacity":  sem.Capacity(),
 		}).Debug("chromedp pool handling job")
 	}
 
