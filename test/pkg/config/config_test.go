@@ -519,6 +519,7 @@ func unsetFetcherChromedpPoolEnvVars(t *testing.T) {
 		"FETCHER_CHROMEDP_WORKER_COUNT",
 		"FETCHER_CHROMEDP_SEMAPHORE_CAPACITY",
 		"FETCHER_CHROMEDP_REMOTE_URLS",
+		"FETCHER_CHROMEDP_REMOTE_URL_PATTERN",
 	}
 	for _, v := range vars {
 		t.Setenv(v, "")
@@ -612,6 +613,58 @@ func TestLoadFetcherChromedpPool_RemoteURLsEmptyEntry_Fails(t *testing.T) {
 	_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("빈 항목 포함 list 는 거부되어야 함")
+	}
+}
+
+func TestLoadFetcherChromedpPool_RemoteURLPattern_Expands(t *testing.T) {
+	// 이슈 #230 — PATTERN 의 {n} placeholder 가 1..WorkerCount 로 치환되는지 검증.
+	unsetFetcherChromedpPoolEnvVars(t)
+	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "3")
+	t.Setenv("FETCHER_CHROMEDP_REMOTE_URL_PATTERN", "ws://chrome-{n}:9222")
+
+	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("PATTERN expand 실패: %v", err)
+	}
+
+	want := []string{"ws://chrome-1:9222", "ws://chrome-2:9222", "ws://chrome-3:9222"}
+	if len(cfg.RemoteURLs) != len(want) {
+		t.Fatalf("RemoteURLs length: got %d, want %d", len(cfg.RemoteURLs), len(want))
+	}
+	for i, w := range want {
+		if cfg.RemoteURLs[i] != w {
+			t.Errorf("RemoteURLs[%d]: got %q, want %q ({n} 치환 1-indexed 검증)", i, cfg.RemoteURLs[i], w)
+		}
+	}
+}
+
+func TestLoadFetcherChromedpPool_RemoteURLsOverridesPattern(t *testing.T) {
+	// 이슈 #230 — REMOTE_URLS 가 PATTERN 보다 우선 적용되는지 검증.
+	unsetFetcherChromedpPoolEnvVars(t)
+	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "2")
+	t.Setenv("FETCHER_CHROMEDP_REMOTE_URLS", "ws://explicit-1:9222,ws://explicit-2:9222")
+	t.Setenv("FETCHER_CHROMEDP_REMOTE_URL_PATTERN", "ws://chrome-{n}:9222")
+
+	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("override 실패: %v", err)
+	}
+
+	if cfg.RemoteURLs[0] != "ws://explicit-1:9222" || cfg.RemoteURLs[1] != "ws://explicit-2:9222" {
+		t.Errorf("RemoteURLs: got %v, want explicit URLs (PATTERN 보다 우선)", cfg.RemoteURLs)
+	}
+}
+
+func TestLoadFetcherChromedpPool_RemoteURLPattern_MissingPlaceholder_Fails(t *testing.T) {
+	// 이슈 #230 — PATTERN 에 {n} 누락 시 모든 worker 가 같은 url 로 향함 → 1:1 매핑 무력화.
+	// fail-fast 로 운영자가 명시적 의사결정 강제.
+	unsetFetcherChromedpPoolEnvVars(t)
+	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "2")
+	t.Setenv("FETCHER_CHROMEDP_REMOTE_URL_PATTERN", "ws://chrome-static:9222")
+
+	_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	if err == nil {
+		t.Fatal("{n} placeholder 누락 PATTERN 은 거부되어야 함")
 	}
 }
 
