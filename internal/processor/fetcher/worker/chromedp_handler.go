@@ -68,7 +68,7 @@ func NewChromedpJobHandler(registry *handler.Registry, sems []Semaphore, log *lo
 // resolveSemaphore 는 ctx 의 worker_id 로 자기 전용 Semaphore 를 반환합니다.
 // worker_id 미설정 또는 범위 밖이면 0번 슬롯 fallback + WARN 로그 (방어 + 가시성).
 func (h *ChromedpJobHandler) resolveSemaphore(ctx context.Context) (Semaphore, int) {
-	id := WorkerIDFromContext(ctx)
+	id := core.WorkerIDFromContext(ctx)
 	if id < 0 || id >= len(h.sems) {
 		if h.log != nil {
 			h.log.WithFields(map[string]interface{}{
