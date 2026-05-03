@@ -248,10 +248,8 @@ coverage-html: coverage ## 커버리지 HTML 리포트 생성
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage HTML report: coverage.html"
 
-lint: ## golangci-lint 실행
-	@echo "Running linters..."
-	@which golangci-lint > /dev/null || (echo "golangci-lint not installed. Run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest" && exit 1)
-	golangci-lint run
+lint: ## golangci-lint 실행 (scripts/lint.sh — 루트 경로 고정)
+	@scripts/lint.sh
 
 fmt: ## 코드 포맷팅
 	@echo "Formatting code..."
