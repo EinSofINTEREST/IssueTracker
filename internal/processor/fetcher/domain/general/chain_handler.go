@@ -87,7 +87,14 @@ func (h *ChainHandler) hasChromedpChain() bool {
 
 // resolveChromedpChain 은 ctx 의 worker_id 로 자기 전용 chromedp chain 을 반환합니다.
 // worker_id 미설정 / 범위 밖이면 0번 chain fallback (방어 + 가시성 WARN).
+//
+// defense-in-depth (gemini 피드백): ChromedpChains 가 empty 면 nil 반환 — 호출자
+// (HandleChromedpOnly) 가 사전에 hasChromedpChain 검사하지만, 헬퍼 자체에서도
+// 슬라이스 길이 확인으로 인덱스 panic 방지. 미래 다른 호출자가 사전 검사 누락해도 안전.
 func (h *ChainHandler) resolveChromedpChain(ctx context.Context) Handler {
+	if len(h.ChromedpChains) == 0 {
+		return nil
+	}
 	id := core.WorkerIDFromContext(ctx)
 	if id < 0 || id >= len(h.ChromedpChains) {
 		if h.Log != nil {
@@ -290,6 +297,11 @@ func (h *ChainHandler) HandleChromedpOnly(ctx context.Context, job *core.CrawlJo
 	}
 
 	chain := h.resolveChromedpChain(ctx)
+	if chain == nil {
+		// defense-in-depth (gemini 피드백): hasChromedpChain 통과 후에도 헬퍼가 nil 반환하면
+		// race condition 또는 ChromedpChains 가 nil 원소 포함 같은 invariant 위반 — graceful error.
+		return nil, fmt.Errorf("crawler %s resolved nil chromedp chain (invariant violation)", job.CrawlerName)
+	}
 	raw, err := chain.Handle(ctx, job)
 	if err != nil {
 		return nil, err
