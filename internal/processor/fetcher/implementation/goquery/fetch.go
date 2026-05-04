@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html/charset"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/logger"
@@ -49,8 +50,17 @@ func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.R
 		return nil, err
 	}
 
+	// charset.NewReader: Content-Type 헤더와 HTML meta 태그를 기반으로 charset 감지 후
+	// 응답 body 를 UTF-8 스트림으로 변환한다 (이슈 #253 — EUC-KR 등 비UTF-8 인코딩 대응).
+	// 변환 실패 시 원본 body 를 그대로 사용 (graceful degrade).
+	contentType := resp.Header.Get("Content-Type")
+	utf8Reader, err := charset.NewReader(resp.Body, contentType)
+	if err != nil {
+		utf8Reader = resp.Body
+	}
+
 	// goquery Document 생성
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(utf8Reader)
 	if err != nil {
 		return nil, &core.CrawlerError{
 			Category: core.ErrCategoryParse,
