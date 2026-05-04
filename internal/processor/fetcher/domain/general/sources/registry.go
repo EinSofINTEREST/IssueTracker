@@ -7,6 +7,7 @@ package sources
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
@@ -48,17 +49,22 @@ func RegisterAll(
 		return fmt.Errorf("RegisterAll: list fetcher rules: %w", err)
 	}
 
-	// source_name 기준으로 대표 row 수집 (첫 번째 row 의 SourceInfo/RequestsPerHour 사용).
+	// source_name 기준으로 대표 row 수집.
+	// base_url 의 hostname 과 host_pattern 이 일치하는 row 를 canonical 로 우선 선택.
+	// 일치하는 row 가 없으면 첫 번째 row 를 fallback 으로 사용.
 	type sourceEntry struct {
-		rec *storage.FetcherRuleRecord
+		rec      *storage.FetcherRuleRecord
+		hasExact bool // base_url hostname == host_pattern
 	}
 	bySource := make(map[string]sourceEntry)
 	for _, r := range rules {
 		if r.SourceName == "" {
 			continue
 		}
-		if _, seen := bySource[r.SourceName]; !seen {
-			bySource[r.SourceName] = sourceEntry{rec: r}
+		exact := isCanonicalHost(r)
+		existing, seen := bySource[r.SourceName]
+		if !seen || (!existing.hasExact && exact) {
+			bySource[r.SourceName] = sourceEntry{rec: r, hasExact: exact}
 		}
 	}
 
@@ -121,6 +127,19 @@ func registerSource(
 		"requests_per_hour": cfg.RequestsPerHour,
 	}).Info("crawler registered from db")
 	return nil
+}
+
+// isCanonicalHost 는 r.BaseURL 의 hostname 이 r.HostPattern 과 일치하면 true 를 반환합니다.
+// 동일 source_name 의 여러 row 중 canonical(대표) host 를 결정적으로 선택하는 데 사용합니다.
+func isCanonicalHost(r *storage.FetcherRuleRecord) bool {
+	if r.BaseURL == "" {
+		return false
+	}
+	u, err := url.Parse(r.BaseURL)
+	if err != nil {
+		return false
+	}
+	return u.Hostname() == r.HostPattern
 }
 
 // buildChromedpChains 는 source 의 chromedp chain 을 worker_id 별 N 개 build 합니다.
