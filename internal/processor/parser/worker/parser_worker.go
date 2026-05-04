@@ -293,7 +293,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 
 	items, err := w.parser.ParseLinks(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, raw, rawID, "parse_links", storage.TargetTypeList, err, llmRetryCount, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_links", storage.TargetTypeList, err, llmRetryCount, crawlerName, mlog)
 	}
 	if len(items) == 0 {
 		mlog.Debug("no article links found in category page")
@@ -325,7 +325,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 
 	page, err := w.parser.ParsePage(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, llmRetryCount, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, llmRetryCount, crawlerName, mlog)
 	}
 
 	// 이슈 #220: parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달이면
@@ -355,7 +355,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 // 이슈 #220 (page 단계 한정): rule.ErrParseFailure / rule.ErrEmptySelector 는 host 단위 카운터로
 // 누적 — 임계값 도달 시 단계 3 (#221) 의 chromedp 자동 전환 트리거 입력. ErrNoRule 은 LLM 자동
 // rule 생성 (이슈 #149) 의 책임 영역이라 카운팅 제외 (다른 정책으로 처리됨).
-func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, mlog *logger.Logger) error {
+func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, crawlerName string, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
 		mlog.WithFields(map[string]interface{}{
@@ -365,9 +365,9 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 		}).WithError(err).Warn("rule-based parse failed, raw retained for LLM retry")
 
 		// ErrNoRule + llmGen 활성화 → LLM 자동 rule 생성 비동기 트리거 (이슈 #149)
-		// 다른 rule.Error (parse_failure / empty_selector) 는 stale rule 진단 — 운영자 review 영역.
+		// crawlerName 은 validate 실패 시 재큐 메시지 헤더 복원용 (이슈 #237 피드백).
 		if rerr.Code == rule.ErrNoRule && w.llmGen != nil {
-			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw, llmRetryCount)
+			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName)
 		}
 
 		// 이슈 #220: page 단계의 ParseFailure / EmptySelector 만 host 카운터에 누적.
@@ -547,51 +547,63 @@ const (
 // 재발행합니다 (이슈 #237). llmgen.Generator 의 validateFailureHandler 로 등록됩니다.
 //
 // llmRetryCount >= maxLLMRetries 이면 재큐잉을 중단하고 Warn 로그만 남깁니다 — 무한루프 방지.
+// targetType, crawlerName 은 Kafka 메시지 헤더로 설정 — 재큐 후 processMessage 가 올바른
+// 파싱 경로 (category vs article) 로 분기할 수 있도록 보존합니다 (gemini/Copilot/CodeRabbit 피드백).
 // 재발행 실패는 non-fatal — raw 는 TTL cleanup 으로 최종 정리됩니다.
-func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, raw *core.RawContent, llmRetryCount int) {
+func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawContentRef, llmRetryCount int, targetType storage.TargetType, crawlerName string) {
 	nextCount := llmRetryCount + 1
 	if nextCount > maxLLMRetries {
 		w.log.WithFields(map[string]interface{}{
-			"raw_id":          raw.ID,
-			"url":             raw.URL,
+			"raw_id":          ref.ID,
+			"url":             ref.URL,
 			"llm_retry_count": llmRetryCount,
 			"max_llm_retries": maxLLMRetries,
 		}).Warn("llm retry limit reached, abandoning raw content requeue")
 		return
 	}
 
-	ref := core.RawContentRef{
-		ID:            raw.ID,
-		URL:           raw.URL,
-		FetchedAt:     raw.FetchedAt,
-		SourceInfo:    raw.SourceInfo,
+	requeued := core.RawContentRef{
+		ID:            ref.ID,
+		URL:           ref.URL,
+		FetchedAt:     ref.FetchedAt,
+		SourceInfo:    ref.SourceInfo,
 		LLMRetryCount: nextCount,
 	}
-	payload, err := json.Marshal(ref)
+	payload, err := json.Marshal(requeued)
 	if err != nil {
 		w.log.WithFields(map[string]interface{}{
-			"raw_id": raw.ID,
+			"raw_id": ref.ID,
 		}).WithError(err).Error("failed to marshal RawContentRef for llm requeue")
 		return
 	}
 
+	// Publish timeout 바운딩 — Kafka 장애 시 goroutine 장시간 정체 방지 (Copilot 피드백).
+	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+
 	msg := queue.Message{
 		Topic: queue.TopicFetched,
 		Value: payload,
+		Headers: map[string]string{
+			"target_type": string(targetType),
+			"crawler":     crawlerName,
+		},
 	}
-	if err := w.producer.Publish(ctx, msg); err != nil {
+	if err := w.producer.Publish(pubCtx, msg); err != nil {
 		w.log.WithFields(map[string]interface{}{
-			"raw_id":          raw.ID,
-			"url":             raw.URL,
+			"raw_id":          ref.ID,
+			"url":             ref.URL,
 			"llm_retry_count": nextCount,
 		}).WithError(err).Warn("failed to requeue raw content for llm retry (non-fatal)")
 		return
 	}
 
 	w.log.WithFields(map[string]interface{}{
-		"raw_id":          raw.ID,
-		"url":             raw.URL,
+		"raw_id":          ref.ID,
+		"url":             ref.URL,
 		"llm_retry_count": nextCount,
+		"target_type":     string(targetType),
+		"crawler":         crawlerName,
 	}).Info("raw content requeued for llm retry after selector validation failure")
 }
 

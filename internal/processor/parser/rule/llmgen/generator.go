@@ -76,9 +76,12 @@ type Generator struct {
 	log      *logger.Logger
 
 	// validateFailureHandler 는 selector 검증 실패 시 호출되는 콜백입니다 (이슈 #237).
-	// 인자: (ctx, raw, llmRetryCount). background goroutine 에서 호출 — thread-safe 책임은 핸들러에 있음.
+	// 인자: (ctx, ref, llmRetryCount, targetType, crawlerName).
+	//   - ref: raw *core.RawContent 의 경량 snapshot — goroutine 내 포인터 공유 없이 값 전달 (Copilot 피드백).
+	//   - targetType, crawlerName: Kafka 메시지 헤더 복원에 필요 (gemini/Copilot/CodeRabbit 피드백).
+	// background goroutine 에서 호출 — thread-safe 책임은 핸들러에 있음.
 	// nil 이면 호출 안 함.
-	validateFailureHandler func(context.Context, *core.RawContent, int)
+	validateFailureHandler func(context.Context, core.RawContentRef, int, storage.TargetType, string)
 
 	inflight *inflightSet
 	wg       sync.WaitGroup
@@ -87,7 +90,7 @@ type Generator struct {
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다 (이슈 #237).
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
-func (g *Generator) SetValidateFailureHandler(fn func(context.Context, *core.RawContent, int)) {
+func (g *Generator) SetValidateFailureHandler(fn func(context.Context, core.RawContentRef, int, storage.TargetType, string)) {
 	g.validateFailureHandler = fn
 }
 
@@ -120,19 +123,16 @@ func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *ru
 // Enqueue 는 (host, type) 에 대한 LLM rule 생성을 비동기로 시작합니다.
 //
 // Enqueue starts an async generation attempt and returns immediately. raw 의 HTML 을
-// LLM 프롬프트 입력으로 사용 — 호출자는 raw 를 변경/해제하면 안 됨 (호출자가 Enqueue 후
-// raw 를 즉시 폐기해도 안전하도록 본 함수가 필요 데이터를 캡쳐).
+// LLM 프롬프트 입력으로 사용 — 호출자가 Enqueue 후 raw 를 폐기해도 안전하도록 필요 데이터를 캡쳐.
 //
 // llmRetryCount 는 호출자 (parser_worker) 가 RawContentRef 에서 전달하는 재큐 횟수입니다.
-// validateSelectors 실패 시 validateFailureHandler 가 등록되어 있으면 (ctx, raw, llmRetryCount)
-// 로 호출되어 raw 를 재발행할 기회를 줍니다 (이슈 #237).
+// crawlerName 은 Kafka 메시지 헤더 복원용 — validateSelectors 실패 시 재큐 메시지에 포함됩니다.
+// validateSelectors 실패 시 validateFailureHandler 가 등록되어 있으면
+// (ctx, ref, llmRetryCount, targetType, crawlerName) 으로 호출됩니다 (이슈 #237).
 //
-// 동일 (host, type) 에 대한 in-flight 호출이 이미 있으면 즉시 skip — 새 호출 발생 X.
-// Stop 호출 후의 Enqueue 는 즉시 noop — 셧다운 중 새 작업 차단.
-//
-// 본 함수는 절대 block 되지 않으며 에러도 반환하지 않습니다 — 모든 실패는 logger 로 기록.
-// 호출 worker 의 hot path 에서 안전하게 호출 가능.
-func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int) {
+// 동일 (host, type) 에 대한 in-flight 호출이 이미 있으면 즉시 skip.
+// Stop 호출 후의 Enqueue 는 즉시 noop.
+func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string) {
 	if g.stopped.Load() {
 		return
 	}
@@ -149,9 +149,15 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 		return
 	}
 
-	// raw.HTML 캡쳐 (호출자가 raw 를 폐기해도 안전)
+	// 필요한 데이터를 값으로 캡쳐 — goroutine 내 포인터 공유 없이 안전 (Copilot 피드백).
 	htmlSnapshot := raw.HTML
 	urlSnapshot := raw.URL
+	rawRef := core.RawContentRef{
+		ID:         raw.ID,
+		URL:        raw.URL,
+		FetchedAt:  raw.FetchedAt,
+		SourceInfo: raw.SourceInfo,
+	}
 
 	if !g.inflight.tryAcquire(host, targetType) {
 		g.log.WithFields(map[string]interface{}{
@@ -161,8 +167,7 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 		return
 	}
 
-	// 호출자 ctx 의 cancel 은 무시 (best-effort 후속 작업) — 단 trace ID / logger 등
-	// 메타데이터는 보존해야 관측성이 유지됨. context.WithoutCancel 이 정확히 그 의미 (Go 1.21+).
+	// 호출자 ctx 의 cancel 은 무시 (best-effort 후속 작업) — trace ID 등 메타데이터 보존.
 	bgCtx := context.WithoutCancel(ctx)
 
 	g.wg.Add(1)
@@ -179,10 +184,10 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 			}).WithError(err).Warn("llmgen rule generation failed")
 
 			// selector 검증 실패인 경우에만 재큐 콜백 호출 (이슈 #237).
-			// LLM API 실패 / JSON 파싱 실패 등 다른 에러는 재큐 대상 아님.
+			// rawRef (값 복사) + targetType + crawlerName 전달 — 헤더 복원에 사용.
 			var sve *selectorValidationError
 			if errors.As(err, &sve) && g.validateFailureHandler != nil {
-				g.validateFailureHandler(bgCtx, raw, llmRetryCount)
+				g.validateFailureHandler(bgCtx, rawRef, llmRetryCount, targetType, crawlerName)
 			}
 		}
 	}()

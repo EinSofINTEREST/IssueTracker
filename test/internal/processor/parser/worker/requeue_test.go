@@ -5,6 +5,7 @@ package worker_test
 // 검증 전략 (black-box):
 //   - RequeueForLLMRetry 를 직접 호출하여 producer.Publish 호출 여부 + 메시지 내용 확인
 //   - maxLLMRetries 초과 시 publish 없이 warn 로그만 (producer 호출 X)
+//   - target_type / crawler 헤더가 메시지에 포함되는지 확인
 
 import (
 	"context"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -35,8 +37,8 @@ func (p *captureProducer) PublishBatch(_ context.Context, msgs []queue.Message) 
 }
 func (p *captureProducer) Close() error { return nil }
 
-func newTestRaw() *core.RawContent {
-	return &core.RawContent{
+func newTestRef() core.RawContentRef {
+	return core.RawContentRef{
 		ID:        "raw-test-001",
 		URL:       "https://example.com/article/1",
 		FetchedAt: time.Now(),
@@ -44,13 +46,8 @@ func newTestRaw() *core.RawContent {
 			Name:    "test-crawler",
 			Country: "KR",
 		},
-		HTML: "<html><body>test</body></html>",
 	}
 }
-
-// buildMinimalWorker 는 RequeueForLLMRetry 테스트에 필요한 최소 ParserWorker 를 만들기 위해
-// 공개 생성자를 우회하지 않고, 메서드 자체가 공개(public) 이므로 직접 호출 가능합니다.
-// — 단, ParserWorker 는 내부 필드라 직접 생성 불가 → 공개 생성자 사용하되 nil 허용 필드 최대 활용.
 
 // TestRequeueForLLMRetry_PublishesWithIncrementedCount 는 정상 재큐 시
 // LLMRetryCount 가 +1 된 RawContentRef 가 TopicFetched 에 발행되는지 검증합니다.
@@ -59,19 +56,36 @@ func TestRequeueForLLMRetry_PublishesWithIncrementedCount(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 
 	pw := newMinimalWorker(prod, log)
-	raw := newTestRaw()
+	ref := newTestRef()
 
-	pw.RequeueForLLMRetry(context.Background(), raw, 0)
+	pw.RequeueForLLMRetry(context.Background(), ref, 0, storage.TargetTypePage, "test-crawler")
 
 	require.Len(t, prod.published, 1)
 	msg := prod.published[0]
 	assert.Equal(t, queue.TopicFetched, msg.Topic)
 
-	var ref core.RawContentRef
-	require.NoError(t, json.Unmarshal(msg.Value, &ref))
-	assert.Equal(t, raw.ID, ref.ID)
-	assert.Equal(t, raw.URL, ref.URL)
-	assert.Equal(t, 1, ref.LLMRetryCount, "LLMRetryCount 는 기존 값 +1 이어야 함")
+	var got core.RawContentRef
+	require.NoError(t, json.Unmarshal(msg.Value, &got))
+	assert.Equal(t, ref.ID, got.ID)
+	assert.Equal(t, ref.URL, got.URL)
+	assert.Equal(t, 1, got.LLMRetryCount, "LLMRetryCount 는 기존 값 +1 이어야 함")
+}
+
+// TestRequeueForLLMRetry_PreservesHeaders 는 재큐 메시지에 target_type 과 crawler 헤더가
+// 포함되는지 검증합니다 (이슈 #237 피드백 — gemini/Copilot/CodeRabbit).
+func TestRequeueForLLMRetry_PreservesHeaders(t *testing.T) {
+	prod := &captureProducer{}
+	log := logger.New(logger.DefaultConfig())
+
+	pw := newMinimalWorker(prod, log)
+	ref := newTestRef()
+
+	pw.RequeueForLLMRetry(context.Background(), ref, 0, storage.TargetTypeList, "naver")
+
+	require.Len(t, prod.published, 1)
+	msg := prod.published[0]
+	assert.Equal(t, "list", msg.Headers["target_type"], "target_type 헤더 보존")
+	assert.Equal(t, "naver", msg.Headers["crawler"], "crawler 헤더 보존")
 }
 
 // TestRequeueForLLMRetry_RespectsMaxRetries 는 maxLLMRetries 초과 시 publish 없이 포기하는지 검증합니다.
@@ -80,10 +94,10 @@ func TestRequeueForLLMRetry_RespectsMaxRetries(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 
 	pw := newMinimalWorker(prod, log)
-	raw := newTestRaw()
+	ref := newTestRef()
 
 	// maxLLMRetries = 3, llmRetryCount = 3 이면 nextCount = 4 > 3 → 재큐 중단
-	pw.RequeueForLLMRetry(context.Background(), raw, 3)
+	pw.RequeueForLLMRetry(context.Background(), ref, 3, storage.TargetTypePage, "test-crawler")
 
 	assert.Empty(t, prod.published, "max retry 초과 시 publish 없어야 함")
 }
@@ -94,12 +108,12 @@ func TestRequeueForLLMRetry_SecondRetry(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 
 	pw := newMinimalWorker(prod, log)
-	raw := newTestRaw()
+	ref := newTestRef()
 
-	pw.RequeueForLLMRetry(context.Background(), raw, 1)
+	pw.RequeueForLLMRetry(context.Background(), ref, 1, storage.TargetTypePage, "test-crawler")
 
 	require.Len(t, prod.published, 1)
-	var ref core.RawContentRef
-	require.NoError(t, json.Unmarshal(prod.published[0].Value, &ref))
-	assert.Equal(t, 2, ref.LLMRetryCount)
+	var got core.RawContentRef
+	require.NoError(t, json.Unmarshal(prod.published[0].Value, &got))
+	assert.Equal(t, 2, got.LLMRetryCount)
 }
