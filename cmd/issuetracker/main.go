@@ -171,6 +171,15 @@ func main() {
 		chromedpRemoteURLs = nil
 	}
 
+	// chromedp pool 이 활성화된 경우 remoteURLs 수 == WorkerCount 를 사전 검증합니다 (CodeRabbit Major 반영).
+	// RegisterAll 이 URL 당 1 개 chain 을 생성하므로, 불일치 시 worker:chain 매핑이 어긋납니다 (이슈 #230).
+	if chromedpPoolCfg.Enabled && len(chromedpRemoteURLs) != chromedpPoolCfg.WorkerCount {
+		log.WithFields(map[string]interface{}{
+			"worker_count":     chromedpPoolCfg.WorkerCount,
+			"remote_url_count": len(chromedpRemoteURLs),
+		}).Fatal("chromedp pool config mismatch: remote_urls count must equal worker_count")
+	}
+
 	// fetcher 측 등록 (이슈 #246): fetcher_rules DB 에서 모든 source 를 읽어 일괄 등록.
 	if err := sources.RegisterAll(ctx, registry, fetcherRuleRepo, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
 		log.WithError(err).Fatal("failed to register crawlers from db")

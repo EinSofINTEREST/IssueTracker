@@ -23,16 +23,19 @@ import (
 )
 
 // defaultLazyKeywords 는 대부분 뉴스 사이트가 사용하는 lazy-load 감지 attr 목록입니다.
-// BuildChain 에 전달되어 goquery-only chain 이 lazy page 를 감지하면 sentinel 을 반환,
-// ChainHandler 가 chromedp pool 로 republish 하도록 합니다 (이슈 #218).
+// chromedp 가 활성화된 경우에만 BuildChain 에 전달합니다 — pool 이 꺼진 환경에서
+// lazy sentinel 이 발생하면 TopicCrawlChromedp 로 republish 되지만 consumer 가 없어
+// 메시지가 유실됩니다 (이슈 #218, Copilot 피드백 반영).
 var defaultLazyKeywords = []string{"data-lazy-src", "lazyload", "data-lazy"}
 
-// RegisterAll 은 fetcher_rules 테이블에서 SourceInfo 가 채워진 모든 source 를 읽어
+// RegisterAll 은 fetcher_rules 테이블에서 source_name 이 채워진 모든 source 를 읽어
 // Registry 에 등록합니다 (이슈 #246).
 //
 // 각 source_name 별로 goquery + (optional) chromedp ChainHandler 를 생성.
 // chromedpRemoteURLs 가 empty 이면 chromedp chain 없이 goquery-only 로 등록.
-// source_name 이 비어있는 row (SourceInfo 미입력) 는 건너뜁니다.
+// source_name 이 비어있는 row 는 건너뜁니다.
+// 동일 source_name 의 row 간 Country/Language/BaseURL/SourceType/RequestsPerHour 불일치 시 에러.
+// 등록 가능한 source 가 하나도 없으면 에러 (migration 014 seed 누락 감지).
 func RegisterAll(
 	ctx context.Context,
 	registry *handler.Registry,
@@ -46,33 +49,46 @@ func RegisterAll(
 ) error {
 	rules, err := fetcherRuleRepo.List(ctx)
 	if err != nil {
-		return fmt.Errorf("RegisterAll: list fetcher rules: %w", err)
+		return fmt.Errorf("list fetcher rules: %w", err)
 	}
 
-	// source_name 기준으로 대표 row 수집.
-	// base_url 의 hostname 과 host_pattern 이 일치하는 row 를 canonical 로 우선 선택.
-	// 일치하는 row 가 없으면 첫 번째 row 를 fallback 으로 사용.
+	// source_name 기준으로 canonical row 수집.
+	// 1. base_url hostname == host_pattern 인 row 를 우선 canonical 로 선택.
+	// 2. 동일 source_name 내 SourceInfo 필드가 불일치하면 즉시 에러 (CodeRabbit Major 반영).
 	type sourceEntry struct {
 		rec      *storage.FetcherRuleRecord
-		hasExact bool // base_url hostname == host_pattern
+		hasExact bool
 	}
 	bySource := make(map[string]sourceEntry)
 	for _, r := range rules {
 		if r.SourceName == "" {
 			continue
 		}
-		exact := isCanonicalHost(r)
-		existing, seen := bySource[r.SourceName]
-		if !seen || (!existing.hasExact && exact) {
-			bySource[r.SourceName] = sourceEntry{rec: r, hasExact: exact}
+		if prev, seen := bySource[r.SourceName]; seen {
+			if prev.rec.Country != r.Country ||
+				prev.rec.Language != r.Language ||
+				prev.rec.BaseURL != r.BaseURL ||
+				prev.rec.SourceType != r.SourceType ||
+				prev.rec.RequestsPerHour != r.RequestsPerHour {
+				return fmt.Errorf("inconsistent source metadata for source_name=%q (host=%q vs host=%q)",
+					r.SourceName, prev.rec.HostPattern, r.HostPattern)
+			}
+			// canonical 우선: base_url hostname == host_pattern 인 row 로 교체.
+			if !prev.hasExact && isCanonicalHost(r) {
+				bySource[r.SourceName] = sourceEntry{rec: r, hasExact: true}
+			}
+			continue
 		}
+		bySource[r.SourceName] = sourceEntry{rec: r, hasExact: isCanonicalHost(r)}
+	}
+
+	if len(bySource) == 0 {
+		return fmt.Errorf("no sources found in fetcher_rules; apply migration 014 seed data")
 	}
 
 	for sourceName, entry := range bySource {
-		if err := registerSource(
-			ctx, registry, sourceName, entry.rec,
-			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, log,
-		); err != nil {
+		if err := registerSource(registry, sourceName, entry.rec,
+			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, log); err != nil {
 			return err
 		}
 	}
@@ -80,7 +96,6 @@ func RegisterAll(
 }
 
 func registerSource(
-	_ context.Context,
 	registry *handler.Registry,
 	sourceName string,
 	rec *storage.FetcherRuleRecord,
@@ -101,18 +116,23 @@ func registerSource(
 
 	cfg := baseConfig
 	cfg.SourceInfo = sourceInfo
-	if rec.RequestsPerHour > 0 {
-		cfg.RequestsPerHour = rec.RequestsPerHour
-	}
+	// DB 값을 그대로 반영 — 0 은 스키마 상 "제한 없음" 이므로 > 0 조건 없이 항상 적용 (CodeRabbit Major 반영).
+	cfg.RequestsPerHour = rec.RequestsPerHour
 
 	gqCrawler := goquery.NewGoqueryCrawler(sourceName+"-goquery", sourceInfo, cfg)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)
 
 	crawler := general.NewGenericCrawler(sourceName, sourceInfo, gqFetcher, rec.BaseURL, cfg)
 
-	defaultChain, err := general.BuildChain(gqFetcher, nil, log, defaultLazyKeywords...)
+	// lazy keyword 는 chromedp 가 활성화된 경우에만 전달.
+	// pool 이 꺼진 환경에서 lazy sentinel 발생 시 republish 대상 consumer 가 없어 메시지 유실 (Copilot 반영).
+	var lazyKeywords []string
+	if len(chromedpRemoteURLs) > 0 {
+		lazyKeywords = defaultLazyKeywords
+	}
+	defaultChain, err := general.BuildChain(gqFetcher, nil, log, lazyKeywords...)
 	if err != nil {
-		return fmt.Errorf("RegisterAll: %s default chain wiring: %w", sourceName, err)
+		return fmt.Errorf("%s default chain wiring: %w", sourceName, err)
 	}
 
 	chromedpChains, err := buildChromedpChains(sourceName, sourceInfo, cfg, chromedpRemoteURLs, log)
@@ -155,9 +175,9 @@ func buildChromedpChains(
 		return nil, nil
 	}
 	chains := make([]general.Handler, len(remoteURLs))
-	for i, url := range remoteURLs {
+	for i, remoteURL := range remoteURLs {
 		opts := cdp.DefaultRemoteOptions()
-		opts.RemoteURL = url
+		opts.RemoteURL = remoteURL
 		cdpCrawler := cdp.NewChromedpCrawlerWithOptions(
 			fmt.Sprintf("%s-browser-%d", sourceName, i), sourceInfo, cfg, opts,
 		)
