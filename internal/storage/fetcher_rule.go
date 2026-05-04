@@ -33,11 +33,11 @@ type FetcherRuleRecord struct {
 	Reason      string      // "manual" | "auto_upgrade_validation" | ...
 
 	// SourceInfo 필드 — migration 014 추가 (이슈 #245). NULL 허용 (레거시 row 호환).
-	SourceName  string // 소스 식별자 (예: "naver", "cnn")
-	SourceType  string // "news" | "community" | "social"
-	Country     string // ISO 3166-1 alpha-2
-	Language    string // ISO 639-1
-	BaseURL     string // 소스 기준 URL
+	SourceName string // 소스 식별자 (예: "naver", "cnn")
+	SourceType string // "news" | "community" | "social"
+	Country    string // ISO 3166-1 alpha-2
+	Language   string // ISO 639-1
+	BaseURL    string // 소스 기준 URL
 	// RequestsPerHour: 0 = 제한 없음.
 	RequestsPerHour int
 
