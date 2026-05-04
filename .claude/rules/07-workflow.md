@@ -248,7 +248,9 @@ GitHub Issue Type 은 라벨과 별개의 native 분류 — `gh api graphql` 의
 
 #### 부여 명령 예시
 
-> **`scripts/gh-meta.sh` 를 사용한다** — 이슈/PR 생성 직후 Label + Type 을 한 번에 부여하는 전용 스크립트. 수동 `gh api graphql` 호출 대신 항상 이 스크립트를 사용한다.
+> **`scripts/gh-meta.sh` 를 사용한다** — title prefix 기반으로 Label · Issue Type 을 자동 부여하는 전용 스크립트. 수동 `gh api graphql` 호출 대신 항상 이 스크립트를 사용한다.
+> - **이슈**: Label + Issue Type 동시 부여 (`scripts/gh-meta.sh issue <N>`)
+> - **PR**: Label 만 부여 (`scripts/gh-meta.sh pr <N>`) — PR 에는 Issue Type 없음
 
 **이슈 생성 시 Label + Type 부여 (생성 직후)**:
 ```bash

@@ -33,8 +33,8 @@ resolve_label_and_type() {
   local title="$1"
   local prefix
   # [FEATURE], [FEAT#123], [DOCS] 등에서 대괄호 안의 알파벳 부분만 추출
-  # `[#\]]` 패턴은 POSIX sed 에서 ] 매칭 버그 있음 → 단순화: `[A-Z]+` 뒤 전체 소비 (#243)
-  prefix=$(echo "$title" | sed -En 's/^\[([A-Z]+).*/\1/p' || true)
+  # POSIX 호환: []#] 는 ] 를 문자 클래스 첫 자리에 놓아 리터럴로 인식 — ] 또는 # 필수 (PR #244 Copilot)
+  prefix=$(echo "$title" | sed -En 's/^\[([A-Z]+)[]#].*/\1/p' || true)
 
   case "$prefix" in
     FEATURE|FEAT)    echo "enhancement $FEATURE_TYPE_ID" ;;
