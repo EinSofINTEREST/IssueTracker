@@ -79,6 +79,9 @@ WHERE host_pattern = $1
 
 // GetByHost 는 host_pattern exact match 로 단일 row 를 반환합니다.
 // 매칭 없으면 storage.ErrNotFound — Resolver 가 errors.Is 로 분기 (캐시 negative entry 등).
+//
+// 배포 전제: 이 쿼리는 migration 014 적용 이후 배포해야 합니다.
+// 014 이전 schema 에서는 source_name 등 컬럼이 없어 즉시 에러가 발생합니다.
 func (r *pgFetcherRuleRepository) GetByHost(ctx context.Context, host string) (*storage.FetcherRuleRecord, error) {
 	host = canonicalizeHost(host)
 	rec := &storage.FetcherRuleRecord{}

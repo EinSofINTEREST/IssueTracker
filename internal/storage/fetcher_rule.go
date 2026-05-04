@@ -32,14 +32,15 @@ type FetcherRuleRecord struct {
 	Fetcher     FetcherKind // "goquery" | "chromedp"
 	Reason      string      // "manual" | "auto_upgrade_validation" | ...
 
-	// SourceInfo 필드 — migration 014 추가 (이슈 #245). NULL 허용 (레거시 row 호환).
-	SourceName string // 소스 식별자 (예: "naver", "cnn")
-	SourceType string // "news" | "community" | "social"
-	Country    string // ISO 3166-1 alpha-2
-	Language   string // ISO 639-1
-	BaseURL    string // 소스 기준 URL
-	// RequestsPerHour: 0 = 제한 없음.
-	RequestsPerHour int
+	// SourceInfo 필드 — migration 014 추가 (이슈 #245).
+	// source_name~base_url 은 DB 상 NULL 허용 (레거시 row 호환); 빈 문자열로 반환됨.
+	// requests_per_hour 는 DB 상 NOT NULL DEFAULT 0; 0 = 제한 없음.
+	SourceName      string // 소스 식별자 (예: "naver", "cnn")
+	SourceType      string // "news" | "community" | "social"
+	Country         string // ISO 3166-1 alpha-2
+	Language        string // ISO 639-1
+	BaseURL         string // 소스 기준 URL
+	RequestsPerHour int    // 시간당 최대 요청 수. 0 = 제한 없음.
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
