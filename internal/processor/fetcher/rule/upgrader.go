@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -200,7 +201,7 @@ func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []stri
 
 		job := &core.CrawlJob{
 			ID:          newRepublishJobID(),
-			CrawlerName: raw.SourceInfo.Name,
+			CrawlerName: hostnameOf(raw.URL, raw.SourceInfo.Name),
 			Target: core.Target{
 				URL:  raw.URL,
 				Type: core.TargetTypeArticle,
@@ -288,6 +289,17 @@ func (u *Upgrader) logFields(msg string, fields map[string]interface{}) {
 }
 
 // newRepublishJobID 는 republish CrawlJob 의 고유 ID 를 생성합니다 (publisher.newJobID 와 동일 패턴 — 32자 hex).
+// hostnameOf 는 rawURL 에서 hostname 을 추출합니다.
+// 파싱 실패 또는 hostname 이 비어있으면 fallback 을 반환합니다 (이슈 #248).
+func hostnameOf(rawURL, fallback string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return fallback
+	}
+	return u.Hostname()
+}
+
+// newRepublishJobID 는 republish job 의 고유 ID 를 생성합니다.
 func newRepublishJobID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

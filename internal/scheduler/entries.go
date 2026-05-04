@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"net/url"
+
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/config"
 )
@@ -50,17 +52,27 @@ var sourceCategoryURLs = map[string][]string{
 	},
 }
 
+// hostOf 는 rawURL 에서 hostname 을 추출합니다. 파싱 실패 시 rawURL 을 그대로 반환합니다.
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return rawURL
+	}
+	return u.Hostname()
+}
+
 // DefaultEntries는 현재 등록된 모든 소스의 기본 ScheduleEntry 목록을 반환합니다.
 //
 // DefaultEntries builds the full list of ScheduleEntry values from sourceCategoryURLs.
 // Intervals are controlled by SchedulerConfig.
 func DefaultEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 	var entries []ScheduleEntry
-	for crawlerName, urls := range sourceCategoryURLs {
-		for _, url := range urls {
+	for _, urls := range sourceCategoryURLs {
+		for _, rawURL := range urls {
+			host := hostOf(rawURL)
 			entries = append(entries, ScheduleEntry{
-				CrawlerName: crawlerName,
-				URL:         url,
+				CrawlerName: host,
+				URL:         rawURL,
 				TargetType:  core.TargetTypeCategory,
 				Interval:    cfg.CategoryInterval,
 				Priority:    core.PriorityNormal,
