@@ -37,12 +37,15 @@ fi
 new_prs=$(jq -n --argjson latest "$latest" --argjson known "$known" \
   '$latest - $known | .[]')
 
+# 신규 PR 번호 출력 (없으면 출력 생략)
+# 출력 → 상태 갱신 순서 보장 — 루프가 중간에 실패해도 다음 회차에서 재감지 가능 (at-least-once)
+if [[ -n "$new_prs" ]]; then
+  echo "$new_prs"
+fi
+
 # 상태 파일 갱신 (known_prs = latest 20개로 교체)
 now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 tmp=$(mktemp)
 jq -n --argjson known_prs "$latest" --arg last_run_at "$now" \
   '{known_prs: $known_prs, last_run_at: $last_run_at}' > "$tmp"
 mv "$tmp" "$STATE_FILE"
-
-# 신규 PR 번호 출력 (없으면 출력 생략)
-[[ -n "$new_prs" ]] && echo "$new_prs"
