@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,10 +49,10 @@ func TestFetch_EUCKR_ConvertedToUTF8(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, raw)
 	// UTF-8 변환 후 HTML은 유효한 UTF-8 문자열이어야 합니다.
-	assert.True(t, isValidUTF8(raw.HTML), "RawContent.HTML must be valid UTF-8 after charset conversion")
+	assert.True(t, utf8.ValidString(raw.HTML), "RawContent.HTML must be valid UTF-8 after charset conversion")
 	// 제목 텍스트 "네이버뉴스"가 올바르게 변환되어야 합니다.
 	assert.True(t, strings.Contains(raw.HTML, "네이버뉴스"),
-		"EUC-KR title should be converted to UTF-8 '네이버뉴스', got: %q", raw.HTML[:min(200, len(raw.HTML))])
+		"EUC-KR title should be converted to UTF-8 '네이버뉴스'")
 }
 
 // TestFetch_UTF8_NoConversion 은 이미 UTF-8 인 응답이 손상 없이 저장되는지 검증합니다.
@@ -70,7 +71,7 @@ func TestFetch_UTF8_NoConversion(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, raw)
-	assert.True(t, isValidUTF8(raw.HTML), "UTF-8 response must remain valid UTF-8")
+	assert.True(t, utf8.ValidString(raw.HTML), "UTF-8 response must remain valid UTF-8")
 	assert.True(t, strings.Contains(raw.HTML, "네이버뉴스"))
 }
 
@@ -92,43 +93,4 @@ func TestFetch_NoCharsetHeader_FallbackToUTF8(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, raw)
 	assert.True(t, strings.Contains(raw.HTML, "hello world"))
-}
-
-func isValidUTF8(s string) bool {
-	for i := 0; i < len(s); {
-		r := rune(s[i])
-		if r < 0x80 {
-			i++
-			continue
-		}
-		// multi-byte UTF-8 시작 바이트 확인
-		var size int
-		switch {
-		case r>>5 == 0b110:
-			size = 2
-		case r>>4 == 0b1110:
-			size = 3
-		case r>>3 == 0b11110:
-			size = 4
-		default:
-			return false
-		}
-		if i+size > len(s) {
-			return false
-		}
-		for j := 1; j < size; j++ {
-			if s[i+j]>>6 != 0b10 {
-				return false
-			}
-		}
-		i += size
-	}
-	return true
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

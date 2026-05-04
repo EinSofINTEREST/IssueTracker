@@ -52,10 +52,14 @@ func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.R
 
 	// charset.NewReader: Content-Type 헤더와 HTML meta 태그를 기반으로 charset 감지 후
 	// 응답 body 를 UTF-8 스트림으로 변환한다 (이슈 #253 — EUC-KR 등 비UTF-8 인코딩 대응).
-	// 변환 실패 시 원본 body 를 그대로 사용 (graceful degrade).
+	// 변환 실패 시 WARN 로깅 후 원본 body 로 fallback — 하위 호환 유지.
 	contentType := resp.Header.Get("Content-Type")
 	utf8Reader, err := charset.NewReader(resp.Body, contentType)
 	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"url":          target.URL,
+			"content_type": contentType,
+		}).WithError(err).Warn("charset detection failed, falling back to raw body")
 		utf8Reader = resp.Body
 	}
 
