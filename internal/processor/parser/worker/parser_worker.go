@@ -277,14 +277,14 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 
 	// 카테고리 페이지 — ParseLinks 후 chained article jobs 발행
 	if targetType == core.TargetTypeCategory {
-		return w.processCategoryPage(ctx, raw, ref.ID, crawlerName, jobTimeout, mlog)
+		return w.processCategoryPage(ctx, raw, ref.ID, crawlerName, jobTimeout, ref.LLMRetryCount, mlog)
 	}
 
 	// article 페이지 — ParsePage → ConvertPage → publish normalized
-	return w.processArticlePage(ctx, raw, ref.ID, crawlerName, mlog)
+	return w.processArticlePage(ctx, raw, ref.ID, crawlerName, ref.LLMRetryCount, mlog)
 }
 
-func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) error {
+func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, jobTimeout time.Duration, llmRetryCount int, mlog *logger.Logger) error {
 	if w.parser == nil || w.publisher == nil {
 		mlog.Debug("parser or publisher not configured, skipping category job")
 		w.deleteRaw(ctx, rawID, mlog)
@@ -293,7 +293,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 
 	items, err := w.parser.ParseLinks(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, raw, rawID, "parse_links", storage.TargetTypeList, err, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_links", storage.TargetTypeList, err, llmRetryCount, mlog)
 	}
 	if len(items) == 0 {
 		mlog.Debug("no article links found in category page")
@@ -316,7 +316,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 	return nil
 }
 
-func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, mlog *logger.Logger) error {
+func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, llmRetryCount int, mlog *logger.Logger) error {
 	if w.parser == nil {
 		mlog.Debug("parser not configured, skipping article")
 		w.deleteRaw(ctx, rawID, mlog)
@@ -325,7 +325,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 
 	page, err := w.parser.ParsePage(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, llmRetryCount, mlog)
 	}
 
 	// 이슈 #220: parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달이면
@@ -355,7 +355,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 // 이슈 #220 (page 단계 한정): rule.ErrParseFailure / rule.ErrEmptySelector 는 host 단위 카운터로
 // 누적 — 임계값 도달 시 단계 3 (#221) 의 chromedp 자동 전환 트리거 입력. ErrNoRule 은 LLM 자동
 // rule 생성 (이슈 #149) 의 책임 영역이라 카운팅 제외 (다른 정책으로 처리됨).
-func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, mlog *logger.Logger) error {
+func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
 		mlog.WithFields(map[string]interface{}{
@@ -367,7 +367,7 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 		// ErrNoRule + llmGen 활성화 → LLM 자동 rule 생성 비동기 트리거 (이슈 #149)
 		// 다른 rule.Error (parse_failure / empty_selector) 는 stale rule 진단 — 운영자 review 영역.
 		if rerr.Code == rule.ErrNoRule && w.llmGen != nil {
-			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw)
+			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw, llmRetryCount)
 		}
 
 		// 이슈 #220: page 단계의 ParseFailure / EmptySelector 만 host 카운터에 누적.
@@ -535,6 +535,64 @@ func (w *ParserWorker) publishContents(ctx context.Context, contents []*core.Con
 		}
 	}
 	return nil
+}
+
+const (
+	// maxLLMRetries 는 LLM selector 검증 실패 시 raw content 를 재큐잉할 최대 횟수입니다 (이슈 #237).
+	// 이 값을 초과하면 재큐잉 없이 raw 를 TTL cleanup 에 맡깁니다.
+	maxLLMRetries = 3
+)
+
+// RequeueForLLMRetry 는 LLM selector 검증 실패 시 raw content 를 issuetracker.fetched 에
+// 재발행합니다 (이슈 #237). llmgen.Generator 의 validateFailureHandler 로 등록됩니다.
+//
+// llmRetryCount >= maxLLMRetries 이면 재큐잉을 중단하고 Warn 로그만 남깁니다 — 무한루프 방지.
+// 재발행 실패는 non-fatal — raw 는 TTL cleanup 으로 최종 정리됩니다.
+func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, raw *core.RawContent, llmRetryCount int) {
+	nextCount := llmRetryCount + 1
+	if nextCount > maxLLMRetries {
+		w.log.WithFields(map[string]interface{}{
+			"raw_id":          raw.ID,
+			"url":             raw.URL,
+			"llm_retry_count": llmRetryCount,
+			"max_llm_retries": maxLLMRetries,
+		}).Warn("llm retry limit reached, abandoning raw content requeue")
+		return
+	}
+
+	ref := core.RawContentRef{
+		ID:            raw.ID,
+		URL:           raw.URL,
+		FetchedAt:     raw.FetchedAt,
+		SourceInfo:    raw.SourceInfo,
+		LLMRetryCount: nextCount,
+	}
+	payload, err := json.Marshal(ref)
+	if err != nil {
+		w.log.WithFields(map[string]interface{}{
+			"raw_id": raw.ID,
+		}).WithError(err).Error("failed to marshal RawContentRef for llm requeue")
+		return
+	}
+
+	msg := queue.Message{
+		Topic: queue.TopicFetched,
+		Value: payload,
+	}
+	if err := w.producer.Publish(ctx, msg); err != nil {
+		w.log.WithFields(map[string]interface{}{
+			"raw_id":          raw.ID,
+			"url":             raw.URL,
+			"llm_retry_count": nextCount,
+		}).WithError(err).Warn("failed to requeue raw content for llm retry (non-fatal)")
+		return
+	}
+
+	w.log.WithFields(map[string]interface{}{
+		"raw_id":          raw.ID,
+		"url":             raw.URL,
+		"llm_retry_count": nextCount,
+	}).Info("raw content requeued for llm retry after selector validation failure")
 }
 
 // deleteRaw 는 처리 완료된 raw_contents row 를 즉시 정리합니다.
