@@ -70,7 +70,7 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 3. **Commit-per-TODO** — 별 언급 없으면 논리적 변경 단위마다 commit (메시지 컨벤션 준수).
 4. **PR 자동 생성** — 작업 완료 직후 컨벤션 + 템플릿 준수해서 `Closes #<sub-issue>` 포함 PR 자동 생성. 마지막 sub-issue PR 에서 메인 이슈도 close.
 5. **권한 사용 최소화** — 새 permission / 외부 도구 / 의존성은 작업 완수에 불가피한 경우에만.
-6. **Label · Issue Type 부여 필수** (이슈 #210, #212) — 이슈는 **issue prefix** 기준 Label + Type (`[FEATURE]→enhancement/Feature`, `[REFACTOR]→refactor/Task`, `[CHORE]→chore/Task`, `[DOCS]→documentation/Task`, `[FIX]→bug/Bug`, `[HOTFIX]→bug+hotfix/Bug`). PR Label 은 그 PR 이 닫는 이슈의 Label 과 동일. 표기 체계 3분리 (commit `[FEAT]:` / PR `[FEAT#N]` / issue `[FEATURE]`) 는 [규약 6](.claude/rules/07-workflow.md) 참조.
+6. **Label · Issue Type 부여 필수** (이슈 #210, #212) — 이슈는 **issue prefix** 기준 Label + Type (`[FEATURE]→enhancement/Feature`, `[REFACTOR]→refactor/Task`, `[CHORE]→chore/Task`, `[DOCS]→documentation/Task`, `[FIX]→bug/Bug`, `[HOTFIX]→bug+hotfix/Bug`). PR Label 은 그 PR 이 닫는 이슈의 Label 과 동일. **부여 수단: `scripts/gh-meta.sh issue <N>` / `scripts/gh-meta.sh pr <N>` — 수동 `gh api graphql` 대신 항상 이 스크립트 사용** (이슈 #243). 표기 체계 3분리 (commit `[FEAT]:` / PR `[FEAT#N]` / issue `[FEATURE]`) 는 [규약 6](.claude/rules/07-workflow.md) 참조.
 
 ## PR 생성 후 자동 동작 (이슈 #129)
 

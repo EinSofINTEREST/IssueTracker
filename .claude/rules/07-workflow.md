@@ -248,33 +248,29 @@ GitHub Issue Type 은 라벨과 별개의 native 분류 — `gh api graphql` 의
 
 #### 부여 명령 예시
 
-**이슈 생성 시 Label** (title 은 issue prefix 사용 — full-word, 콜론 없음):
+> **`scripts/gh-meta.sh` 를 사용한다** — title prefix 기반으로 Label · Issue Type 을 자동 부여하는 전용 스크립트. 수동 `gh api graphql` 호출 대신 항상 이 스크립트를 사용한다.
+> - **이슈**: Label + Issue Type 동시 부여 (`scripts/gh-meta.sh issue <N>`)
+> - **PR**: Label 만 부여 (`scripts/gh-meta.sh pr <N>`) — PR 에는 Issue Type 없음
+
+**이슈 생성 시 Label + Type 부여 (생성 직후)**:
 ```bash
+# 이슈 생성 (--label 은 생략 가능 — gh-meta.sh 가 title prefix 로 자동 판단)
 gh issue create --repo EinSofINTEREST/IssueTracker \
   --title "[DOCS] 제목" \
-  --label documentation \
   --body "..."
+
+# Label + Issue Type 일괄 부여 (이슈 번호 지정)
+scripts/gh-meta.sh issue <ISSUE_NUMBER>
 ```
 
 다른 issue prefix 예: `[FEATURE] 새 크롤러`, `[REFACTOR] 모듈 분리`, `[HOTFIX] 배포 직후 데드락`.
 
-**이슈 Type 부여 (생성 직후)**:
+**PR 생성 후 Label 부여**:
 ```bash
-ISSUE_ID=$(gh issue view <ISSUE_NUMBER> --json id --jq .id)
+gh pr create --title "[DOCS#N] 제목" --body "..."
 
-gh api graphql -f query='
-mutation($issueId: ID!, $issueTypeId: ID!) {
-  updateIssueIssueType(input: {issueId: $issueId, issueTypeId: $issueTypeId}) {
-    issue { number issueType { name } }
-  }
-}' -f issueId="$ISSUE_ID" -f issueTypeId="IT_kwDODsDQh84By0jZ"
-```
-
-**PR 생성 시 Label**:
-```bash
-gh pr create --label documentation --title "[DOCS#N] 제목" --body "..."
-# 또는 생성 후
-gh pr edit <PR_NUMBER> --add-label documentation
+# PR Label 부여 (닫는 이슈의 Label 과 자동 동기화)
+scripts/gh-meta.sh pr <PR_NUMBER>
 ```
 
 #### Why
@@ -285,9 +281,10 @@ gh pr edit <PR_NUMBER> --add-label documentation
 
 #### How to apply
 
-- 이슈 생성 후 즉시 Label + Type 둘 다 부여 (생성 직후 같은 회차에서 처리, 까먹지 않도록)
-- PR 생성 시 `--label` 플래그로 같이 지정 (생성 후 add-label 도 OK)
+- **이슈 생성 직후** `scripts/gh-meta.sh issue <N>` 호출 — Label + Type 동시 부여, 까먹지 않도록 생성 직후 같은 회차에서 처리
+- **PR 생성 직후** `scripts/gh-meta.sh pr <N>` 호출 — 닫는 이슈의 Label 과 자동 동기화
 - 매핑이 모호하면 (예: refactor 인데 bug 도 같이 잡는 PR) 가장 큰 변경 의도 prefix 기준으로 분류 + 보조 label 추가 가능
+- `gh api graphql` 직접 호출은 사용하지 않는다 — `gh-meta.sh` 로 표준화
 
 <br>
 
