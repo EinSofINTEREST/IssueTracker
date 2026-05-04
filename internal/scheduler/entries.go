@@ -7,7 +7,7 @@ import (
 
 // sourceCategoryURLs 는 각 소스의 카테고리 URL 목록입니다 (이슈 #247).
 //
-// 기존 sources/{kr,us}/*/config.go 에 하드코딩된 CategoryURLs 를 이 단일 맵으로 통합.
+// 기존 sources/{kr,us}/*/config.go 에 하드코딩된 CategoryURLs 를 이 맵으로 통합.
 // DefaultEntries 가 이 목록에서 ScheduleEntry 를 생성합니다.
 // 카테고리 이름 키는 사용하지 않으므로 map[string][]string 으로 URL 목록만 보관합니다.
 var sourceCategoryURLs = map[string][]string{
