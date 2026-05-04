@@ -171,7 +171,7 @@ func TestGenerator_Enqueue_PageSuccess_InsertsDisabledRule(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
-	})
+	}, 0)
 
 	waitForInserts(t, repo, 1, 2*time.Second)
 
@@ -201,7 +201,7 @@ func TestGenerator_Enqueue_ListSuccess(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypeList, &core.RawContent{
 		URL: "https://example.com/news", HTML: sampleListHTML,
-	})
+	}, 0)
 
 	waitForInserts(t, repo, 1, 2*time.Second)
 	rec := repo.inserts()[0]
@@ -224,7 +224,7 @@ func TestGenerator_Enqueue_ValidationFailure_NoInsert(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
-	})
+	}, 0)
 
 	// validation reject 시 INSERT 가 발생하지 않는지 확인 — 충분한 wait 후에도 0건이어야 함
 	time.Sleep(300 * time.Millisecond)
@@ -238,7 +238,7 @@ func TestGenerator_Enqueue_LLMError_NoInsert(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
-	})
+	}, 0)
 
 	// async goroutine 이 LLM 호출 후 실패 — INSERT 없어야 함
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -274,7 +274,7 @@ func TestGenerator_Enqueue_InflightDedup_SingleLLMCall(t *testing.T) {
 			defer wg.Done()
 			g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 				URL: "https://example.com/x", HTML: samplePageHTML,
-			})
+			}, 0)
 		}()
 	}
 	wg.Wait()
@@ -298,10 +298,10 @@ func TestGenerator_Enqueue_DifferentHosts_BothCalled(t *testing.T) {
 
 	g.Enqueue(context.Background(), "a.example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://a.example.com/x", HTML: samplePageHTML,
-	})
+	}, 0)
 	g.Enqueue(context.Background(), "b.example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://b.example.com/x", HTML: samplePageHTML,
-	})
+	}, 0)
 
 	waitForInserts(t, repo, 2, 2*time.Second)
 	assert.Equal(t, 2, provider.callCount())
@@ -314,7 +314,7 @@ func TestGenerator_Enqueue_EmptyHTML_NoCall(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: "",
-	})
+	}, 0)
 
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, 0, provider.callCount(), "빈 HTML 은 LLM 호출 skip")
@@ -338,7 +338,7 @@ func TestGenerator_Stop_WaitsForInflightGoroutines(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
-	})
+	}, 0)
 
 	// 충분한 timeout 으로 Stop — provider delay (200ms) 가 끝날 때까지 대기.
 	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -359,7 +359,7 @@ func TestGenerator_EnqueueAfterStop_NoOp(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
-	})
+	}, 0)
 
 	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, 0, provider.callCount(), "Stop 이후 Enqueue 는 LLM 호출하지 않아야 함")
@@ -396,7 +396,7 @@ func TestGenerator_Enqueue_OutlivesCallerCtxCancel(t *testing.T) {
 	callerCtx, cancel := context.WithCancel(context.Background())
 	g.Enqueue(callerCtx, "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
-	})
+	}, 0)
 
 	// 호출자 ctx 즉시 cancel — LLM 호출 중에 cancel 됨. WithoutCancel 이라 호출은 계속 진행되어야 함.
 	cancel()
