@@ -15,8 +15,7 @@ import (
 	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/fetcher"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/fetcher/domain/general/sources/kr"
-	"issuetracker/internal/processor/fetcher/domain/general/sources/us"
+	"issuetracker/internal/processor/fetcher/domain/general/sources"
 	"issuetracker/internal/processor/fetcher/handler"
 	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
@@ -172,12 +171,18 @@ func main() {
 		chromedpRemoteURLs = nil
 	}
 
-	// fetcher 측 등록 (이슈 #134 분리 후): chain handler 가 raw_contents 저장 + RawContentRef 발행만 수행.
-	if err := kr.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
-		log.WithError(err).Fatal("failed to register kr crawlers")
+	// chromedp pool 이 활성화된 경우 remoteURLs 수 == WorkerCount 를 사전 검증합니다 (CodeRabbit Major 반영).
+	// RegisterAll 이 URL 당 1 개 chain 을 생성하므로, 불일치 시 worker:chain 매핑이 어긋납니다 (이슈 #230).
+	if chromedpPoolCfg.Enabled && len(chromedpRemoteURLs) != chromedpPoolCfg.WorkerCount {
+		log.WithFields(map[string]interface{}{
+			"worker_count":     chromedpPoolCfg.WorkerCount,
+			"remote_url_count": len(chromedpRemoteURLs),
+		}).Fatal("chromedp pool config mismatch: remote_urls count must equal worker_count")
 	}
-	if err := us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
-		log.WithError(err).Fatal("failed to register us crawlers")
+
+	// fetcher 측 등록 (이슈 #246): fetcher_rules DB 에서 모든 source 를 읽어 일괄 등록.
+	if err := sources.RegisterAll(ctx, registry, fetcherRuleRepo, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
+		log.WithError(err).Fatal("failed to register crawlers from db")
 	}
 
 	// Redis 기반 ProcessingLock: 동일 URL 이 여러 worker/인스턴스에서 단계별 (fetcher/parser/validator)
