@@ -15,8 +15,7 @@ import (
 	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/fetcher"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/fetcher/domain/general/sources/kr"
-	"issuetracker/internal/processor/fetcher/domain/general/sources/us"
+	"issuetracker/internal/processor/fetcher/domain/general/sources"
 	"issuetracker/internal/processor/fetcher/handler"
 	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
@@ -172,12 +171,9 @@ func main() {
 		chromedpRemoteURLs = nil
 	}
 
-	// fetcher 측 등록 (이슈 #134 분리 후): chain handler 가 raw_contents 저장 + RawContentRef 발행만 수행.
-	if err := kr.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
-		log.WithError(err).Fatal("failed to register kr crawlers")
-	}
-	if err := us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
-		log.WithError(err).Fatal("failed to register us crawlers")
+	// fetcher 측 등록 (이슈 #246): fetcher_rules DB 에서 모든 source 를 읽어 일괄 등록.
+	if err := sources.RegisterAll(ctx, registry, fetcherRuleRepo, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
+		log.WithError(err).Fatal("failed to register crawlers from db")
 	}
 
 	// Redis 기반 ProcessingLock: 동일 URL 이 여러 worker/인스턴스에서 단계별 (fetcher/parser/validator)
