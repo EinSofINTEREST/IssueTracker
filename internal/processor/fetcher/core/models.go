@@ -116,10 +116,11 @@ func newRawContentID(name string, t time.Time) string {
 // HTML 본문을 제외하고 다운스트림 소비자가 Postgres에서 전체 데이터를 조회할 수 있는
 // 최소한의 필드만 포함합니다.
 type RawContentRef struct {
-	ID         string     `json:"id"`
-	URL        string     `json:"url"`
-	FetchedAt  time.Time  `json:"fetched_at"`
-	SourceInfo SourceInfo `json:"source_info"`
+	ID            string     `json:"id"`
+	URL           string     `json:"url"`
+	FetchedAt     time.Time  `json:"fetched_at"`
+	SourceInfo    SourceInfo `json:"source_info"`
+	LLMRetryCount int        `json:"llm_retry_count,omitempty"` // 이슈 #237: LLM validate 실패 재큐 횟수
 }
 
 // ContentRef는 contents 테이블에 저장된 Content의 경량 참조입니다.

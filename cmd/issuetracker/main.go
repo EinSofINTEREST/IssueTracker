@@ -413,6 +413,13 @@ func main() {
 		log,
 	)
 
+	// ── LLM validate 실패 재큐 (이슈 #237) ───────────────────────────────────
+	// selector 검증 실패 시 raw 를 issuetracker.fetched 에 재발행 — 룰 생성 성공 후 재파싱 기회 부여.
+	// llmGen 이 nil(LLM 비활성) 이면 wiring 불필요.
+	if llmGen != nil {
+		llmGen.SetValidateFailureHandler(pw.RequeueForLLMRetry)
+	}
+
 	// ── Refiner (이슈 #173 단계 4-2) ──────────────────────────────────────────
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
