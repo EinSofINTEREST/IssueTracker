@@ -1,13 +1,16 @@
 package goquery
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html/charset"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/logger"
@@ -32,8 +35,23 @@ func (c *GoqueryCrawler) FetchAndParse(ctx context.Context, target core.Target, 
 	}
 	defer resp.Body.Close()
 
+	// fetch.go 와 동일하게 body 전체를 메모리에 읽은 뒤 charset 감지 (이슈 #253).
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	contentType := resp.Header.Get("Content-Type")
+	utf8Reader, err := charset.NewReader(bytes.NewReader(bodyBytes), contentType)
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"url":          target.URL,
+			"content_type": contentType,
+		}).WithError(err).Warn("charset detection failed, falling back to raw body")
+		utf8Reader = bytes.NewReader(bodyBytes)
+	}
+
 	// goquery Document 생성
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(utf8Reader)
 	if err != nil {
 		return nil, err
 	}
