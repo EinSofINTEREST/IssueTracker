@@ -52,18 +52,20 @@ func RegisterAll(
 		return fmt.Errorf("list fetcher rules: %w", err)
 	}
 
-	// source_name 기준으로 canonical row 수집.
-	// 1. base_url hostname == host_pattern 인 row 를 우선 canonical 로 선택.
-	// 2. 동일 source_name 내 SourceInfo 필드가 불일치하면 즉시 에러 (CodeRabbit Major 반영).
+	// 단일 루프에서 canonical row(bySource)와 host 목록(hostsBySource) 동시 수집 (Gemini Medium 반영).
+	// - base_url hostname == host_pattern 인 row 를 canonical 로 우선 선택
+	// - 동일 source_name 내 SourceInfo 불일치 시 즉시 에러
 	type sourceEntry struct {
 		rec      *storage.FetcherRuleRecord
 		hasExact bool
 	}
 	bySource := make(map[string]sourceEntry)
+	hostsBySource := make(map[string][]string)
 	for _, r := range rules {
 		if r.SourceName == "" {
 			continue
 		}
+		hostsBySource[r.SourceName] = append(hostsBySource[r.SourceName], r.HostPattern)
 		if prev, seen := bySource[r.SourceName]; seen {
 			if prev.rec.Country != r.Country ||
 				prev.rec.Language != r.Language ||
@@ -86,26 +88,15 @@ func RegisterAll(
 		return fmt.Errorf("no sources found in fetcher_rules; apply migration 014 seed data")
 	}
 
-	// source_name 별로 handler 를 빌드한 뒤, 해당 source 의 모든 host_pattern 에도 동일 handler 등록.
-	// CrawlerName 이 host 기반으로 통일 (#248) 되면서 Registry 가 host key 로 dispatch 해야 함.
-	// source_name key 도 유지 — 기존 CrawlJob 하위 호환.
-	hostsBySource := make(map[string][]string)
-	for _, r := range rules {
-		if r.SourceName == "" {
-			continue
-		}
-		hostsBySource[r.SourceName] = append(hostsBySource[r.SourceName], r.HostPattern)
-	}
-
+	// source_name 별로 handler 를 빌드한 뒤, source_name 과 각 host_pattern 양쪽으로 등록.
+	// CrawlerName 이 host 기반으로 통일 (#248) — source_name 키는 하위 호환 유지.
 	for sourceName, entry := range bySource {
-		h, err := buildHandler(registry, sourceName, entry.rec,
+		h, err := buildHandler(sourceName, entry.rec,
 			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, log)
 		if err != nil {
 			return err
 		}
-		// source_name 으로 등록 (기존 경로 호환).
 		registry.Register(sourceName, h)
-		// 각 host_pattern 으로도 등록 — host 기반 CrawlerName dispatch 지원 (이슈 #248).
 		for _, host := range hostsBySource[sourceName] {
 			registry.Register(host, h)
 		}
@@ -121,7 +112,6 @@ func RegisterAll(
 // buildHandler 는 source 의 ChainHandler 를 빌드하여 반환합니다.
 // 등록(registry.Register)은 호출자가 직접 수행 — source_name 과 host_pattern 양쪽 등록 지원.
 func buildHandler(
-	_ *handler.Registry,
 	sourceName string,
 	rec *storage.FetcherRuleRecord,
 	baseConfig core.Config,

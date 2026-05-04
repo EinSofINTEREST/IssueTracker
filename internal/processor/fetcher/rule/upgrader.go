@@ -299,6 +299,7 @@ func hostnameOf(rawURL, fallback string) string {
 	return u.Hostname()
 }
 
+// newRepublishJobID 는 republish job 의 고유 ID 를 생성합니다.
 func newRepublishJobID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
