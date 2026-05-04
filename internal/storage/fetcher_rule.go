@@ -31,8 +31,19 @@ type FetcherRuleRecord struct {
 	HostPattern string      // exact host (예: "edition.cnn.com")
 	Fetcher     FetcherKind // "goquery" | "chromedp"
 	Reason      string      // "manual" | "auto_upgrade_validation" | ...
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+
+	// SourceInfo 필드 — migration 014 추가 (이슈 #245).
+	// source_name~base_url 은 DB 상 NULL 허용 (레거시 row 호환); 빈 문자열로 반환됨.
+	// requests_per_hour 는 DB 상 NOT NULL DEFAULT 0; 0 = 제한 없음.
+	SourceName      string // 소스 식별자 (예: "naver", "cnn")
+	SourceType      string // "news" | "community" | "social"
+	Country         string // ISO 3166-1 alpha-2
+	Language        string // ISO 639-1
+	BaseURL         string // 소스 기준 URL
+	RequestsPerHour int    // 시간당 최대 요청 수. 0 = 제한 없음.
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // FetcherRuleRepository 는 fetcher_rules 테이블에 대한 데이터 접근 인터페이스입니다.

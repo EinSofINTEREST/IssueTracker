@@ -68,19 +68,29 @@ func (r *pgFetcherRuleRepository) Upsert(ctx context.Context, host string, fetch
 }
 
 const sqlGetFetcherRuleByHost = `
-SELECT id, host_pattern, fetcher, COALESCE(reason, ''), created_at, updated_at
+SELECT id, host_pattern, fetcher, COALESCE(reason, ''),
+       COALESCE(source_name, ''), COALESCE(source_type, ''),
+       COALESCE(country, ''), COALESCE(language, ''),
+       COALESCE(base_url, ''), COALESCE(requests_per_hour, 0),
+       created_at, updated_at
 FROM fetcher_rules
 WHERE host_pattern = $1
 `
 
 // GetByHost 는 host_pattern exact match 로 단일 row 를 반환합니다.
 // 매칭 없으면 storage.ErrNotFound — Resolver 가 errors.Is 로 분기 (캐시 negative entry 등).
+//
+// 배포 전제: 이 쿼리는 migration 014 적용 이후 배포해야 합니다.
+// 014 이전 schema 에서는 source_name 등 컬럼이 없어 즉시 에러가 발생합니다.
 func (r *pgFetcherRuleRepository) GetByHost(ctx context.Context, host string) (*storage.FetcherRuleRecord, error) {
 	host = canonicalizeHost(host)
 	rec := &storage.FetcherRuleRecord{}
 	var fetcher string
 	err := r.pool.QueryRow(ctx, sqlGetFetcherRuleByHost, host).Scan(
-		&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason,
+		&rec.SourceName, &rec.SourceType, &rec.Country, &rec.Language,
+		&rec.BaseURL, &rec.RequestsPerHour,
+		&rec.CreatedAt, &rec.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -93,7 +103,11 @@ func (r *pgFetcherRuleRepository) GetByHost(ctx context.Context, host string) (*
 }
 
 const sqlListFetcherRules = `
-SELECT id, host_pattern, fetcher, COALESCE(reason, ''), created_at, updated_at
+SELECT id, host_pattern, fetcher, COALESCE(reason, ''),
+       COALESCE(source_name, ''), COALESCE(source_type, ''),
+       COALESCE(country, ''), COALESCE(language, ''),
+       COALESCE(base_url, ''), COALESCE(requests_per_hour, 0),
+       created_at, updated_at
 FROM fetcher_rules
 ORDER BY host_pattern ASC
 `
@@ -110,7 +124,12 @@ func (r *pgFetcherRuleRepository) List(ctx context.Context) ([]*storage.FetcherR
 	for rows.Next() {
 		rec := &storage.FetcherRuleRecord{}
 		var fetcher string
-		if err := rows.Scan(&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason,
+			&rec.SourceName, &rec.SourceType, &rec.Country, &rec.Language,
+			&rec.BaseURL, &rec.RequestsPerHour,
+			&rec.CreatedAt, &rec.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan fetcher rule: %w", err)
 		}
 		rec.Fetcher = storage.FetcherKind(fetcher)
