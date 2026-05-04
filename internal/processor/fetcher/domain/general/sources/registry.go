@@ -86,17 +86,42 @@ func RegisterAll(
 		return fmt.Errorf("no sources found in fetcher_rules; apply migration 014 seed data")
 	}
 
+	// source_name 별로 handler 를 빌드한 뒤, 해당 source 의 모든 host_pattern 에도 동일 handler 등록.
+	// CrawlerName 이 host 기반으로 통일 (#248) 되면서 Registry 가 host key 로 dispatch 해야 함.
+	// source_name key 도 유지 — 기존 CrawlJob 하위 호환.
+	hostsBySource := make(map[string][]string)
+	for _, r := range rules {
+		if r.SourceName == "" {
+			continue
+		}
+		hostsBySource[r.SourceName] = append(hostsBySource[r.SourceName], r.HostPattern)
+	}
+
 	for sourceName, entry := range bySource {
-		if err := registerSource(registry, sourceName, entry.rec,
-			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, log); err != nil {
+		h, err := buildHandler(registry, sourceName, entry.rec,
+			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, log)
+		if err != nil {
 			return err
 		}
+		// source_name 으로 등록 (기존 경로 호환).
+		registry.Register(sourceName, h)
+		// 각 host_pattern 으로도 등록 — host 기반 CrawlerName dispatch 지원 (이슈 #248).
+		for _, host := range hostsBySource[sourceName] {
+			registry.Register(host, h)
+		}
+		log.WithFields(map[string]interface{}{
+			"source":            sourceName,
+			"hosts":             hostsBySource[sourceName],
+			"requests_per_hour": entry.rec.RequestsPerHour,
+		}).Info("crawler registered from db")
 	}
 	return nil
 }
 
-func registerSource(
-	registry *handler.Registry,
+// buildHandler 는 source 의 ChainHandler 를 빌드하여 반환합니다.
+// 등록(registry.Register)은 호출자가 직접 수행 — source_name 과 host_pattern 양쪽 등록 지원.
+func buildHandler(
+	_ *handler.Registry,
 	sourceName string,
 	rec *storage.FetcherRuleRecord,
 	baseConfig core.Config,
@@ -105,7 +130,7 @@ func registerSource(
 	resolver rule.Resolver,
 	chromedpRemoteURLs []string,
 	log *logger.Logger,
-) error {
+) (handler.Handler, error) {
 	sourceInfo := core.SourceInfo{
 		Country:  rec.Country,
 		Type:     core.SourceType(rec.SourceType),
@@ -132,21 +157,15 @@ func registerSource(
 	}
 	defaultChain, err := general.BuildChain(gqFetcher, nil, log, lazyKeywords...)
 	if err != nil {
-		return fmt.Errorf("%s default chain wiring: %w", sourceName, err)
+		return nil, fmt.Errorf("%s default chain wiring: %w", sourceName, err)
 	}
 
 	chromedpChains, err := buildChromedpChains(sourceName, sourceInfo, cfg, chromedpRemoteURLs, log)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	registry.Register(sourceName, general.NewChainHandler(crawler, defaultChain, chromedpChains, resolver, rawSvc, producer, log))
-	log.WithFields(map[string]interface{}{
-		"crawler":           sourceName,
-		"chromedp_workers":  len(chromedpChains),
-		"requests_per_hour": cfg.RequestsPerHour,
-	}).Info("crawler registered from db")
-	return nil
+	return general.NewChainHandler(crawler, defaultChain, chromedpChains, resolver, rawSvc, producer, log), nil
 }
 
 // isCanonicalHost 는 r.BaseURL 의 hostname 이 r.HostPattern 과 일치하면 true 를 반환합니다.

@@ -16,7 +16,7 @@ import (
 //
 // ScheduleEntry describes a single URL to be crawled on a fixed interval.
 type ScheduleEntry struct {
-	// CrawlerName은 이 Job을 처리할 크롤러 이름입니다 (registry 키).
+	// CrawlerName은 이 Job을 처리할 크롤러 이름입니다 (registry 키 — host 기반, 이슈 #248).
 	CrawlerName string
 
 	// URL은 크롤링 대상 URL입니다.
