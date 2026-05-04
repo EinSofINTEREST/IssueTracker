@@ -45,4 +45,6 @@ jq -n --argjson known_prs "$latest" --arg last_run_at "$now" \
 mv "$tmp" "$STATE_FILE"
 
 # 신규 PR 번호 출력 (없으면 출력 생략)
-[[ -n "$new_prs" ]] && echo "$new_prs"
+if [[ -n "$new_prs" ]]; then
+  echo "$new_prs"
+fi
