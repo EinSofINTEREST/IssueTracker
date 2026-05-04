@@ -5,48 +5,48 @@ import (
 	"issuetracker/pkg/config"
 )
 
-// sourceCategoryURLs 는 각 소스의 카테고리 이름 → URL 매핑입니다 (이슈 #247).
+// sourceCategoryURLs 는 각 소스의 카테고리 URL 목록입니다 (이슈 #247).
 //
-// 기존 sources/{kr,us}/*/config.go 에 하드코딩된 CategoryURLs 를 이 단일 상수로 통합.
-// 스케줄러는 이 맵에서 ScheduleEntry 를 생성하고, ChainHandler 는 fetcher_rules DB 에서
-// SourceInfo·RequestsPerHour 를 조회하므로 각자의 관심사가 분리됩니다.
-var sourceCategoryURLs = map[string]map[string]string{
+// 기존 sources/{kr,us}/*/config.go 에 하드코딩된 CategoryURLs 를 이 단일 맵으로 통합.
+// DefaultEntries 가 이 목록에서 ScheduleEntry 를 생성합니다.
+// 카테고리 이름 키는 사용하지 않으므로 map[string][]string 으로 URL 목록만 보관합니다.
+var sourceCategoryURLs = map[string][]string{
 	"naver": {
-		"politics": "https://news.naver.com/section/100",
-		"economy":  "https://news.naver.com/section/101",
-		"society":  "https://news.naver.com/section/102",
-		"culture":  "https://news.naver.com/section/103",
-		"world":    "https://news.naver.com/section/104",
-		"IT":       "https://news.naver.com/section/105",
+		"https://news.naver.com/section/100", // politics
+		"https://news.naver.com/section/101", // economy
+		"https://news.naver.com/section/102", // society
+		"https://news.naver.com/section/103", // culture
+		"https://news.naver.com/section/104", // world
+		"https://news.naver.com/section/105", // it
 	},
 	"daum": {
-		"politics": "https://news.daum.net/politics",
-		"economy":  "https://news.daum.net/economic",
-		"society":  "https://news.daum.net/society",
-		"culture":  "https://news.daum.net/culture",
-		"world":    "https://news.daum.net/foreign",
-		"IT":       "https://news.daum.net/tech",
-		"climate":  "https://news.daum.net/climate",
-		"life":     "https://news.daum.net/life",
-		"column":   "https://news.daum.net/understanding",
+		"https://news.daum.net/politics",      // politics
+		"https://news.daum.net/economic",      // economy
+		"https://news.daum.net/society",       // society
+		"https://news.daum.net/culture",       // culture
+		"https://news.daum.net/foreign",       // world
+		"https://news.daum.net/tech",          // it
+		"https://news.daum.net/climate",       // climate
+		"https://news.daum.net/life",          // life
+		"https://news.daum.net/understanding", // column
 	},
 	"yonhap": {
-		"politics": "https://www.yna.co.kr/politics/all",
-		"economy":  "https://www.yna.co.kr/economy/all",
-		"society":  "https://www.yna.co.kr/society/all",
-		"culture":  "https://www.yna.co.kr/culture/all",
-		"world":    "https://www.yna.co.kr/international/all",
+		"https://www.yna.co.kr/politics/all",      // politics
+		"https://www.yna.co.kr/economy/all",       // economy
+		"https://www.yna.co.kr/society/all",       // society
+		"https://www.yna.co.kr/culture/all",       // culture
+		"https://www.yna.co.kr/international/all", // world
 	},
 	"cnn": {
-		"top":           "https://edition.cnn.com",
-		"us":            "https://edition.cnn.com/us",
-		"world":         "https://edition.cnn.com/world",
-		"politics":      "https://edition.cnn.com/politics",
-		"business":      "https://edition.cnn.com/business",
-		"tech":          "https://edition.cnn.com/business/tech",
-		"health":        "https://edition.cnn.com/health",
-		"entertainment": "https://edition.cnn.com/entertainment",
-		"sports":        "https://edition.cnn.com/sport",
+		"https://edition.cnn.com",               // top
+		"https://edition.cnn.com/us",            // us
+		"https://edition.cnn.com/world",         // world
+		"https://edition.cnn.com/politics",      // politics
+		"https://edition.cnn.com/business",      // business
+		"https://edition.cnn.com/business/tech", // tech
+		"https://edition.cnn.com/health",        // health
+		"https://edition.cnn.com/entertainment", // entertainment
+		"https://edition.cnn.com/sport",         // sports
 	},
 }
 
@@ -56,8 +56,8 @@ var sourceCategoryURLs = map[string]map[string]string{
 // Intervals are controlled by SchedulerConfig.
 func DefaultEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 	var entries []ScheduleEntry
-	for crawlerName, categoryURLs := range sourceCategoryURLs {
-		for _, url := range categoryURLs {
+	for crawlerName, urls := range sourceCategoryURLs {
+		for _, url := range urls {
 			entries = append(entries, ScheduleEntry{
 				CrawlerName: crawlerName,
 				URL:         url,
