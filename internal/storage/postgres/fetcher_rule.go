@@ -68,7 +68,11 @@ func (r *pgFetcherRuleRepository) Upsert(ctx context.Context, host string, fetch
 }
 
 const sqlGetFetcherRuleByHost = `
-SELECT id, host_pattern, fetcher, COALESCE(reason, ''), created_at, updated_at
+SELECT id, host_pattern, fetcher, COALESCE(reason, ''),
+       COALESCE(source_name, ''), COALESCE(source_type, ''),
+       COALESCE(country, ''), COALESCE(language, ''),
+       COALESCE(base_url, ''), COALESCE(requests_per_hour, 0),
+       created_at, updated_at
 FROM fetcher_rules
 WHERE host_pattern = $1
 `
@@ -80,7 +84,10 @@ func (r *pgFetcherRuleRepository) GetByHost(ctx context.Context, host string) (*
 	rec := &storage.FetcherRuleRecord{}
 	var fetcher string
 	err := r.pool.QueryRow(ctx, sqlGetFetcherRuleByHost, host).Scan(
-		&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason,
+		&rec.SourceName, &rec.SourceType, &rec.Country, &rec.Language,
+		&rec.BaseURL, &rec.RequestsPerHour,
+		&rec.CreatedAt, &rec.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -93,7 +100,11 @@ func (r *pgFetcherRuleRepository) GetByHost(ctx context.Context, host string) (*
 }
 
 const sqlListFetcherRules = `
-SELECT id, host_pattern, fetcher, COALESCE(reason, ''), created_at, updated_at
+SELECT id, host_pattern, fetcher, COALESCE(reason, ''),
+       COALESCE(source_name, ''), COALESCE(source_type, ''),
+       COALESCE(country, ''), COALESCE(language, ''),
+       COALESCE(base_url, ''), COALESCE(requests_per_hour, 0),
+       created_at, updated_at
 FROM fetcher_rules
 ORDER BY host_pattern ASC
 `
@@ -110,7 +121,12 @@ func (r *pgFetcherRuleRepository) List(ctx context.Context) ([]*storage.FetcherR
 	for rows.Next() {
 		rec := &storage.FetcherRuleRecord{}
 		var fetcher string
-		if err := rows.Scan(&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason,
+			&rec.SourceName, &rec.SourceType, &rec.Country, &rec.Language,
+			&rec.BaseURL, &rec.RequestsPerHour,
+			&rec.CreatedAt, &rec.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan fetcher rule: %w", err)
 		}
 		rec.Fetcher = storage.FetcherKind(fetcher)
