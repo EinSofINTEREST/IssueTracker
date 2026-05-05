@@ -195,8 +195,9 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 		SourceInfo: raw.SourceInfo,
 	}
 
-	// TryAcquire: short-timeout context 사용 — Redis 장애 시 Enqueue 전체가 무기한 블록되지 않도록.
-	acquireCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// TryAcquire: WithoutCancel 후 timeout — 호출자 ctx cancel 이 즉시 전파되지 않도록 하되
+	// Redis 장애 시 무기한 블록도 방지. 기존 inflightSet 동작(cancel 무시)과 일관성 유지.
+	acquireCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	acquired, err := g.locker.TryAcquire(acquireCtx, host, targetType)
 	cancel()
 	if err != nil {
