@@ -1,15 +1,25 @@
 // Package claudegen 은 상시 기동된 Claude Code Docker 컨테이너에 세션을 생성하여
-// HTML 에서 CSS 셀렉터를 추출하는 컴포넌트입니다 (이슈 #256).
+// HTML 에서 CSS 셀렉터를 추출하는 컴포넌트입니다 (이슈 #256, #266).
 //
 // 기존 콜드스타트 방식(docker run --rm)과 달리, 컨테이너를 서비스 기동 시 한 번만 띄우고
 // (Start) 요청마다 docker exec 으로 새 세션을 생성합니다. 컨테이너 초기화 비용을 최초 1회로
 // 상각하여 이후 요청의 레이턴시를 줄입니다.
 //
+// 인증 방식 (이슈 #266):
+//
+//	호스트에서 `claude` CLI 로 사전 로그인하여 발급된 OAuth auth_token 을 사용합니다.
+//	Claude 의 인증 상태는 두 위치에 분산되어 있어 둘 다 컨테이너에 마운트합니다:
+//	  1. ~/.claude/        : 인증 디렉토리 (.credentials.json, history, 세션 상태 등)
+//	  2. ~/.claude.json    : 메인 설정 파일 (sibling — .claude/ 와 같은 부모 디렉토리)
+//	두 path 모두 read-write — Claude CLI 가 세션 history 등을 직접 기록하므로 :ro 마운트 불가.
+//	구독 quota 안에서 sonnet 호출이 가능합니다. ANTHROPIC_API_KEY 종량제 과금 방식 대체.
+//
 // 환경변수:
-//   - ANTHROPIC_API_KEY    : Claude Code 인증 (필수)
-//   - CLAUDE_CODE_MODEL    : 모델 ID (기본: claude-sonnet-4-6)
-//   - CLAUDE_CODE_IMAGE    : Docker 이미지 (기본: ghcr.io/anthropics/claude-code:latest)
-//   - CLAUDE_CODE_TIMEOUT  : 세션 단위 타임아웃 (기본: 120s, Go duration 형식)
+//   - CLAUDE_CODE_AUTH_DIR             : 호스트의 Claude 인증 디렉토리 (기본: $HOME/.claude)
+//   - CLAUDE_CODE_CONTAINER_AUTH_PATH  : 컨테이너 내 디렉토리 마운트 경로 (기본: /root/.claude)
+//   - CLAUDE_CODE_MODEL                : 모델 ID (기본: claude-sonnet-4-6)
+//   - CLAUDE_CODE_IMAGE                : Docker 이미지 (기본: ghcr.io/anthropics/claude-code:latest)
+//   - CLAUDE_CODE_TIMEOUT              : 세션 단위 타임아웃 (기본: 120s, Go duration 형식)
 package claudegen
 
 import (
@@ -29,21 +39,22 @@ import (
 )
 
 const (
-	defaultImage          = "ghcr.io/anthropics/claude-code:latest"
-	defaultModel          = "claude-sonnet-4-6"
-	defaultSessionTimeout = 120 * time.Second
+	defaultImage             = "ghcr.io/anthropics/claude-code:latest"
+	defaultModel             = "claude-sonnet-4-6"
+	defaultSessionTimeout    = 120 * time.Second
+	defaultContainerAuthPath = "/root/.claude" // 컨테이너 내 인증 마운트 경로 (이슈 #266)
 
 	truncateStderrLen = 512 // exec 실패 시 stderr 미리보기 최대 길이
 	truncateStdoutLen = 256 // 파싱 실패 시 stdout 미리보기 최대 길이
 )
 
 // ContainerRunner 는 Docker 컨테이너 생명주기를 추상화합니다 (테스트 mock 교체용).
-//
-// API 키 등 비밀값은 env 슬라이스로 전달 — args 에 포함 시 ps/procfs 로 노출됩니다.
 type ContainerRunner interface {
 	// StartContainer 는 장기 실행 컨테이너를 기동하고 컨테이너 ID 를 반환합니다.
-	// workDir 은 컨테이너의 /workspace 로 마운트할 호스트 경로입니다.
-	StartContainer(ctx context.Context, image, workDir string, env []string) (containerID string, err error)
+	//   - workDir: 컨테이너의 /workspace 로 마운트할 호스트 경로 (read-write)
+	//   - authDir: 호스트의 Claude 인증 디렉토리 (read-write 마운트 — Claude CLI 가 세션 상태 기록)
+	//   - containerAuthPath: 컨테이너 내 authDir 마운트 대상 경로
+	StartContainer(ctx context.Context, image, workDir, authDir, containerAuthPath string) (containerID string, err error)
 
 	// ExecSession 은 실행 중인 컨테이너에서 명령을 실행합니다.
 	ExecSession(ctx context.Context, containerID string, args []string) (stdout, stderr string, err error)
@@ -62,12 +73,13 @@ type ContainerRunner interface {
 // Extract 는 동시 호출에 안전합니다 — 각 세션이 고유 디렉토리를 사용합니다.
 // Stop 은 진행 중인 모든 Extract 완료를 대기합니다 (graceful shutdown).
 type ClaudeWorker struct {
-	image          string
-	model          string
-	apiKey         string
-	sessionTimeout time.Duration
-	runner         ContainerRunner
-	log            *logger.Logger
+	image             string
+	model             string
+	authDir           string // 호스트 인증 디렉토리 (이슈 #266)
+	containerAuthPath string // 컨테이너 내 마운트 경로 (이슈 #266)
+	sessionTimeout    time.Duration
+	runner            ContainerRunner
+	log               *logger.Logger
 
 	mu          sync.RWMutex
 	containerID string
@@ -81,13 +93,16 @@ func (w *ClaudeWorker) ModelName() string { return w.model }
 
 // NewFromEnv 는 환경변수 기반 ClaudeWorker 를 생성합니다.
 // Start() 를 호출하기 전까지는 컨테이너가 기동되지 않습니다.
+//
+// CLAUDE_CODE_AUTH_DIR 미지정 시 $HOME/.claude 를 사용합니다 (이슈 #266).
+// 인증 디렉토리가 없거나 접근 불가하면 fail-fast — 호스트 `claude` CLI 사전 로그인 필요.
 func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewFromEnv requires non-nil logger")
 	}
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return nil, errors.New("claudegen: ANTHROPIC_API_KEY is required")
+	authDir, err := resolveAuthDir(os.Getenv("CLAUDE_CODE_AUTH_DIR"))
+	if err != nil {
+		return nil, err
 	}
 	timeout := defaultSessionTimeout
 	if s := os.Getenv("CLAUDE_CODE_TIMEOUT"); s != "" {
@@ -103,44 +118,101 @@ func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
 		}
 	}
 	return &ClaudeWorker{
-		image:          envOr("CLAUDE_CODE_IMAGE", defaultImage),
-		model:          envOr("CLAUDE_CODE_MODEL", defaultModel),
-		apiKey:         apiKey,
-		sessionTimeout: timeout,
-		runner:         &execContainerRunner{},
-		log:            log,
+		image:             envOr("CLAUDE_CODE_IMAGE", defaultImage),
+		model:             envOr("CLAUDE_CODE_MODEL", defaultModel),
+		authDir:           authDir,
+		containerAuthPath: envOr("CLAUDE_CODE_CONTAINER_AUTH_PATH", defaultContainerAuthPath),
+		sessionTimeout:    timeout,
+		runner:            &execContainerRunner{},
+		log:               log,
 	}, nil
 }
 
 // New 는 명시적 파라미터로 ClaudeWorker 를 생성합니다 (DI 용).
-func New(image, model, apiKey string, timeout time.Duration, log *logger.Logger) (*ClaudeWorker, error) {
+//
+// authDir 은 호스트의 Claude 인증 디렉토리, containerAuthPath 는 컨테이너 내 마운트 대상 경로 (이슈 #266).
+// containerAuthPath 가 빈 문자열이면 defaultContainerAuthPath 사용.
+// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증 (PR #268 리뷰).
+func New(image, model, authDir, containerAuthPath string, timeout time.Duration, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: New requires non-nil logger")
 	}
-	if apiKey == "" {
-		return nil, errors.New("claudegen: New requires non-empty apiKey")
+	resolved, err := validateAuthDir(authDir)
+	if err != nil {
+		return nil, err
+	}
+	if containerAuthPath == "" {
+		containerAuthPath = defaultContainerAuthPath
 	}
 	return &ClaudeWorker{
-		image: image, model: model, apiKey: apiKey,
+		image: image, model: model,
+		authDir: resolved, containerAuthPath: containerAuthPath,
 		sessionTimeout: timeout, runner: &execContainerRunner{}, log: log,
 	}, nil
 }
 
 // NewWithRunner 는 ContainerRunner 를 주입하는 생성자입니다 (테스트/DI 용).
-func NewWithRunner(image, model, apiKey string, timeout time.Duration, runner ContainerRunner, log *logger.Logger) (*ClaudeWorker, error) {
+// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증 (PR #268 리뷰).
+func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time.Duration, runner ContainerRunner, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil logger")
-	}
-	if apiKey == "" {
-		return nil, errors.New("claudegen: NewWithRunner requires non-empty apiKey")
 	}
 	if runner == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil runner")
 	}
+	resolved, err := validateAuthDir(authDir)
+	if err != nil {
+		return nil, err
+	}
+	if containerAuthPath == "" {
+		containerAuthPath = defaultContainerAuthPath
+	}
 	return &ClaudeWorker{
-		image: image, model: model, apiKey: apiKey,
+		image: image, model: model,
+		authDir: resolved, containerAuthPath: containerAuthPath,
 		sessionTimeout: timeout, runner: runner, log: log,
 	}, nil
+}
+
+// resolveAuthDir 은 환경변수 또는 $HOME 기반으로 인증 디렉토리를 결정하고 접근성을 검증합니다.
+// validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증을 위임합니다.
+func resolveAuthDir(envValue string) (string, error) {
+	authDir := envValue
+	if authDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("claudegen: CLAUDE_CODE_AUTH_DIR not set and cannot determine home dir: %w", err)
+		}
+		authDir = filepath.Join(home, ".claude")
+	}
+	return validateAuthDir(authDir)
+}
+
+// validateAuthDir 은 인증 디렉토리의 절대 경로를 산출하고 접근성을 검증합니다 (PR #268 리뷰).
+//
+//   - 빈 문자열 거부 (호출자가 빈 값 처리 후 호출)
+//   - filepath.Abs 로 절대 경로 변환 — Docker 마운트 시 상대 경로 모호성 제거
+//   - os.Stat: 존재 + 디렉토리 검증
+//   - os.ReadDir: 읽기 권한 검증 (mode 만 보지 않고 실제로 읽어봄)
+func validateAuthDir(authDir string) (string, error) {
+	if authDir == "" {
+		return "", errors.New("claudegen: authDir must not be empty")
+	}
+	absPath, err := filepath.Abs(authDir)
+	if err != nil {
+		return "", fmt.Errorf("claudegen: failed to resolve absolute path for %q: %w", authDir, err)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("claudegen: auth dir %q not accessible: %w (run `claude` CLI on host to login first)", absPath, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("claudegen: auth dir %q is not a directory", absPath)
+	}
+	if _, err := os.ReadDir(absPath); err != nil {
+		return "", fmt.Errorf("claudegen: auth dir %q is not readable: %w", absPath, err)
+	}
+	return absPath, nil
 }
 
 // Start 는 Claude Code 컨테이너를 기동하고 workspace 를 준비합니다.
@@ -158,9 +230,7 @@ func (w *ClaudeWorker) Start(ctx context.Context) error {
 		return fmt.Errorf("create workspace dir: %w", err)
 	}
 
-	// ANTHROPIC_API_KEY 는 env 슬라이스로만 전달 — args 포함 시 ps 에 노출됨 (보안).
-	env := []string{"ANTHROPIC_API_KEY=" + w.apiKey}
-	containerID, err := w.runner.StartContainer(ctx, w.image, workDir, env)
+	containerID, err := w.runner.StartContainer(ctx, w.image, workDir, w.authDir, w.containerAuthPath)
 	if err != nil {
 		os.RemoveAll(workDir)
 		return fmt.Errorf("start claude container: %w", err)
@@ -168,11 +238,17 @@ func (w *ClaudeWorker) Start(ctx context.Context) error {
 
 	w.containerID = containerID
 	w.workDir = workDir
+	// INFO 로그는 운영자가 외부 수집 시스템에서 보는 항목 — 호스트 사용자명/홈 구조 노출 회피 (PR #268 리뷰).
+	// auth_dir 같은 절대 경로는 DEBUG 레벨로 격리.
 	w.log.WithFields(map[string]interface{}{
 		"container_id": containerID,
 		"image":        w.image,
 		"model":        w.model,
-	}).Info("claude code container started (warm)")
+	}).Info("claude code container started (warm, subscription auth)")
+	w.log.WithFields(map[string]interface{}{
+		"auth_dir":            w.authDir,
+		"container_auth_path": w.containerAuthPath,
+	}).Debug("claude code auth mount paths")
 	return nil
 }
 
@@ -261,7 +337,8 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 	args := []string{
 		"claude",
 		"--model", w.model,
-		"--dangerously-skip-permissions",
+		// --dangerously-skip-permissions 는 root user 환경에서 동작하지 않고, OAuth 인증 + -p 모드는
+		// 본 플래그 없이 정상 동작 — 라이브 검증 시 발견 (이슈 #266).
 		"-p", buildPrompt(host, targetType, sessionContainerPath),
 	}
 

@@ -3,6 +3,8 @@ package claudegen_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -25,9 +27,10 @@ type mockContainerRunner struct {
 
 	mu          sync.Mutex
 	startedWith struct {
-		image   string
-		workDir string
-		env     []string
+		image             string
+		workDir           string
+		authDir           string
+		containerAuthPath string
 	}
 	execedWith struct {
 		containerID string
@@ -35,11 +38,12 @@ type mockContainerRunner struct {
 	}
 }
 
-func (m *mockContainerRunner) StartContainer(_ context.Context, image, workDir string, env []string) (string, error) {
+func (m *mockContainerRunner) StartContainer(_ context.Context, image, workDir, authDir, containerAuthPath string) (string, error) {
 	m.mu.Lock()
 	m.startedWith.image = image
 	m.startedWith.workDir = workDir
-	m.startedWith.env = env
+	m.startedWith.authDir = authDir
+	m.startedWith.containerAuthPath = containerAuthPath
 	m.mu.Unlock()
 	if m.startErr != nil {
 		return "", m.startErr
@@ -59,13 +63,24 @@ func (m *mockContainerRunner) StopContainer(_ context.Context, _ string) error {
 	return m.stopErr
 }
 
+// makeAuthDir 은 테스트용 임시 인증 디렉토리를 생성합니다 (이슈 #266).
+func makeAuthDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	// 빈 디렉토리이지만 존재 + 디렉토리 검증을 통과하도록 임시 파일 추가
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".credentials"), []byte("mock"), 0o600))
+	return dir
+}
+
 func newTestWorker(t *testing.T, runner *mockContainerRunner) *claudegen.ClaudeWorker {
 	t.Helper()
 	log := logger.New(logger.DefaultConfig())
+	authDir := makeAuthDir(t)
 	w, err := claudegen.NewWithRunner(
 		"ghcr.io/anthropics/claude-code:latest",
 		"claude-sonnet-4-6",
-		"test-api-key",
+		authDir,
+		"/root/.claude",
 		10*time.Second,
 		runner,
 		log,
@@ -82,14 +97,9 @@ func TestClaudeWorker_StartStop(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	assert.Equal(t, "ghcr.io/anthropics/claude-code:latest", runner.startedWith.image)
 
-	// API 키가 env 로 전달됐는지 확인 (ps/proc 노출 방지)
-	found := false
-	for _, e := range runner.startedWith.env {
-		if e == "ANTHROPIC_API_KEY=test-api-key" {
-			found = true
-		}
-	}
-	assert.True(t, found, "ANTHROPIC_API_KEY must be in env slice")
+	// auth_token 마운트 검증 (이슈 #266) — authDir 과 containerAuthPath 가 StartContainer 에 전달됐는지 확인
+	assert.NotEmpty(t, runner.startedWith.authDir, "authDir must be passed to StartContainer")
+	assert.Equal(t, "/root/.claude", runner.startedWith.containerAuthPath)
 
 	require.NoError(t, w.Stop(t.Context()))
 }
@@ -260,38 +270,77 @@ func TestClaudeWorker_ModelName(t *testing.T) {
 	assert.Equal(t, "claude-sonnet-4-6", w.ModelName())
 }
 
-// TestNewFromEnv_MissingAPIKey 는 ANTHROPIC_API_KEY 없을 때 에러를 반환하는지 검증합니다.
-func TestNewFromEnv_MissingAPIKey(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "")
+// ─────────────────────────────────────────────────────────────────────────────
+// 인증 디렉토리 검증 테스트 (이슈 #266)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestNewFromEnv_MissingAuthDir 는 CLAUDE_CODE_AUTH_DIR 미존재 경로 지정 시 에러를 반환하는지 검증합니다.
+func TestNewFromEnv_MissingAuthDir(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_AUTH_DIR", "/nonexistent/path/to/claude/auth")
 	log := logger.New(logger.DefaultConfig())
 	_, err := claudegen.NewFromEnv(log)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ANTHROPIC_API_KEY")
+	assert.Contains(t, err.Error(), "auth dir")
 }
 
-// TestNew_EmptyAPIKey 는 New() 에 빈 apiKey 전달 시 에러를 반환하는지 검증합니다.
-func TestNew_EmptyAPIKey(t *testing.T) {
+// TestNewFromEnv_AuthDirIsFile 는 CLAUDE_CODE_AUTH_DIR 가 디렉토리가 아닌 파일을 가리킬 때 에러를 반환하는지 검증합니다.
+func TestNewFromEnv_AuthDirIsFile(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o644))
+	t.Setenv("CLAUDE_CODE_AUTH_DIR", tmpFile)
 	log := logger.New(logger.DefaultConfig())
-	_, err := claudegen.New("image", "model", "", 10*time.Second, log)
+	_, err := claudegen.NewFromEnv(log)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "apiKey")
+	assert.Contains(t, err.Error(), "not a directory")
 }
 
-// TestNewWithRunner_EmptyAPIKey 는 NewWithRunner() 에 빈 apiKey 전달 시 에러를 반환하는지 검증합니다.
-func TestNewWithRunner_EmptyAPIKey(t *testing.T) {
+// TestNewFromEnv_ValidAuthDir 는 유효한 인증 디렉토리로 NewFromEnv 가 성공하는지 검증합니다.
+func TestNewFromEnv_ValidAuthDir(t *testing.T) {
+	authDir := makeAuthDir(t)
+	t.Setenv("CLAUDE_CODE_AUTH_DIR", authDir)
+	log := logger.New(logger.DefaultConfig())
+	w, err := claudegen.NewFromEnv(log)
+	require.NoError(t, err)
+	assert.NotNil(t, w)
+}
+
+// TestNew_EmptyAuthDir 는 New() 에 빈 authDir 전달 시 에러를 반환하는지 검증합니다.
+func TestNew_EmptyAuthDir(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	_, err := claudegen.New("image", "model", "", "/root/.claude", 10*time.Second, log)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authDir")
+}
+
+// TestNewWithRunner_EmptyAuthDir 는 NewWithRunner() 에 빈 authDir 전달 시 에러를 반환하는지 검증합니다.
+func TestNewWithRunner_EmptyAuthDir(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	runner := &mockContainerRunner{}
-	_, err := claudegen.NewWithRunner("image", "model", "", 10*time.Second, runner, log)
+	_, err := claudegen.NewWithRunner("image", "model", "", "/root/.claude", 10*time.Second, runner, log)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "apiKey")
+	assert.Contains(t, err.Error(), "authDir")
 }
 
 // TestNewWithRunner_NilRunner 는 NewWithRunner() 에 nil runner 전달 시 에러를 반환하는지 검증합니다.
 func TestNewWithRunner_NilRunner(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
-	_, err := claudegen.NewWithRunner("image", "model", "key", 10*time.Second, nil, log)
+	authDir := makeAuthDir(t)
+	_, err := claudegen.NewWithRunner("image", "model", authDir, "/root/.claude", 10*time.Second, nil, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "runner")
+}
+
+// TestNewWithRunner_DefaultContainerAuthPath 는 빈 containerAuthPath 전달 시 기본값(/root/.claude)이 적용되는지 검증합니다.
+func TestNewWithRunner_DefaultContainerAuthPath(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	authDir := makeAuthDir(t)
+	runner := &mockContainerRunner{}
+	w, err := claudegen.NewWithRunner("image", "model", authDir, "", 10*time.Second, runner, log)
+	require.NoError(t, err)
+	require.NoError(t, w.Start(t.Context()))
+	t.Cleanup(func() { _ = w.Stop(context.Background()) })
+
+	assert.Equal(t, "/root/.claude", runner.startedWith.containerAuthPath, "빈 containerAuthPath → 기본값 적용")
 }
 
 func containsStr(s, sub string) bool {
