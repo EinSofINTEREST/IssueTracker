@@ -293,7 +293,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 
 	items, err := w.parser.ParseLinks(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, raw, rawID, "parse_links", storage.TargetTypeList, err, llmRetryCount, crawlerName, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_links", storage.TargetTypeList, err, llmRetryCount, crawlerName, jobTimeout, mlog)
 	}
 	if len(items) == 0 {
 		mlog.Debug("no article links found in category page")
@@ -325,7 +325,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 
 	page, err := w.parser.ParsePage(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, llmRetryCount, crawlerName, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, llmRetryCount, crawlerName, 0, mlog)
 	}
 
 	// 이슈 #220: parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달이면
@@ -355,7 +355,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 // 이슈 #220 (page 단계 한정): rule.ErrParseFailure / rule.ErrEmptySelector 는 host 단위 카운터로
 // 누적 — 임계값 도달 시 단계 3 (#221) 의 chromedp 자동 전환 트리거 입력. ErrNoRule 은 LLM 자동
 // rule 생성 (이슈 #149) 의 책임 영역이라 카운팅 제외 (다른 정책으로 처리됨).
-func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, crawlerName string, mlog *logger.Logger) error {
+func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
 		mlog.WithFields(map[string]interface{}{
@@ -366,8 +366,9 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 
 		// ErrNoRule + llmGen 활성화 → LLM 자동 rule 생성 비동기 트리거 (이슈 #149)
 		// crawlerName 은 validate 실패 시 재큐 메시지 헤더 복원용 (이슈 #237 피드백).
+		// jobTimeout 은 pending 재투입 시 카테고리 chained job timeout 보존 (이슈 #262 리뷰).
 		if rerr.Code == rule.ErrNoRule && w.llmGen != nil {
-			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName)
+			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName, jobTimeout)
 		}
 
 		// 이슈 #220: page 단계의 ParseFailure / EmptySelector 만 host 카운터에 누적.
@@ -585,7 +586,9 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 		Topic: queue.TopicFetched,
 		Value: payload,
 		Headers: map[string]string{
-			"target_type": string(targetType),
+			// storageToFetcherTargetType: storage "list"/"page" → fetcher "category"/"article"
+			// 파서 워커가 target_type 을 core.TargetType 으로 읽으므로 변환 필수 (이슈 #262 리뷰).
+			"target_type": storageToFetcherTargetType(targetType),
 			"crawler":     crawlerName,
 		},
 	}
@@ -602,7 +605,7 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 		"raw_id":          ref.ID,
 		"url":             ref.URL,
 		"llm_retry_count": nextCount,
-		"target_type":     string(targetType),
+		"target_type":     storageToFetcherTargetType(targetType),
 		"crawler":         crawlerName,
 	}).Info("raw content requeued for llm retry after selector validation failure")
 }
@@ -611,16 +614,21 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 // llmgen.Generator 의 RequeueFunc 로 등록됩니다.
 //
 // 룰 생성 완료 후 호출 — 대기 중이던 URL 이 새 룰로 재파싱될 수 있도록 TopicFetched 에 투입.
-// 실패는 non-fatal — raw 는 TTL cleanup 으로 최종 정리됩니다.
-func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.PendingItem) {
+// Kafka 발행에 실패한 항목을 반환 — Generator 가 pending queue 에 재적재 (이슈 #262 리뷰).
+func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.PendingItem) (failed []llmgen.PendingItem) {
 	// WithoutCancel 은 루프 외부에서 1회 — 루프마다 새 컨텍스트 파생 불필요 (Gemini 피드백).
 	baseCtx := context.WithoutCancel(ctx)
 	for _, item := range items {
-		payload, err := json.Marshal(item.RawRef)
+		// LLMRetryCount 를 ref 에 반영하여 직렬화 — item.RawRef 는 원본(0)이므로 별도 세팅 필요
+		// (이슈 #262 리뷰: PendingItem.LLMRetryCount 가 payload 에서 유실되는 버그).
+		ref := item.RawRef
+		ref.LLMRetryCount = item.LLMRetryCount
+		payload, err := json.Marshal(ref)
 		if err != nil {
 			w.log.WithFields(map[string]interface{}{
 				"raw_id": item.RawRef.ID,
 			}).WithError(err).Error("failed to marshal RawContentRef for pending requeue")
+			failed = append(failed, item)
 			continue
 		}
 
@@ -629,18 +637,23 @@ func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.Pendin
 			Topic: queue.TopicFetched,
 			Value: payload,
 			Headers: map[string]string{
-				"target_type": string(item.TargetType),
+				// storage "list"/"page" → fetcher "category"/"article" 변환 (이슈 #262 리뷰).
+				"target_type": storageToFetcherTargetType(item.TargetType),
 				"crawler":     item.CrawlerName,
+				// timeout_ms 보존 — 카테고리 재투입 시 chained job timeout 유지 (이슈 #262 리뷰).
+				"timeout_ms": strconv.FormatInt(item.TimeoutMs, 10),
 			},
 		}
 		if err := w.producer.Publish(pubCtx, msg); err != nil {
 			w.log.WithFields(map[string]interface{}{
 				"raw_id": item.RawRef.ID,
 				"url":    item.RawRef.URL,
-			}).WithError(err).Warn("failed to requeue pending URL for parsing (non-fatal)")
+			}).WithError(err).Warn("failed to requeue pending URL for parsing, will re-push to pending queue")
+			failed = append(failed, item)
 		}
 		cancel()
 	}
+	return failed
 }
 
 // deleteRaw 는 처리 완료된 raw_contents row 를 즉시 정리합니다.
@@ -710,6 +723,18 @@ func uniqueURLs(items []parser.LinkItem, limit int) []string {
 		}
 	}
 	return urls
+}
+
+// storageToFetcherTargetType 은 storage.TargetType ("list"/"page") 을
+// TopicFetched 헤더에서 사용하는 core.TargetType 문자열 ("category"/"article") 로 변환합니다.
+//
+// 초기 fetcher 는 core.TargetType 값을 target_type 헤더로 발행하므로,
+// RequeueParsing / RequeueForLLMRetry 에서 재발행 시 동일 변환이 필요합니다 (이슈 #262 리뷰).
+func storageToFetcherTargetType(t storage.TargetType) string {
+	if t == storage.TargetTypeList {
+		return string(core.TargetTypeCategory)
+	}
+	return string(core.TargetTypeArticle)
 }
 
 // parseTimeoutHeader 는 timeout_ms 헤더를 time.Duration 으로 파싱합니다.

@@ -77,22 +77,23 @@ func TestGenerator_PendingQueue_InFlight_Queued(t *testing.T) {
 	pq := newMemPendingQueue()
 	var requeued []llmgen.PendingItem
 	var requeueMu sync.Mutex
-	g.SetPendingQueue(pq, func(_ context.Context, items []llmgen.PendingItem) {
+	g.SetPendingQueue(pq, func(_ context.Context, items []llmgen.PendingItem) []llmgen.PendingItem {
 		requeueMu.Lock()
 		requeued = append(requeued, items...)
 		requeueMu.Unlock()
+		return nil
 	})
 
 	// URL 1: 슬롯 획득 → LLM 시작
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	// URL 2: in-flight 중 → pendingQueue 적재
 	time.Sleep(20 * time.Millisecond) // URL 1 goroutine 확실히 시작 후
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/2", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	assert.Equal(t, 1, pq.count("example.com", storage.TargetTypePage), "URL 2는 pendingQueue에 적재되어야 함")
 
@@ -120,18 +121,19 @@ func TestGenerator_PendingQueue_LLMFail_NotFlushed(t *testing.T) {
 
 	pq := newMemPendingQueue()
 	var requeueCalled bool
-	g.SetPendingQueue(pq, func(_ context.Context, _ []llmgen.PendingItem) {
+	g.SetPendingQueue(pq, func(_ context.Context, _ []llmgen.PendingItem) []llmgen.PendingItem {
 		requeueCalled = true
+		return nil
 	})
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	time.Sleep(20 * time.Millisecond)
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/2", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -159,12 +161,12 @@ func TestGenerator_NoPendingQueue_SkipsBehaviorUnchanged(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	time.Sleep(20 * time.Millisecond)
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/2", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	waitForInserts(t, repo, 1, 2*time.Second)
 	assert.Equal(t, 1, provider.callCount(), "pendingQueue 없으면 LLM은 1회만 호출")
@@ -184,14 +186,14 @@ func TestGenerator_PendingQueue_DifferentHosts_Independent(t *testing.T) {
 	g, _ := newGenerator(t, provider, repo)
 
 	pq := newMemPendingQueue()
-	g.SetPendingQueue(pq, func(_ context.Context, _ []llmgen.PendingItem) {})
+	g.SetPendingQueue(pq, func(_ context.Context, _ []llmgen.PendingItem) []llmgen.PendingItem { return nil })
 
 	g.Enqueue(context.Background(), "a.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://a.com/x", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 	g.Enqueue(context.Background(), "b.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://b.com/x", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	waitForInserts(t, repo, 2, 2*time.Second)
 	assert.Equal(t, 2, provider.callCount(), "다른 도메인은 각자 LLM 호출")
@@ -218,20 +220,21 @@ func TestPendingItem_RequeueFunc_ReceivesCorrectData(t *testing.T) {
 	pq := newMemPendingQueue()
 	var received []llmgen.PendingItem
 	var mu sync.Mutex
-	g.SetPendingQueue(pq, func(_ context.Context, items []llmgen.PendingItem) {
+	g.SetPendingQueue(pq, func(_ context.Context, items []llmgen.PendingItem) []llmgen.PendingItem {
 		mu.Lock()
 		received = append(received, items...)
 		mu.Unlock()
+		return nil
 	})
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
-	}, 0, "test-crawler")
+	}, 0, "test-crawler", 0)
 
 	time.Sleep(20 * time.Millisecond)
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/2", HTML: samplePageHTML,
-	}, 1, "test-crawler")
+	}, 1, "test-crawler", 0)
 
 	waitForInserts(t, repo, 1, 2*time.Second)
 	time.Sleep(50 * time.Millisecond)
@@ -246,4 +249,61 @@ func TestPendingItem_RequeueFunc_ReceivesCorrectData(t *testing.T) {
 	assert.Equal(t, "test-crawler", items[0].CrawlerName)
 	assert.Equal(t, 1, items[0].LLMRetryCount)
 	assert.Equal(t, storage.TargetTypePage, items[0].TargetType)
+}
+
+// TestGenerator_PendingQueue_TargetTypeList_Queued 는 TargetTypeList (카테고리 페이지) 에 대한
+// pendingQueue 가 TargetTypePage 와 독립적으로 동작하는지 검증합니다 (이슈 #262 리뷰).
+func TestGenerator_PendingQueue_TargetTypeList_Queued(t *testing.T) {
+	provider := &slowProvider{
+		fakeProvider: fakeProvider{
+			name: "fake",
+			response: `{
+				"item_container": {"css": "li.news-item"},
+				"item_link": {"css": "a", "attribute": "href"}
+			}`,
+		},
+		delay: 150 * time.Millisecond,
+	}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	pq := newMemPendingQueue()
+	var requeued []llmgen.PendingItem
+	var mu sync.Mutex
+	g.SetPendingQueue(pq, func(_ context.Context, items []llmgen.PendingItem) []llmgen.PendingItem {
+		mu.Lock()
+		requeued = append(requeued, items...)
+		mu.Unlock()
+		return nil
+	})
+
+	// URL 1: TargetTypeList 슬롯 획득 → LLM 시작
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypeList, &core.RawContent{
+		URL: "https://example.com/news", HTML: sampleListHTML,
+	}, 0, "", 0)
+
+	// URL 2: 동일 host + TargetTypeList, in-flight 중 → pending 적재
+	time.Sleep(20 * time.Millisecond)
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypeList, &core.RawContent{
+		URL: "https://example.com/news/2", HTML: sampleListHTML,
+	}, 0, "", 0)
+
+	assert.Equal(t, 1, pq.count("example.com", storage.TargetTypeList), "URL 2는 TargetTypeList pending 에 적재되어야 함")
+	// TargetTypePage pending 은 영향 없어야 함
+	assert.Equal(t, 0, pq.count("example.com", storage.TargetTypePage), "TargetTypePage pending 은 독립")
+
+	waitForInserts(t, repo, 1, 2*time.Second)
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	requeuedCount := len(requeued)
+	mu.Unlock()
+
+	assert.Equal(t, 1, requeuedCount, "룰 생성 완료 후 TargetTypeList pending URL이 requeueFn 으로 전달되어야 함")
+	assert.Equal(t, 0, pq.count("example.com", storage.TargetTypeList), "flush 후 pending 비어야 함")
+	if requeuedCount > 0 {
+		mu.Lock()
+		assert.Equal(t, storage.TargetTypeList, requeued[0].TargetType, "재투입 항목의 TargetType 은 TargetTypeList")
+		mu.Unlock()
+	}
 }
