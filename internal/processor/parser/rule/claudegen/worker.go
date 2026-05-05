@@ -327,8 +327,12 @@ func envOr(key, fallback string) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+	var count int
+	for i := range s {
+		if count == n {
+			return s[:i] + "..."
+		}
+		count++
 	}
-	return s[:n] + "..."
+	return s
 }
