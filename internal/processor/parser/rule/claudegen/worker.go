@@ -57,6 +57,7 @@ type ContainerRunner interface {
 //   - Stop(ctx): 컨테이너 종료 + workspace 정리
 //
 // Extract 는 동시 호출에 안전합니다 — 각 세션이 고유 디렉토리를 사용합니다.
+// Stop 은 진행 중인 모든 Extract 완료를 대기합니다 (graceful shutdown).
 type ClaudeWorker struct {
 	image          string
 	model          string
@@ -68,6 +69,7 @@ type ClaudeWorker struct {
 	mu          sync.RWMutex
 	containerID string
 	workDir     string
+	wg          sync.WaitGroup // 진행 중인 Extract 호출 추적
 }
 
 // ModelName 은 이 Worker 가 사용하는 모델 ID 를 반환합니다.
@@ -90,6 +92,9 @@ func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
 		if err != nil {
 			log.WithFields(map[string]interface{}{"value": s}).WithError(err).
 				Warn("CLAUDE_CODE_TIMEOUT parse failed, using default")
+		} else if d <= 0 {
+			log.WithFields(map[string]interface{}{"value": s}).
+				Warn("CLAUDE_CODE_TIMEOUT must be positive, using default")
 		} else {
 			timeout = d
 		}
@@ -119,6 +124,9 @@ func New(image, model, apiKey string, timeout time.Duration, log *logger.Logger)
 func NewWithRunner(image, model, apiKey string, timeout time.Duration, runner ContainerRunner, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil logger")
+	}
+	if runner == nil {
+		return nil, errors.New("claudegen: NewWithRunner requires non-nil runner")
 	}
 	return &ClaudeWorker{
 		image: image, model: model, apiKey: apiKey,
@@ -159,24 +167,42 @@ func (w *ClaudeWorker) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop 은 컨테이너를 종료하고 workspace 를 정리합니다.
+// Stop 은 진행 중인 Extract 호출 완료를 대기한 뒤 컨테이너를 종료하고 workspace 를 정리합니다.
 // graceful shutdown 시 호출합니다. 멱등(이미 정지된 경우 noop).
+// StopContainer 실패 시 state 를 소거하지 않아 재시도가 가능합니다.
 func (w *ClaudeWorker) Stop(ctx context.Context) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if w.containerID == "" {
+		w.mu.Unlock()
 		return nil
 	}
-
-	err := w.runner.StopContainer(ctx, w.containerID)
-	os.RemoveAll(w.workDir)
+	// containerID 를 먼저 비워 새 Extract() 호출이 즉시 "not started" 에러를 반환하도록 함.
+	containerID := w.containerID
+	workDir := w.workDir
 	w.containerID = ""
 	w.workDir = ""
+	w.mu.Unlock()
 
-	if err != nil {
+	// 진행 중인 모든 Extract() 호출 완료 대기 (graceful shutdown).
+	done := make(chan struct{})
+	go func() { w.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		w.log.Warn("stop timeout — forcing container removal with in-flight sessions")
+	}
+
+	if err := w.runner.StopContainer(ctx, containerID); err != nil {
+		// 실패 시 state 복원 — 다음 Stop() 호출로 재시도 가능.
+		w.mu.Lock()
+		if w.containerID == "" {
+			w.containerID = containerID
+			w.workDir = workDir
+		}
+		w.mu.Unlock()
 		return fmt.Errorf("stop claude container: %w", err)
 	}
+	os.RemoveAll(workDir)
 	w.log.Info("claude code container stopped")
 	return nil
 }
@@ -190,6 +216,10 @@ func (w *ClaudeWorker) Stop(ctx context.Context) error {
 //  4. stdout JSON 파싱 → SelectorMap 반환
 //  5. 세션 디렉토리 정리 (defer)
 func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType storage.TargetType, html string) (storage.SelectorMap, error) {
+	// wg.Add 를 락 획득보다 먼저 수행 — Stop() 의 wg.Wait() 이 이 Extract 호출을 놓치지 않도록 함.
+	w.wg.Add(1)
+	defer w.wg.Done()
+
 	w.mu.RLock()
 	containerID := w.containerID
 	workDir := w.workDir
@@ -302,6 +332,10 @@ func extractJSON(s string) string {
 			}
 			depth++
 		case '}':
+			if depth == 0 {
+				// JSON 시작 전 stray '}' — 무시하고 계속 탐색.
+				continue
+			}
 			depth--
 			if depth == 0 && start != -1 {
 				return s[start : i+1]
