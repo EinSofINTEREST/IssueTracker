@@ -8,10 +8,10 @@
 // 인증 방식 (이슈 #266):
 //
 //	호스트에서 `claude` CLI 로 사전 로그인하여 발급된 OAuth auth_token 을 사용합니다.
-//	Claude 의 인증 상태는 두 위치에 분산되어 있어 둘 다 컨테이너에 read-only 로 마운트합니다:
-//	  1. ~/.claude/        : 인증 디렉토리 (.credentials.json, history 등)
+//	Claude 의 인증 상태는 두 위치에 분산되어 있어 둘 다 컨테이너에 마운트합니다:
+//	  1. ~/.claude/        : 인증 디렉토리 (.credentials.json, history, 세션 상태 등)
 //	  2. ~/.claude.json    : 메인 설정 파일 (sibling — .claude/ 와 같은 부모 디렉토리)
-//	두 path 모두 read-only — 컨테이너가 호스트 인증 상태를 변조하지 못하도록 합니다.
+//	두 path 모두 read-write — Claude CLI 가 세션 history 등을 직접 기록하므로 :ro 마운트 불가.
 //	구독 quota 안에서 sonnet 호출이 가능합니다. ANTHROPIC_API_KEY 종량제 과금 방식 대체.
 //
 // 환경변수:
@@ -309,7 +309,8 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 	args := []string{
 		"claude",
 		"--model", w.model,
-		"--dangerously-skip-permissions",
+		// --dangerously-skip-permissions 는 root user 환경에서 동작하지 않고, OAuth 인증 + -p 모드는
+		// 본 플래그 없이 정상 동작 — 라이브 검증 시 발견 (이슈 #266).
 		"-p", buildPrompt(host, targetType, sessionContainerPath),
 	}
 

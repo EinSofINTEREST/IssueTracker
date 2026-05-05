@@ -17,9 +17,11 @@ type execContainerRunner struct{}
 //
 // 마운트 정책 (이슈 #266):
 //   - workDir → /workspace (read-write): 세션별 페이지 + 출력 임시 저장
-//   - authDir → containerAuthPath (read-only): 호스트의 .claude/ 디렉토리 (.credentials.json, history)
-//   - sibling .claude.json → containerAuthPath sibling (read-only, optional):
-//     Claude 의 메인 설정 파일이 .claude/ 와 같은 부모 디렉토리에 있어 별도 마운트 필요.
+//   - authDir → containerAuthPath (read-write): 호스트의 .claude/ 디렉토리.
+//     Claude CLI 가 세션 history / 일시 상태를 본 디렉토리에 기록하므로 :ro 마운트 불가.
+//     운영자는 본 디렉토리를 통해 세션 기록이 누적될 수 있음을 인지해야 함.
+//   - sibling .claude.json → containerAuthPath sibling (read-write, optional):
+//     Claude 의 메인 설정 파일도 컨테이너가 갱신할 수 있어 read-write 로 마운트.
 //     호스트에 파일이 존재할 때만 마운트 — 신규 사용자(claude CLI 미실행)는 .claude.json 부재 가능.
 //
 // 컨테이너는 `tail -f /dev/null` 로 대기 — docker exec 세션이 올 때까지 유지.
@@ -27,14 +29,14 @@ type execContainerRunner struct{}
 func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir, authDir, containerAuthPath string, env []string) (string, error) {
 	args := []string{
 		"run", "-d", "--rm",
-		"-v", authDir + ":" + containerAuthPath + ":ro",
+		"-v", authDir + ":" + containerAuthPath,
 	}
 
 	// .claude.json 파일도 함께 마운트 (이슈 #266) — Claude CLI 가 main config 를 sibling 위치에서 찾음.
 	hostJSON := filepath.Join(filepath.Dir(authDir), ".claude.json")
 	if _, err := os.Stat(hostJSON); err == nil {
 		containerJSON := filepath.Join(filepath.Dir(containerAuthPath), ".claude.json")
-		args = append(args, "-v", hostJSON+":"+containerJSON+":ro")
+		args = append(args, "-v", hostJSON+":"+containerJSON)
 	}
 
 	args = append(args,
