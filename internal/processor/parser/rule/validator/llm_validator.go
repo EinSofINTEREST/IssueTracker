@@ -52,7 +52,7 @@ func (v *LLMValidator) Validate(ctx context.Context, html string, selectors stor
 	if err := parseValidationResponse(resp.Content, &vr); err != nil {
 		return Result{}, fmt.Errorf("parse validation response: %w", err)
 	}
-	return Result{Valid: vr.Valid, Reason: vr.Reason}, nil
+	return Result(vr), nil
 }
 
 const validationSystemPrompt = `You are a CSS selector quality validator for a news crawler.
