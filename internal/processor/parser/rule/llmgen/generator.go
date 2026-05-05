@@ -8,13 +8,12 @@
 //  2. Generator goroutine: in-flight dedup 후 LLM 프롬프트 생성 → Provider.Generate 호출
 //  3. 응답 JSON 파싱 → storage.SelectorMap 으로 변환
 //  4. validation: 생성된 selector 로 실제 HTML 매칭 확인 (0건이면 폐기)
-//  5. ParsingRuleRepository.Insert (enabled=false — 운영자 review 후 enabled=true flip)
+//  5. ParsingRuleRepository.Insert (enabled=true — CSS selector 검증 통과가 품질 게이트)
 //  6. Resolver.Invalidate 로 negative cache flush — 다음 fetch 부터 새 rule 사용 가능
 //
 // 본 PR scope (이슈 #149 1차):
 //   - 단일 LLM 호출 + 기본 validation + DB INSERT + cache invalidate
 //   - Best-effort in-process dedup (단일 instance 보호)
-//   - enabled=false 로 INSERT (운영자 spot-check 게이트)
 //
 // 후속 PR scope (이슈 TBD 2차):
 //   - 비용 cap (일일 / 시간당 호출 수 제한)
@@ -101,15 +100,25 @@ type Generator struct {
 	// nil 이면 호출 안 함.
 	validateFailureHandler func(context.Context, core.RawContentRef, int, storage.TargetType, string)
 
-	locker  InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker (이슈 #261)
-	wg      sync.WaitGroup
-	stopped atomic.Bool
+	locker       InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker (이슈 #261)
+	pendingQueue PendingQueue   // nil 이면 pending URL 보존 비활성 (이슈 #262)
+	requeueFn    RequeueFunc    // nil 이면 재투입 비활성 (이슈 #262)
+	wg           sync.WaitGroup
+	stopped      atomic.Bool
 }
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다 (이슈 #237).
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
 func (g *Generator) SetValidateFailureHandler(fn func(context.Context, core.RawContentRef, int, storage.TargetType, string)) {
 	g.validateFailureHandler = fn
+}
+
+// SetPendingQueue 는 대기 URL 큐와 재투입 콜백을 등록합니다 (이슈 #262).
+// 둘 다 비-nil 이어야 활성화됩니다. Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로
+// 초기화 시 1회만 호출합니다.
+func (g *Generator) SetPendingQueue(pq PendingQueue, fn RequeueFunc) {
+	g.pendingQueue = pq
+	g.requeueFn = fn
 }
 
 // SetLocker 는 분산 Lock 구현체를 교체합니다 (이슈 #261).
@@ -163,12 +172,13 @@ func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *ru
 //
 // llmRetryCount 는 호출자 (parser_worker) 가 RawContentRef 에서 전달하는 재큐 횟수입니다.
 // crawlerName 은 Kafka 메시지 헤더 복원용 — validateSelectors 실패 시 재큐 메시지에 포함됩니다.
+// jobTimeout 은 원본 crawl job 의 timeout — pending 재투입 시 카테고리 chained job timeout 보존 (이슈 #262 리뷰).
 // validateSelectors 실패 시 validateFailureHandler 가 등록되어 있으면
 // (ctx, ref, llmRetryCount, targetType, crawlerName) 으로 호출됩니다 (이슈 #237).
 //
 // 동일 (host, type) 에 대한 in-flight 호출이 이미 있으면 즉시 skip.
 // Stop 호출 후의 Enqueue 는 즉시 noop.
-func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string) {
+func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration) {
 	if g.stopped.Load() {
 		return
 	}
@@ -208,10 +218,33 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 		return
 	}
 	if !acquired {
-		g.log.WithFields(map[string]interface{}{
-			"host":        host,
-			"target_type": string(targetType),
-		}).Debug("llmgen enqueue skipped — in-flight request already exists")
+		// in-flight 중 — pending 큐에 적재하여 룰 생성 완료 후 재파싱 (이슈 #262).
+		if g.pendingQueue != nil {
+			item := PendingItem{
+				RawRef:        rawRef,
+				CrawlerName:   crawlerName,
+				LLMRetryCount: llmRetryCount,
+				TargetType:    targetType,
+				TimeoutMs:     jobTimeout.Milliseconds(),
+			}
+			if perr := g.pendingQueue.Push(context.WithoutCancel(ctx), host, targetType, item); perr != nil {
+				g.log.WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+				}).WithError(perr).Warn("llmgen pending queue push failed")
+			} else {
+				g.log.WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+					"url":         rawRef.URL,
+				}).Debug("llmgen enqueue deferred — added to pending queue")
+			}
+		} else {
+			g.log.WithFields(map[string]interface{}{
+				"host":        host,
+				"target_type": string(targetType),
+			}).Debug("llmgen enqueue skipped — in-flight request already exists")
+		}
 		return
 	}
 
@@ -243,6 +276,38 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 			var sve *selectorValidationError
 			if errors.As(err, &sve) && g.validateFailureHandler != nil {
 				g.validateFailureHandler(bgCtx, rawRef, llmRetryCount, targetType, crawlerName)
+			}
+			return
+		}
+
+		// 룰 생성 성공 — pending 대기 URL 을 파서 워커에 재투입 (이슈 #262).
+		// flush 는 defer(Release) 실행 전에 수행됨 — flush 중 새로 들어온 URL 은 pending 에 적재되고
+		// 락 해제 후 새 runOnce 가 다음 flush 에서 처리.
+		// Kafka publish 실패 항목은 requeueFn 이 반환 → pending 에 재적재 (이슈 #262 리뷰).
+		if g.pendingQueue != nil && g.requeueFn != nil {
+			items, ferr := g.pendingQueue.Flush(bgCtx, host, targetType)
+			if ferr != nil {
+				logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+				}).WithError(ferr).Warn("llmgen pending queue flush failed")
+			} else if len(items) > 0 {
+				failed := g.requeueFn(bgCtx, items)
+				for _, item := range failed {
+					if perr := g.pendingQueue.Push(bgCtx, host, targetType, item); perr != nil {
+						logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+							"host":        host,
+							"target_type": string(targetType),
+							"url":         item.RawRef.URL,
+						}).WithError(perr).Warn("llmgen failed to re-push Kafka-failed pending item")
+					}
+				}
+				logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+					"count":       len(items),
+					"failed":      len(failed),
+				}).Info("llmgen pending URLs requeued for parsing")
 			}
 		}
 	}()
@@ -331,7 +396,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		HostPattern: host,
 		TargetType:  targetType,
 		Version:     1,
-		Enabled:     false, // 운영자 review 게이트 — spot-check 후 수동 enable
+		Enabled:     true, // CSS selector 검증 통과 = 품질 게이트 — 즉시 활성화하여 pending 재투입이 유효하도록
 		Selectors:   selectors,
 		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, modelName),
 	}
@@ -339,8 +404,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		return fmt.Errorf("insert parsing rule: %w", err)
 	}
 
-	// negative cache 만 즉시 무효화 — enabled=false 상태이므로 다음 lookup 도 ErrNoRule 이지만,
-	// 운영자가 enabled=true 로 flip 한 직후 새 rule 이 즉시 반영되도록 cache 비움.
+	// negative cache 무효화 — 다음 lookup 부터 새 rule 이 즉시 반영되도록.
 	g.resolver.Invalidate(host, targetType)
 
 	g.log.WithFields(map[string]interface{}{
@@ -348,8 +412,8 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		"target_type": string(targetType),
 		"rule_id":     record.ID,
 		"model":       modelName,
-		"enabled":     false,
-	}).Info("llm-generated parsing rule inserted (review required before enabling)")
+		"enabled":     true,
+	}).Info("llm-generated parsing rule inserted and enabled")
 
 	return nil
 }

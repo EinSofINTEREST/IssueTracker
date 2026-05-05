@@ -84,7 +84,8 @@ func TestRequeueForLLMRetry_PreservesHeaders(t *testing.T) {
 
 	require.Len(t, prod.published, 1)
 	msg := prod.published[0]
-	assert.Equal(t, "list", msg.Headers["target_type"], "target_type 헤더 보존")
+	// storage.TargetTypeList ("list") → core.TargetTypeCategory ("category") 변환 검증 (이슈 #262 리뷰).
+	assert.Equal(t, "category", msg.Headers["target_type"], "target_type 헤더는 fetcher 형식(category)으로 변환되어야 함")
 	assert.Equal(t, "naver", msg.Headers["crawler"], "crawler 헤더 보존")
 }
 

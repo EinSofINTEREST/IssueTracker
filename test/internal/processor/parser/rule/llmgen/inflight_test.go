@@ -33,7 +33,7 @@ func TestGenerator_SetLocker_Nil_FallsBackToMem(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	waitForInserts(t, repo, 1, 2*time.Second)
 	assert.Equal(t, 1, provider.callCount(), "nil SetLocker 시 기존 동작 유지")
@@ -50,7 +50,7 @@ func TestGenerator_SetLocker_AlwaysLocked_NoLLMCall(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, 0, provider.callCount(), "locker 가 false 반환 시 LLM 호출 없어야 함")
@@ -74,7 +74,7 @@ func TestGenerator_SetLocker_CustomLocker_IsInvoked(t *testing.T) {
 
 	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
-	}, 0, "")
+	}, 0, "", 0)
 
 	waitForInserts(t, repo, 1, 2*time.Second)
 	assert.Equal(t, 1, locker.acquireCalls(), "TryAcquire 가 1회 호출되어야 함")
