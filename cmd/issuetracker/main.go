@@ -20,6 +20,7 @@ import (
 	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
 	"issuetracker/internal/processor/parser/rule"
+	"issuetracker/internal/processor/parser/rule/claudegen"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/rule/refiner"
 	"issuetracker/internal/processor/parser/rule/validator"
@@ -449,6 +450,25 @@ func main() {
 		log.Info("llmgen: 의미 검증 ValidatorPool 활성화")
 	}
 
+	// ── Claude Code 추출기 (이슈 #267) ──────────────────────────────────────
+	// LLM_EXTRACTOR=claude-code 일 때 활성화 — Claude 구독 환경의 sonnet 으로 셀렉터 추출.
+	// 미지정 / gemini (기본) 일 때는 buildLLMGenerator 가 설정한 기본 LLM provider 추출.
+	// Start 실패 시 Gemini 경로로 graceful fallback (fatal 아님).
+	// 종료 시 stages.Stop 이후 worker.Stop 호출 — llmGen.Stop 으로 in-flight Extract 완료 보장 후 컨테이너 정리.
+	var claudegenWorker *claudegen.ClaudeWorker
+	if llmGen != nil && os.Getenv("LLM_EXTRACTOR") == "claude-code" {
+		worker, werr := claudegen.NewFromEnv(log)
+		if werr != nil {
+			log.WithError(werr).Warn("claudegen worker construction failed, falling back to default extractor")
+		} else if serr := worker.Start(ctx); serr != nil {
+			log.WithError(serr).Warn("claudegen worker start failed, falling back to default extractor")
+		} else {
+			llmGen.SetExtractor(worker)
+			claudegenWorker = worker
+			log.Info("llmgen: Claude Code 웜 컨테이너 추출기 활성화")
+		}
+	}
+
 	// ── Refiner (이슈 #173 단계 4-2) ──────────────────────────────────────────
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
@@ -596,6 +616,16 @@ func main() {
 			log.WithFields(map[string]interface{}{"stage": s.Name()}).WithError(err).Error("error during stage shutdown")
 		} else {
 			log.WithField("stage", s.Name()).Info("pipeline stage stopped")
+		}
+	}
+
+	// Claude Code 컨테이너 종료 (이슈 #267) — stages.Stop 으로 llmGen 의 모든 in-flight Extract 가
+	// 완료된 이후 호출. Worker.Stop 이 실행 중인 docker exec 세션 완료 대기 + 컨테이너 정리.
+	if claudegenWorker != nil {
+		if err := claudegenWorker.Stop(shutdownCtx); err != nil {
+			log.WithError(err).Error("claudegen worker stop failed")
+		} else {
+			log.Info("claudegen worker stopped")
 		}
 	}
 
