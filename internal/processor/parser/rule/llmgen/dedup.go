@@ -1,56 +1,161 @@
 package llmgen
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"sync"
+	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"issuetracker/internal/storage"
 )
 
-// inflightKey 는 in-flight LLM 요청을 식별하는 (host, target_type) 튜플입니다.
+// DefaultInflightLockTTL 은 Redis 분산 Lock 의 기본 TTL 입니다.
+// CLAUDE_CODE_TIMEOUT 기본값(120s) 의 2.5배 — 프로세스 크래시 후 stuck 슬롯 자동 해제 보장.
+const DefaultInflightLockTTL = 5 * time.Minute
+
+const inflightKeyPrefix = "llmgen:inflight:"
+
+// inflightKey 는 (host, target_type) 튜플입니다 — DB FindActiveCandidates 인자와 1:1 매칭.
 type inflightKey struct {
 	host       string
 	targetType storage.TargetType
 }
 
-// inflightSet 은 동일 (host, type) 에 대해 동시에 진행 중인 LLM 호출을 1회로 제한합니다.
+// InflightLocker 는 (host, targetType) 단위 중복 실행 방지 인터페이스입니다 (이슈 #261).
 //
-// inflightSet provides best-effort in-process dedup. 새 host 에 대해 100개 article URL 이
-// 동시에 들어와도 LLM 호출은 1회만 발생하도록 보장 (이슈 #149 의 안전망).
-//
-// **Best-effort 한계**: 본 set 은 단일 process 내 상태 — 여러 instance 가 같은 host 를
-// 동시에 처리하면 instance 수만큼 호출 발생 가능. 분산 dedup 은 후속 PR (Redis lock).
-//
-// 모든 메소드는 goroutine-safe.
-type inflightSet struct {
+// 구현체:
+//   - memInflightLocker: in-process map 기반 (기본값, 단일 인스턴스 환경)
+//   - RedisInflightLocker: Redis SETNX+TTL 기반 (다중 인스턴스 환경)
+type InflightLocker interface {
+	// TryAcquire 는 슬롯 획득을 시도합니다.
+	// acquired=true: 호출자가 작업 진행 + 완료 후 Release 책임.
+	// acquired=false: 다른 goroutine/인스턴스가 이미 처리 중 — skip.
+	TryAcquire(ctx context.Context, host string, targetType storage.TargetType) (acquired bool, err error)
+	// Release 는 획득한 슬롯을 해제합니다.
+	Release(ctx context.Context, host string, targetType storage.TargetType) error
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// memInflightLocker — in-process 기본 구현
+// ─────────────────────────────────────────────────────────────────────────────
+
+type memInflightLocker struct {
 	mu      sync.Mutex
 	pending map[inflightKey]struct{}
 }
 
-// newInflightSet 은 빈 inflightSet 을 반환합니다.
-func newInflightSet() *inflightSet {
-	return &inflightSet{pending: make(map[inflightKey]struct{})}
+func newMemInflightLocker() *memInflightLocker {
+	return &memInflightLocker{pending: make(map[inflightKey]struct{})}
 }
 
-// tryAcquire 는 (host, type) 의 LLM 호출 슬롯을 획득합니다.
-//
-// 반환값 acquired=true: 호출자가 LLM 호출을 진행 + 종료 후 release 호출 책임.
-// 반환값 acquired=false: 다른 goroutine 이 이미 동일 key 를 처리 중 — 호출자는 skip.
-func (s *inflightSet) tryAcquire(host string, t storage.TargetType) bool {
-	key := inflightKey{host: host, targetType: t}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.pending[key]; exists {
-		return false
+func (m *memInflightLocker) TryAcquire(_ context.Context, host string, targetType storage.TargetType) (bool, error) {
+	key := inflightKey{host: host, targetType: targetType}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.pending[key]; exists {
+		return false, nil
 	}
-	s.pending[key] = struct{}{}
-	return true
+	m.pending[key] = struct{}{}
+	return true, nil
 }
 
-// release 는 acquire 한 (host, type) 슬롯을 해제합니다.
-// tryAcquire 가 false 를 반환한 호출자는 release 를 호출하면 안 됩니다 (다른 owner 의 슬롯 침범).
-func (s *inflightSet) release(host string, t storage.TargetType) {
-	key := inflightKey{host: host, targetType: t}
-	s.mu.Lock()
-	delete(s.pending, key)
-	s.mu.Unlock()
+func (m *memInflightLocker) Release(_ context.Context, host string, targetType storage.TargetType) error {
+	key := inflightKey{host: host, targetType: targetType}
+	m.mu.Lock()
+	delete(m.pending, key)
+	m.mu.Unlock()
+	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RedisInflightLocker — 분산 Lock 구현 (이슈 #261)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// luaRelease 는 소유권 확인 후 삭제하는 Lua 스크립트입니다.
+// GET 과 DEL 의 원자성 보장 — 다른 인스턴스가 재획득한 락을 삭제하지 않습니다.
+const luaRelease = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end`
+
+// RedisInflightLocker 는 Redis SET NX+TTL 기반 분산 Lock 구현입니다.
+//
+// 다중 인스턴스 환경에서 동일 (host, targetType) 에 대한 LLM 호출을 1회로 제한합니다.
+// TTL 은 프로세스 크래시 후 stuck 슬롯 자동 해제를 보장합니다.
+//
+// 소유권 보장: TryAcquire 시 고유 token 을 값으로 저장하고, Release 시 Lua 스크립트로
+// token 일치를 확인한 후 삭제 — TTL 만료 후 다른 인스턴스가 재획득한 락을 삭제하지 않습니다.
+type RedisInflightLocker struct {
+	rdb    *goredis.Client
+	ttl    time.Duration
+	mu     sync.Mutex
+	tokens map[string]string // lockKey → token (소유권 추적)
+}
+
+// NewRedisInflightLocker 는 RedisInflightLocker 를 생성합니다.
+// ttl ≤ 0 이면 DefaultInflightLockTTL 로 보정합니다.
+func NewRedisInflightLocker(rdb *goredis.Client, ttl time.Duration) *RedisInflightLocker {
+	if ttl <= 0 {
+		ttl = DefaultInflightLockTTL
+	}
+	return &RedisInflightLocker{rdb: rdb, ttl: ttl, tokens: make(map[string]string)}
+}
+
+func (r *RedisInflightLocker) TryAcquire(ctx context.Context, host string, targetType storage.TargetType) (bool, error) {
+	key := r.key(host, targetType)
+	token := newLockToken()
+
+	// SET key token NX PX ttl — SetNX 는 deprecated, SetArgs 의 NX mode 사용.
+	err := r.rdb.SetArgs(ctx, key, token, goredis.SetArgs{
+		Mode: "NX",
+		TTL:  r.ttl,
+	}).Err()
+	if errors.Is(err, goredis.Nil) {
+		return false, nil // 이미 다른 소유자가 획득 중
+	}
+	if err != nil {
+		return false, fmt.Errorf("redis inflight acquire %s: %w", key, err)
+	}
+
+	r.mu.Lock()
+	r.tokens[key] = token
+	r.mu.Unlock()
+	return true, nil
+}
+
+func (r *RedisInflightLocker) Release(ctx context.Context, host string, targetType storage.TargetType) error {
+	key := r.key(host, targetType)
+
+	r.mu.Lock()
+	token, ok := r.tokens[key]
+	if ok {
+		delete(r.tokens, key)
+	}
+	r.mu.Unlock()
+
+	if !ok {
+		return nil // 이 인스턴스가 소유하지 않음
+	}
+
+	// Lua 스크립트로 소유권 확인 후 원자적 삭제 — TTL 만료 후 재획득된 락을 삭제하지 않음.
+	if err := r.rdb.Eval(ctx, luaRelease, []string{key}, token).Err(); err != nil && !errors.Is(err, goredis.Nil) {
+		return fmt.Errorf("redis inflight release %s: %w", key, err)
+	}
+	return nil
+}
+
+func (r *RedisInflightLocker) key(host string, targetType storage.TargetType) string {
+	return inflightKeyPrefix + host + ":" + string(targetType)
+}
+
+func newLockToken() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

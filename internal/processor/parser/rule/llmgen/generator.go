@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 
@@ -79,7 +80,7 @@ func (e *selectorValidationError) Unwrap() error { return e.cause }
 // Generator 는 host 별 parsing rule 을 LLM 으로 자동 생성합니다.
 //
 // goroutine-safe — provider / repo / resolver 가 자체 thread-safety 를 가짐.
-// inflightSet 은 자체 mutex 로 보호.
+// locker 는 InflightLocker 구현체에 따라 자체 thread-safety 를 가짐.
 //
 // Lifecycle:
 //   - Enqueue 가 background goroutine 으로 LLM 호출 수행 — sync.WaitGroup 으로 추적
@@ -100,15 +101,26 @@ type Generator struct {
 	// nil 이면 호출 안 함.
 	validateFailureHandler func(context.Context, core.RawContentRef, int, storage.TargetType, string)
 
-	inflight *inflightSet
-	wg       sync.WaitGroup
-	stopped  atomic.Bool
+	locker  InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker (이슈 #261)
+	wg      sync.WaitGroup
+	stopped atomic.Bool
 }
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다 (이슈 #237).
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
 func (g *Generator) SetValidateFailureHandler(fn func(context.Context, core.RawContentRef, int, storage.TargetType, string)) {
 	g.validateFailureHandler = fn
+}
+
+// SetLocker 는 분산 Lock 구현체를 교체합니다 (이슈 #261).
+// nil 이면 기본 in-process memInflightLocker 로 fallback.
+// Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
+func (g *Generator) SetLocker(l InflightLocker) {
+	if l == nil {
+		g.locker = newMemInflightLocker()
+		return
+	}
+	g.locker = l
 }
 
 // SetExtractor 는 셀렉터 추출 단계를 교체합니다 (이슈 #256).
@@ -140,7 +152,7 @@ func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *ru
 		repo:     repo,
 		resolver: resolver,
 		log:      log,
-		inflight: newInflightSet(),
+		locker:   newMemInflightLocker(),
 	}, nil
 }
 
@@ -183,7 +195,19 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 		SourceInfo: raw.SourceInfo,
 	}
 
-	if !g.inflight.tryAcquire(host, targetType) {
+	// TryAcquire: WithoutCancel 후 timeout — 호출자 ctx cancel 이 즉시 전파되지 않도록 하되
+	// Redis 장애 시 무기한 블록도 방지. 기존 inflightSet 동작(cancel 무시)과 일관성 유지.
+	acquireCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	acquired, err := g.locker.TryAcquire(acquireCtx, host, targetType)
+	cancel()
+	if err != nil {
+		g.log.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+		}).WithError(err).Warn("llmgen inflight lock acquire failed, skipping")
+		return
+	}
+	if !acquired {
 		g.log.WithFields(map[string]interface{}{
 			"host":        host,
 			"target_type": string(targetType),
@@ -197,7 +221,14 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
-		defer g.inflight.release(host, targetType)
+		defer func() {
+			if rerr := g.locker.Release(bgCtx, host, targetType); rerr != nil {
+				logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+				}).WithError(rerr).Warn("llmgen inflight lock release failed")
+			}
+		}()
 
 		err := g.runOnce(bgCtx, host, targetType, urlSnapshot, htmlSnapshot)
 		if err != nil {

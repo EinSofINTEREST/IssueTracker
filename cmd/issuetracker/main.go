@@ -310,7 +310,7 @@ func main() {
 	//
 	// 이슈 #173 단계 4-2: 동일 provider 를 refiner 와 공유 — 환경변수 1세트로 동시 제어.
 	llmProvider := buildLLMProvider(log)
-	llmGen := buildLLMGenerator(llmProvider, parsingRuleRepo, ruleResolver, log)
+	llmGen := buildLLMGenerator(llmProvider, parsingRuleRepo, ruleResolver, redisClientShared, log)
 
 	// ── Fetcher 실패 카운터 (이슈 #220) ────────────────────────────────────────
 	// host 단위 fetcher 실패를 sliding window 로 누적 — 단계 3 (#221) 의 chromedp 자동 전환
@@ -628,13 +628,18 @@ func buildLLMProvider(log *logger.Logger) llm.Provider {
 //
 // provider 가 nil (LLM 비활성) 이면 nil 반환 — parser worker 는 ErrNoRule 시 raw 만 잔존.
 // llmgen.New 자체 실패는 wiring 버그라 fatal — 도달하면 dependency injection 모순 (이슈 #208).
-func buildLLMGenerator(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, log *logger.Logger) *llmgen.Generator {
+// redisClient 가 nil 이면 in-process memInflightLocker 로 graceful degrade (이슈 #261).
+func buildLLMGenerator(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, redisClient *redis.Client, log *logger.Logger) *llmgen.Generator {
 	if provider == nil {
 		return nil
 	}
 	gen, err := llmgen.New(provider, repo, resolver, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct llmgen generator")
+	}
+	if redisClient != nil {
+		gen.SetLocker(llmgen.NewRedisInflightLocker(redisClient.Raw(), llmgen.DefaultInflightLockTTL))
+		log.Info("llmgen: Redis 분산 inflight lock 활성화")
 	}
 	return gen
 }
