@@ -60,6 +60,15 @@ func (e *selectorValidationError) Error() string {
 }
 func (e *selectorValidationError) Unwrap() error { return e.cause }
 
+// SelectorExtractor 는 HTML 에서 CSS 셀렉터를 추출하는 인터페이스입니다 (이슈 #256).
+//
+// 기본 구현: pkg/llm.Provider 기반 LLM 호출 (Gemini Flash 등).
+// 대체 구현: claudegen.Executor (Claude Code Docker).
+// SetExtractor 로 교체하면 추출 단계만 대체되고 나머지 흐름 (validation, INSERT) 은 동일.
+type SelectorExtractor interface {
+	Extract(ctx context.Context, host string, targetType storage.TargetType, html string) (storage.SelectorMap, error)
+}
+
 // Generator 는 host 별 parsing rule 을 LLM 으로 자동 생성합니다.
 //
 // goroutine-safe — provider / repo / resolver 가 자체 thread-safety 를 가짐.
@@ -70,10 +79,11 @@ func (e *selectorValidationError) Unwrap() error { return e.cause }
 //   - Stop(ctx) 호출 시 새 Enqueue 차단 + 진행 중 goroutine 의 완료 대기 (graceful shutdown)
 //   - Stop 후 Enqueue 는 noop (race 안전)
 type Generator struct {
-	provider llm.Provider
-	repo     storage.ParsingRuleRepository
-	resolver *rule.Resolver
-	log      *logger.Logger
+	provider  llm.Provider
+	extractor SelectorExtractor // nil 이면 provider 로 fallback (이슈 #256)
+	repo      storage.ParsingRuleRepository
+	resolver  *rule.Resolver
+	log       *logger.Logger
 
 	// validateFailureHandler 는 selector 검증 실패 시 호출되는 콜백입니다 (이슈 #237).
 	// 인자: (ctx, ref, llmRetryCount, targetType, crawlerName).
@@ -92,6 +102,13 @@ type Generator struct {
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
 func (g *Generator) SetValidateFailureHandler(fn func(context.Context, core.RawContentRef, int, storage.TargetType, string)) {
 	g.validateFailureHandler = fn
+}
+
+// SetExtractor 는 셀렉터 추출 단계를 교체합니다 (이슈 #256).
+// nil 이면 기존 provider (Gemini Flash 등) 로 fallback.
+// Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
+func (g *Generator) SetExtractor(e SelectorExtractor) {
+	g.extractor = e
 }
 
 // New 는 Generator 를 생성합니다.
@@ -222,28 +239,44 @@ func (g *Generator) Stop(ctx context.Context) {
 	}
 }
 
-// runOnce 는 단일 LLM 호출 + validation + INSERT + cache invalidate 의 동기 실행입니다.
+// runOnce 는 단일 추출 + validation + INSERT + cache invalidate 의 동기 실행입니다.
 // 호출자 (Enqueue 의 goroutine) 가 in-flight 슬롯 release 책임.
 func (g *Generator) runOnce(ctx context.Context, host string, targetType storage.TargetType, sampleURL, html string) error {
-	system, user := BuildPrompt(host, targetType, html)
+	var (
+		selectors storage.SelectorMap
+		modelName string
+	)
 
-	resp, err := g.provider.Generate(ctx, llm.Request{
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: system},
-			{Role: llm.RoleUser, Content: user},
-		},
-		TaskHint: llm.TaskHintJSON,
-	})
-	if err != nil {
-		return fmt.Errorf("llm provider call: %w", err)
-	}
-	if resp == nil || resp.Content == "" {
-		return errors.New("llm returned empty response")
-	}
-
-	selectors, err := parseSelectorMap(resp.Content)
-	if err != nil {
-		return fmt.Errorf("parse llm response: %w", err)
+	if g.extractor != nil {
+		// Claude Code Docker 추출 경로 (이슈 #256)
+		sm, err := g.extractor.Extract(ctx, host, targetType, html)
+		if err != nil {
+			return fmt.Errorf("claude code extractor: %w", err)
+		}
+		selectors = sm
+		modelName = "claude-code"
+	} else {
+		// 기존 LLM provider 경로 (Gemini Flash 등)
+		system, user := BuildPrompt(host, targetType, html)
+		resp, err := g.provider.Generate(ctx, llm.Request{
+			Messages: []llm.Message{
+				{Role: llm.RoleSystem, Content: system},
+				{Role: llm.RoleUser, Content: user},
+			},
+			TaskHint: llm.TaskHintJSON,
+		})
+		if err != nil {
+			return fmt.Errorf("llm provider call: %w", err)
+		}
+		if resp == nil || resp.Content == "" {
+			return errors.New("llm returned empty response")
+		}
+		sm, err := parseSelectorMap(resp.Content)
+		if err != nil {
+			return fmt.Errorf("parse llm response: %w", err)
+		}
+		selectors = sm
+		modelName = resp.Model
 	}
 
 	if err := validateSelectors(selectors, targetType, html); err != nil {
@@ -257,7 +290,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		Version:     1,
 		Enabled:     false, // 운영자 review 게이트 — spot-check 후 수동 enable
 		Selectors:   selectors,
-		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, resp.Model),
+		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, modelName),
 	}
 	if err := g.repo.Insert(ctx, record); err != nil {
 		return fmt.Errorf("insert parsing rule: %w", err)
@@ -271,7 +304,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		"host":        host,
 		"target_type": string(targetType),
 		"rule_id":     record.ID,
-		"model":       resp.Model,
+		"model":       modelName,
 		"enabled":     false,
 	}).Info("llm-generated parsing rule inserted (review required before enabling)")
 
