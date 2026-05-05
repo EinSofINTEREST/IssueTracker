@@ -69,6 +69,13 @@ type SelectorExtractor interface {
 	Extract(ctx context.Context, host string, targetType storage.TargetType, html string) (storage.SelectorMap, error)
 }
 
+// modelNamer 는 추출기가 사용하는 모델 ID 를 반환하는 선택적 인터페이스입니다 (이슈 #256).
+// SelectorExtractor 구현체가 이 인터페이스도 구현하면 실제 모델 ID 를 DB description 에 기록합니다.
+// 구현하지 않으면 fallback 으로 "claude-code" 를 사용합니다.
+type modelNamer interface {
+	ModelName() string
+}
+
 // Generator 는 host 별 parsing rule 을 LLM 으로 자동 생성합니다.
 //
 // goroutine-safe — provider / repo / resolver 가 자체 thread-safety 를 가짐.
@@ -254,7 +261,12 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 			return fmt.Errorf("claude code extractor: %w", err)
 		}
 		selectors = sm
-		modelName = "claude-code"
+		// 추출기가 ModelName() 을 구현하면 실제 모델 ID 를 사용, 없으면 fallback.
+		if mn, ok := g.extractor.(modelNamer); ok {
+			modelName = mn.ModelName()
+		} else {
+			modelName = "claude-code"
+		}
 	} else {
 		// 기존 LLM provider 경로 (Gemini Flash 등)
 		system, user := BuildPrompt(host, targetType, html)

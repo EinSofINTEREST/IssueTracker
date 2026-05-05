@@ -20,16 +20,19 @@ type mockRunner struct {
 	stderr       string
 	err          error
 	capturedArgs []string
+	capturedEnv  []string
 }
 
-func (m *mockRunner) Run(_ context.Context, args []string) (string, string, error) {
+func (m *mockRunner) Run(_ context.Context, args []string, env []string) (string, string, error) {
 	m.capturedArgs = args
+	m.capturedEnv = env
 	return m.stdout, m.stderr, m.err
 }
 
-func newTestExecutor(runner *mockRunner) *claudegen.Executor {
+func newTestExecutor(t *testing.T, runner *mockRunner) *claudegen.Executor {
+	t.Helper()
 	log := logger.New(logger.DefaultConfig())
-	return claudegen.NewWithRunner(
+	ex, err := claudegen.NewWithRunner(
 		"ghcr.io/anthropics/claude-code:latest",
 		"claude-sonnet-4-6",
 		"test-api-key",
@@ -37,6 +40,8 @@ func newTestExecutor(runner *mockRunner) *claudegen.Executor {
 		runner,
 		log,
 	)
+	require.NoError(t, err)
+	return ex
 }
 
 func TestExtract_Success_ArticlePage(t *testing.T) {
@@ -44,7 +49,7 @@ func TestExtract_Success_ArticlePage(t *testing.T) {
 		stdout: `Here are the selectors:
 {"title":{"css":"h1.article-title"},"main_content":{"css":"div.article-body","multi":true},"published_at":{"css":"time","attribute":"datetime"}}`,
 	}
-	sm, err := newTestExecutor(runner).Extract(t.Context(), "news.naver.com", storage.TargetTypePage, "<html>...</html>")
+	sm, err := newTestExecutor(t, runner).Extract(t.Context(), "news.naver.com", storage.TargetTypePage, "<html>...</html>")
 
 	require.NoError(t, err)
 	require.NotNil(t, sm.Title)
@@ -59,7 +64,7 @@ func TestExtract_Success_ListPage(t *testing.T) {
 	runner := &mockRunner{
 		stdout: `{"item_container":{"css":"ul.news-list li"},"item_link":{"css":"a.news-link","attribute":"href"},"item_title":{"css":"span.title"}}`,
 	}
-	sm, err := newTestExecutor(runner).Extract(t.Context(), "news.daum.net", storage.TargetTypeList, "<html>...</html>")
+	sm, err := newTestExecutor(t, runner).Extract(t.Context(), "news.daum.net", storage.TargetTypeList, "<html>...</html>")
 
 	require.NoError(t, err)
 	require.NotNil(t, sm.ItemContainer)
@@ -73,7 +78,7 @@ func TestExtract_DockerRunError(t *testing.T) {
 		stderr: "docker: Cannot connect to the Docker daemon",
 		err:    errors.New("exit status 1"),
 	}
-	_, err := newTestExecutor(runner).Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+	_, err := newTestExecutor(t, runner).Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "docker run")
@@ -83,30 +88,39 @@ func TestExtract_NoJSONInOutput(t *testing.T) {
 	runner := &mockRunner{
 		stdout: "I could not find any relevant selectors in the provided HTML.",
 	}
-	_, err := newTestExecutor(runner).Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+	_, err := newTestExecutor(t, runner).Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse claude output")
 }
 
-func TestExtract_DockerArgsContainAPIKey(t *testing.T) {
+// TestExtract_APIKeyNotInDockerArgs 는 ANTHROPIC_API_KEY 가 docker args 가 아닌
+// env 슬라이스로 전달되는지 검증합니다 (ps/proc 노출 방지 — PR #258 보안 요건).
+func TestExtract_APIKeyNotInDockerArgs(t *testing.T) {
 	runner := &mockRunner{stdout: `{"title":{"css":"h1"}}`}
-	_, err := newTestExecutor(runner).Extract(t.Context(), "example.com", storage.TargetTypePage, "<html><h1>test</h1></html>")
+	_, err := newTestExecutor(t, runner).Extract(t.Context(), "example.com", storage.TargetTypePage, "<html><h1>test</h1></html>")
 	require.NoError(t, err)
 
-	found := false
+	// API 키 값이 docker args 에 포함되어서는 안 됨 (ps 로 노출 방지)
 	for _, arg := range runner.capturedArgs {
-		if arg == "ANTHROPIC_API_KEY=test-api-key" {
+		assert.NotContains(t, arg, "test-api-key",
+			"ANTHROPIC_API_KEY value must not appear in docker args (ps/proc exposure)")
+	}
+
+	// API 키는 env 슬라이스로 전달되어야 함
+	found := false
+	for _, e := range runner.capturedEnv {
+		if e == "ANTHROPIC_API_KEY=test-api-key" {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "ANTHROPIC_API_KEY must be passed to docker run args")
+	assert.True(t, found, "ANTHROPIC_API_KEY must be passed via env slice, not docker args")
 }
 
 func TestExtract_ModelInArgs(t *testing.T) {
 	runner := &mockRunner{stdout: `{"title":{"css":"h1"}}`}
-	_, _ = newTestExecutor(runner).Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+	_, _ = newTestExecutor(t, runner).Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
 
 	modelFound := false
 	for i, arg := range runner.capturedArgs {

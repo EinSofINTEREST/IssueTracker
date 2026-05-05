@@ -12,7 +12,7 @@ func buildPrompt(host string, targetType storage.TargetType) string {
 	fieldsGuide := fieldsGuideFor(targetType)
 	return fmt.Sprintf(`Read the HTML file at /workspace/page.html from the %s website.
 
-Your task: extract CSS selectors for the fields below and return them as a **single JSON object only** — no explanation, no markdown, no code blocks.
+Your task: extract CSS selectors for the fields below and return them as a single JSON object only — no explanation, no markdown, no code blocks.
 
 Target page type: %s
 

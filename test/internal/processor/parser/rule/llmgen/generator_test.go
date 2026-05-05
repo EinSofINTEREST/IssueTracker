@@ -426,3 +426,121 @@ func (s *slowProvider) Generate(ctx context.Context, req llm.Request) (*llm.Resp
 	}
 	return s.fakeProvider.Generate(ctx, req)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Extractor path tests (이슈 #256)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// fakeExtractor 는 SelectorExtractor 의 테스트용 구현입니다.
+type fakeExtractor struct {
+	sm  storage.SelectorMap
+	err error
+	mu  sync.Mutex
+	n   int
+}
+
+func (e *fakeExtractor) Extract(_ context.Context, _ string, _ storage.TargetType, _ string) (storage.SelectorMap, error) {
+	e.mu.Lock()
+	e.n++
+	e.mu.Unlock()
+	return e.sm, e.err
+}
+
+func (e *fakeExtractor) callCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.n
+}
+
+// fakeExtractorWithModel 은 ModelName() 도 구현하는 SelectorExtractor 입니다.
+type fakeExtractorWithModel struct {
+	fakeExtractor
+	modelName string
+}
+
+func (e *fakeExtractorWithModel) ModelName() string { return e.modelName }
+
+// TestGenerator_SetExtractor_UsesExtractorNotProvider 는 SetExtractor 설정 시
+// provider (Gemini 등) 대신 extractor 가 사용되는지 검증합니다 (이슈 #256).
+func TestGenerator_SetExtractor_UsesExtractorNotProvider(t *testing.T) {
+	provider := &fakeProvider{name: "gemini-flash", response: "{}"}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	extractor := &fakeExtractor{
+		sm: storage.SelectorMap{
+			Title:       &storage.FieldSelector{CSS: "h1.article-title"},
+			MainContent: &storage.FieldSelector{CSS: "article p", Multi: true},
+		},
+	}
+	g.SetExtractor(extractor)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/article/1", HTML: samplePageHTML,
+	}, 0, "")
+
+	waitForInserts(t, repo, 1, 2*time.Second)
+
+	assert.Equal(t, 0, provider.callCount(), "extractor 설정 시 provider 는 호출 안 됨")
+	assert.Equal(t, 1, extractor.callCount(), "extractor 가 1회 호출됨")
+	recs := repo.inserts()
+	require.Len(t, recs, 1)
+	assert.Equal(t, "h1.article-title", recs[0].Selectors.Title.CSS)
+}
+
+// TestGenerator_SetExtractor_ModelNameFromInterface 는 extractor 가 ModelName() 을 구현하면
+// 실제 모델 ID 가 DB description 에 기록되는지 검증합니다 (이슈 #256).
+func TestGenerator_SetExtractor_ModelNameFromInterface(t *testing.T) {
+	provider := &fakeProvider{name: "gemini-flash", response: "{}"}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	extractor := &fakeExtractorWithModel{
+		fakeExtractor: fakeExtractor{
+			sm: storage.SelectorMap{
+				Title:       &storage.FieldSelector{CSS: "h1.article-title"},
+				MainContent: &storage.FieldSelector{CSS: "article p"},
+			},
+		},
+		modelName: "claude-sonnet-4-6",
+	}
+	g.SetExtractor(extractor)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/article/1", HTML: samplePageHTML,
+	}, 0, "")
+
+	waitForInserts(t, repo, 1, 2*time.Second)
+
+	recs := repo.inserts()
+	require.Len(t, recs, 1)
+	assert.Contains(t, recs[0].Description, "claude-sonnet-4-6",
+		"ModelName() 구현체의 모델 ID 가 description 에 포함되어야 함")
+}
+
+// TestGenerator_SetExtractor_FallbackModelName 는 extractor 가 ModelName() 을 구현하지 않으면
+// fallback "claude-code" 가 description 에 기록되는지 검증합니다 (이슈 #256).
+func TestGenerator_SetExtractor_FallbackModelName(t *testing.T) {
+	provider := &fakeProvider{name: "gemini-flash", response: "{}"}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	extractor := &fakeExtractor{
+		sm: storage.SelectorMap{
+			Title:       &storage.FieldSelector{CSS: "h1.article-title"},
+			MainContent: &storage.FieldSelector{CSS: "article p"},
+		},
+	}
+	g.SetExtractor(extractor)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/article/1", HTML: samplePageHTML,
+	}, 0, "")
+
+	waitForInserts(t, repo, 1, 2*time.Second)
+
+	recs := repo.inserts()
+	require.Len(t, recs, 1)
+	assert.Contains(t, recs[0].Description, "claude-code",
+		"ModelName() 미구현 시 fallback 'claude-code' 가 description 에 포함되어야 함")
+}
