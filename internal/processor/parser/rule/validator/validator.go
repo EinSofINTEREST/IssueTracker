@@ -59,14 +59,20 @@ func extractContent(html string, sm storage.SelectorMap) (extractedContent, erro
 		ec.Title = strings.TrimSpace(doc.Find(sm.Title.CSS).First().Text())
 	}
 	if sm.MainContent != nil && sm.MainContent.CSS != "" {
-		var parts []string
-		doc.Find(sm.MainContent.CSS).Each(func(_ int, s *goquery.Selection) {
-			if t := strings.TrimSpace(s.Text()); t != "" {
-				parts = append(parts, t)
-			}
-		})
+		// Multi=false(기본) 이면 첫 번째 매칭만 사용 — 실제 parser 동작과 일치해야 의미 검증이 유효 (이슈 #265 리뷰).
+		var body string
+		if sm.MainContent.Multi {
+			var parts []string
+			doc.Find(sm.MainContent.CSS).Each(func(_ int, s *goquery.Selection) {
+				if t := strings.TrimSpace(s.Text()); t != "" {
+					parts = append(parts, t)
+				}
+			})
+			body = strings.Join(parts, " ")
+		} else {
+			body = strings.TrimSpace(doc.Find(sm.MainContent.CSS).First().Text())
+		}
 		// 최대 500자 — 프롬프트 크기 제한
-		body := strings.Join(parts, " ")
 		if len([]rune(body)) > 500 {
 			runes := []rune(body)
 			body = string(runes[:500]) + "…"
@@ -82,13 +88,30 @@ func extractContent(html string, sm storage.SelectorMap) (extractedContent, erro
 		}
 	}
 	if sm.ItemContainer != nil && sm.ItemContainer.CSS != "" {
-		ec.ItemContainer = strings.TrimSpace(doc.Find(sm.ItemContainer.CSS).First().Text())
+		container := doc.Find(sm.ItemContainer.CSS).First()
+		ec.ItemContainer = strings.TrimSpace(container.Text())
 		if len([]rune(ec.ItemContainer)) > 200 {
 			runes := []rune(ec.ItemContainer)
 			ec.ItemContainer = string(runes[:200]) + "…"
 		}
-	}
-	if sm.ItemLink != nil && sm.ItemLink.CSS != "" {
+		// ItemLink 는 ItemContainer 내부에서 수집 — 전체 문서에서 수집하면 네비게이션/푸터 링크가
+		// 섞여 잘못된 list rule 이 의미 검증을 통과할 수 있음 (이슈 #265 리뷰).
+		if sm.ItemLink != nil && sm.ItemLink.CSS != "" {
+			container.Find(sm.ItemLink.CSS).Each(func(i int, s *goquery.Selection) {
+				if i >= 3 {
+					return
+				}
+				if attr := sm.ItemLink.Attribute; attr != "" {
+					if v, ok := s.Attr(attr); ok {
+						ec.ItemLinks = append(ec.ItemLinks, v)
+					}
+				} else {
+					ec.ItemLinks = append(ec.ItemLinks, strings.TrimSpace(s.Text()))
+				}
+			})
+		}
+	} else if sm.ItemLink != nil && sm.ItemLink.CSS != "" {
+		// ItemContainer 없이 ItemLink 만 있는 경우 — 문서 전체에서 수집
 		doc.Find(sm.ItemLink.CSS).Each(func(i int, s *goquery.Selection) {
 			if i >= 3 {
 				return

@@ -79,12 +79,15 @@ func main() {
 
 	semPool := validator.NewPool(log, validator.NewLLMValidator(llmProvider))
 	res, verr := semPool.Validate(ctx, string(htmlBytes), record.Selectors, record.TargetType)
-	if verr != nil {
-		fmt.Printf("검증 API 오류 (best-effort): %v\n", verr)
-	}
 
 	fmt.Printf("검증 결과: valid=%v\nreason: %s\n", res.Valid, res.Reason)
 
+	// CLI 는 수동 운영 도구 — API 오류(verr)도 실패로 처리하여 운영자가 인지 가능하도록 (이슈 #265 리뷰).
+	// best-effort 통과는 자동 파이프라인(validator.Pool) 에서만 적용.
+	if verr != nil {
+		fmt.Printf("검증 API 오류: %v\n", verr)
+		os.Exit(2)
+	}
 	if !res.Valid {
 		os.Exit(2)
 	}
