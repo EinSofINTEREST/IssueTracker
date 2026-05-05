@@ -17,6 +17,7 @@ ISSUETRACKER_BINARY=$(BINARY_DIR)/issuetracker
 MIGRATE_BINARY=$(BINARY_DIR)/migrate
 MIGRATE_DOWN_BINARY=$(BINARY_DIR)/migrate-down
 RULE_VALIDATOR_BINARY=$(BINARY_DIR)/rule-validator
+CLAUDEGEN_IMAGE_TAG ?= issuetracker-claudegen:local
 EXAMPLE_BINARY=$(BINARY_DIR)/basic_usage
 COMPARISON_BINARY=$(BINARY_DIR)/crawler_comparison
 KAFKA_PIPELINE_BINARY=$(BINARY_DIR)/kafka_pipeline
@@ -51,6 +52,11 @@ build: ## 모든 바이너리 빌드
 	@echo "Build complete: $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY), $(MIGRATE_BINARY), $(MIGRATE_DOWN_BINARY), $(RULE_VALIDATOR_BINARY)"
 
 build-all: build ## 모든 실행 파일 빌드 (build와 동일)
+
+claudegen-build: ## claudegen 자체 Claude Code 이미지 빌드 (이슈 #269 — Anthropic 공식 미공개 대응)
+	@echo "Building claudegen image: $(CLAUDEGEN_IMAGE_TAG)"
+	docker build -t $(CLAUDEGEN_IMAGE_TAG) deployments/docker/claudegen/
+	@echo "Build complete: $(CLAUDEGEN_IMAGE_TAG)"
 
 start: ## Crawler + Processor 통합 실행 (의존: chrome, kafka 자동 기동, 직렬 실행)
 	@$(MAKE) chrome-ensure
