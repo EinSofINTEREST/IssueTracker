@@ -12,13 +12,18 @@ import (
 // execContainerRunner 는 실제 docker CLI 를 사용하는 ContainerRunner 구현입니다.
 type execContainerRunner struct{}
 
-// StartContainer 는 workspace 를 마운트한 장기 실행 컨테이너를 기동합니다.
+// StartContainer 는 workspace + auth 디렉토리를 마운트한 장기 실행 컨테이너를 기동합니다.
+//
+// 마운트 정책 (이슈 #266):
+//   - workDir → /workspace (read-write): 세션별 페이지 + 출력 임시 저장
+//   - authDir → containerAuthPath (read-only): 호스트의 Claude 구독 인증 토큰 — 컨테이너가 토큰 변조 못하도록 ro
+//
 // 컨테이너는 `tail -f /dev/null` 로 대기 — docker exec 세션이 올 때까지 유지.
 // env 슬라이스의 값은 cmd.Env 로 주입 — args 에 포함하지 않아 ps 에 노출되지 않습니다.
-func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir string, env []string) (string, error) {
+func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir, authDir, containerAuthPath string, env []string) (string, error) {
 	args := []string{
 		"run", "-d", "--rm",
-		"-e", "ANTHROPIC_API_KEY",
+		"-v", authDir + ":" + containerAuthPath + ":ro",
 		"-v", workDir + ":/workspace",
 		image,
 		"tail", "-f", "/dev/null",
@@ -35,7 +40,7 @@ func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir
 }
 
 // ExecSession 은 실행 중인 컨테이너에서 명령을 실행합니다.
-// 컨테이너에 이미 ANTHROPIC_API_KEY 가 설정되어 있으므로 env 전달이 불필요합니다.
+// 인증은 컨테이너에 마운트된 auth_token 디렉토리로 처리됨 (이슈 #266) — env 전달 불필요.
 func (r *execContainerRunner) ExecSession(ctx context.Context, containerID string, args []string) (string, string, error) {
 	fullArgs := append([]string{"exec", containerID}, args...)
 	var stdout, stderr bytes.Buffer
