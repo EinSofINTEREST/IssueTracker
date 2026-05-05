@@ -6,17 +6,21 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
 // execContainerRunner 는 실제 docker CLI 를 사용하는 ContainerRunner 구현입니다.
 type execContainerRunner struct{}
 
-// StartContainer 는 workspace + auth 디렉토리를 마운트한 장기 실행 컨테이너를 기동합니다.
+// StartContainer 는 workspace + auth 상태를 마운트한 장기 실행 컨테이너를 기동합니다.
 //
 // 마운트 정책 (이슈 #266):
 //   - workDir → /workspace (read-write): 세션별 페이지 + 출력 임시 저장
-//   - authDir → containerAuthPath (read-only): 호스트의 Claude 구독 인증 토큰 — 컨테이너가 토큰 변조 못하도록 ro
+//   - authDir → containerAuthPath (read-only): 호스트의 .claude/ 디렉토리 (.credentials.json, history)
+//   - sibling .claude.json → containerAuthPath sibling (read-only, optional):
+//     Claude 의 메인 설정 파일이 .claude/ 와 같은 부모 디렉토리에 있어 별도 마운트 필요.
+//     호스트에 파일이 존재할 때만 마운트 — 신규 사용자(claude CLI 미실행)는 .claude.json 부재 가능.
 //
 // 컨테이너는 `tail -f /dev/null` 로 대기 — docker exec 세션이 올 때까지 유지.
 // env 슬라이스의 값은 cmd.Env 로 주입 — args 에 포함하지 않아 ps 에 노출되지 않습니다.
@@ -24,10 +28,21 @@ func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir
 	args := []string{
 		"run", "-d", "--rm",
 		"-v", authDir + ":" + containerAuthPath + ":ro",
-		"-v", workDir + ":/workspace",
+	}
+
+	// .claude.json 파일도 함께 마운트 (이슈 #266) — Claude CLI 가 main config 를 sibling 위치에서 찾음.
+	hostJSON := filepath.Join(filepath.Dir(authDir), ".claude.json")
+	if _, err := os.Stat(hostJSON); err == nil {
+		containerJSON := filepath.Join(filepath.Dir(containerAuthPath), ".claude.json")
+		args = append(args, "-v", hostJSON+":"+containerJSON+":ro")
+	}
+
+	args = append(args,
+		"-v", workDir+":/workspace",
 		image,
 		"tail", "-f", "/dev/null",
-	}
+	)
+
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdout = &stdout

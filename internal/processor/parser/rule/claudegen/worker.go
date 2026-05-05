@@ -8,12 +8,15 @@
 // 인증 방식 (이슈 #266):
 //
 //	호스트에서 `claude` CLI 로 사전 로그인하여 발급된 OAuth auth_token 을 사용합니다.
-//	호스트의 인증 디렉토리($HOME/.claude 기본)를 컨테이너에 read-only 로 마운트하여
+//	Claude 의 인증 상태는 두 위치에 분산되어 있어 둘 다 컨테이너에 read-only 로 마운트합니다:
+//	  1. ~/.claude/        : 인증 디렉토리 (.credentials.json, history 등)
+//	  2. ~/.claude.json    : 메인 설정 파일 (sibling — .claude/ 와 같은 부모 디렉토리)
+//	두 path 모두 read-only — 컨테이너가 호스트 인증 상태를 변조하지 못하도록 합니다.
 //	구독 quota 안에서 sonnet 호출이 가능합니다. ANTHROPIC_API_KEY 종량제 과금 방식 대체.
 //
 // 환경변수:
 //   - CLAUDE_CODE_AUTH_DIR             : 호스트의 Claude 인증 디렉토리 (기본: $HOME/.claude)
-//   - CLAUDE_CODE_CONTAINER_AUTH_PATH  : 컨테이너 내 마운트 경로 (기본: /root/.claude)
+//   - CLAUDE_CODE_CONTAINER_AUTH_PATH  : 컨테이너 내 디렉토리 마운트 경로 (기본: /root/.claude)
 //   - CLAUDE_CODE_MODEL                : 모델 ID (기본: claude-sonnet-4-6)
 //   - CLAUDE_CODE_IMAGE                : Docker 이미지 (기본: ghcr.io/anthropics/claude-code:latest)
 //   - CLAUDE_CODE_TIMEOUT              : 세션 단위 타임아웃 (기본: 120s, Go duration 형식)
