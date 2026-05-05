@@ -32,6 +32,9 @@ const (
 	defaultImage          = "ghcr.io/anthropics/claude-code:latest"
 	defaultModel          = "claude-sonnet-4-6"
 	defaultSessionTimeout = 120 * time.Second
+
+	truncateStderrLen = 512 // exec 실패 시 stderr 미리보기 최대 길이
+	truncateStdoutLen = 256 // 파싱 실패 시 stdout 미리보기 최대 길이
 )
 
 // ContainerRunner 는 Docker 컨테이너 생명주기를 추상화합니다 (테스트 mock 교체용).
@@ -114,6 +117,9 @@ func New(image, model, apiKey string, timeout time.Duration, log *logger.Logger)
 	if log == nil {
 		return nil, errors.New("claudegen: New requires non-nil logger")
 	}
+	if apiKey == "" {
+		return nil, errors.New("claudegen: New requires non-empty apiKey")
+	}
 	return &ClaudeWorker{
 		image: image, model: model, apiKey: apiKey,
 		sessionTimeout: timeout, runner: &execContainerRunner{}, log: log,
@@ -124,6 +130,9 @@ func New(image, model, apiKey string, timeout time.Duration, log *logger.Logger)
 func NewWithRunner(image, model, apiKey string, timeout time.Duration, runner ContainerRunner, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil logger")
+	}
+	if apiKey == "" {
+		return nil, errors.New("claudegen: NewWithRunner requires non-empty apiKey")
 	}
 	if runner == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil runner")
@@ -266,7 +275,7 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 	stdout, stderr, err := w.runner.ExecSession(runCtx, containerID, args)
 	if err != nil {
 		return storage.SelectorMap{}, fmt.Errorf("claude code exec session: %w (stderr: %s)",
-			err, truncate(stderr, 512))
+			err, truncate(stderr, truncateStderrLen))
 	}
 
 	sm, err := parseSelectorOutput(stdout)
@@ -274,7 +283,7 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 		w.log.WithFields(map[string]interface{}{
 			"host":        host,
 			"target_type": string(targetType),
-			"raw_output":  truncate(stdout, 256),
+			"raw_output":  truncate(stdout, truncateStdoutLen),
 		}).Debug("claude code session output parse failed")
 		return storage.SelectorMap{}, fmt.Errorf("parse claude output: %w", err)
 	}

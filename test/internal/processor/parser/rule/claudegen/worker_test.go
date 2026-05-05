@@ -269,6 +269,31 @@ func TestNewFromEnv_MissingAPIKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "ANTHROPIC_API_KEY")
 }
 
+// TestNew_EmptyAPIKey 는 New() 에 빈 apiKey 전달 시 에러를 반환하는지 검증합니다.
+func TestNew_EmptyAPIKey(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	_, err := claudegen.New("image", "model", "", 10*time.Second, log)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "apiKey")
+}
+
+// TestNewWithRunner_EmptyAPIKey 는 NewWithRunner() 에 빈 apiKey 전달 시 에러를 반환하는지 검증합니다.
+func TestNewWithRunner_EmptyAPIKey(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	runner := &mockContainerRunner{}
+	_, err := claudegen.NewWithRunner("image", "model", "", 10*time.Second, runner, log)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "apiKey")
+}
+
+// TestNewWithRunner_NilRunner 는 NewWithRunner() 에 nil runner 전달 시 에러를 반환하는지 검증합니다.
+func TestNewWithRunner_NilRunner(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	_, err := claudegen.NewWithRunner("image", "model", "key", 10*time.Second, nil, log)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "runner")
+}
+
 func containsStr(s, sub string) bool {
 	return len(s) >= len(sub) && func() bool {
 		for i := 0; i <= len(s)-len(sub); i++ {

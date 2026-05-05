@@ -29,7 +29,7 @@ func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir
 	cmd.Stderr = &stderr
 	cmd.Env = append(os.Environ(), env...)
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("docker run: %w (stderr: %s)", err, truncate(stderr.String(), 256))
+		return "", fmt.Errorf("docker run: %w (stderr: %s)", err, truncate(stderr.String(), truncateStdoutLen))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -42,15 +42,21 @@ func (r *execContainerRunner) ExecSession(ctx context.Context, containerID strin
 	cmd := exec.CommandContext(ctx, "docker", fullArgs...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	return stdout.String(), stderr.String(), cmd.Run()
+	// cmd.Run() 을 먼저 실행 후 버퍼를 읽음 — return 문에서 평가 순서에 의존하지 않음.
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
 }
 
 // StopContainer 는 컨테이너를 강제 종료하고 삭제합니다.
+// 컨테이너가 --rm 플래그로 이미 자동 삭제된 경우 "no such container" 를 성공으로 처리합니다.
 func (r *execContainerRunner) StopContainer(ctx context.Context, containerID string) error {
 	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", containerID)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker rm -f: %w (output: %s)", err, truncate(string(out), 256))
+		if strings.Contains(strings.ToLower(string(out)), "no such container") {
+			return nil // 이미 제거됨 — 원하는 상태 달성
+		}
+		return fmt.Errorf("docker rm -f: %w (output: %s)", err, truncate(string(out), truncateStdoutLen))
 	}
 	return nil
 }
