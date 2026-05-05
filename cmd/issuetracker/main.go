@@ -22,6 +22,7 @@ import (
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/rule/refiner"
+	"issuetracker/internal/processor/parser/rule/validator"
 	parserStage "issuetracker/internal/processor/parser/stage"
 	parserWorker "issuetracker/internal/processor/parser/worker"
 	"issuetracker/internal/processor/validate"
@@ -435,6 +436,17 @@ func main() {
 			pw.RequeueParsing,
 		)
 		log.Info("llmgen: Redis 기반 pending URL 큐 활성화")
+	}
+
+	// ── 의미 검증 ValidatorPool (이슈 #257) ──────────────────────────────────
+	// DOM 매칭 검증 통과 후 추출 내용이 실제 뉴스 제목/본문인지 LLM 으로 의미 검증.
+	// llmProvider 가 nil(LLM 비활성) 이면 의미 검증 건너뜀 — DOM 검증만 수행.
+	if llmGen != nil && llmProvider != nil {
+		semPool := validator.NewPool(log,
+			validator.NewLLMValidator(llmProvider),
+		)
+		llmGen.SetSelectorValidator(validator.NewLLMGenAdapter(semPool))
+		log.Info("llmgen: 의미 검증 ValidatorPool 활성화")
 	}
 
 	// ── Refiner (이슈 #173 단계 4-2) ──────────────────────────────────────────
