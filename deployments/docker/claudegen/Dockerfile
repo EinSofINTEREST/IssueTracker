@@ -22,11 +22,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Claude Code CLI 전역 설치
-# postinstall 스크립트가 native binary 를 다운로드하지 못하는 경우가 있어 명시적으로 install.cjs 실행 (이슈 #269)
-RUN npm install -g @anthropic-ai/claude-code \
-    && (node /usr/lib/node_modules/@anthropic-ai/claude-code/install.cjs || \
-        echo "install.cjs not found, native binary may already be present")
+# Claude Code CLI 전역 설치 (이슈 #269)
+# - 버전 고정 (재현성 확보 — PR #270 리뷰 피드백)
+# - npm root -g 로 실제 global 경로 동적 결정 (node:20-slim 은 /usr/local/lib/node_modules)
+# - postinstall 스크립트가 native binary 를 다운로드하지 못하는 경우가 있어 install.cjs 명시 실행
+# - 마지막에 claude --version 으로 smoke check — 실패 시 빌드 실패 (silent breakage 회피)
+ARG CLAUDE_CODE_VERSION=2.1.128
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && INSTALL_CJS="$(npm root -g)/@anthropic-ai/claude-code/install.cjs" \
+    && if [ -f "$INSTALL_CJS" ]; then node "$INSTALL_CJS"; \
+       else echo "install.cjs not found at $INSTALL_CJS — native binary may already be present"; fi \
+    && claude --version
 
 # 인증 디렉토리 마운트 지점 (이슈 #266) — 호스트 ~/.claude 가 read-write 로 마운트됨
 RUN mkdir -p /root/.claude

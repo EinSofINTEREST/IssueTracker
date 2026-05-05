@@ -4,7 +4,7 @@
         run-kafka-pipeline \
         kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics kafka-init \
         pg-start pg-stop pg-clean pg-migrate pg-status pg-psql \
-        proto
+        proto claudegen-build
 
 # 기본 변수
 BINARY_DIR=bin
