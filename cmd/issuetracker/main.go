@@ -425,6 +425,18 @@ func main() {
 		llmGen.SetValidateFailureHandler(pw.RequeueForLLMRetry)
 	}
 
+	// ── Pending URL 큐 (이슈 #262) ────────────────────────────────────────────
+	// in-flight 중 동일 도메인으로 유입된 URL 을 Redis LIST 에 보존.
+	// 룰 생성 완료 시 대기 URL 을 issuetracker.fetched 에 재발행 — 새 룰로 재파싱.
+	// Redis 미설정 시 graceful degrade (pending URL 보존 없이 기존 skip 동작 유지).
+	if llmGen != nil && redisClientShared != nil {
+		llmGen.SetPendingQueue(
+			llmgen.NewRedisPendingQueue(redisClientShared.Raw()),
+			pw.RequeueParsing,
+		)
+		log.Info("llmgen: Redis 기반 pending URL 큐 활성화")
+	}
+
 	// ── Refiner (이슈 #173 단계 4-2) ──────────────────────────────────────────
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.

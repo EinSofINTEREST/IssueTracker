@@ -607,6 +607,40 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 	}).Info("raw content requeued for llm retry after selector validation failure")
 }
 
+// RequeueParsing 은 pending 대기 URL 목록을 issuetracker.fetched 에 재발행합니다 (이슈 #262).
+// llmgen.Generator 의 RequeueFunc 로 등록됩니다.
+//
+// 룰 생성 완료 후 호출 — 대기 중이던 URL 이 새 룰로 재파싱될 수 있도록 TopicFetched 에 투입.
+// 실패는 non-fatal — raw 는 TTL cleanup 으로 최종 정리됩니다.
+func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.PendingItem) {
+	for _, item := range items {
+		payload, err := json.Marshal(item.RawRef)
+		if err != nil {
+			w.log.WithFields(map[string]interface{}{
+				"raw_id": item.RawRef.ID,
+			}).WithError(err).Error("failed to marshal RawContentRef for pending requeue")
+			continue
+		}
+
+		pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		msg := queue.Message{
+			Topic: queue.TopicFetched,
+			Value: payload,
+			Headers: map[string]string{
+				"target_type": string(item.TargetType),
+				"crawler":     item.CrawlerName,
+			},
+		}
+		if err := w.producer.Publish(pubCtx, msg); err != nil {
+			w.log.WithFields(map[string]interface{}{
+				"raw_id": item.RawRef.ID,
+				"url":    item.RawRef.URL,
+			}).WithError(err).Warn("failed to requeue pending URL for parsing (non-fatal)")
+		}
+		cancel()
+	}
+}
+
 // deleteRaw 는 처리 완료된 raw_contents row 를 즉시 정리합니다.
 // 실패는 non-fatal — cleanup cron 이 안전망으로 동작.
 func (w *ParserWorker) deleteRaw(ctx context.Context, rawID string, mlog *logger.Logger) {

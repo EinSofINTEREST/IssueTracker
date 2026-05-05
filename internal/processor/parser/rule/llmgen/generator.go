@@ -101,15 +101,25 @@ type Generator struct {
 	// nil 이면 호출 안 함.
 	validateFailureHandler func(context.Context, core.RawContentRef, int, storage.TargetType, string)
 
-	locker  InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker (이슈 #261)
-	wg      sync.WaitGroup
-	stopped atomic.Bool
+	locker       InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker (이슈 #261)
+	pendingQueue PendingQueue   // nil 이면 pending URL 보존 비활성 (이슈 #262)
+	requeueFn    RequeueFunc    // nil 이면 재투입 비활성 (이슈 #262)
+	wg           sync.WaitGroup
+	stopped      atomic.Bool
 }
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다 (이슈 #237).
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
 func (g *Generator) SetValidateFailureHandler(fn func(context.Context, core.RawContentRef, int, storage.TargetType, string)) {
 	g.validateFailureHandler = fn
+}
+
+// SetPendingQueue 는 대기 URL 큐와 재투입 콜백을 등록합니다 (이슈 #262).
+// 둘 다 비-nil 이어야 활성화됩니다. Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로
+// 초기화 시 1회만 호출합니다.
+func (g *Generator) SetPendingQueue(pq PendingQueue, fn RequeueFunc) {
+	g.pendingQueue = pq
+	g.requeueFn = fn
 }
 
 // SetLocker 는 분산 Lock 구현체를 교체합니다 (이슈 #261).
@@ -208,10 +218,32 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 		return
 	}
 	if !acquired {
-		g.log.WithFields(map[string]interface{}{
-			"host":        host,
-			"target_type": string(targetType),
-		}).Debug("llmgen enqueue skipped — in-flight request already exists")
+		// in-flight 중 — pending 큐에 적재하여 룰 생성 완료 후 재파싱 (이슈 #262).
+		if g.pendingQueue != nil {
+			item := PendingItem{
+				RawRef:        rawRef,
+				CrawlerName:   crawlerName,
+				LLMRetryCount: llmRetryCount,
+				TargetType:    targetType,
+			}
+			if perr := g.pendingQueue.Push(context.WithoutCancel(ctx), host, targetType, item); perr != nil {
+				g.log.WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+				}).WithError(perr).Warn("llmgen pending queue push failed")
+			} else {
+				g.log.WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+					"url":         rawRef.URL,
+				}).Debug("llmgen enqueue deferred — added to pending queue")
+			}
+		} else {
+			g.log.WithFields(map[string]interface{}{
+				"host":        host,
+				"target_type": string(targetType),
+			}).Debug("llmgen enqueue skipped — in-flight request already exists")
+		}
 		return
 	}
 
@@ -243,6 +275,26 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 			var sve *selectorValidationError
 			if errors.As(err, &sve) && g.validateFailureHandler != nil {
 				g.validateFailureHandler(bgCtx, rawRef, llmRetryCount, targetType, crawlerName)
+			}
+			return
+		}
+
+		// 룰 생성 성공 — pending 대기 URL 을 파서 워커에 재투입 (이슈 #262).
+		// lock release 후 flush: release 이후 새로 들어온 URL 은 새 runOnce 가 처리.
+		if g.pendingQueue != nil && g.requeueFn != nil {
+			items, ferr := g.pendingQueue.Flush(bgCtx, host, targetType)
+			if ferr != nil {
+				logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+				}).WithError(ferr).Warn("llmgen pending queue flush failed")
+			} else if len(items) > 0 {
+				g.requeueFn(bgCtx, items)
+				logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+					"count":       len(items),
+				}).Info("llmgen pending URLs requeued for parsing")
 			}
 		}
 	}()
