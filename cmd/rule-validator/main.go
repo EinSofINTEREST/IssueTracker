@@ -95,7 +95,11 @@ func main() {
 
 func buildProvider(log *logger.Logger) llm.Provider {
 	cfg, err := config.LoadLLM()
-	if err != nil || !cfg.Enabled || cfg.APIKey == "" {
+	if err != nil {
+		log.WithError(err).Warn("failed to load LLM config")
+		return nil
+	}
+	if !cfg.Enabled || cfg.APIKey == "" {
 		return nil
 	}
 	provider, err := llm.New(llm.Config{
@@ -105,6 +109,7 @@ func buildProvider(log *logger.Logger) llm.Provider {
 		Timeout:  cfg.Timeout,
 	})
 	if err != nil {
+		log.WithError(err).WithField("provider", cfg.Provider).Warn("failed to construct LLM provider")
 		return nil
 	}
 	pol := policy.NewFixedOrder(cfg.Provider)
