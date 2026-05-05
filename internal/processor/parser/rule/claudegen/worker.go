@@ -18,7 +18,7 @@
 //   - CLAUDE_CODE_AUTH_DIR             : 호스트의 Claude 인증 디렉토리 (기본: $HOME/.claude)
 //   - CLAUDE_CODE_CONTAINER_AUTH_PATH  : 컨테이너 내 디렉토리 마운트 경로 (기본: /root/.claude)
 //   - CLAUDE_CODE_MODEL                : 모델 ID (기본: claude-sonnet-4-6)
-//   - CLAUDE_CODE_IMAGE                : Docker 이미지 (기본: ghcr.io/anthropics/claude-code:latest)
+//   - CLAUDE_CODE_IMAGE                : Docker 이미지 (기본: issuetracker-claudegen:local — `make claudegen-build` 필요)
 //   - CLAUDE_CODE_TIMEOUT              : 세션 단위 타임아웃 (기본: 120s, Go duration 형식)
 package claudegen
 
@@ -39,7 +39,9 @@ import (
 )
 
 const (
-	defaultImage             = "ghcr.io/anthropics/claude-code:latest"
+	// defaultImage 는 deployments/docker/claudegen/Dockerfile 로 빌드한 자체 이미지 (이슈 #269).
+	// Anthropic 공식 ghcr.io/anthropics/claude-code 는 비공개 상태이므로 `make claudegen-build` 로 사전 빌드 필요.
+	defaultImage             = "issuetracker-claudegen:local"
 	defaultModel             = "claude-sonnet-4-6"
 	defaultSessionTimeout    = 120 * time.Second
 	defaultContainerAuthPath = "/root/.claude" // 컨테이너 내 인증 마운트 경로 (이슈 #266)
