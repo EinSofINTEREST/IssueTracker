@@ -25,18 +25,24 @@ type execContainerRunner struct{}
 //     호스트에 파일이 존재할 때만 마운트 — 신규 사용자(claude CLI 미실행)는 .claude.json 부재 가능.
 //
 // 컨테이너는 `tail -f /dev/null` 로 대기 — docker exec 세션이 올 때까지 유지.
-// env 슬라이스의 값은 cmd.Env 로 주입 — args 에 포함하지 않아 ps 에 노출되지 않습니다.
-func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir, authDir, containerAuthPath string, env []string) (string, error) {
+func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir, authDir, containerAuthPath string) (string, error) {
+	// trailing slash 등 정규화 — sibling .claude.json 도출이 정확하도록 (PR #268 리뷰).
+	cleanAuthDir := filepath.Clean(authDir)
+	cleanContainerAuthPath := filepath.Clean(containerAuthPath)
+
 	args := []string{
 		"run", "-d", "--rm",
-		"-v", authDir + ":" + containerAuthPath,
+		"-v", cleanAuthDir + ":" + cleanContainerAuthPath,
 	}
 
 	// .claude.json 파일도 함께 마운트 (이슈 #266) — Claude CLI 가 main config 를 sibling 위치에서 찾음.
-	hostJSON := filepath.Join(filepath.Dir(authDir), ".claude.json")
+	hostJSON := filepath.Join(filepath.Dir(cleanAuthDir), ".claude.json")
 	if _, err := os.Stat(hostJSON); err == nil {
-		containerJSON := filepath.Join(filepath.Dir(containerAuthPath), ".claude.json")
+		containerJSON := filepath.Join(filepath.Dir(cleanContainerAuthPath), ".claude.json")
 		args = append(args, "-v", hostJSON+":"+containerJSON)
+	} else if !os.IsNotExist(err) {
+		// 권한 거부 등 다른 에러는 명시적으로 보고 — silent skip 회피.
+		return "", fmt.Errorf("stat host claude config %q: %w", hostJSON, err)
 	}
 
 	args = append(args,
@@ -49,7 +55,6 @@ func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Env = append(os.Environ(), env...)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("docker run: %w (stderr: %s)", err, truncate(stderr.String(), truncateStdoutLen))
 	}

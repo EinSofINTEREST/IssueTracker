@@ -52,10 +52,9 @@ const (
 type ContainerRunner interface {
 	// StartContainer 는 장기 실행 컨테이너를 기동하고 컨테이너 ID 를 반환합니다.
 	//   - workDir: 컨테이너의 /workspace 로 마운트할 호스트 경로 (read-write)
-	//   - authDir: 호스트의 Claude 인증 디렉토리 (read-only 마운트)
+	//   - authDir: 호스트의 Claude 인증 디렉토리 (read-write 마운트 — Claude CLI 가 세션 상태 기록)
 	//   - containerAuthPath: 컨테이너 내 authDir 마운트 대상 경로
-	//   - env: 추가 환경변수 (비밀값은 args 에 포함하지 않음 — ps 노출 방지)
-	StartContainer(ctx context.Context, image, workDir, authDir, containerAuthPath string, env []string) (containerID string, err error)
+	StartContainer(ctx context.Context, image, workDir, authDir, containerAuthPath string) (containerID string, err error)
 
 	// ExecSession 은 실행 중인 컨테이너에서 명령을 실행합니다.
 	ExecSession(ctx context.Context, containerID string, args []string) (stdout, stderr string, err error)
@@ -133,45 +132,50 @@ func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
 //
 // authDir 은 호스트의 Claude 인증 디렉토리, containerAuthPath 는 컨테이너 내 마운트 대상 경로 (이슈 #266).
 // containerAuthPath 가 빈 문자열이면 defaultContainerAuthPath 사용.
+// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증 (PR #268 리뷰).
 func New(image, model, authDir, containerAuthPath string, timeout time.Duration, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: New requires non-nil logger")
 	}
-	if authDir == "" {
-		return nil, errors.New("claudegen: New requires non-empty authDir")
+	resolved, err := validateAuthDir(authDir)
+	if err != nil {
+		return nil, err
 	}
 	if containerAuthPath == "" {
 		containerAuthPath = defaultContainerAuthPath
 	}
 	return &ClaudeWorker{
 		image: image, model: model,
-		authDir: authDir, containerAuthPath: containerAuthPath,
+		authDir: resolved, containerAuthPath: containerAuthPath,
 		sessionTimeout: timeout, runner: &execContainerRunner{}, log: log,
 	}, nil
 }
 
 // NewWithRunner 는 ContainerRunner 를 주입하는 생성자입니다 (테스트/DI 용).
+// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증 (PR #268 리뷰).
 func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time.Duration, runner ContainerRunner, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil logger")
 	}
-	if authDir == "" {
-		return nil, errors.New("claudegen: NewWithRunner requires non-empty authDir")
-	}
 	if runner == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil runner")
+	}
+	resolved, err := validateAuthDir(authDir)
+	if err != nil {
+		return nil, err
 	}
 	if containerAuthPath == "" {
 		containerAuthPath = defaultContainerAuthPath
 	}
 	return &ClaudeWorker{
 		image: image, model: model,
-		authDir: authDir, containerAuthPath: containerAuthPath,
+		authDir: resolved, containerAuthPath: containerAuthPath,
 		sessionTimeout: timeout, runner: runner, log: log,
 	}, nil
 }
 
 // resolveAuthDir 은 환경변수 또는 $HOME 기반으로 인증 디렉토리를 결정하고 접근성을 검증합니다.
+// validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증을 위임합니다.
 func resolveAuthDir(envValue string) (string, error) {
 	authDir := envValue
 	if authDir == "" {
@@ -181,14 +185,34 @@ func resolveAuthDir(envValue string) (string, error) {
 		}
 		authDir = filepath.Join(home, ".claude")
 	}
-	info, err := os.Stat(authDir)
+	return validateAuthDir(authDir)
+}
+
+// validateAuthDir 은 인증 디렉토리의 절대 경로를 산출하고 접근성을 검증합니다 (PR #268 리뷰).
+//
+//   - 빈 문자열 거부 (호출자가 빈 값 처리 후 호출)
+//   - filepath.Abs 로 절대 경로 변환 — Docker 마운트 시 상대 경로 모호성 제거
+//   - os.Stat: 존재 + 디렉토리 검증
+//   - os.ReadDir: 읽기 권한 검증 (mode 만 보지 않고 실제로 읽어봄)
+func validateAuthDir(authDir string) (string, error) {
+	if authDir == "" {
+		return "", errors.New("claudegen: authDir must not be empty")
+	}
+	absPath, err := filepath.Abs(authDir)
 	if err != nil {
-		return "", fmt.Errorf("claudegen: auth dir %q not accessible: %w (run `claude` CLI on host to login first)", authDir, err)
+		return "", fmt.Errorf("claudegen: failed to resolve absolute path for %q: %w", authDir, err)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("claudegen: auth dir %q not accessible: %w (run `claude` CLI on host to login first)", absPath, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("claudegen: auth dir %q is not a directory", authDir)
+		return "", fmt.Errorf("claudegen: auth dir %q is not a directory", absPath)
 	}
-	return authDir, nil
+	if _, err := os.ReadDir(absPath); err != nil {
+		return "", fmt.Errorf("claudegen: auth dir %q is not readable: %w", absPath, err)
+	}
+	return absPath, nil
 }
 
 // Start 는 Claude Code 컨테이너를 기동하고 workspace 를 준비합니다.
@@ -206,7 +230,7 @@ func (w *ClaudeWorker) Start(ctx context.Context) error {
 		return fmt.Errorf("create workspace dir: %w", err)
 	}
 
-	containerID, err := w.runner.StartContainer(ctx, w.image, workDir, w.authDir, w.containerAuthPath, nil)
+	containerID, err := w.runner.StartContainer(ctx, w.image, workDir, w.authDir, w.containerAuthPath)
 	if err != nil {
 		os.RemoveAll(workDir)
 		return fmt.Errorf("start claude container: %w", err)
@@ -214,13 +238,17 @@ func (w *ClaudeWorker) Start(ctx context.Context) error {
 
 	w.containerID = containerID
 	w.workDir = workDir
+	// INFO 로그는 운영자가 외부 수집 시스템에서 보는 항목 — 호스트 사용자명/홈 구조 노출 회피 (PR #268 리뷰).
+	// auth_dir 같은 절대 경로는 DEBUG 레벨로 격리.
 	w.log.WithFields(map[string]interface{}{
-		"container_id":        containerID,
-		"image":               w.image,
-		"model":               w.model,
+		"container_id": containerID,
+		"image":        w.image,
+		"model":        w.model,
+	}).Info("claude code container started (warm, subscription auth)")
+	w.log.WithFields(map[string]interface{}{
 		"auth_dir":            w.authDir,
 		"container_auth_path": w.containerAuthPath,
-	}).Info("claude code container started (warm, subscription auth)")
+	}).Debug("claude code auth mount paths")
 	return nil
 }
 

@@ -31,7 +31,6 @@ type mockContainerRunner struct {
 		workDir           string
 		authDir           string
 		containerAuthPath string
-		env               []string
 	}
 	execedWith struct {
 		containerID string
@@ -39,13 +38,12 @@ type mockContainerRunner struct {
 	}
 }
 
-func (m *mockContainerRunner) StartContainer(_ context.Context, image, workDir, authDir, containerAuthPath string, env []string) (string, error) {
+func (m *mockContainerRunner) StartContainer(_ context.Context, image, workDir, authDir, containerAuthPath string) (string, error) {
 	m.mu.Lock()
 	m.startedWith.image = image
 	m.startedWith.workDir = workDir
 	m.startedWith.authDir = authDir
 	m.startedWith.containerAuthPath = containerAuthPath
-	m.startedWith.env = env
 	m.mu.Unlock()
 	if m.startErr != nil {
 		return "", m.startErr
@@ -102,11 +100,6 @@ func TestClaudeWorker_StartStop(t *testing.T) {
 	// auth_token 마운트 검증 (이슈 #266) — authDir 과 containerAuthPath 가 StartContainer 에 전달됐는지 확인
 	assert.NotEmpty(t, runner.startedWith.authDir, "authDir must be passed to StartContainer")
 	assert.Equal(t, "/root/.claude", runner.startedWith.containerAuthPath)
-
-	// ANTHROPIC_API_KEY 가 더 이상 env 로 주입되지 않는지 확인 (이슈 #266 보안)
-	for _, e := range runner.startedWith.env {
-		assert.NotContains(t, e, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY must NOT be in env (auth_token 방식 전환)")
-	}
 
 	require.NoError(t, w.Stop(t.Context()))
 }
