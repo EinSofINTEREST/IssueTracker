@@ -1,10 +1,13 @@
 package goquery
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html/charset"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/logger"
@@ -49,8 +52,35 @@ func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.R
 		return nil, err
 	}
 
+	// body 를 메모리에 완전히 읽은 뒤 charset 감지를 수행합니다 (이슈 #253, CodeRabbit Major 반영).
+	// charset.NewReader 는 내부에서 최대 1024 바이트를 미리 읽으므로, resp.Body 를 직접 fallback 으로
+	// 재사용하면 해당 바이트가 소실된 truncated 스트림이 됩니다. io.ReadAll 로 전체를 읽어두고
+	// bytes.NewReader 로 재생성하면 charset 감지 실패 시에도 원본 body 를 온전히 유지합니다.
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &core.CrawlerError{
+			Category:  core.ErrCategoryNetwork,
+			Code:      "NET_002",
+			Message:   "failed to read response body",
+			Source:    c.name,
+			URL:       target.URL,
+			Retryable: true,
+			Err:       err,
+		}
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	utf8Reader, err := charset.NewReader(bytes.NewReader(bodyBytes), contentType)
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"url":          target.URL,
+			"content_type": contentType,
+		}).WithError(err).Warn("charset detection failed, falling back to raw body")
+		utf8Reader = bytes.NewReader(bodyBytes)
+	}
+
 	// goquery Document 생성
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(utf8Reader)
 	if err != nil {
 		return nil, &core.CrawlerError{
 			Category: core.ErrCategoryParse,
