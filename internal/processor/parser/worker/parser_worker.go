@@ -613,6 +613,8 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 // 룰 생성 완료 후 호출 — 대기 중이던 URL 이 새 룰로 재파싱될 수 있도록 TopicFetched 에 투입.
 // 실패는 non-fatal — raw 는 TTL cleanup 으로 최종 정리됩니다.
 func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.PendingItem) {
+	// WithoutCancel 은 루프 외부에서 1회 — 루프마다 새 컨텍스트 파생 불필요 (Gemini 피드백).
+	baseCtx := context.WithoutCancel(ctx)
 	for _, item := range items {
 		payload, err := json.Marshal(item.RawRef)
 		if err != nil {
@@ -622,7 +624,7 @@ func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.Pendin
 			continue
 		}
 
-		pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		pubCtx, cancel := context.WithTimeout(baseCtx, 10*time.Second)
 		msg := queue.Message{
 			Topic: queue.TopicFetched,
 			Value: payload,

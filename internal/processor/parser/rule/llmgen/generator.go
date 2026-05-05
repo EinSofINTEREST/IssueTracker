@@ -280,7 +280,8 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 		}
 
 		// 룰 생성 성공 — pending 대기 URL 을 파서 워커에 재투입 (이슈 #262).
-		// lock release 후 flush: release 이후 새로 들어온 URL 은 새 runOnce 가 처리.
+		// flush 는 defer(Release) 실행 전에 수행됨 — flush 중 새로 들어온 URL 은 pending 에 적재되고
+		// 락 해제 후 새 runOnce 가 다음 flush 에서 처리.
 		if g.pendingQueue != nil && g.requeueFn != nil {
 			items, ferr := g.pendingQueue.Flush(bgCtx, host, targetType)
 			if ferr != nil {
