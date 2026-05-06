@@ -366,6 +366,38 @@ func (g *Generator) Stop(ctx context.Context) {
 // runOnce 는 단일 추출 + validation + INSERT + cache invalidate 의 동기 실행입니다.
 // 호출자 (Enqueue 의 goroutine) 가 in-flight 슬롯 release 책임.
 func (g *Generator) runOnce(ctx context.Context, host string, targetType storage.TargetType, sampleURL, html string) error {
+	// 사전 lookup (이슈 #274) — 동일 자연키 룰이 이미 DB 에 존재하면 LLM 호출 회피.
+	// PR #275 리뷰 반영:
+	//   - enabled=true 룰 적중 시에만 skip (resolver 가 enabled=TRUE 만 조회하므로 disabled 는 사실상 부재)
+	//   - ErrNotFound 만 normal miss, 그 외 에러는 warn 로그 — DB 장애 silent fallthrough 회피
+	existing, err := g.repo.FindByNaturalKey(ctx, LLMAutoSourceName, host, "", targetType, 1)
+	switch {
+	case err == nil && existing != nil && existing.Enabled:
+		g.resolver.Invalidate(host, targetType)
+		g.log.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+			"rule_id":     existing.ID,
+		}).Info("llmgen pre-check hit — enabled rule already exists, skipping LLM call")
+		return nil
+	case err == nil && existing != nil && !existing.Enabled:
+		// 운영자가 disable 한 룰이 잔존 — 자동 재활성은 정책상 보수적으로 회피.
+		// LLM 재호출도 결과적으로 ErrDuplicate 로 reject 될 것이므로 LLM 비용 절감 + 운영 가시성을 위해 skip + warn.
+		g.log.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+			"rule_id":     existing.ID,
+		}).Warn("llmgen pre-check hit — disabled rule exists, skipping LLM call (manual re-enable required)")
+		return nil
+	case err != nil && !errors.Is(err, storage.ErrNotFound):
+		g.log.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+		}).WithError(err).Warn("llmgen pre-check lookup failed — proceeding to LLM (best-effort)")
+		// fallthrough 로 LLM 경로 진행 — 후속 Insert 도 동일 원인으로 실패할 수 있으나
+		// best-effort 정책 유지 (DB 일시 장애가 rule 학습 파이프라인을 영구 차단하지 않도록).
+	}
+
 	var (
 		selectors storage.SelectorMap
 		modelName string
@@ -436,6 +468,31 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, modelName),
 	}
 	if err := g.repo.Insert(ctx, record); err != nil {
+		// 동일 자연키 (source_name, host_pattern, path_pattern, target_type, version) 룰이 이미
+		// DB 에 존재 — 정상 경로로 흡수 (이슈 #274).
+		// 발생 시나리오: 이전 실행이 INSERT 한 룰이 잔존하나 resolver lookup 이 stale 캐시 등으로
+		// 룰을 찾지 못해 generate() 진입한 케이스. 또는 사전 lookup 후 race window 에서 다른
+		// 인스턴스가 INSERT 완료한 케이스.
+		//
+		// PR #275 리뷰 반영: enabled 여부 / rule_id 를 로그에 포함하여 운영 가시성 ↑.
+		// disabled 룰 잔존이면 warn — 운영자가 수동 재활성 결정을 해야 함을 명시.
+		if errors.Is(err, storage.ErrDuplicate) {
+			g.resolver.Invalidate(host, targetType)
+			fields := map[string]interface{}{
+				"host":        host,
+				"target_type": string(targetType),
+			}
+			if existing, ferr := g.repo.FindByNaturalKey(ctx, LLMAutoSourceName, host, "", targetType, 1); ferr == nil && existing != nil {
+				fields["existing_rule_id"] = existing.ID
+				fields["existing_enabled"] = existing.Enabled
+				if !existing.Enabled {
+					g.log.WithFields(fields).Warn("llmgen Insert ErrDuplicate — existing rule is disabled (manual re-enable required)")
+					return nil
+				}
+			}
+			g.log.WithFields(fields).Info("llmgen Insert ErrDuplicate absorbed — rule already exists, cache invalidated")
+			return nil
+		}
 		return fmt.Errorf("insert parsing rule: %w", err)
 	}
 

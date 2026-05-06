@@ -157,6 +157,37 @@ func (r *pgParsingRuleRepository) GetByID(ctx context.Context, id int64) (*stora
 	return rec, nil
 }
 
+const sqlFindParsingRuleByNaturalKey = `
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, description, created_at, updated_at
+FROM parsing_rules
+WHERE source_name  = $1
+  AND host_pattern = $2
+  AND path_pattern = $3
+  AND target_type  = $4
+  AND version      = $5
+`
+
+// FindByNaturalKey 는 자연키로 단일 rule 을 조회합니다 (이슈 #274).
+//
+// Insert 의 unique constraint 와 동일한 키 — enabled 필터 없음.
+// 매칭 없으면 storage.ErrNotFound.
+//
+// 용도: llmgen.Generator 가 LLM 호출 전 사전 lookup 으로 사용. 이미 같은 자연키 룰이
+// 존재하면 LLM 호출 (~55s sonnet) 을 회피하여 비용 절감.
+func (r *pgParsingRuleRepository) FindByNaturalKey(ctx context.Context, sourceName, hostPattern, pathPattern string, targetType storage.TargetType, version int) (*storage.ParsingRuleRecord, error) {
+	row := r.pool.QueryRow(ctx, sqlFindParsingRuleByNaturalKey,
+		sourceName, hostPattern, pathPattern, string(targetType), version,
+	)
+	rec, err := scanParsingRule(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, storage.ErrNotFound
+		}
+		return nil, fmt.Errorf("find parsing rule by natural key: %w", err)
+	}
+	return rec, nil
+}
+
 // sqlFindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 후보 슬라이스로 반환합니다 (이슈 #173).
 //
 // 정렬:
