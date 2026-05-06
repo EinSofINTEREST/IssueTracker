@@ -35,8 +35,9 @@ func Build(
 ) (*refiner.Refiner, error) {
 	cfg, err := config.LoadRefinement()
 	if err != nil {
-		log.WithError(err).Warn("failed to load refinement config, refiner disabled")
-		return nil, nil
+		// malformed env 가 silent 로 refiner 를 끄지 않도록 명시적 에러 반환 (PR #277 CodeRabbit).
+		// (nil, nil) 은 explicit !cfg.Enabled 경로에 한정 — 호출자가 Fatal 결정.
+		return nil, fmt.Errorf("load refinement config: %w", err)
 	}
 	if !cfg.Enabled {
 		log.Info("refiner disabled (REFINEMENT_ENABLED=false)")
