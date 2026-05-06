@@ -616,7 +616,9 @@ func main() {
 
 	// shutdownCtx 에 logger 를 주입하여 Stop 내부에서 logger.FromContext 가
 	// shutting_down 필드를 자동으로 상속받도록 합니다.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownCfg.Timeout)
+	// context.WithoutCancel(ctx) 사용 — parent ctx 의 cancellation (방금 호출한 cancel())
+	// 은 분리하되 ctx values (logger / 향후 trace ID 등) 는 상속 보존 (PR #273 리뷰).
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownCfg.Timeout)
 	defer shutdownCancel()
 	shutdownCtx = log.ToContext(shutdownCtx)
 
@@ -639,8 +641,9 @@ func main() {
 	//
 	// shutdownCtx 가 stages.Stop 에서 timeout 으로 cancel 되더라도 docker rm -f 자체는 반드시 시도되어야
 	// 컨테이너 누수가 발생하지 않으므로, 별도의 cleanupCtx 를 사용 (PR #271 리뷰).
+	// WithoutCancel(ctx) 로 ctx values 보존 (PR #273 리뷰).
 	if claudegenWorker != nil {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), shutdownCfg.ClaudegenTimeout)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownCfg.ClaudegenTimeout)
 		cleanupCtx = log.ToContext(cleanupCtx)
 		if err := claudegenWorker.Stop(cleanupCtx); err != nil {
 			log.WithError(err).Error("claudegen worker stop failed")

@@ -124,7 +124,8 @@ func main() {
 	log.Warn("shutdown signal received, draining workers...")
 	cancel()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownCfg.Timeout)
+	// WithoutCancel(ctx) 로 parent cancellation 은 분리하되 ctx values (logger 등) 보존 (PR #273 리뷰).
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownCfg.Timeout)
 	defer shutdownCancel()
 	shutdownCtx = log.ToContext(shutdownCtx)
 
