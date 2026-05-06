@@ -18,7 +18,8 @@ import (
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/claudegen"
 	"issuetracker/internal/processor/parser/rule/llmgen"
-	"issuetracker/internal/processor/parser/rule/refiner"
+	llmgenwiring "issuetracker/internal/processor/parser/rule/llmgen/wiring"
+	refinerwiring "issuetracker/internal/processor/parser/rule/refiner/wiring"
 	"issuetracker/internal/processor/parser/rule/validator"
 	parserStage "issuetracker/internal/processor/parser/stage"
 	parserWorker "issuetracker/internal/processor/parser/worker"
@@ -313,7 +314,10 @@ func main() {
 	//
 	// 이슈 #173 단계 4-2: 동일 provider 를 refiner 와 공유 — 환경변수 1세트로 동시 제어.
 	llmProvider := llmwiring.BuildProvider(log)
-	llmGen := llmgen.Build(llmProvider, parsingRuleRepo, ruleResolver, redisClientShared, log)
+	llmGen, err := llmgenwiring.Build(llmProvider, parsingRuleRepo, ruleResolver, redisClientShared, log)
+	if err != nil {
+		log.WithError(err).Fatal("failed to build llmgen generator")
+	}
 
 	// ── Fetcher 실패 카운터 (이슈 #220) ────────────────────────────────────────
 	// host 단위 fetcher 실패를 sliding window 로 누적 — 단계 3 (#221) 의 chromedp 자동 전환
@@ -481,7 +485,10 @@ func main() {
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
 	// metricsRegistry 는 nil 허용 — Record* 호출이 noop (PR #191 피드백).
-	pathRefiner := refiner.Build(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
+	pathRefiner, err := refinerwiring.Build(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
+	if err != nil {
+		log.WithError(err).Fatal("failed to build refiner")
+	}
 
 	// Cleanup cron — parser worker 가 처리하지 못한 채 잔존한 raw_contents row 정리.
 	// 정상 흐름에서는 거의 동작 안 함. crash / rule.Error 잔존 / LLM 재처리 윈도우 만료된 row 만 대상.
