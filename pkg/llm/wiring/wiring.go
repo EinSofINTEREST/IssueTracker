@@ -54,7 +54,11 @@ var fallbackOrder = []string{"gemini", "openai", "anthropic"}
 //
 // fallback 순서: gemini → openai → anthropic (hardcoded — 향후 metric 기반 정책으로 대체).
 // 각 provider 는 자신의 API key 가 환경변수에 설정된 경우에만 chain 후보에 포함:
-//   - GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY (없으면 LLM_API_KEY 로 fallback)
+//   - GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY 직접 lookup
+//
+// LLM_API_KEY 의 역할 (backward compat — primary 1건 한정):
+//   - primary (LLM_PROVIDER 가 가리키는 provider) 가 자신의 specific key 부재인 경우에만 LLM_API_KEY 적용.
+//   - 다른 provider 에는 cascade 되지 않음 — 잘못된 key 가 chain 에 채워져 auth 실패로 시간 낭비하는 부작용 회피.
 //
 // 반환값 nil 은 LLM 비활성을 의미 — 호출자가 nil 허용 분기:
 //   - LLM_ENABLED=false → nil
@@ -65,7 +69,7 @@ var fallbackOrder = []string{"gemini", "openai", "anthropic"}
 //   - 향후 metric 기반 정책 도입 시 본 함수의 policy 객체만 교체하면 됨
 //
 // LLM_PROVIDER / LLM_MODEL 의 역할 (backward compat):
-//   - LLM_PROVIDER 와 일치하는 provider 에는 LLM_MODEL 이 적용됨
+//   - LLM_PROVIDER 와 일치하는 provider 에는 LLM_MODEL 이 적용됨 (claude alias 포함)
 //   - 그 외 provider 는 자체 default model 사용 (gemini-2.5-flash / gpt-4o-mini / claude-opus-4-7)
 //
 // llmgen 과 refiner 가 동일 provider 를 공유 — 환경변수 1세트 (LLM_*) 로 두 컴포넌트 동시 제어.
@@ -125,11 +129,17 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 	pol := policy.NewFixedOrder(fallbackOrder...)
 	composed := chain.NewWithPolicy(pol, candidates, chain.WithPolicyLogger(log))
 
+	// 로그 필드 의미 (PR #280 Copilot 리뷰):
+	//   - chain          : 실제 활성화되어 시도되는 provider 시퀀스 (정책 적용 전 후보 목록)
+	//   - first_in_chain : chain[0] — 매 호출의 첫 시도 대상 (디버깅용)
+	//   - configured_primary : LLM_PROVIDER 가 가리키는 사용자 의도 (alias 정규화 후)
+	//                          — first_in_chain 과 다를 수 있음 (key 부재 등으로 chain 에서 제외된 경우)
 	log.WithFields(map[string]interface{}{
-		"chain":   activeNames,
-		"primary": activeNames[0],
-		"policy":  "FixedOrder",
-		"timeout": cfg.Timeout.String(),
+		"chain":              activeNames,
+		"first_in_chain":     activeNames[0],
+		"configured_primary": primaryName,
+		"policy":             "FixedOrder",
+		"timeout":            cfg.Timeout.String(),
 	}).Info("LLM provider chain enabled (fixed order — gemini → openai → anthropic; metric policy 후속 PR)")
 
 	return composed
