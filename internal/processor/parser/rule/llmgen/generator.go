@@ -366,6 +366,20 @@ func (g *Generator) Stop(ctx context.Context) {
 // runOnce 는 단일 추출 + validation + INSERT + cache invalidate 의 동기 실행입니다.
 // 호출자 (Enqueue 의 goroutine) 가 in-flight 슬롯 release 책임.
 func (g *Generator) runOnce(ctx context.Context, host string, targetType storage.TargetType, sampleURL, html string) error {
+	// 사전 lookup (이슈 #274) — 동일 자연키 룰이 이미 DB 에 존재하면 LLM 호출 회피.
+	// resolver lookup 이 stale 캐시 / disabled 룰 등으로 못 찾는 케이스를 LLM 호출 (~55s sonnet)
+	// 으로 가지 않게 차단. lookup 실패는 best-effort — 에러는 무시하고 LLM 경로로 진행.
+	if existing, err := g.repo.FindByNaturalKey(ctx, LLMAutoSourceName, host, "", targetType, 1); err == nil && existing != nil {
+		g.resolver.Invalidate(host, targetType)
+		g.log.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+			"rule_id":     existing.ID,
+			"enabled":     existing.Enabled,
+		}).Info("llmgen pre-check hit — rule already exists, skipping LLM call")
+		return nil
+	}
+
 	var (
 		selectors storage.SelectorMap
 		modelName string

@@ -67,6 +67,10 @@ func (r *fakeRepo) FindActiveCandidates(_ context.Context, host string, t storag
 
 func (r *fakeRepo) calls() int { return int(atomic.LoadInt64(&r.findActiveCalls)) }
 
+func (r *fakeRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+	return nil, storage.ErrNotFound
+}
+
 // sortByPathPatternLengthDesc 는 LENGTH(path_pattern) DESC, version DESC 정렬을 수행합니다.
 // postgres 의 ORDER BY LENGTH(path_pattern) DESC, version DESC 와 동일 동작 (PR #181 gemini 피드백).
 func sortByPathPatternLengthDesc(s []*storage.ParsingRuleRecord) {

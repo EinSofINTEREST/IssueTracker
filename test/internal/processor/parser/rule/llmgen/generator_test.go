@@ -54,6 +54,10 @@ type recordingRepo struct {
 	mu       sync.Mutex
 	inserted []*storage.ParsingRuleRecord
 	insertEr error
+
+	// findByNaturalKeyResult: 사전 lookup 시뮬레이션 (이슈 #274). nil 이면 ErrNotFound.
+	findByNaturalKeyResult *storage.ParsingRuleRecord
+	findByNaturalKeyCalls  int
 }
 
 func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParsingRuleRecord) error {
@@ -76,6 +80,15 @@ func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.Target
 }
 func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil
+}
+func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.findByNaturalKeyCalls++
+	if r.findByNaturalKeyResult != nil {
+		return r.findByNaturalKeyResult, nil
+	}
+	return nil, storage.ErrNotFound
 }
 func (r *recordingRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil
@@ -130,6 +143,9 @@ func (noopFindRepo) FindActive(_ context.Context, _ string, _ storage.TargetType
 }
 func (noopFindRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil
+}
+func (noopFindRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+	return nil, storage.ErrNotFound
 }
 func (noopFindRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil

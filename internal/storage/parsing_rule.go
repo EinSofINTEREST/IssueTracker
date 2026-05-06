@@ -187,6 +187,15 @@ type ParsingRuleRepository interface {
 	// FindActiveCandidates 의 첫 항목 (length DESC 정렬, '' 포함) 을 반환합니다.
 	FindActive(ctx context.Context, host string, targetType TargetType) (*ParsingRuleRecord, error)
 
+	// FindByNaturalKey 는 자연키 (source_name, host_pattern, path_pattern, target_type, version)
+	// 로 단일 rule 을 조회합니다 (이슈 #274). enabled 필터 없음 — disabled 룰도 반환.
+	//
+	// 용도: llmgen.Generator 가 Insert 전에 동일 자연키 룰의 존재 여부를 확인하여 LLM 호출을
+	// 회피하는 사전 lookup. Insert 시 ErrDuplicate 위반과 동일한 자연키를 검사합니다.
+	//
+	// 매칭 없으면 ErrNotFound.
+	FindByNaturalKey(ctx context.Context, sourceName, hostPattern, pathPattern string, targetType TargetType, version int) (*ParsingRuleRecord, error)
+
 	// FindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 LENGTH(path_pattern) DESC,
 	// version DESC 정렬로 반환합니다 (이슈 #173 단계 1).
 	//

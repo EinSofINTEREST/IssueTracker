@@ -52,6 +52,9 @@ func (r *fakeRulesRepo) FindActive(_ context.Context, _ string, _ storage.Target
 func (r *fakeRulesRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil
 }
+func (r *fakeRulesRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+	return nil, storage.ErrNotFound
+}
 func (r *fakeRulesRepo) List(_ context.Context, f storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
