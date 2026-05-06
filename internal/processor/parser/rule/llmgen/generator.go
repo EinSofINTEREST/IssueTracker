@@ -436,6 +436,18 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, modelName),
 	}
 	if err := g.repo.Insert(ctx, record); err != nil {
+		// 동일 자연키 (source_name, host_pattern, path_pattern, target_type, version) 룰이 이미
+		// DB 에 존재 — 우리가 원하던 최종 상태와 동일하므로 정상 경로로 흡수 (이슈 #274).
+		// 발생 시나리오: 이전 실행이 INSERT 한 룰이 잔존하나 resolver lookup 이 stale 캐시 등으로
+		// 룰을 찾지 못해 generate() 진입한 케이스.
+		if errors.Is(err, storage.ErrDuplicate) {
+			g.resolver.Invalidate(host, targetType)
+			g.log.WithFields(map[string]interface{}{
+				"host":        host,
+				"target_type": string(targetType),
+			}).Info("llmgen rule already exists in DB, invalidating cache and continuing")
+			return nil
+		}
 		return fmt.Errorf("insert parsing rule: %w", err)
 	}
 
