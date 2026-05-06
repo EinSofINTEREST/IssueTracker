@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/pkg/llm"
-	"issuetracker/pkg/llm/gemini"
+	"issuetracker/pkg/llm/providers/gemini"
 )
 
 // gemini API 응답 mock — usageMetadata + candidates 1개 (text part 1개).

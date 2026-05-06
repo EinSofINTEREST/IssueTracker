@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/pkg/llm"
-	"issuetracker/pkg/llm/anthropic"
+	"issuetracker/pkg/llm/providers/anthropic"
 )
 
 const successResponse = `{
