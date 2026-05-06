@@ -68,6 +68,19 @@ func TestBuildProvider_AllKeys_ReturnsChainWithAll(t *testing.T) {
 	assert.Equal(t, "chain", p.Name())
 }
 
+// TestBuildProvider_LLMAPIKeyFallback_ClaudeAlias 는 LLM_PROVIDER=claude alias 가 anthropic 으로
+// 정규화되어 LLM_API_KEY fallback 이 정확히 anthropic 항목에 적용되는지 검증합니다 (PR #280 gemini).
+func TestBuildProvider_LLMAPIKeyFallback_ClaudeAlias(t *testing.T) {
+	clearLLMEnv(t)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "claude")
+	t.Setenv("LLM_API_KEY", "fallback-key")
+
+	p := wiring.BuildProvider(logger.New(logger.DefaultConfig()))
+	require.NotNil(t, p, "claude alias 가 anthropic 으로 정규화되어 chain 에 포함")
+	assert.Equal(t, "chain", p.Name())
+}
+
 // TestBuildProvider_LLMAPIKeyFallback_OnlyPrimary 는 LLM_API_KEY fallback 이 primary (LLM_PROVIDER) 에만
 // 적용되어 다른 provider 로 cascade 되지 않는지 검증합니다 (이슈 #216).
 //

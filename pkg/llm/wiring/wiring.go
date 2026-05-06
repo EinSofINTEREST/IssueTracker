@@ -15,12 +15,12 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// providerEnvKey 는 provider 별 API key 환경변수 이름을 반환합니다 (이슈 #216).
+// lookupProviderAPIKey 는 provider 별 표준 환경변수의 *값* 을 반환합니다 (이슈 #216).
 //
-// config.LookupLLMAPIKey 는 미발견 시 LLM_API_KEY 로 cascade 하여 모든 provider 에 동일 key 가
-// 적용되는 부작용이 있어, chain 구성 시에는 본 helper 로 provider 별 key 만 직접 조회합니다.
+// config 의 lookupLLMAPIKey 는 미발견 시 LLM_API_KEY 로 cascade 하여 모든 provider 에 동일 key 가
+// 적용되는 부작용이 있으므로, chain 구성 시에는 본 helper 로 provider 별 key 만 직접 조회합니다.
 // LLM_API_KEY fallback 은 primary (cfg.Provider) 1건에만 적용 — backward compat 보존.
-func providerEnvKey(name string) string {
+func lookupProviderAPIKey(name string) string {
 	switch name {
 	case "gemini":
 		return os.Getenv("GEMINI_API_KEY")
@@ -30,6 +30,17 @@ func providerEnvKey(name string) string {
 		return os.Getenv("ANTHROPIC_API_KEY")
 	}
 	return ""
+}
+
+// normalizePrimary 는 LLM_PROVIDER 의 alias 를 fallbackOrder 의 정식 이름으로 정규화합니다.
+//
+// 예: cfg.Provider="claude" → "anthropic" 으로 매핑하여 chain 의 anthropic 항목에 LLM_API_KEY
+// fallback / LLM_MODEL override 가 정확히 적용되도록 보장 (PR #280 gemini 리뷰).
+func normalizePrimary(name string) string {
+	if name == "claude" {
+		return "anthropic"
+	}
+	return name
 }
 
 // fallbackOrder 는 fixed-order fallback chain 의 시도 순서입니다 (이슈 #216).
@@ -69,13 +80,17 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 		return nil
 	}
 
+	// LLM_PROVIDER alias (예: "claude" → "anthropic") 정규화 — fallbackOrder 의 정식 이름과 매칭하여
+	// LLM_API_KEY fallback / LLM_MODEL override 가 올바른 chain 항목에 적용되도록 보장 (PR #280 리뷰).
+	primaryName := normalizePrimary(cfg.Provider)
+
 	candidates := make([]llm.Provider, 0, len(fallbackOrder))
 	activeNames := make([]string, 0, len(fallbackOrder))
 	for _, name := range fallbackOrder {
-		apiKey := providerEnvKey(name)
+		apiKey := lookupProviderAPIKey(name)
 		// LLM_API_KEY fallback 은 primary (LLM_PROVIDER) 에만 적용 — backward compat.
 		// 다른 provider 에 같은 key 를 cascade 하면 chain 이 잘못 채워져 auth 실패 후 다음 시도로 낭비.
-		if apiKey == "" && name == cfg.Provider {
+		if apiKey == "" && name == primaryName {
 			apiKey = cfg.APIKey
 		}
 		if apiKey == "" {
@@ -84,7 +99,7 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 		}
 		// 사용자가 LLM_PROVIDER 로 지정한 primary 에는 LLM_MODEL override 적용. 나머지는 provider default.
 		model := ""
-		if name == cfg.Provider {
+		if name == primaryName {
 			model = cfg.Model
 		}
 		p, perr := llm.New(llm.Config{
