@@ -57,7 +57,9 @@ type recordingRepo struct {
 
 	// findByNaturalKeyResult: 사전 lookup 시뮬레이션 (이슈 #274). nil 이면 ErrNotFound.
 	findByNaturalKeyResult *storage.ParsingRuleRecord
-	findByNaturalKeyCalls  int
+	// findByNaturalKeyErr: 설정 시 result 무시하고 본 에러 반환 (PR #275 리뷰 — DB 장애 시뮬레이션).
+	findByNaturalKeyErr   error
+	findByNaturalKeyCalls int
 }
 
 func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParsingRuleRecord) error {
@@ -85,6 +87,9 @@ func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ st
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.findByNaturalKeyCalls++
+	if r.findByNaturalKeyErr != nil {
+		return nil, r.findByNaturalKeyErr
+	}
 	if r.findByNaturalKeyResult != nil {
 		return r.findByNaturalKeyResult, nil
 	}
@@ -689,4 +694,56 @@ func TestGenerator_PreCheckMiss_ProceedsToLLM(t *testing.T) {
 	repo.mu.Lock()
 	assert.Equal(t, 1, repo.findByNaturalKeyCalls, "사전 lookup 1회 호출")
 	repo.mu.Unlock()
+}
+
+// TestGenerator_PreCheckHit_DisabledRule_SkipsLLM 은 사전 lookup 적중이지만 enabled=false 일 때
+// LLM 호출 없이 warn 로그만 남기고 종료하는지 검증합니다 (PR #275 리뷰).
+func TestGenerator_PreCheckHit_DisabledRule_SkipsLLM(t *testing.T) {
+	provider := &fakeProvider{name: "fake", response: `{"title":{"css":"h1"}}`}
+	repo := &recordingRepo{
+		findByNaturalKeyResult: &storage.ParsingRuleRecord{
+			ID:          99,
+			SourceName:  llmgen.LLMAutoSourceName,
+			HostPattern: "example.com",
+			TargetType:  storage.TargetTypePage,
+			Version:     1,
+			Enabled:     false, // 운영자 disabled — 자동 재활성 회피
+		},
+	}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/article/1", HTML: samplePageHTML,
+	}, 0, "", 0)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	g.Stop(stopCtx)
+
+	assert.Equal(t, 0, provider.callCount(), "disabled 룰 적중 시 LLM 호출 미발생")
+	assert.Empty(t, repo.inserts(), "disabled 룰 적중 시 Insert 미발생")
+}
+
+// TestGenerator_PreCheckLookupError_FallthroughToLLM 은 사전 lookup 이 ErrNotFound 외 에러를
+// 반환할 때 LLM 경로로 fallthrough 하는지 검증합니다 (PR #275 리뷰 — DB 장애 best-effort 정책).
+func TestGenerator_PreCheckLookupError_FallthroughToLLM(t *testing.T) {
+	provider := &fakeProvider{
+		name: "fake",
+		response: `{
+			"title": {"css": "h1.article-title"},
+			"main_content": {"css": "article p", "multi": true}
+		}`,
+	}
+	// 일시 DB 장애 시뮬레이션 — ErrNotFound 외 에러
+	repo := &recordingRepo{findByNaturalKeyErr: errors.New("db connection refused")}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/article/1", HTML: samplePageHTML,
+	}, 0, "", 0)
+
+	waitForInserts(t, repo, 1, 2*time.Second)
+
+	assert.Equal(t, 1, provider.callCount(), "lookup 에러 시 LLM 경로 fallthrough — best-effort 정책")
+	require.Len(t, repo.inserts(), 1, "lookup 에러 후에도 Insert 진행")
 }
