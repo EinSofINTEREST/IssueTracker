@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"github.com/prometheus/client_golang/prometheus"
 
 	goredis "github.com/redis/go-redis/v9"
 	"issuetracker/internal/locks"
@@ -28,15 +25,11 @@ import (
 	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/publisher"
 	"issuetracker/internal/scheduler"
-	"issuetracker/internal/storage"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
-	"issuetracker/pkg/llm"
-	"issuetracker/pkg/llm/chain"
-	"issuetracker/pkg/llm/policy"
-	_ "issuetracker/pkg/llm/providers"
+	llmwiring "issuetracker/pkg/llm/wiring"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/metrics"
 	"issuetracker/pkg/queue"
@@ -141,7 +134,7 @@ func main() {
 	// Readiness check: 사이트 등록 전 parsing_rules 가 seed 됐는지 검증.
 	// 부재 시 fail-fast — 실행 중 모든 ParsePage/ParseLinks 가 ErrNoRule 로 죽는 것보다 즉시 종료.
 	// migration 007 (또는 동등한 운영자 seed) 가 적용되어야 통과.
-	if err := verifyParsingRulesSeeded(ctx, ruleResolver); err != nil {
+	if err := rule.VerifySeeded(ctx, ruleResolver); err != nil {
 		log.WithError(err).Fatal("parsing_rules seed missing — apply migration 007 before deploy")
 	}
 
@@ -319,8 +312,8 @@ func main() {
 	// 후속 PR (이슈 TBD) 에서 chain (gemini → openai → anthropic) 으로 정책 확장.
 	//
 	// 이슈 #173 단계 4-2: 동일 provider 를 refiner 와 공유 — 환경변수 1세트로 동시 제어.
-	llmProvider := buildLLMProvider(log)
-	llmGen := buildLLMGenerator(llmProvider, parsingRuleRepo, ruleResolver, redisClientShared, log)
+	llmProvider := llmwiring.BuildProvider(log)
+	llmGen := llmgen.Build(llmProvider, parsingRuleRepo, ruleResolver, redisClientShared, log)
 
 	// ── Fetcher 실패 카운터 (이슈 #220) ────────────────────────────────────────
 	// host 단위 fetcher 실패를 sliding window 로 누적 — 단계 3 (#221) 의 chromedp 자동 전환
@@ -488,7 +481,7 @@ func main() {
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
 	// metricsRegistry 는 nil 허용 — Record* 호출이 noop (PR #191 피드백).
-	pathRefiner := buildRefiner(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
+	pathRefiner := refiner.Build(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
 
 	// Cleanup cron — parser worker 가 처리하지 못한 채 잔존한 raw_contents row 정리.
 	// 정상 흐름에서는 거의 동작 안 함. crash / rule.Error 잔존 / LLM 재처리 윈도우 만료된 row 만 대상.
@@ -654,140 +647,4 @@ func main() {
 	}
 
 	log.Info("shutdown completed")
-}
-
-// buildLLMProvider 는 LLMConfig 에 따라 chain provider 를 구성합니다 (이슈 #173 단계 4-2 — 공유용).
-//
-// 반환값 nil 은 LLM 비활성을 의미 — 호출자가 nil 허용 분기:
-//   - LLM_ENABLED=false / API key 부재 / provider 생성 실패 → nil + warn 로그
-//
-// llmgen 과 refiner 가 동일 provider 를 공유 — 환경변수 1세트 (LLM_*) 로 두 컴포넌트 동시 제어.
-//
-// **본 PR scope**: FixedOrder(cfg.Provider) 정책으로 단일 provider 사용. 후속 PR 에서 chain 확장.
-func buildLLMProvider(log *logger.Logger) llm.Provider {
-	cfg, err := config.LoadLLM()
-	if err != nil {
-		log.WithError(err).Warn("failed to load LLM config, llm provider disabled")
-		return nil
-	}
-	if !cfg.Enabled {
-		log.Info("LLM provider disabled (LLM_ENABLED=false)")
-		return nil
-	}
-	if cfg.APIKey == "" {
-		log.WithField("provider", cfg.Provider).Warn("LLM API key missing, llm provider disabled (set GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY)")
-		return nil
-	}
-
-	provider, err := llm.New(llm.Config{
-		Provider: cfg.Provider,
-		APIKey:   cfg.APIKey,
-		Model:    cfg.Model,
-		Timeout:  cfg.Timeout,
-	})
-	if err != nil {
-		log.WithError(err).WithField("provider", cfg.Provider).Warn("failed to construct LLM provider")
-		return nil
-	}
-
-	pol := policy.NewFixedOrder(cfg.Provider)
-	composed := chain.NewWithPolicy(pol, []llm.Provider{provider}, chain.WithPolicyLogger(log))
-
-	log.WithFields(map[string]interface{}{
-		"provider": cfg.Provider,
-		"model":    cfg.Model,
-		"timeout":  cfg.Timeout.String(),
-	}).Info("LLM provider enabled (FixedOrder policy — see issue #149 follow-up for chain expansion)")
-
-	return composed
-}
-
-// buildLLMGenerator 는 buildLLMProvider 결과로 llmgen.Generator 를 구성합니다 (이슈 #149).
-//
-// provider 가 nil (LLM 비활성) 이면 nil 반환 — parser worker 는 ErrNoRule 시 raw 만 잔존.
-// llmgen.New 자체 실패는 wiring 버그라 fatal — 도달하면 dependency injection 모순 (이슈 #208).
-// redisClient 가 nil 이면 in-process memInflightLocker 로 graceful degrade (이슈 #261).
-func buildLLMGenerator(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, redisClient *redis.Client, log *logger.Logger) *llmgen.Generator {
-	if provider == nil {
-		return nil
-	}
-	gen, err := llmgen.New(provider, repo, resolver, log)
-	if err != nil {
-		log.WithError(err).Fatal("failed to construct llmgen generator")
-	}
-	if redisClient != nil {
-		gen.SetLocker(llmgen.NewRedisInflightLocker(redisClient.Raw(), llmgen.DefaultInflightLockTTL))
-		log.Info("llmgen: Redis 분산 inflight lock 활성화")
-	}
-	return gen
-}
-
-// buildRefiner 는 RefinementConfig + LLM provider 로 refiner.Refiner 를 구성합니다 (이슈 #173 단계 4-2).
-//
-// 반환값 nil 은 정밀화 비활성을 의미 — REFINEMENT_ENABLED=false 또는 config load 실패 시.
-// LLM provider 는 nil 허용 — algorithm-only 모드로 동작.
-// metricsRegistry 는 nil 허용 — METRICS_ADDR 빈 값으로 endpoint 비활성인 환경에서 noop (PR #191 피드백).
-func buildRefiner(
-	provider llm.Provider,
-	rules storage.ParsingRuleRepository,
-	samples storage.SampleURLRepository,
-	resolver *rule.Resolver,
-	metricsRegistry *prometheus.Registry,
-	log *logger.Logger,
-) *refiner.Refiner {
-	cfg, err := config.LoadRefinement()
-	if err != nil {
-		log.WithError(err).Warn("failed to load refinement config, refiner disabled")
-		return nil
-	}
-	if !cfg.Enabled {
-		log.Info("refiner disabled (REFINEMENT_ENABLED=false)")
-		return nil
-	}
-
-	opts := []refiner.Option{
-		refiner.WithInterval(cfg.Interval),
-		refiner.WithMinSamples(cfg.MinSamples),
-		refiner.WithMetrics(refiner.NewMetrics(metricsRegistry)),
-	}
-	if provider != nil {
-		adapter, err := refiner.NewLLMAdapter(provider)
-		if err != nil {
-			log.WithError(err).Fatal("failed to construct refiner LLM adapter")
-		}
-		opts = append(opts, refiner.WithLLMClient(adapter))
-	}
-	r, err := refiner.New(rules, samples, resolver, log, opts...)
-	if err != nil {
-		log.WithError(err).Fatal("failed to construct refiner")
-	}
-	return r
-}
-
-// verifyParsingRulesSeeded 는 본 PR 이 등록할 모든 사이트의 (host, target_type) 페어가
-// parsing_rules 테이블에 활성 row 로 존재하는지 확인합니다.
-//
-// 부재 시 ErrNoRule 등 진단 에러를 그대로 반환 — 호출자가 Fatal 로 부팅 차단.
-// migration 007 이 적용되어야 통과 (또는 운영자가 동등한 row 를 직접 입력).
-func verifyParsingRulesSeeded(ctx context.Context, resolver *rule.Resolver) error {
-	required := []struct {
-		host string
-		typ  storage.TargetType
-	}{
-		{"n.news.naver.com", storage.TargetTypePage},
-		{"news.naver.com", storage.TargetTypeList},
-		{"v.daum.net", storage.TargetTypePage},
-		{"news.daum.net", storage.TargetTypeList},
-		{"www.yna.co.kr", storage.TargetTypePage},
-		{"www.yna.co.kr", storage.TargetTypeList},
-		{"edition.cnn.com", storage.TargetTypePage},
-		{"edition.cnn.com", storage.TargetTypeList},
-	}
-	for _, r := range required {
-		// "/" path 로 catch-all (path_pattern='') 매칭 검증 — seed 된 host-only rule 확인 (이슈 #173).
-		if _, err := resolver.Resolve(ctx, r.host, "/", r.typ); err != nil {
-			return fmt.Errorf("missing rule for (%s, %s): %w", r.host, r.typ, err)
-		}
-	}
-	return nil
 }
