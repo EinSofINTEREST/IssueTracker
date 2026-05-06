@@ -9,7 +9,7 @@
 package providers
 
 import (
-	_ "issuetracker/pkg/llm/anthropic"
-	_ "issuetracker/pkg/llm/gemini"
-	_ "issuetracker/pkg/llm/openai"
+	_ "issuetracker/pkg/llm/providers/anthropic"
+	_ "issuetracker/pkg/llm/providers/gemini"
+	_ "issuetracker/pkg/llm/providers/openai"
 )

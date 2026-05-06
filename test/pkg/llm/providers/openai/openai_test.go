@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/pkg/llm"
-	"issuetracker/pkg/llm/openai"
+	"issuetracker/pkg/llm/providers/openai"
 )
 
 const successResponse = `{
