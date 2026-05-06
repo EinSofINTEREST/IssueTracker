@@ -600,3 +600,93 @@ func (s *slowProvider) Generate(ctx context.Context, req llm.Request) (*llm.Resp
 	}
 	return s.fakeProvider.Generate(ctx, req)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 이슈 #274 — ErrDuplicate 흡수 + 사전 lookup
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestGenerator_DuplicateInsert_AbsorbedAsSuccess 는 Insert 가 ErrDuplicate 를 반환할 때
+// generator 가 정상 경로로 흡수하여 selectorValidationError 분기 없이 종료되는지 검증합니다 (이슈 #274 — A).
+func TestGenerator_DuplicateInsert_AbsorbedAsSuccess(t *testing.T) {
+	provider := &fakeProvider{
+		name: "fake",
+		response: `{
+			"title": {"css": "h1.article-title"},
+			"main_content": {"css": "article p", "multi": true}
+		}`,
+	}
+	// Insert 가 ErrDuplicate 를 반환하도록 구성. inserted 슬라이스는 비어있어야 함 (race 없음).
+	repo := &recordingRepo{insertEr: storage.ErrDuplicate}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/article/1", HTML: samplePageHTML,
+	}, 0, "", 0)
+
+	// Stop 으로 in-flight goroutine 종료 대기 — provider 호출은 발생했어야 함.
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	g.Stop(stopCtx)
+
+	assert.Equal(t, 1, provider.callCount(), "LLM 호출은 발생해야 함 (사전 lookup miss)")
+	assert.Empty(t, repo.inserts(), "Insert ErrDuplicate 시 inserted 누적 없음 (recordingRepo 의 insertEr 분기)")
+	// 핵심 회귀 방어: validateFailureHandler 등록 없이 ErrDuplicate 가 selectorValidationError 로
+	// wrap 되지 않고 정상 종료됨 — 패닉 / 무한 루프 / requeue 폭주 없음.
+}
+
+// TestGenerator_PreCheckHit_SkipsLLMCall 은 사전 lookup 적중 시 LLM 호출이 발생하지 않는지 검증합니다 (이슈 #274 — B).
+func TestGenerator_PreCheckHit_SkipsLLMCall(t *testing.T) {
+	provider := &fakeProvider{name: "fake", response: `{"title":{"css":"h1"}}`}
+	repo := &recordingRepo{
+		findByNaturalKeyResult: &storage.ParsingRuleRecord{
+			ID:          42,
+			SourceName:  llmgen.LLMAutoSourceName,
+			HostPattern: "example.com",
+			TargetType:  storage.TargetTypePage,
+			Version:     1,
+			Enabled:     true,
+		},
+	}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/article/1", HTML: samplePageHTML,
+	}, 0, "", 0)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	g.Stop(stopCtx)
+
+	assert.Equal(t, 0, provider.callCount(), "사전 lookup 적중 시 LLM 호출 미발생")
+	assert.Empty(t, repo.inserts(), "사전 lookup 적중 시 Insert 호출 미발생")
+	repo.mu.Lock()
+	assert.Equal(t, 1, repo.findByNaturalKeyCalls, "사전 lookup 1회 호출")
+	repo.mu.Unlock()
+}
+
+// TestGenerator_PreCheckMiss_ProceedsToLLM 는 사전 lookup miss 시 기존 경로 (LLM 호출 + Insert) 가
+// 정상 동작하는지 검증합니다 (이슈 #274 — B).
+func TestGenerator_PreCheckMiss_ProceedsToLLM(t *testing.T) {
+	provider := &fakeProvider{
+		name: "fake",
+		response: `{
+			"title": {"css": "h1.article-title"},
+			"main_content": {"css": "article p", "multi": true}
+		}`,
+	}
+	// findByNaturalKeyResult 미설정 → ErrNotFound 반환 → LLM 경로 진행.
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://example.com/article/1", HTML: samplePageHTML,
+	}, 0, "", 0)
+
+	waitForInserts(t, repo, 1, 2*time.Second)
+
+	assert.Equal(t, 1, provider.callCount(), "사전 lookup miss 시 LLM 호출 발생")
+	require.Len(t, repo.inserts(), 1)
+	repo.mu.Lock()
+	assert.Equal(t, 1, repo.findByNaturalKeyCalls, "사전 lookup 1회 호출")
+	repo.mu.Unlock()
+}
