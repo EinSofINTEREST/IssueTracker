@@ -744,14 +744,17 @@ func LoadLLM(envFiles ...string) (LLMConfig, error) {
 		cfg.Timeout = d
 	}
 
-	cfg.APIKey = lookupLLMAPIKey(cfg.Provider)
+	cfg.APIKey = LookupLLMAPIKey(cfg.Provider)
 
 	return cfg, nil
 }
 
-// lookupLLMAPIKey 는 provider 별 표준 환경변수에서 API key 를 조회하고,
+// LookupLLMAPIKey 는 provider 별 표준 환경변수에서 API key 를 조회하고,
 // 부재 시 LLM_API_KEY fallback 을 사용합니다.
-func lookupLLMAPIKey(provider string) string {
+//
+// 외부 (pkg/llm/wiring) 가 multi-provider chain 구성 시 provider 별 key 를 조회하기 위해 export
+// (이슈 #216).
+func LookupLLMAPIKey(provider string) string {
 	switch provider {
 	case "gemini":
 		if v := os.Getenv("GEMINI_API_KEY"); v != "" {
