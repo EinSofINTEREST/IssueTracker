@@ -20,7 +20,8 @@ import (
 
 // Build 는 RefinementConfig + LLM provider 로 refiner.Refiner 를 구성합니다 (이슈 #173 단계 4-2).
 //
-// 반환값 (nil, nil) 은 정밀화 비활성을 의미 — REFINEMENT_ENABLED=false 또는 config load 실패 시.
+// 반환값 (nil, nil) 은 정밀화 비활성을 의미 — REFINEMENT_ENABLED=false 인 경우에 한정.
+// config load 실패는 (nil, error) — malformed env 가 silent disable 되지 않도록 명시적 에러 (PR #277 CodeRabbit).
 // LLM provider 는 nil 허용 — algorithm-only 모드로 동작.
 // metricsRegistry 는 nil 허용 — METRICS_ADDR 빈 값으로 endpoint 비활성인 환경에서 noop (PR #191 피드백).
 //
