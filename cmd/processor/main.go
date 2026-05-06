@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/validate"
@@ -34,6 +33,12 @@ func main() {
 	log = logger.New(loggerCfg)
 
 	log.Info("starting IssueTracker processor")
+
+	shutdownCfg, err := config.LoadShutdown()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load shutdown config")
+	}
+	log.WithField("shutdown_timeout", shutdownCfg.Timeout.String()).Info("shutdown timeout loaded")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -119,7 +124,7 @@ func main() {
 	log.Warn("shutdown signal received, draining workers...")
 	cancel()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownCfg.Timeout)
 	defer shutdownCancel()
 	shutdownCtx = log.ToContext(shutdownCtx)
 

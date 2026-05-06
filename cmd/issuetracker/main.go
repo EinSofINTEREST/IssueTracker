@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -65,6 +64,15 @@ func main() {
 	log = logger.New(loggerCfg)
 
 	log.Info("starting IssueTracker")
+
+	shutdownCfg, err := config.LoadShutdown()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load shutdown config")
+	}
+	log.WithFields(map[string]interface{}{
+		"shutdown_timeout":           shutdownCfg.Timeout.String(),
+		"claudegen_shutdown_timeout": shutdownCfg.ClaudegenTimeout.String(),
+	}).Info("shutdown timeouts loaded")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -608,7 +616,7 @@ func main() {
 
 	// shutdownCtx 에 logger 를 주입하여 Stop 내부에서 logger.FromContext 가
 	// shutting_down 필드를 자동으로 상속받도록 합니다.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownCfg.Timeout)
 	defer shutdownCancel()
 	shutdownCtx = log.ToContext(shutdownCtx)
 
@@ -632,7 +640,7 @@ func main() {
 	// shutdownCtx 가 stages.Stop 에서 timeout 으로 cancel 되더라도 docker rm -f 자체는 반드시 시도되어야
 	// 컨테이너 누수가 발생하지 않으므로, 별도의 cleanupCtx 를 사용 (PR #271 리뷰).
 	if claudegenWorker != nil {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), shutdownCfg.ClaudegenTimeout)
 		cleanupCtx = log.ToContext(cleanupCtx)
 		if err := claudegenWorker.Stop(cleanupCtx); err != nil {
 			log.WithError(err).Error("claudegen worker stop failed")

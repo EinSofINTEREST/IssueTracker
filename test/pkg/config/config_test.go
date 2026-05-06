@@ -714,3 +714,77 @@ func TestLoadFetcherChromedpPool_InvalidSemaphoreCapacity(t *testing.T) {
 		})
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ShutdownConfig (이슈 #272)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func unsetShutdownEnvVars(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"SHUTDOWN_TIMEOUT", "CLAUDE_CODE_SHUTDOWN_TIMEOUT"} {
+		t.Setenv(k, "")
+	}
+}
+
+func TestLoadShutdown_DefaultValues(t *testing.T) {
+	unsetShutdownEnvVars(t)
+
+	cfg, err := config.LoadShutdown("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("기본값 로드 실패: %v", err)
+	}
+
+	def := config.DefaultShutdownConfig()
+	if cfg.Timeout != def.Timeout {
+		t.Errorf("Timeout: got %v, want %v", cfg.Timeout, def.Timeout)
+	}
+	if cfg.ClaudegenTimeout != def.ClaudegenTimeout {
+		t.Errorf("ClaudegenTimeout: got %v, want %v", cfg.ClaudegenTimeout, def.ClaudegenTimeout)
+	}
+	if cfg.Timeout != 30*time.Second {
+		t.Errorf("Timeout default 30s 보장: got %v", cfg.Timeout)
+	}
+	if cfg.ClaudegenTimeout != 10*time.Second {
+		t.Errorf("ClaudegenTimeout default 10s 보장: got %v", cfg.ClaudegenTimeout)
+	}
+}
+
+func TestLoadShutdown_EnvOverride(t *testing.T) {
+	unsetShutdownEnvVars(t)
+	t.Setenv("SHUTDOWN_TIMEOUT", "120s")
+	t.Setenv("CLAUDE_CODE_SHUTDOWN_TIMEOUT", "30s")
+
+	cfg, err := config.LoadShutdown("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("환경변수 로드 실패: %v", err)
+	}
+	if cfg.Timeout != 120*time.Second {
+		t.Errorf("Timeout: got %v, want 120s", cfg.Timeout)
+	}
+	if cfg.ClaudegenTimeout != 30*time.Second {
+		t.Errorf("ClaudegenTimeout: got %v, want 30s", cfg.ClaudegenTimeout)
+	}
+}
+
+func TestLoadShutdown_InvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"SHUTDOWN_TIMEOUT 음수", "SHUTDOWN_TIMEOUT", "-5s"},
+		{"SHUTDOWN_TIMEOUT 0", "SHUTDOWN_TIMEOUT", "0s"},
+		{"SHUTDOWN_TIMEOUT 포맷 오류", "SHUTDOWN_TIMEOUT", "abc"},
+		{"CLAUDE_CODE_SHUTDOWN_TIMEOUT 음수", "CLAUDE_CODE_SHUTDOWN_TIMEOUT", "-1s"},
+		{"CLAUDE_CODE_SHUTDOWN_TIMEOUT 포맷 오류", "CLAUDE_CODE_SHUTDOWN_TIMEOUT", "ten"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetShutdownEnvVars(t)
+			t.Setenv(tt.key, tt.value)
+			if _, err := config.LoadShutdown("/tmp/nonexistent-env-file.env"); err == nil {
+				t.Fatalf("%s=%q 는 거부되어야 함", tt.key, tt.value)
+			}
+		})
+	}
+}
