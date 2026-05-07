@@ -477,7 +477,8 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		// PR #275 리뷰 반영: enabled 여부 / rule_id 를 로그에 포함하여 운영 가시성 ↑.
 		// disabled 룰 잔존이면 warn — 운영자가 수동 재활성 결정을 해야 함을 명시.
 		if errors.Is(err, storage.ErrDuplicate) {
-			g.resolver.Invalidate(host, targetType)
+			// 이슈 #288: cache invalidate 는 invalidatingRepo decorator 가 ErrDuplicate
+			// 시에도 자동 호출 — 본 함수는 순수 로깅 / 분기 책임만.
 			fields := map[string]interface{}{
 				"host":        host,
 				"target_type": string(targetType),
@@ -496,8 +497,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		return fmt.Errorf("insert parsing rule: %w", err)
 	}
 
-	// negative cache 무효화 — 다음 lookup 부터 새 rule 이 즉시 반영되도록.
-	g.resolver.Invalidate(host, targetType)
+	// 이슈 #288: cache invalidate 는 invalidatingRepo decorator 가 자동 호출.
 
 	g.log.WithFields(map[string]interface{}{
 		"host":        host,

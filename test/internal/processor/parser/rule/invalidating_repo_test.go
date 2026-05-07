@@ -1,0 +1,244 @@
+package rule_test
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"issuetracker/internal/processor/parser/rule"
+	"issuetracker/internal/storage"
+)
+
+// recordingInvalidator 는 Invalidate 호출을 기록하는 fake CacheInvalidator 입니다.
+type recordingInvalidator struct {
+	mu    sync.Mutex
+	calls []invalidateCall
+}
+
+type invalidateCall struct {
+	Host string
+	Type storage.TargetType
+}
+
+func (i *recordingInvalidator) Invalidate(host string, t storage.TargetType) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.calls = append(i.calls, invalidateCall{Host: host, Type: t})
+}
+
+func (i *recordingInvalidator) callCount() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return len(i.calls)
+}
+
+func (i *recordingInvalidator) lastCall() invalidateCall {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if len(i.calls) == 0 {
+		return invalidateCall{}
+	}
+	return i.calls[len(i.calls)-1]
+}
+
+// recordingRepo — invalidating_repo decorator 의 inner repo 시뮬레이션.
+type recordingRepo struct {
+	insertErr     error
+	updateErr     error
+	updatePathErr error
+	getByIDResult *storage.ParsingRuleRecord
+	getByIDErr    error
+
+	insertCalls     int
+	updateCalls     int
+	updatePathCalls int
+	deleteCalls     int
+	getByIDCalls    int
+}
+
+func (r *recordingRepo) Insert(_ context.Context, _ *storage.ParsingRuleRecord) error {
+	r.insertCalls++
+	return r.insertErr
+}
+func (r *recordingRepo) Update(_ context.Context, _ *storage.ParsingRuleRecord) error {
+	r.updateCalls++
+	return r.updateErr
+}
+func (r *recordingRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) error {
+	r.updatePathCalls++
+	return r.updatePathErr
+}
+func (r *recordingRepo) Delete(_ context.Context, _ int64) error {
+	r.deleteCalls++
+	return nil
+}
+func (r *recordingRepo) GetByID(_ context.Context, _ int64) (*storage.ParsingRuleRecord, error) {
+	r.getByIDCalls++
+	return r.getByIDResult, r.getByIDErr
+}
+func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParsingRuleRecord, error) {
+	return nil, storage.ErrNotFound
+}
+func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+	return nil, nil
+}
+func (r *recordingRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
+	return false, false, nil
+}
+func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+	return nil, storage.ErrNotFound
+}
+func (r *recordingRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
+	return nil, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Insert
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestInvalidatingRepo_Insert_Success_TriggersInvalidate(t *testing.T) {
+	inner := &recordingRepo{}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
+	err := repo.Insert(context.Background(), rec)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inv.callCount(), "Insert 성공 시 Invalidate 호출")
+	assert.Equal(t, invalidateCall{Host: "example.com", Type: storage.TargetTypePage}, inv.lastCall())
+}
+
+func TestInvalidatingRepo_Insert_ErrDuplicate_TriggersInvalidate(t *testing.T) {
+	inner := &recordingRepo{insertErr: storage.ErrDuplicate}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
+	err := repo.Insert(context.Background(), rec)
+	require.ErrorIs(t, err, storage.ErrDuplicate)
+	assert.Equal(t, 1, inv.callCount(), "ErrDuplicate 도 invalidate — cache 가 stale 일 가능성")
+}
+
+func TestInvalidatingRepo_Insert_OtherError_NoInvalidate(t *testing.T) {
+	inner := &recordingRepo{insertErr: errors.New("db down")}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
+	err := repo.Insert(context.Background(), rec)
+	require.Error(t, err)
+	assert.Equal(t, 0, inv.callCount(), "기타 에러 (DB 장애 등) 시 invalidate 안 함 — cache 보존")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Update
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestInvalidatingRepo_Update_Success_TriggersInvalidate(t *testing.T) {
+	inner := &recordingRepo{}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypeList}
+	err := repo.Update(context.Background(), rec)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inv.callCount())
+	assert.Equal(t, invalidateCall{Host: "example.com", Type: storage.TargetTypeList}, inv.lastCall())
+}
+
+func TestInvalidatingRepo_Update_Error_NoInvalidate(t *testing.T) {
+	inner := &recordingRepo{updateErr: errors.New("constraint violation")}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	err := repo.Update(context.Background(), &storage.ParsingRuleRecord{})
+	require.Error(t, err)
+	assert.Equal(t, 0, inv.callCount())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UpdatePathPattern
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestInvalidatingRepo_UpdatePathPattern_Success_PrefetchesAndInvalidates(t *testing.T) {
+	inner := &recordingRepo{
+		getByIDResult: &storage.ParsingRuleRecord{
+			ID: 42, HostPattern: "yna.co.kr", TargetType: storage.TargetTypePage,
+		},
+	}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	err := repo.UpdatePathPattern(context.Background(), 42, "/news/.*", "refiner v1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, inner.getByIDCalls, "host/type 미지로 사전 GetByID 1회")
+	assert.Equal(t, 1, inner.updatePathCalls)
+	assert.Equal(t, 1, inv.callCount())
+	assert.Equal(t, invalidateCall{Host: "yna.co.kr", Type: storage.TargetTypePage}, inv.lastCall())
+}
+
+func TestInvalidatingRepo_UpdatePathPattern_Error_NoInvalidate(t *testing.T) {
+	inner := &recordingRepo{
+		getByIDResult: &storage.ParsingRuleRecord{HostPattern: "x.com", TargetType: storage.TargetTypePage},
+		updatePathErr: errors.New("not found"),
+	}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	err := repo.UpdatePathPattern(context.Background(), 1, "/", "")
+	require.Error(t, err)
+	assert.Equal(t, 0, inv.callCount(), "update 실패 시 invalidate 안 함")
+}
+
+func TestInvalidatingRepo_UpdatePathPattern_PrefetchFails_NoInvalidate(t *testing.T) {
+	inner := &recordingRepo{
+		getByIDErr: errors.New("db down"),
+	}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	// pre-fetch 실패해도 update 자체는 진행 (성공 가정).
+	err := repo.UpdatePathPattern(context.Background(), 1, "/", "")
+	require.NoError(t, err)
+	assert.Equal(t, 0, inv.callCount(), "pre-fetch 실패 시 host/type 미상으로 invalidate skip")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Delete
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestInvalidatingRepo_Delete_NoInvalidate(t *testing.T) {
+	inner := &recordingRepo{}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	err := repo.Delete(context.Background(), 1)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inner.deleteCalls)
+	assert.Equal(t, 0, inv.callCount(),
+		"Delete 는 ID 만 받음 — host/type 미상이라 호출자가 명시 Invalidate 책임 (decorator 가 강제하지 않음)")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// nil invalidator (wrapping 단계에서 비활성)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestInvalidatingRepo_NilInvalidator_NoOp(t *testing.T) {
+	inner := &recordingRepo{}
+	repo := rule.WrapWithInvalidator(inner, nil)
+
+	err := repo.Insert(context.Background(), &storage.ParsingRuleRecord{HostPattern: "x", TargetType: storage.TargetTypePage})
+	require.NoError(t, err)
+	assert.Equal(t, 1, inner.insertCalls, "inner 호출은 정상")
+	// invalidator 가 nil 이라 panic 없이 통과 — 정상 동작 확인 만으로 충분.
+}
+
+func TestWrapWithInvalidator_NilInner_Panics(t *testing.T) {
+	assert.Panics(t, func() {
+		_ = rule.WrapWithInvalidator(nil, &recordingInvalidator{})
+	}, "nil inner 는 wiring 버그 — panic 으로 즉시 노출")
+}
