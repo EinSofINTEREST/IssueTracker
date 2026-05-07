@@ -109,9 +109,13 @@ func ApplyConfidenceFilter(sm storage.SelectorMap, confidence map[string]storage
 	return out
 }
 
-// isFieldHit 는 doc 에 selector 를 적용해 hit (1건 이상 매칭 + 형식 검증 통과) 여부를 반환합니다.
+// isFieldHit 는 doc 에 selector 를 적용해 hit 여부를 반환합니다.
 //
-// published_at 한정으로 추출된 텍스트가 time.Parse 통과해야 hit. 다른 필드는 단순 매칭만으로 hit.
+// hit 정의 (PR #293 CodeRabbit Major):
+//   - DOM 매칭 1건 이상
+//   - **추출 결과 (text 또는 attribute) 가 비어있지 않음** — attribute selector 가 attribute
+//     를 못 찾거나 빈 element 매칭하면 hit 아님 (low-confidence drop 게이트 강화)
+//   - published_at 추가: 추출된 텍스트가 time.Parse 통과해야 hit
 func isFieldHit(doc *goquery.Document, fieldName string, fs *storage.FieldSelector) bool {
 	if fs == nil || strings.TrimSpace(fs.CSS) == "" {
 		return false
@@ -120,24 +124,29 @@ func isFieldHit(doc *goquery.Document, fieldName string, fs *storage.FieldSelect
 	if sel.Length() == 0 {
 		return false
 	}
-	if fieldName != "published_at" {
-		return true
-	}
-	// published_at — 첫 매칭의 추출 결과가 date 로 parse 가능한지 확인.
-	first := sel.First()
-	var text string
-	if fs.Attribute != "" {
-		if v, exists := first.Attr(fs.Attribute); exists {
-			text = strings.TrimSpace(v)
-		}
-	}
-	if text == "" {
-		text = strings.TrimSpace(first.Text())
-	}
+	text := extractFirstValue(sel, fs)
 	if text == "" {
 		return false
 	}
-	return tryParseDateLayouts(text)
+	if fieldName == "published_at" {
+		return tryParseDateLayouts(text)
+	}
+	return true
+}
+
+// extractFirstValue 는 selector 의 첫 매칭 element 에서 추출 값을 반환합니다.
+//
+// fs.Attribute != "" 이면 attribute 값 (없으면 빈 문자열 — text fallback 안 함, attribute
+// selector 의 의도 존중). 그 외에는 text().
+func extractFirstValue(sel *goquery.Selection, fs *storage.FieldSelector) string {
+	first := sel.First()
+	if fs.Attribute != "" {
+		if v, exists := first.Attr(fs.Attribute); exists {
+			return strings.TrimSpace(v)
+		}
+		return ""
+	}
+	return strings.TrimSpace(first.Text())
 }
 
 // tryParseDateLayouts 는 publishedAtTimeLayouts 의 layout 을 순회하며 parse 성공 여부를 반환합니다.

@@ -86,6 +86,38 @@ func TestComputeFieldConfidence_PublishedAtVariousFormats(t *testing.T) {
 	}
 }
 
+func TestComputeFieldConfidence_EmptyExtractedValue_ReturnsZero(t *testing.T) {
+	// element 는 매칭되나 추출 값이 비어있는 케이스 (PR #293 CodeRabbit Major).
+	cases := []struct {
+		name string
+		html string
+		fs   *storage.FieldSelector
+	}{
+		{
+			name: "text selector 매칭하나 element 비어있음",
+			html: `<html><body><h1 class="title"></h1></body></html>`,
+			fs:   &storage.FieldSelector{CSS: "h1.title"},
+		},
+		{
+			name: "attribute selector — attribute 부재",
+			html: `<html><body><a class="link">text</a></body></html>`,
+			fs:   &storage.FieldSelector{CSS: "a.link", Attribute: "href"},
+		},
+		{
+			name: "attribute selector — attribute 빈 문자열",
+			html: `<html><body><a class="link" href="">text</a></body></html>`,
+			fs:   &storage.FieldSelector{CSS: "a.link", Attribute: "href"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := storage.SelectorMap{Title: tc.fs}
+			got := llmgen.ComputeFieldConfidence(sm, tc.html)
+			assert.Equal(t, 0.0, got["title"].HitRate, "추출 값이 빈 문자열이면 hit_rate=0")
+		})
+	}
+}
+
 func TestComputeFieldConfidence_NilSelectorIgnored(t *testing.T) {
 	sm := storage.SelectorMap{
 		Title: &storage.FieldSelector{CSS: "h1.article-title"},

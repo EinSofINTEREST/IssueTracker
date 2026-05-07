@@ -82,19 +82,27 @@ func (r *pgParsingRuleRepository) Insert(ctx context.Context, rec *storage.Parsi
 
 const sqlUpdateParsingRule = `
 UPDATE parsing_rules
-SET selectors = $2, enabled = $3, description = $4
+SET selectors = $2, confidence = $3, enabled = $4, description = $5
 WHERE id = $1
 RETURNING updated_at
 `
 
 // Update 는 ID 로 규칙을 갱신합니다. 자연키 (source/host/path/type/version) 는 변경 불가 —
 // 규칙 진화는 새 row 를 INSERT 후 enabled flip 으로 표현 권장.
+//
+// PR #293 CodeRabbit Major: confidence 도 함께 갱신 — selectors 만 바뀌고 confidence 가 stale
+// 로 남으면 하류 validator 가 잘못된 신뢰도로 판단. 호출자는 selectors 변경 시 confidence 도
+// 같이 채워서 전달 (또는 nil/빈 map 으로 reset).
 func (r *pgParsingRuleRepository) Update(ctx context.Context, rec *storage.ParsingRuleRecord) error {
 	selectors, err := json.Marshal(rec.Selectors)
 	if err != nil {
 		return fmt.Errorf("marshal selectors: %w", err)
 	}
-	row := r.pool.QueryRow(ctx, sqlUpdateParsingRule, rec.ID, selectors, rec.Enabled, rec.Description)
+	confidence, err := marshalConfidence(rec.Confidence)
+	if err != nil {
+		return fmt.Errorf("marshal confidence: %w", err)
+	}
+	row := r.pool.QueryRow(ctx, sqlUpdateParsingRule, rec.ID, selectors, confidence, rec.Enabled, rec.Description)
 	if err := row.Scan(&rec.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return storage.ErrNotFound
