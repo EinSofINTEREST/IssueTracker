@@ -19,13 +19,13 @@ import (
 // Emitter를 통해 Kafka crawl 토픽에 발행합니다.
 // 체이닝 Job(크롤된 페이지에서 발견된 URL)은 internal/publisher 패키지가 담당합니다.
 //
-// URL 가드 (이슈 #119):
+// URL 가드:
 //   - SetGate 로 urlguard.Gate 를 설정하면 publish 직전에 entry.URL 검사
 //   - 차단된 URL 은 Emit 호출 없이 silent drop + WARN 로그
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
 //   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — Start 이후 변경에도 race 없음
 //
-// Backlog throttle (이슈 #124):
+// Backlog throttle:
 //   - SetThrottler 로 Throttler 를 설정하면 emit 직전에 ShouldThrottle 검사
 //   - throttle 결정 시 emit 호출 없이 silent drop (구현체가 WARN 로그 책임)
 //   - 미설정 시 throttle 비활성 (기존 동작 유지)
@@ -147,7 +147,7 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 		return
 	}
 
-	// URL 가드 (이슈 #119): job 생성 직전에 entry.URL 검사
+	// URL 가드: job 생성 직전에 entry.URL 검사
 	// 차단 시 emit 호출 없이 silent drop (가드가 WARN 로그 자동 생성)
 	if g := s.gate.Load(); g != nil {
 		if !g.Allow(entry.URL, map[string]interface{}{
@@ -171,14 +171,14 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 		MaxRetries:  s.maxRetries,
 	}
 
-	// Backlog throttle (이슈 #124): job.Priority 에 대응하는 crawl 토픽의
+	// Backlog throttle: job.Priority 에 대응하는 crawl 토픽의
 	// consumer-group lag 가 임계값 초과 시 silent drop. 구현체가 WARN 로그 책임.
 	if r := s.throttler.Load(); r != nil && r.t.ShouldThrottle(ctx, job) {
 		return
 	}
 
 	if err := s.emitter.Emit(ctx, job); err != nil {
-		// ErrEmitSkipped (이슈 #285): PipelineGuard 가 cycle 진행 중 판단으로 skip — non-fatal.
+		// ErrEmitSkipped: PipelineGuard 가 cycle 진행 중 판단으로 skip — non-fatal.
 		// "scheduled" / "failed" 양쪽 로그 모두 생략 (실제 발행 안 된 job 이 발행된 것처럼 보이지 않게).
 		if errors.Is(err, ErrEmitSkipped) {
 			return

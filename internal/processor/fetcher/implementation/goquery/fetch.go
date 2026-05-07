@@ -47,12 +47,12 @@ func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.R
 	}
 	defer resp.Body.Close()
 
-	// HTTP 상태코드 검사: 4xx/5xx는 에러로 처리 (이슈 #75: core 공통 분기)
+	// HTTP 상태코드 검사: 4xx/5xx는 에러로 처리 (core 공통 분기)
 	if err := core.CheckHTTPStatus(target.URL, resp.StatusCode); err != nil {
 		return nil, err
 	}
 
-	// body 를 메모리에 완전히 읽은 뒤 charset 감지를 수행합니다 (이슈 #253, CodeRabbit Major 반영).
+	// body 를 메모리에 완전히 읽은 뒤 charset 감지를 수행합니다.
 	// charset.NewReader 는 내부에서 최대 1024 바이트를 미리 읽으므로, resp.Body 를 직접 fallback 으로
 	// 재사용하면 해당 바이트가 소실된 truncated 스트림이 됩니다. io.ReadAll 로 전체를 읽어두고
 	// bytes.NewReader 로 재생성하면 charset 감지 실패 시에도 원본 body 를 온전히 유지합니다.
@@ -113,7 +113,7 @@ func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.R
 		}
 	}
 
-	// RawContent 조립 (이슈 #75: core 공통 생성자)
+	// RawContent 조립 (core 공통 생성자)
 	rawContent := core.NewRawContent(c.name, c.sourceInfo, target, html, resp.StatusCode, headers)
 
 	log.WithFields(map[string]interface{}{

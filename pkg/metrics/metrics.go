@@ -1,6 +1,6 @@
 // Package metrics provides a Prometheus registry and HTTP handler for /metrics export.
 //
-// metrics 패키지는 Prometheus 기반 운영 metric 수집·노출의 진입점입니다 (이슈 #165).
+// metrics 패키지는 Prometheus 기반 운영 metric 수집·노출의 진입점입니다.
 // 모든 모듈은 본 패키지의 NewRegistry() 가 반환한 *prometheus.Registry 를 공유하여
 // 자신의 metric (counter / histogram / gauge) 을 등록합니다.
 //
@@ -42,7 +42,7 @@ func NewRegistry() *prometheus.Registry {
 // addr 가 빈 문자열이면 endpoint 비활성화 — (noop stop, nil) 반환 후 종료. 운영 환경별 metric
 // 노출 토글에 사용.
 //
-// **fail-fast 정책 (PR #166 CodeRabbit 피드백)**: bind/listen 실패는 호출 시점에 동기 검출되어
+// **fail-fast 정책**: bind/listen 실패는 호출 시점에 동기 검출되어
 // error 로 반환됩니다 — 포트 충돌 등으로 metric 이 silent 누락되지 않도록 caller 가 Fatal 처리해야
 // 합니다. listen 성공 후 발생하는 Serve 에러만 goroutine 안에서 로깅됩니다.
 //

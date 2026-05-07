@@ -2,7 +2,7 @@ package llm
 
 // Capabilities describes a provider/model's quantitative properties used by routing policies.
 //
-// Capabilities 는 routing policy 가 provider 선택에 사용하는 정량적 속성입니다 (이슈 #144).
+// Capabilities 는 routing policy 가 provider 선택에 사용하는 정량적 속성입니다.
 // 비용 / context window / 평균 latency 등을 표준 단위로 표현합니다.
 //
 // 모든 비용은 USD per 1M tokens, latency 는 milliseconds 입니다.
@@ -24,9 +24,9 @@ type Capabilities struct {
 // CapabilitiesProvider returns the Capabilities for a given (provider, model) pair.
 //
 // 구현체:
-//   - StaticCapabilitiesProvider: 컴파일 시점 hardcode (초기 구현, 본 PR)
+//   - StaticCapabilitiesProvider: 컴파일 시점 hardcode (초기 구현)
 //   - 향후 RefreshableCapabilitiesProvider: 주기 background goroutine 으로 외부 source
-//     (config 파일 / DB / pricing API) 에서 fetch 후 cache 갱신 (이슈 #144 후속)
+//     (config 파일 / DB / pricing API) 에서 fetch 후 cache 갱신
 //
 // Get 은 lookup 결과가 없으면 (Capabilities{}, false) 반환합니다.
 type CapabilitiesProvider interface {
@@ -35,7 +35,7 @@ type CapabilitiesProvider interface {
 
 // StaticCapabilitiesProvider returns Capabilities from a compile-time hardcoded table.
 //
-// 본 구현은 본 PR 에서만 동기 lookup. RefreshableCapabilitiesProvider (후속) 는 동일 인터페이스를
+// 초기 구현은 동기 lookup 만. RefreshableCapabilitiesProvider (후속) 는 동일 인터페이스를
 // 구현하면서 background refresh 로직만 추가하므로 호출자 코드 변경 없이 교체 가능합니다.
 type StaticCapabilitiesProvider struct {
 	table map[capKey]Capabilities
@@ -47,7 +47,7 @@ type capKey struct {
 }
 
 // NewStaticCapabilitiesProvider returns a StaticCapabilitiesProvider pre-populated with
-// the well-known model pricing as of 2026-04 (이슈 #144 본문 참고). 운영 단가 변동 시 hardcode
+// the well-known model pricing as of 2026-04. 운영 단가 변동 시 hardcode
 // 갱신 또는 RefreshableCapabilitiesProvider 로 교체.
 func NewStaticCapabilitiesProvider() *StaticCapabilitiesProvider {
 	return &StaticCapabilitiesProvider{
@@ -79,7 +79,7 @@ func (s *StaticCapabilitiesProvider) Get(provider, model string) (Capabilities, 
 }
 
 // defaultCapabilitiesTable returns the hardcoded pricing baseline (USD per 1M tokens).
-// 단가 출처는 이슈 #144 본문 — 작업 시점 (2026-04) 기준이며 운영자가 주기 검증 필요.
+// 단가 출처는 본문 — 작업 시점 (2026-04) 기준이며 운영자가 주기 검증 필요.
 func defaultCapabilitiesTable() map[capKey]Capabilities {
 	return map[capKey]Capabilities{
 		// OpenAI

@@ -19,7 +19,7 @@ import (
 //
 // Handler processes a single CrawlJob, fetches and parses the content,
 // and returns normalized Content(s) ready for the processing pipeline.
-// 시그니처상 다수 Content 반환을 허용하나, 현 fetcher/parser 분리 (이슈 #134) 이후
+// 시그니처상 다수 Content 반환을 허용하나, 현 fetcher/parser 분리 이후
 // fetcher 측 ChainHandler 는 항상 nil 을 반환하고 실제 Content 발행은 parser worker 가 담당합니다.
 // Implementations must be safe for concurrent use by multiple goroutines.
 type Handler interface {
@@ -61,7 +61,7 @@ func (r *Registry) Register(name string, h Handler) {
 // Lookup returns the registered Handler for crawler name. ok=false 면 미등록 — 호출자는
 // fallback (예: 별도 에러 처리) 결정. Handle 과 달리 noop fallback 자동 적용 안 함.
 //
-// 이슈 #218: ChromedpJobHandler 가 Registry 에서 *ChainHandler 를 직접 가져와
+// ChromedpJobHandler 가 Registry 에서 *ChainHandler 를 직접 가져와
 // HandleChromedpOnly 호출하기 위해 사용.
 func (r *Registry) Lookup(name string) (Handler, bool) {
 	h, ok := r.handlers[name]

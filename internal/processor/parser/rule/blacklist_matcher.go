@@ -11,7 +11,7 @@ import (
 	"issuetracker/internal/storage"
 )
 
-// DefaultBlacklistCacheTTL 은 BlacklistMatcher 의 기본 양성 캐시 TTL 입니다 (이슈 #295).
+// DefaultBlacklistCacheTTL 은 BlacklistMatcher 의 기본 양성 캐시 TTL 입니다.
 //
 // Resolver (5m) 와 동일 — 운영자가 manual 등록 / disable 토글 후 약간의 지연을 허용하되,
 // 핫패스 lookup 의 DB 부담은 거의 0 으로.
@@ -27,12 +27,12 @@ const DefaultBlacklistMaxCacheEntries = 10_000
 
 // DefaultBlacklistMaxRegexEntries 는 path_pattern regex 컴파일 결과 cache 의 최대 entry 수입니다.
 //
-// PR #296 gemini 피드백: sync.Map 은 키 공간이 작고 bounded 일 때만 권장 — 향후 auto source
+// sync.Map 은 키 공간이 작고 bounded 일 때만 권장 — 향후 auto source
 // 등장 시 unique pattern 수가 증가할 수 있어 메모리 unbounded growth 가능. cap + simple evict
 // 로 보호.
 const DefaultBlacklistMaxRegexEntries = 10_000
 
-// BlacklistMatcher 는 (host, path) 매칭으로 blacklist 차단 여부를 판단합니다 (이슈 #295).
+// BlacklistMatcher 는 (host, path) 매칭으로 blacklist 차단 여부를 판단합니다.
 //
 // Resolver 와 동일 패턴 — host 단위 후보 슬라이스를 cache + DB lookup, application 측에서
 // path regex 매칭. catch-all (path_pattern="") 은 LENGTH DESC 정렬상 가장 마지막에 평가.
@@ -95,7 +95,7 @@ func WithBlacklistMaxCacheEntries(n int) BlacklistMatcherOption {
 	}
 }
 
-// WithBlacklistMaxRegexEntries 는 path_pattern regex 컴파일 cache 의 최대 entry 수를 override 합니다 (PR #296 gemini).
+// WithBlacklistMaxRegexEntries 는 path_pattern regex 컴파일 cache 의 최대 entry 수를 override 합니다.
 func WithBlacklistMaxRegexEntries(n int) BlacklistMatcherOption {
 	return func(m *BlacklistMatcher) {
 		if n > 0 {
@@ -159,7 +159,7 @@ func (m *BlacklistMatcher) IsBlocked(ctx context.Context, rawURL string) (bool, 
 // 동일 호스트가 반복되는 카테고리 페이지 링크 시나리오에서 host cache 가 재사용되어 비용
 // 거의 없음. 개별 IsBlocked 호출 에러는 best-effort — 해당 URL 만 통과 (차단 안 함).
 //
-// Deprecated: 이슈 #297 에서 mode 컬럼 도입 후 Classify 사용 권장 — Filter 는 Allowed 만 반환하여
+// Deprecated: mode 컬럼 도입 후 Classify 사용 권장 — Filter 는 Allowed 만 반환하여
 // 'extract_links_only' 모드의 URL 도 함께 drop 됨. 호환성을 위해 메소드는 유지.
 func (m *BlacklistMatcher) Filter(ctx context.Context, urls []string) []string {
 	if len(urls) == 0 {
@@ -180,7 +180,7 @@ func (m *BlacklistMatcher) Filter(ctx context.Context, urls []string) []string {
 	return out
 }
 
-// BlacklistDecision 은 Classify 의 결과 — mode 별로 URL 슬라이스를 분리합니다 (이슈 #297).
+// BlacklistDecision 은 Classify 의 결과 — mode 별로 URL 슬라이스를 분리합니다.
 //
 // 호출자 (parser_worker) 는 슬라이스별로 다른 publish 분기를 적용:
 //   - Allowed          : blacklist 매칭 X 또는 lookup 에러 (best-effort 통과) — 정상 article 발행
@@ -191,7 +191,7 @@ type BlacklistDecision struct {
 	ExtractLinksOnly []string
 }
 
-// Classify 는 입력 URL 슬라이스를 mode 별로 분류합니다 (이슈 #297).
+// Classify 는 입력 URL 슬라이스를 mode 별로 분류합니다.
 //
 // 매칭 정책:
 //  1. blacklist row 매칭 X → Allowed
@@ -314,7 +314,7 @@ func (m *BlacklistMatcher) pathMatches(pattern, path string) bool {
 	return cp.re.MatchString(path)
 }
 
-// compileRegex 는 pattern 의 컴파일 결과를 cache + reuse 합니다 (PR #296 gemini 피드백 반영).
+// compileRegex 는 pattern 의 컴파일 결과를 cache + reuse 합니다.
 //
 // sync.Map 대신 mutex-protected map 으로 변경 — maxRegexEntries cap 적용 + simple evict (1 random).
 // auto source 등 unique pattern 수 증가 시 unbounded growth 회피.
@@ -347,7 +347,7 @@ func (m *BlacklistMatcher) compileRegex(pattern string) *blacklistCompiledPatter
 }
 
 // invalidatingBlacklistRepo 는 BlacklistRepository 를 wrap 하여 mutation 후 자동으로 Matcher 의
-// host cache 를 invalidate 하는 decorator 입니다 (이슈 #295, parsing_rules 의 invalidatingRepo
+// host cache 를 invalidate 하는 decorator 입니다 (parsing_rules 의 invalidatingRepo
 // 와 동일 패턴).
 //
 // 적용 정책:
@@ -391,7 +391,7 @@ func (r *invalidatingBlacklistRepo) Insert(ctx context.Context, rec *storage.Bla
 }
 
 func (r *invalidatingBlacklistRepo) Update(ctx context.Context, rec *storage.BlacklistRecord) error {
-	// PR #296 CodeRabbit 피드백: Update 는 host 변경 안 하므로 호출자가 rec.HostPattern 을 비워
+	// Update 는 host 변경 안 하므로 호출자가 rec.HostPattern 을 비워
 	// 보내도 정당. 사전 GetByID 로 authoritative host 를 얻어 invalidate — Delete 와 동일 패턴.
 	// pre-fetch 실패 시 fallback 으로 rec.HostPattern (비어있지 않을 때만) 사용.
 	before, lookupErr := r.inner.GetByID(ctx, rec.ID)

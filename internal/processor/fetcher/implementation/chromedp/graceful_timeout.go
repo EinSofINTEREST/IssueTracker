@@ -46,7 +46,7 @@ func IsValidPartialDOM(html string) bool {
 	return strings.Contains(html, "<body") || strings.Contains(html, "<BODY")
 }
 
-// captureOuterHTML: timeout 이후 별도 context로 OuterHTML 추출 시도 (이슈 #146).
+// captureOuterHTML: timeout 이후 별도 context로 OuterHTML 추출 시도.
 // browserCtx는 timeout으로 cancel되지 않은 tab context여야 하며,
 // chromedp가 동일 탭에 새 명령을 발행할 수 있어야 한다.
 //

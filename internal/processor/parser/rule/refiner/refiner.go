@@ -1,5 +1,5 @@
 // Package refiner 는 catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 을
-// 추론하여 자동 갱신하는 점진적 정밀화 워크플로를 구현합니다 (이슈 #173 단계 4-2).
+// 추론하여 자동 갱신하는 점진적 정밀화 워크플로를 구현합니다.
 //
 // 흐름 (Run goroutine 1회 cycle):
 //  1. ParsingRuleRepository.List(SourceName='llm-auto', OnlyEnabled=true) 로 후보 rule 조회.
@@ -11,7 +11,7 @@
 //     d. 실패 + LLMClient != nil 이면 pathinfer.InferLLM(samples) 시도 — 성공하면 llm 방식 채택.
 //     e. 결과 regex 가 비어있으면 skip (다음 polling 에서 재시도 — sample 누적 추가 후 재평가).
 //     f. ParsingRuleRepository.InsertNextVersion — 기존 catch-all (v1) 보존 + 정밀 path_pattern 으로
-//     새 version (v2) INSERT (이슈 #282 Phase 2). v2 가 매칭 안 되는 path 는 v1 (catch-all)
+//     새 version (v2) INSERT. v2 가 매칭 안 되는 path 는 v1 (catch-all)
 //     로 fallback — 정밀화 적용 범위가 좁아도 silent miss 없음.
 //     g. resolver.Invalidate(host, type) — cache flush (다음 lookup 부터 갱신된 rule 적용).
 //     h. SampleURLRepository.Purge(rule.ID) — 기존 catch-all (v1) 의 sample 정리 (다음 cycle 에서 재누적).
@@ -50,7 +50,7 @@ const DefaultMinSamples = 5
 // LLMClient 는 nil 허용 — nil 이면 InferLLM 단계 skip (algorithm-only).
 // 운영자가 LLM 비활성 환경 (REFINEMENT 활성 + LLM_ENABLE=false) 도 동작.
 //
-// Lifecycle (PR #191 피드백):
+// Lifecycle:
 //   - Start(ctx) 가 background goroutine 으로 polling 시작 — sync.WaitGroup 으로 추적
 //   - Stop(ctx) 호출 시 in-flight cycle 의 완료 대기 (graceful shutdown). ctx cancel 시
 //     대기 timeout — in-flight 호출은 background ctx 가 아니라 Start 의 ctx 를 사용하므로
@@ -100,14 +100,14 @@ func WithLLMClient(c pathinfer.LLMClient) Option {
 	return func(r *Refiner) { r.llm = c }
 }
 
-// WithMetrics 는 Prometheus collector 를 주입합니다 (PR #191 피드백).
+// WithMetrics 는 Prometheus collector 를 주입합니다.
 // nil 또는 미지정 시 모든 Record* 호출이 noop — REFINEMENT 활성 + METRICS 비활성 환경 cover.
 func WithMetrics(m *Metrics) Option {
 	return func(r *Refiner) { r.metrics = m }
 }
 
 // New 는 Refiner 를 생성합니다. rules / samples / resolver / log 가 nil 이면 error —
-// 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208). LLMClient 만 nil 허용 (algorithm-only 동작).
+// 호출자 (cmd/main) 가 boot fatal 처리. LLMClient 만 nil 허용 (algorithm-only 동작).
 func New(
 	rules storage.ParsingRuleRepository,
 	samples storage.SampleURLRepository,
@@ -141,7 +141,7 @@ func New(
 	return r, nil
 }
 
-// Start 는 background goroutine 으로 polling 을 시작하고 즉시 반환합니다 (PR #191 피드백).
+// Start 는 background goroutine 으로 polling 을 시작하고 즉시 반환합니다.
 //
 // 첫 호출만 goroutine 을 spawn — 이후 호출은 noop (atomic CAS). Stop 후 호출도 noop.
 // 호출자는 Stop(ctx) 으로 in-flight cycle 의 완료를 대기 가능.
@@ -159,7 +159,7 @@ func (r *Refiner) Start(ctx context.Context) {
 	}()
 }
 
-// Stop 은 in-flight polling cycle 의 완료를 대기합니다 (graceful shutdown, PR #191 피드백).
+// Stop 은 in-flight polling cycle 의 완료를 대기합니다 (graceful shutdown).
 //
 // Start 의 ctx 가 이미 cancel 된 상태라면 in-flight RunOnce 가 ctx 전파로 빠르게 종료되어
 // Stop 도 즉시 반환. ctx (Stop 인자) 가 cancel 되면 대기 timeout — in-flight 가 길게 걸리는
@@ -291,7 +291,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 		return
 	}
 
-	// 1) algorithm 우선 시도 → 실패 시 LLM fallback. LLM 호출 에러는 별도 분기 (PR #191 gemini 피드백).
+	// 1) algorithm 우선 시도 → 실패 시 LLM fallback. LLM 호출 에러는 별도 분기.
 	pattern, method, inferErr := inferPattern(ctx, paths, r.llm, r.minSamples, r.metrics)
 	if inferErr != nil {
 		rlog.WithFields(map[string]interface{}{
@@ -317,7 +317,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 
 	desc := buildDescription(rec.Description, method, len(paths))
 
-	// 이슈 #282 Phase 2: catch-all (v1) 을 보존하고 정밀 path_pattern 으로 새 version (v2) INSERT.
+	// catch-all (v1) 을 보존하고 정밀 path_pattern 으로 새 version (v2) INSERT.
 	// 기존 UpdatePathPattern 은 v1 의 path_pattern 을 직접 mutation 하여 catch-all 을 잃었음 —
 	// 정밀화 적용 범위 (예: /news/123) 외 path 는 매칭되는 룰이 사라져 silent miss 발생.
 	// InsertNextVersion 은 v1 그대로 두고 v2 추가 — Resolver 가 LENGTH(path_pattern) DESC + version DESC
@@ -353,7 +353,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 		return
 	}
 
-	// 2) cache flush 는 invalidatingRepo decorator 가 InsertNextVersion 성공 후 자동 호출 (이슈 #288).
+	// 2) cache flush 는 invalidatingRepo decorator 가 InsertNextVersion 성공 후 자동 호출.
 	//    refiner 의 명시적 Invalidate 책임 제거 — single source of truth.
 
 	// 3) sample purge — 기존 catch-all (v1) 의 누적 sample 정리. 다음 cycle 에서 v2 미매칭 path 가
@@ -379,10 +379,10 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 //   - 추론 거부       : ("", "", nil) — algorithm 휴리스틱 실패 + LLM 검증 거부 (호출자가 Debug 로그)
 //   - LLM 호출 에러   : ("", "", err) — network / API 에러 (호출자가 Warn 로그, 다음 cycle 재시도)
 //
-// PR #191 gemini 피드백: LLM 에러를 삼키지 않고 호출자에게 전달 — 운영자가 LLM 장애 / 할당량
+// LLM 에러를 삼키지 않고 호출자에게 전달 — 운영자가 LLM 장애 / 할당량
 // 초과 등을 로그로 즉시 인지 가능.
 //
-// PR #191 후속 (metrics): LLM Generate 호출 1건이 발생할 때 metrics.RecordLLMCall 호출 —
+// LLM Generate 호출 1건이 발생할 때 metrics.RecordLLMCall 호출 —
 // success / error 라벨로 운영자가 호출 빈도 + 실패율 추적 가능. metrics nil 허용.
 func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, minSamples int, metrics *Metrics) (string, string, error) {
 	opt := pathinfer.WithMinSamples(minSamples)

@@ -1,4 +1,4 @@
-// Package anthropic 는 Anthropic Claude API 의 llm.Provider 구현입니다 (이슈 #140).
+// Package anthropic 는 Anthropic Claude API 의 llm.Provider 구현입니다.
 //
 // Package anthropic implements the llm.Provider interface against Anthropic's
 // Messages REST API.
@@ -22,7 +22,7 @@ const (
 	apiVersion       = "2023-06-01"
 )
 
-// init 은 factory (llm.New) 에서 본 provider 를 사용할 수 있게 등록합니다 (이슈 #140).
+// init 은 factory (llm.New) 에서 본 provider 를 사용할 수 있게 등록합니다.
 //
 // "anthropic" 외 별칭 "claude" 도 함께 등록 — 사용자가 모델 이름으로 자연스럽게 호출 가능.
 func init() {

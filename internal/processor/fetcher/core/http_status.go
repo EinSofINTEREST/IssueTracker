@@ -5,7 +5,7 @@ import "net/http"
 // CheckHTTPStatus 는 HTTP 응답 상태 코드를 검사하여 4xx/5xx 에러를 적절한
 // CrawlerError 로 변환합니다. 정상(2xx/3xx) 인 경우 nil 을 반환합니다.
 //
-// 분기 정책 (이슈 #75 — fetcher 공통 추출):
+// 분기 정책:
 //   - 404 (Not Found)            → NewNotFoundError    (retry 불가)
 //   - 429 (Too Many Requests)    → NewRateLimitError   (retry 가능, code "HTTP_429")
 //   - 5xx (Server Error)         → NewHTTPServerError  (retry 가능)

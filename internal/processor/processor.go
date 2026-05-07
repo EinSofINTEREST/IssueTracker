@@ -6,7 +6,7 @@
 // (and optional auxiliary background goroutines) and is managed uniformly via Stage.
 //
 // 검증 인터페이스 (Validator / ValidationResult / ValidationError) 는
-// `internal/processor/validate/types/` 로 분리됨 (이슈 #206 후속) — sub-validator
+// `internal/processor/validate/types/` 로 분리됨 — sub-validator
 // (news / community) 가 import 하므로 leaf-only sub-package 에 두어 cycle 회피.
 package processor
 
@@ -14,7 +14,7 @@ import (
 	"context"
 )
 
-// Stage 는 파이프라인 단계의 공통 lifecycle 인터페이스입니다 (이슈 #206).
+// Stage 는 파이프라인 단계의 공통 lifecycle 인터페이스입니다.
 //
 // 각 stage 는 Kafka consumer + worker pool 을 보유하며 background goroutine 으로 동작.
 // `cmd/issuetracker/main.go` 는 `[]Stage` 로 모든 단계를 균일하게 Start/Stop 관리합니다.

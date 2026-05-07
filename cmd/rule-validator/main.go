@@ -1,4 +1,4 @@
-// rule-validator 는 parsing_rules 의 특정 row 를 의미 검증하는 수동 운영 CLI 입니다 (이슈 #257).
+// rule-validator 는 parsing_rules 의 특정 row 를 의미 검증하는 수동 운영 CLI 입니다.
 //
 // 사용법:
 //
@@ -82,7 +82,7 @@ func main() {
 
 	fmt.Printf("검증 결과: valid=%v\nreason: %s\n", res.Valid, res.Reason)
 
-	// CLI 는 수동 운영 도구 — API 오류(verr)도 실패로 처리하여 운영자가 인지 가능하도록 (이슈 #265 리뷰).
+	// CLI 는 수동 운영 도구 — API 오류(verr)도 실패로 처리하여 운영자가 인지 가능하도록.
 	// best-effort 통과는 자동 파이프라인(validator.Pool) 에서만 적용.
 	if verr != nil {
 		fmt.Printf("검증 API 오류: %v\n", verr)

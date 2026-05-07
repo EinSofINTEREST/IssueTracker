@@ -17,7 +17,7 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// pgParsingRuleRepository 는 pgx/v5 기반 ParsingRuleRepository 구현체입니다 (이슈 #100).
+// pgParsingRuleRepository 는 pgx/v5 기반 ParsingRuleRepository 구현체입니다.
 type pgParsingRuleRepository struct {
 	pool *pgxpool.Pool
 }
@@ -44,7 +44,7 @@ RETURNING id, created_at, updated_at
 // Insert 는 새 규칙을 저장합니다. 자연키 (source_name, host_pattern, path_pattern, target_type, version)
 // 충돌 시 storage.ErrDuplicate 를 반환합니다.
 //
-// path_pattern 이 비어있지 않으면 RE2 컴파일 검증 — 실패 시 storage.ErrInvalid (이슈 #173).
+// path_pattern 이 비어있지 않으면 RE2 컴파일 검증 — 실패 시 storage.ErrInvalid.
 // DB write 전 마지막 방어선 — Resolver 가 매 호출마다 컴파일 실패한 패턴을 스킵하도록 두기보다,
 // INSERT 시점에 거부하는 것이 운영 가시성 ↑ + DB 에 잘못된 row 진입 차단.
 //
@@ -90,7 +90,7 @@ RETURNING updated_at
 // Update 는 ID 로 규칙을 갱신합니다. 자연키 (source/host/path/type/version) 는 변경 불가 —
 // 규칙 진화는 새 row 를 INSERT 후 enabled flip 으로 표현 권장.
 //
-// PR #293 CodeRabbit Major: confidence 도 함께 갱신 — selectors 만 바뀌고 confidence 가 stale
+// confidence 도 함께 갱신 — selectors 만 바뀌고 confidence 가 stale
 // 로 남으면 하류 validator 가 잘못된 신뢰도로 판단. 호출자는 selectors 변경 시 confidence 도
 // 같이 채워서 전달 (또는 nil/빈 map 으로 reset).
 func (r *pgParsingRuleRepository) Update(ctx context.Context, rec *storage.ParsingRuleRecord) error {
@@ -114,7 +114,7 @@ func (r *pgParsingRuleRepository) Update(ctx context.Context, rec *storage.Parsi
 
 // sqlUpdatePathPattern 은 catch-all + llm-auto + enabled 상태 가드를 포함한 optimistic update 입니다.
 //
-// PR #191 CodeRabbit 피드백 — 단순 `WHERE id=$1` 은 lost-update 윈도우 발생:
+// 단순 `WHERE id=$1` 은 lost-update 윈도우 발생:
 //   - 다중 issuetracker 인스턴스에서 동시 정밀화 시 마지막 writer 만 적용
 //   - 운영자가 List 직후 rule 의 source_name / enabled / path_pattern 을 수동 변경했을 때 덮어씀
 //
@@ -130,7 +130,7 @@ WHERE id = $1
 RETURNING updated_at
 `
 
-// UpdatePathPattern 은 정밀화 워크플로 (이슈 #173 단계 4-2) 에서 호출 — path_pattern + description 갱신.
+// UpdatePathPattern 은 정밀화 워크플로 에서 호출 — path_pattern + description 갱신.
 //
 // pattern != "" 이면 RE2 컴파일 검증 (Insert 와 동일 정책) — 실패 시 storage.ErrInvalid.
 // rule 이 미존재하거나 catch-all + llm-auto + enabled 상태가 아니면 storage.ErrNotFound.
@@ -179,7 +179,7 @@ WHERE source_name  = $1
   AND version      = $5
 `
 
-// FindByNaturalKey 는 자연키로 단일 rule 을 조회합니다 (이슈 #274).
+// FindByNaturalKey 는 자연키로 단일 rule 을 조회합니다.
 //
 // Insert 의 unique constraint 와 동일한 키 — enabled 필터 없음.
 // 매칭 없으면 storage.ErrNotFound.
@@ -209,7 +209,7 @@ WHERE source_name = $1
   AND target_type  = $4
 `
 
-// InsertNextVersion 은 자연키의 max(version)+1 로 rec 을 INSERT 합니다 (이슈 #282).
+// InsertNextVersion 은 자연키의 max(version)+1 로 rec 을 INSERT 합니다.
 //
 // race window: MAX 조회와 INSERT 사이에 다른 인스턴스가 같은 version 을 INSERT 할 수 있음.
 // 자연키 unique 제약이 ErrDuplicate 로 반응 — 호출자가 retry 또는 흡수 책임.
@@ -230,10 +230,10 @@ func (r *pgParsingRuleRepository) InsertNextVersion(ctx context.Context, rec *st
 }
 
 // sqlHasAnyRule 은 (host_pattern, target_type) 에 대한 enabled / disabled 무관 존재 여부를
-// 1 row 로 반환합니다 (이슈 #287).
+// 1 row 로 반환합니다.
 //
 // 단일 aggregate query — host_pattern + target_type 인덱스 스캔 1회로 exists / has_enabled 동시 산출.
-// 매칭 row 없으면 COUNT(*)=0 / bool_or NULL → COALESCE 로 (FALSE, FALSE) 보장 (PR #291 Copilot 리뷰).
+// 매칭 row 없으면 COUNT(*)=0 / bool_or NULL → COALESCE 로 (FALSE, FALSE) 보장.
 const sqlHasAnyRule = `
 SELECT
   COUNT(*) > 0                        AS exists_any,
@@ -242,7 +242,7 @@ FROM parsing_rules
 WHERE host_pattern=$1 AND target_type=$2
 `
 
-// HasAnyRule 은 (host_pattern, target_type) 룰 존재 여부 + enabled 여부를 1 round-trip 으로 반환합니다 (이슈 #287).
+// HasAnyRule 은 (host_pattern, target_type) 룰 존재 여부 + enabled 여부를 1 round-trip 으로 반환합니다.
 //
 // FindActiveCandidates 와 달리 enabled 필터 없음 — disabled 룰도 \"존재함\" 으로 카운트.
 // 결과는 (exists, hasEnabled).
@@ -255,7 +255,7 @@ func (r *pgParsingRuleRepository) HasAnyRule(ctx context.Context, hostPattern st
 	return exists, hasEnabled, nil
 }
 
-// sqlFindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 후보 슬라이스로 반환합니다 (이슈 #173).
+// sqlFindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 후보 슬라이스로 반환합니다.
 //
 // 정렬:
 //   - LENGTH(path_pattern) DESC : 더 구체적인 (긴) regex 패턴 우선 (path_pattern=” 은 길이 0 으로 마지막)
@@ -271,7 +271,7 @@ ORDER BY LENGTH(path_pattern) DESC, version DESC
 
 // FindActive 는 host + target_type 매칭 활성 규칙 1건을 반환합니다 (후방 호환).
 //
-// Deprecated (이슈 #173): path_pattern 도입 후 후보 슬라이스를 받아 application 측에서 path 매칭하는
+// Deprecated: path_pattern 도입 후 후보 슬라이스를 받아 application 측에서 path 매칭하는
 // FindActiveCandidates 사용 권장. 본 메소드는 호출자 호환을 위해 유지 — 내부적으로 후보 슬라이스의
 // 첫 항목 (가장 구체적 또는 최신) 을 반환. ErrNotFound 시 storage.ErrNotFound.
 func (r *pgParsingRuleRepository) FindActive(ctx context.Context, host string, targetType storage.TargetType) (*storage.ParsingRuleRecord, error) {
@@ -286,7 +286,7 @@ func (r *pgParsingRuleRepository) FindActive(ctx context.Context, host string, t
 }
 
 // FindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 LENGTH(path_pattern) DESC,
-// version DESC 정렬로 반환합니다 (이슈 #173).
+// version DESC 정렬로 반환합니다.
 //
 // 매칭 없으면 빈 슬라이스 + nil 에러 (호출자가 빈 슬라이스로 분기).
 func (r *pgParsingRuleRepository) FindActiveCandidates(ctx context.Context, host string, targetType storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
@@ -377,7 +377,7 @@ func (r *pgParsingRuleRepository) Delete(ctx context.Context, id int64) error {
 }
 
 // scanParsingRule 은 Row/Rows 에서 ParsingRuleRecord 를 스캔합니다.
-// selectors / confidence 는 raw JSONB → application struct 로 unmarshal (이슈 #283).
+// selectors / confidence 는 raw JSONB → application struct 로 unmarshal.
 func scanParsingRule(s scanner) (*storage.ParsingRuleRecord, error) {
 	rec := &storage.ParsingRuleRecord{}
 	var selectorsRaw, confidenceRaw []byte
@@ -402,7 +402,7 @@ func scanParsingRule(s scanner) (*storage.ParsingRuleRecord, error) {
 	return rec, nil
 }
 
-// marshalConfidence 는 Confidence map 을 JSONB byte 로 직렬화합니다 (이슈 #283).
+// marshalConfidence 는 Confidence map 을 JSONB byte 로 직렬화합니다.
 //
 // nil 또는 빈 map 은 "{}" 로 직렬화 — JSONB NOT NULL 제약 충족 + scan 시 빈 map 으로 복원.
 func marshalConfidence(c map[string]storage.FieldConfidence) ([]byte, error) {

@@ -53,7 +53,7 @@ func (g *PatternGuard) Allow(url string) (bool, string) {
 // defaultPatterns 는 도메인 디폴트 차단 패턴입니다 (unexported — 외부 변경 차단).
 //
 // 정책 근거:
-//   - "/rss" : RSS 피드 URL 일괄 차단 (이슈 #119 의 CNN RSS 잔존 사고 대응).
+//   - "/rss" : RSS 피드 URL 일괄 차단.
 //     pkg/links 의 defaultExcludePatterns 와 동일 패턴.
 //   - "mailto:" / "tel:" : 비-HTTP 스킴은 외부 fetch 대상이 아님.
 //   - "javascript:" : 클라이언트 사이드 코드 — fetch 의미 없음.

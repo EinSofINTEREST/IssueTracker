@@ -1,4 +1,4 @@
-// Package fetcher 는 fetcher 단계의 processor.Stage 래퍼를 제공합니다 (이슈 #206).
+// Package fetcher 는 fetcher 단계의 processor.Stage 래퍼를 제공합니다.
 //
 // 디렉토리 정렬상 본 파일은 internal/processor/fetcher/ 의 entry-point — 하위 패키지
 // (core / handler / domain / implementation / rate_limiter / worker) 의 wiring 결과를
@@ -25,7 +25,7 @@ type Stage struct {
 }
 
 // NewStage 는 wired PoolManager 를 받아 fetcher.Stage 를 반환합니다.
-// manager 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+// manager 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
 func NewStage(manager *worker.PoolManager) (*Stage, error) {
 	if manager == nil {
 		return nil, errors.New("fetcher: NewStage requires non-nil PoolManager")

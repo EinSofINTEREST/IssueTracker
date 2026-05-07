@@ -15,10 +15,10 @@ const (
 
 	// DefaultStaleRawTTL: parser worker 가 처리하지 못한 채 남은 raw_contents row 의 보존 기간.
 	//
-	// 정책 의도 (이슈 #134):
+	// 정책 의도:
 	//   - 정상 흐름에서는 parser worker 가 즉시 Delete 하므로 raw 가 누적되지 않음
 	//   - 잔존하는 row 는 (1) parser crash, (2) rule.Error 로 잔존, (3) LLM 재처리 대기 윈도우
-	//   - LLM 자동 rule 생성 (이슈 #149) 후 cleanup 이전에 reprocess 가능해야 의미 있음
+	//   - LLM 자동 rule 생성 후 cleanup 이전에 reprocess 가능해야 의미 있음
 	//   - 기본 1시간 — LLM rule 생성 + 재처리에 충분, 폭주 시 디스크 보호
 	DefaultStaleRawTTL = 1 * time.Hour
 )
@@ -32,12 +32,12 @@ type CleanupConfig struct {
 }
 
 // RawContentCleaner 는 parser worker 가 처리하지 못한 채 잔존한 raw_contents row 를
-// 주기적으로 정리하는 안전망 goroutine 입니다 (이슈 #134).
+// 주기적으로 정리하는 안전망 goroutine 입니다.
 //
 // 정상 흐름에서는 parser worker 가 처리 직후 raw 를 삭제하므로 본 cleaner 의 동작은 거의 없음.
 // row 가 남는 케이스:
 //   - parser worker crash (Delete 호출 전)
-//   - rule.Error 로 raw 잔존 (LLM 재처리 윈도우 — 이슈 #149)
+//   - rule.Error 로 raw 잔존 (LLM 재처리 윈도우)
 //   - 일시적 DB 에러로 Delete 실패
 //
 // StaleTTL 보다 오래된 row 는 LLM 재처리에 더 이상 의미 없다고 판단하여 정리.

@@ -2,8 +2,8 @@ package core
 
 import "context"
 
-// 이슈 #229 — KafkaConsumerPool 의 worker goroutine 별 인덱스를 ctx 로 전달하기 위한 helper.
-// ChromedpJobHandler 가 per-worker Semaphore 슬롯을 lookup 하는 데 사용. 이슈 #230 에서
+// KafkaConsumerPool 의 worker goroutine 별 인덱스를 ctx 로 전달하기 위한 helper.
+// ChromedpJobHandler 가 per-worker Semaphore 슬롯을 lookup 하는 데 사용.
 // general.ChainHandler 의 chromedpChains slice lookup 에도 동일 키 재사용 — 이를 위해
 // worker 패키지 외부 (사이클 없는 core) 에 위치.
 //

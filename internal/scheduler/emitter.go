@@ -11,19 +11,19 @@ import (
 	"issuetracker/pkg/queue"
 )
 
-// ErrEmitSkipped 는 PipelineGuard 가 \"이미 in-pipeline\" 으로 판단해 emit 을 건너뛴 경우 반환됩니다 (이슈 #285).
+// ErrEmitSkipped 는 PipelineGuard 가 \"이미 in-pipeline\" 으로 판단해 emit 을 건너뛴 경우 반환됩니다.
 //
 // 호출자는 errors.Is(err, ErrEmitSkipped) 로 분기하여 \"failed to publish\" / \"scheduled\" 로그를
-// 모두 생략 — 실제로 발행되지 않은 job 이 발행된 것처럼 보이는 misleading 로그 회피 (PR #286 리뷰).
+// 모두 생략 — 실제로 발행되지 않은 job 이 발행된 것처럼 보이는 misleading 로그 회피.
 var ErrEmitSkipped = errors.New("emit skipped — url already in pipeline")
 
-// PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 체크하는 인터페이스입니다 (이슈 #285).
+// PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 체크하는 인터페이스입니다.
 //
 // emitter 가 internal/locks 의 전체 surface 가 아닌 필요한 메소드만 노출 — interface segregation.
 // locks.PipelineGuard 는 구조적 타이핑으로 본 인터페이스 만족.
 //
 // Release: CheckAndAcquire 가 marker 를 잡았으나 후속 producer.Publish 가 실패한 경우 marker 를
-// 즉시 해제 — 다음 retry 가 silent skip 으로 잃어버리지 않도록 (PR #286 CodeRabbit 리뷰).
+// 즉시 해제 — 다음 retry 가 silent skip 으로 잃어버리지 않도록.
 type PipelineGuard interface {
 	CheckAndAcquire(ctx context.Context, url string, targetType core.TargetType) (bool, error)
 	Release(ctx context.Context, url string) error
@@ -33,7 +33,7 @@ type PipelineGuard interface {
 // ScheduleEntry에 이미 결정된 Priority를 그대로 사용하여 Kafka crawl 토픽에 직접 발행합니다.
 // 우선순위 재결정이 필요한 체이닝 발행은 internal/publisher 패키지를 사용하세요.
 //
-// PipelineGuard (이슈 #285): SetGuard 로 주입 시 Emit 직전에 CheckAndAcquire 호출 — 같은 URL 의
+// PipelineGuard: SetGuard 로 주입 시 Emit 직전에 CheckAndAcquire 호출 — 같은 URL 의
 // cycle 이 진행 중이면 silent skip. Scheduler 의 정기 갱신 의도는 보존 (다음 주기 자연 진입).
 // 미주입 (nil) 이면 가드 비활성 (기존 동작 유지).
 type JobEmitter struct {
@@ -48,11 +48,11 @@ func NewJobEmitter(producer queue.Producer, log *logger.Logger) *JobEmitter {
 	return &JobEmitter{producer: producer, log: log}
 }
 
-// SetGuard 는 PipelineGuard 를 주입합니다 (이슈 #285).
+// SetGuard 는 PipelineGuard 를 주입합니다.
 // nil 주입 시 가드 비활성. Emit 호출 도중 변경하지 말 것 (race) — wiring 단계에서 1회.
 func (e *JobEmitter) SetGuard(g PipelineGuard) { e.guard = g }
 
-// SetNormalizer 는 guard 호출 전 URL 정규화에 사용할 Normalizer 를 주입합니다 (PR #286 gemini 리뷰).
+// SetNormalizer 는 guard 호출 전 URL 정규화에 사용할 Normalizer 를 주입합니다.
 //
 // publisher 가 SetNormalizer 로 사용하는 것과 동일 normalizer 를 공유해야 marker 키가 일치 —
 // 같은 logical URL 이 다른 입구 (scheduler / publisher) 에서 다른 Redis 키를 갖지 않도록.
@@ -64,7 +64,7 @@ func (e *JobEmitter) SetNormalizer(n *links.Normalizer) { e.normalizer = n }
 // PipelineGuard 가 주입되어 있고 같은 URL 의 cycle 이 진행 중이면 (acquired=false) silent skip
 // (debug 로그 + nil 반환). guard 조회 실패는 fail-open (warn 로그 + publish 진행).
 func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
-	// guard 키 일관성 (PR #286 gemini): publisher 도 동일 normalizer 적용 후 CheckAndAcquire 함.
+	// guard 키 일관성: publisher 도 동일 normalizer 적용 후 CheckAndAcquire 함.
 	// scheduler 에서도 같은 정규형으로 marker 잡아야 동일 URL 이 두 입구에서 같은 키 사용.
 	// 정규화 실패는 fail-open — 원본으로 fallback (정규화 자체 장애가 emit 차단 회피).
 	guardURL := job.Target.URL
@@ -73,7 +73,7 @@ func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 			guardURL = normalized
 		}
 	}
-	guardAcquired := false // publish 실패 시 release 호출 여부 추적 (PR #286 CodeRabbit 리뷰)
+	guardAcquired := false // publish 실패 시 release 호출 여부 추적
 
 	if e.guard != nil {
 		acquired, gerr := e.guard.CheckAndAcquire(ctx, guardURL, job.Target.Type)
@@ -116,7 +116,7 @@ func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 
 	if err := e.producer.Publish(ctx, msg); err != nil {
 		// publish 실패 시 marker 즉시 해제 — 다음 retry 가 false acquired 로 silent skip 되지 않도록
-		// (PR #286 CodeRabbit 리뷰).
+		//.
 		e.releaseGuardOnFailure(ctx, guardURL, guardAcquired, job)
 		return fmt.Errorf("emit job %s to %s: %w", job.ID, topic, err)
 	}
@@ -133,7 +133,7 @@ func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 }
 
 // releaseGuardOnFailure 는 CheckAndAcquire 가 marker 를 잡았으나 후속 marshal/publish 가 실패한 경우
-// marker 를 즉시 해제합니다 (PR #286 CodeRabbit 리뷰).
+// marker 를 즉시 해제합니다.
 //
 // guardAcquired=false 이거나 guard=nil 이면 noop. Release 실패는 non-fatal — TTL fallback 으로
 // 자연 해제 (Category 60s).

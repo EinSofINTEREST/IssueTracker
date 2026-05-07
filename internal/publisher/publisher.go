@@ -28,7 +28,7 @@ type PriorityResolver interface {
 }
 
 // IngestionLock 은 publish 직전에 URL 의 파이프라인 진입 marker 를 atomic 으로 set
-// 하는 최소 인터페이스입니다 (이슈 #178).
+// 하는 최소 인터페이스입니다.
 //
 // 의도적으로 작은 인터페이스 — Publisher 는 단지 "이 URL 의 진입 슬롯을 잡을 수 있는가?"
 // 만 알고 싶어합니다. worker 패키지의 IngestionLock 와 method signature 가 동일하지만
@@ -40,7 +40,7 @@ type IngestionLock interface {
 	Acquire(ctx context.Context, url string) (bool, error)
 }
 
-// PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 target type 별 정책으로 체크합니다 (이슈 #285).
+// PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 target type 별 정책으로 체크합니다.
 //
 // publisher 가 internal/locks 를 직접 import 하지 않도록 별도 정의 — 구조적 타이핑으로
 // locks.PipelineGuard 가 그대로 만족.
@@ -51,13 +51,13 @@ type PipelineGuard interface {
 // Publisher는 크롤된 페이지에서 발견된 URL을 새 CrawlJob으로 변환하여
 // 우선순위에 맞는 Kafka crawl 토픽에 발행합니다.
 //
-// URL 가드 (이슈 #119):
+// URL 가드:
 //   - SetGate 로 urlguard.Gate 를 설정하면 PublishBatch 직전에 urls 슬라이스를 필터링
 //   - 차단된 URL 은 발행에서 제외 (Gate 가 자체 WARN 로그)
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
 //   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — 워커 동시 실행 중 변경에도 race 없음
 //
-// URL dedup — Pipeline Guard (이슈 #285) / Ingestion Lock (이슈 #178):
+// URL dedup — Pipeline Guard / Ingestion Lock:
 //   - SetNormalizer 로 pkg/links.Normalizer 를 주입하면 publish 직전 모든 URL 정규화
 //     (정규화된 URL 이 marker 키 / Kafka payload / 다운스트림 dedup 모두에 일관)
 //   - SetPipelineGuard 우선 — 모든 target type 에 적용:
@@ -85,7 +85,7 @@ type ingestionLockRef struct {
 	l IngestionLock
 }
 
-// guardRef 는 PipelineGuard 의 atomic 교체용 wrapper 입니다 (이슈 #285).
+// guardRef 는 PipelineGuard 의 atomic 교체용 wrapper 입니다.
 type guardRef struct {
 	g PipelineGuard
 }
@@ -111,17 +111,17 @@ func (p *Publisher) SetGate(g *urlguard.Gate) {
 // nil 전달 시 정규화 비활성 (URL 원본 그대로 사용). atomic 으로 race-safe 한 swap 보장.
 //
 // 정규화는 Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두에 동일하게 적용되도록
-// Publisher 단에서 단일 책임으로 수행 (이슈 #178).
+// Publisher 단에서 단일 책임으로 수행.
 func (p *Publisher) SetNormalizer(n *links.Normalizer) {
 	p.normalizer.Store(n)
 }
 
 // SetIngestionLock 은 Publish 시 atomic SETNX 로 진입 marker 를 잡을 IngestionLock 을
-// 설정합니다 (이슈 #178). nil 전달 시 dedup 비활성 (기존 동작 유지).
+// 설정합니다. nil 전달 시 dedup 비활성 (기존 동작 유지).
 //
 // atomic 으로 race-safe 한 swap 보장.
 //
-// Deprecated (이슈 #285): SetPipelineGuard 사용 권장 — target type 별 TTL 정책 적용.
+// Deprecated: SetPipelineGuard 사용 권장 — target type 별 TTL 정책 적용.
 // 본 메소드는 backward compat 로 유지 — guard 미설정 시 fallback 으로 사용됨.
 func (p *Publisher) SetIngestionLock(l IngestionLock) {
 	if l == nil {
@@ -132,7 +132,7 @@ func (p *Publisher) SetIngestionLock(l IngestionLock) {
 }
 
 // SetPipelineGuard 는 publish 진입 시 target type 별 정책으로 marker 를 잡을 PipelineGuard 를
-// 설정합니다 (이슈 #285).
+// 설정합니다.
 //
 // guard 가 설정되어 있으면 IngestionLock 보다 우선 — 모든 target type 에 적용 (Article 24h,
 // Category 단명 TTL). nil 전달 시 가드 비활성 — IngestionLock fallback (있으면).
@@ -157,7 +157,7 @@ func (p *Publisher) Publish(
 		return nil
 	}
 
-	// URL 정규화 (이슈 #178): publish 직전 단일 책임으로 정규화
+	// URL 정규화: publish 직전 단일 책임으로 정규화
 	// - Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두 동일 정규형 사용
 	// - 정규화 실패한 URL 은 통과 (fail-open) — 정규화 실패가 fetch 가능성을 차단하지 않도록
 	// - Normalizer 미설정 시 원본 그대로
@@ -168,7 +168,7 @@ func (p *Publisher) Publish(
 		}
 	}
 
-	// URL 가드 (이슈 #119): 차단된 URL 을 사전 필터링
+	// URL 가드: 차단된 URL 을 사전 필터링
 	// Gate 가 자체 WARN 로그 + url/reason/crawler/stage 필드 자동 부착
 	if g := p.gate.Load(); g != nil {
 		urls = g.Filter(urls, map[string]interface{}{
@@ -180,7 +180,7 @@ func (p *Publisher) Publish(
 		}
 	}
 
-	// Pipeline Guard (이슈 #285) / Ingestion Lock (이슈 #178):
+	// Pipeline Guard / Ingestion Lock:
 	// - PipelineGuard 우선 — target type 별 TTL 정책 (Article 24h / Category 단명)
 	// - IngestionLock fallback — Article 만 적용 (Category 우회) — backward compat
 	// - 둘 다 미설정 시 dedup 비활성
@@ -234,7 +234,7 @@ func (p *Publisher) Publish(
 	return nil
 }
 
-// normalizeURLs 는 입력 URL 슬라이스를 정규화하여 새 슬라이스로 반환합니다 (이슈 #178).
+// normalizeURLs 는 입력 URL 슬라이스를 정규화하여 새 슬라이스로 반환합니다.
 //
 // 정규화 실패한 URL 은 원본을 그대로 통과 (fail-open) + WARN 로그 — 정규화 자체가
 // fetch 가능성을 차단하지 않도록. 정규화 결과가 빈 문자열이면 결과에서 제외.
@@ -262,7 +262,7 @@ func (p *Publisher) normalizeURLs(urls []string, n *links.Normalizer, crawlerNam
 	return out
 }
 
-// acquireViaGuard 는 PipelineGuard 로 target type 별 TTL 정책을 적용하여 진입 marker 를 잡습니다 (이슈 #285).
+// acquireViaGuard 는 PipelineGuard 로 target type 별 TTL 정책을 적용하여 진입 marker 를 잡습니다.
 //
 // 동작 정책은 acquireIngestion 과 동일 — fail-open / ctx 취소 / 정규화 가정 등.
 // 차이점: lock.Acquire 대신 guard.CheckAndAcquire(targetType) 호출 — Category 는 단명 TTL 적용.
@@ -296,7 +296,7 @@ func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerN
 }
 
 // acquireIngestion 은 IngestionLock 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
-// 반환합니다 (이슈 #178).
+// 반환합니다.
 //
 //   - acquired=true  : 신규 진입 marker 획득 — 결과 슬라이스에 포함
 //   - acquired=false : 이미 다른 publisher 또는 재배달이 marker 점유 — DEBUG 로그 후 제외
@@ -309,7 +309,7 @@ func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerN
 //
 // 성능: crawler/stage sub-logger 를 루프 외부에서 1회 생성하여 재사용.
 //
-// Deprecated (이슈 #285): SetPipelineGuard 사용 시 acquireViaGuard 가 우선 — 본 메소드는
+// Deprecated: SetPipelineGuard 사용 시 acquireViaGuard 가 우선 — 본 메소드는
 // guard 미주입 환경의 backward compat fallback.
 func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionLock) []string {
 	out := make([]string, 0, len(urls))

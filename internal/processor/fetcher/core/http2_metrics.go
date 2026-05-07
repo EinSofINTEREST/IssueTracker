@@ -17,7 +17,7 @@ import (
 //	    log.Printf("%s: %d", errType, count)
 //	}
 //
-// 본 카운터는 이슈 #71 의 'received DATA after END_STREAM' 같은 protocol error 의
+// 본 카운터는 'received DATA after END_STREAM' 같은 protocol error 의
 // 재발 빈도 추적을 목표로 합니다. 빈도 추이가 충분히 누적되면 후속 단계
 // (ForceHTTP1 옵션화, 풀 제거 hook) 도입 여부를 결정합니다.
 type HTTP2ErrorCounter struct {

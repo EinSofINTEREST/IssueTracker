@@ -20,7 +20,7 @@ const (
 	DefaultIngestionLockTTL = 24 * time.Hour
 )
 
-// IngestionLock 은 URL 이 파이프라인에 진입한 상태를 marker 로 표시합니다 (이슈 #178).
+// IngestionLock 은 URL 이 파이프라인에 진입한 상태를 marker 로 표시합니다.
 //
 // 의도:
 //
@@ -39,7 +39,7 @@ type IngestionLock interface {
 	// 두 URL 이 다른 marker 를 갖지 않도록.
 	Acquire(ctx context.Context, url string) (acquired bool, err error)
 
-	// AcquireWithTTL 은 Acquire 와 동일하되 호출별 TTL 을 지정합니다 (이슈 #285).
+	// AcquireWithTTL 은 Acquire 와 동일하되 호출별 TTL 을 지정합니다.
 	//
 	// 용도: PipelineGuard 가 target type 에 따라 Article (24h) / Category (단명) 로 다른
 	// TTL 적용. ttl<=0 이면 default TTL fallback.
@@ -88,7 +88,7 @@ func (l *RedisIngestionLock) Acquire(ctx context.Context, url string) (bool, err
 	return l.locker.AcquireLock(ctx, ingestionKey(url), l.ttl)
 }
 
-// AcquireWithTTL 은 호출별 TTL 로 marker 를 set 시도합니다 (이슈 #285).
+// AcquireWithTTL 은 호출별 TTL 로 marker 를 set 시도합니다.
 //
 // ttl<=0 이면 RedisIngestionLock 의 default TTL 사용. nil receiver / nil locker 보호는 Acquire 와 동일.
 func (l *RedisIngestionLock) AcquireWithTTL(ctx context.Context, url string, ttl time.Duration) (bool, error) {

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TargetType 은 파싱 규칙이 적용될 페이지 종류입니다 (이슈 #100).
+// TargetType 은 파싱 규칙이 적용될 페이지 종류입니다.
 //
 // TargetType discriminates rules between article pages and list/category pages.
 type TargetType string
@@ -46,7 +46,7 @@ type FieldSelector struct {
 // page (단일 컨텐츠 페이지) 용 필드와 list (링크-허브 페이지) 용 필드가 한 struct 에
 // 함께 정의되지만, target_type 에 따라 사용되는 부분만 채워집니다 (JSONB nil 친화).
 //
-// 뉴스 / 블로그 / 제품 페이지 등 임의 웹페이지의 핵심 내용 추출에 일반화 (이슈 #100):
+// 뉴스 / 블로그 / 제품 페이지 등 임의 웹페이지의 핵심 내용 추출에 일반화:
 //   - Title       : 페이지 제목 (h1 등)
 //   - MainContent : 핵심 본문 (article body / blog post / product description ...)
 //   - Summary     : meta description 또는 별도 요약 영역
@@ -72,19 +72,19 @@ type SelectorMap struct {
 	ItemTitle     *FieldSelector `json:"item_title,omitempty"`
 	ItemSnippet   *FieldSelector `json:"item_snippet,omitempty"` // 짧은 요약/설명 (있을 때)
 
-	// LinkDiscovery (이슈 #139, #148): 페이지 전체 <a href> 스캔 + 정책 기반 필터 모드.
+	// LinkDiscovery: 페이지 전체 <a href> 스캔 + 정책 기반 필터 모드.
 	//
 	// 설정 시 ParseLinks 가 ItemContainer 경로 대신 full-page discovery 로 동작합니다 —
 	// 사이드바 / 추천 / 관련 기사 / 카테고리 메뉴 등 ItemContainer 가 놓치는 영역까지
 	// 같은 fetch 비용으로 발견. **nil 일 때만** 기존 ItemContainer 경로로 fallback —
 	// 객체가 채워져 있으면 ArticleURLPattern 이 빈 문자열이어도 discovery 모드 (all-pass).
 	//
-	// 권장 활용: 사이트 전체에서 모든 의미 있는 글을 발견하고자 할 때 (이슈 #100 도메인 일반화).
+	// 권장 활용: 사이트 전체에서 모든 의미 있는 글을 발견하고자 할 때.
 	// noise 는 ExcludePatterns + MaxLinksPerPage + 다운스트림 URL dedup / rate limiter 가 흡수.
 	LinkDiscovery *LinkDiscoveryConfig `json:"link_discovery,omitempty"`
 }
 
-// LinkDiscoveryConfig 는 full-page link discovery 모드의 설정입니다 (이슈 #139, #148).
+// LinkDiscoveryConfig 는 full-page link discovery 모드의 설정입니다.
 //
 // LinkDiscoveryConfig drives the rule-based full-page <a href> discovery, replacing
 // site-specific ItemContainer extraction with a generic policy-based filter.
@@ -111,7 +111,7 @@ type LinkDiscoveryConfig struct {
 
 	// MaxLinksPerPage: 한 페이지에서 발행할 최대 링크 수 (0 = 무제한).
 	//
-	// 우선순위 정책 (이슈 #148):
+	// 우선순위 정책:
 	//   1. same-origin (raw.URL host 와 동일) 링크는 cap 무시하고 모두 통과
 	//   2. cross-origin 은 잔여 슬롯 (cap - len(same)) 만큼 무작위 sample
 	//   3. 0 (무제한) 이면 same + cross 모두 통과
@@ -131,13 +131,13 @@ type ParsingRuleRecord struct {
 	ID          int64
 	SourceName  string     // "naver" / "cnn"
 	HostPattern string     // URL host 매칭 (예: "n.news.naver.com")
-	PathPattern string     // URL path regex (RE2). "" 면 모든 path 매칭 (이슈 #173 단계 1).
+	PathPattern string     // URL path regex (RE2). "" 면 모든 path 매칭.
 	TargetType  TargetType // "page" | "list"
 	Version     int        // 활성 row 안에서 같은 (source, host, path, type) 의 최신 버전
 	Enabled     bool
 	Selectors   SelectorMap // JSONB — application 측 struct 로 직렬화
 
-	// Confidence 는 필드별 selector 추출 신뢰도 metadata 입니다 (이슈 #283).
+	// Confidence 는 필드별 selector 추출 신뢰도 metadata 입니다.
 	//
 	// LLM 자동 생성 룰이 INSERT 시점에 각 selector 를 sample HTML 에 적용하여 hit_rate 계산.
 	// 하류 validator 는 본 metadata 로 host 별 차별화된 정책 적용 가능 (예: published_at hit_rate=0
@@ -151,7 +151,7 @@ type ParsingRuleRecord struct {
 	UpdatedAt   time.Time
 }
 
-// FieldConfidence 는 단일 필드의 추출 신뢰도 (이슈 #283).
+// FieldConfidence 는 단일 필드의 추출 신뢰도.
 //
 //   - HitRate     : 0.0~1.0 — sample 중 selector 가 매칭 + 유효 결과를 산출한 비율
 //   - SampleCount : 분모 — 신뢰도 계산에 사용된 sample 수 (단일 sample 환경은 1)
@@ -185,11 +185,11 @@ type ParsingRuleRepository interface {
 	// 갱신 가능 필드: Selectors, Enabled, Description (자연키는 변경 불가).
 	Update(ctx context.Context, r *ParsingRuleRecord) error
 
-	// UpdatePathPattern 은 정밀화 워크플로 (이슈 #173 단계 4-2) 에서 호출 — path_pattern + description 갱신.
+	// UpdatePathPattern 은 정밀화 워크플로 에서 호출 — path_pattern + description 갱신.
 	//
 	// pattern 이 비어있지 않으면 RE2 컴파일 검증 (Insert 와 동일 정책) — 실패 시 ErrInvalid.
 	//
-	// optimistic guard (PR #191 CodeRabbit 피드백): 대상 rule 이 여전히
+	// optimistic guard: 대상 rule 이 여전히
 	// (source_name='llm-auto' AND enabled=TRUE AND path_pattern='') 상태일 때만 적용.
 	// 가드 실패 또는 rule 미존재 시 ErrNotFound — 호출자가 lost-update 회피용으로 분기.
 	//
@@ -203,13 +203,13 @@ type ParsingRuleRepository interface {
 	// 같은 (host, type) 에 여러 활성 row 가 있다면 version DESC 순으로 첫 항목 반환.
 	// 매칭 없으면 ErrNotFound.
 	//
-	// Deprecated (이슈 #173): path_pattern 도입 후 후보 슬라이스를 한꺼번에 받아 application 측에서
+	// Deprecated: path_pattern 도입 후 후보 슬라이스를 한꺼번에 받아 application 측에서
 	// 매칭하는 FindActiveCandidates 사용 권장. 본 메소드는 후방 호환을 위해 유지 — 내부적으로
 	// FindActiveCandidates 의 첫 항목 (length DESC 정렬, '' 포함) 을 반환합니다.
 	FindActive(ctx context.Context, host string, targetType TargetType) (*ParsingRuleRecord, error)
 
 	// InsertNextVersion 은 (source_name, host_pattern, path_pattern, target_type) 자연키의 다음
-	// version 으로 rec 을 INSERT 합니다 (이슈 #282).
+	// version 으로 rec 을 INSERT 합니다.
 	//
 	// 사용처:
 	//   - Stale rule 재학습: 기존 v1 (catch-all enabled=true) 잔존 + 신규 v2 (정밀 / 갱신 selector)
@@ -225,7 +225,7 @@ type ParsingRuleRepository interface {
 	// rec.Version 은 입력 무관 (자동 계산). 성공 시 rec.ID / Version / CreatedAt / UpdatedAt 채워짐.
 	InsertNextVersion(ctx context.Context, r *ParsingRuleRecord) error
 
-	// HasAnyRule 은 (host_pattern, target_type) 에 대한 룰 존재 여부를 반환합니다 (이슈 #287).
+	// HasAnyRule 은 (host_pattern, target_type) 에 대한 룰 존재 여부를 반환합니다.
 	//
 	// FindActiveCandidates 와 달리 enabled 필터 없음 — disabled 룰도 \"존재함\" 으로 카운트.
 	//
@@ -239,7 +239,7 @@ type ParsingRuleRepository interface {
 	HasAnyRule(ctx context.Context, hostPattern string, targetType TargetType) (exists, hasEnabled bool, err error)
 
 	// FindByNaturalKey 는 자연키 (source_name, host_pattern, path_pattern, target_type, version)
-	// 로 단일 rule 을 조회합니다 (이슈 #274). enabled 필터 없음 — disabled 룰도 반환.
+	// 로 단일 rule 을 조회합니다. enabled 필터 없음 — disabled 룰도 반환.
 	//
 	// 용도: llmgen.Generator 가 Insert 전에 동일 자연키 룰의 존재 여부를 확인하여 LLM 호출을
 	// 회피하는 사전 lookup. Insert 시 ErrDuplicate 위반과 동일한 자연키를 검사합니다.
@@ -248,7 +248,7 @@ type ParsingRuleRepository interface {
 	FindByNaturalKey(ctx context.Context, sourceName, hostPattern, pathPattern string, targetType TargetType, version int) (*ParsingRuleRecord, error)
 
 	// FindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 LENGTH(path_pattern) DESC,
-	// version DESC 정렬로 반환합니다 (이슈 #173 단계 1).
+	// version DESC 정렬로 반환합니다.
 	//
 	// Resolver 가 반환된 슬라이스를 application 측에서 URL path 와 regex 매칭 — 첫 매칭 rule 채택.
 	// path_pattern='' 인 row 는 길이 0 으로 가장 마지막에 위치 (catch-all).

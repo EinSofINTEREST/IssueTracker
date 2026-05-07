@@ -5,7 +5,7 @@ import (
 	"errors"
 )
 
-// Semaphore 는 N 개의 동시 진입을 허용하는 counting semaphore 입니다 (이슈 #218).
+// Semaphore 는 N 개의 동시 진입을 허용하는 counting semaphore 입니다.
 //
 // chromedp worker pool 이 Chrome 인스턴스의 동시 navigation 수를 제한하기 위해 사용 — 같은
 // Chrome 의 URLLoader / ResourceScheduler 가 ERR_INSUFFICIENT_RESOURCES 로 거부되는 빈도를
@@ -19,7 +19,7 @@ type Semaphore interface {
 
 	// Release 는 슬롯 1개를 반납합니다. Acquire 와 1:1 매핑.
 	// 매칭 Acquire 없이 호출 시 ErrReleaseWithoutAcquire — 호출자가 contract 위반을 log/audit.
-	// (production panic 금지 정책 — 이슈 #208 / 04-error-handling.md.)
+	// (production panic 금지 정책 — 04-error-handling.md.)
 	Release() error
 
 	// Capacity 는 동시 보유 가능한 최대 슬롯 수를 반환합니다.
@@ -28,7 +28,7 @@ type Semaphore interface {
 
 // ErrReleaseWithoutAcquire 는 Release() 가 매칭 Acquire 없이 호출됐을 때 반환됩니다.
 //
-// production panic 금지 (이슈 #208) 에 따라 panic 대신 sentinel error — 호출자가 sentry / log 로
+// production panic 금지 에 따라 panic 대신 sentinel error — 호출자가 sentry / log 로
 // contract 위반 알림. 정상 흐름에서는 발생 안 함 (defer Release 패턴 사용).
 var ErrReleaseWithoutAcquire = errors.New("worker: release called without matching acquire")
 
@@ -40,7 +40,7 @@ type chanSemaphore struct {
 
 // NewSemaphore 는 capacity 만큼의 동시 진입을 허용하는 Semaphore 를 생성합니다.
 //
-// capacity <= 0 이면 error (이슈 #208 정책).
+// capacity <= 0 이면 error.
 func NewSemaphore(capacity int) (Semaphore, error) {
 	if capacity <= 0 {
 		return nil, errors.New("worker: semaphore requires positive capacity")
@@ -70,7 +70,7 @@ func (s *chanSemaphore) Acquire(ctx context.Context) error {
 // Release 는 슬롯 1개를 반납합니다 (Acquire 후 1:1 매핑).
 //
 // 매칭 Acquire 없이 호출되면 ErrReleaseWithoutAcquire 반환 — 호출자가 log 로 contract 위반
-// 알림. production panic 금지 (이슈 #208) 에 따라 panic 대신 error.
+// 알림. production panic 금지 에 따라 panic 대신 error.
 func (s *chanSemaphore) Release() error {
 	select {
 	case <-s.slots:

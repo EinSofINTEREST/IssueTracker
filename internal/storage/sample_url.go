@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// SampleURL 은 parsing_rule_sample_urls 테이블의 단일 행입니다 (이슈 #173 단계 4-1).
+// SampleURL 은 parsing_rule_sample_urls 테이블의 단일 행입니다.
 //
 // SampleURL represents a single accumulated sample URL for a parsing rule —
 // used by the progressive refinement workflow (path_pattern 추론).
@@ -22,7 +22,7 @@ type SampleURL struct {
 // trigger 미동작 / LLM_ENABLED=false 등으로 정밀화가 발생하지 않을 때 DB 폭증 방어.
 const SampleCapPerRule = 100
 
-// SampleURLRepository 는 parsing_rule_sample_urls 테이블에 대한 데이터 접근 인터페이스입니다 (이슈 #173 단계 4-1).
+// SampleURLRepository 는 parsing_rule_sample_urls 테이블에 대한 데이터 접근 인터페이스입니다.
 //
 // 모든 구현체는 goroutine-safe 해야 합니다.
 type SampleURLRepository interface {

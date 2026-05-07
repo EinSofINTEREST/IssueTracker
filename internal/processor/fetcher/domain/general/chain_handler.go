@@ -15,7 +15,7 @@ import (
 	"issuetracker/pkg/queue"
 )
 
-// ChainHandler 는 fetcher worker 의 책임을 담당하는 handler.Handler 어댑터입니다 (이슈 #134).
+// ChainHandler 는 fetcher worker 의 책임을 담당하는 handler.Handler 어댑터입니다.
 //
 // 분리 후 책임 (Claim Check 패턴):
 //  1. Chain (GoQuery / Browser) 으로 raw HTML fetch
@@ -26,13 +26,13 @@ import (
 // consumer group) 의 책임으로 이전됨. 본 핸들러는 nil Content slice 를 반환하여 worker pool 의
 // publishNormalized 단계를 스킵하도록 함.
 //
-// host 단위 fetcher 정책 (이슈 #175 단계 1):
+// host 단위 fetcher 정책:
 //   - Resolver 가 nil 이거나 룰 미등록 host: DefaultChain 사용 (gq → browser fallback)
 //   - 룰 = 'chromedp': ChromedpChains 사용 (browser only) — goquery 시도 skip
 //   - 룰 = 'goquery':  DefaultChain 사용 (gq → browser fallback) — 현재로선 default 와 동일.
 //     단계 3 의 자동 downgrade 정책이 도입되면 GoQueryOnly chain 으로 분기 가능.
 //
-// 이슈 #230 — ChromedpChains 를 worker_id 별 slice 로 분리하여 worker:Chrome 1:1 매핑 활성화:
+// ChromedpChains 를 worker_id 별 slice 로 분리하여 worker:Chrome 1:1 매핑 활성화:
 //   - 각 chain 인스턴스는 자기 전용 RemoteURL 의 ChromedpCrawler 를 보유
 //   - HandleChromedpOnly 가 ctx 의 worker_id 로 자기 chain 선택 → worker:Chrome 격리
 //   - chain 길이는 chromedp pool 의 WorkerCount 와 일치 (main.go wiring 시 보장)
@@ -41,11 +41,11 @@ import (
 //   - parser 가 무거워져도 (chromedp 가 큰 HTML 처리, LLM 호출 등) fetcher worker 슬롯 점유 X
 //   - parser worker 인스턴스 수를 fetcher 와 독립으로 스케일 가능
 //   - raw HTML 이 DB 에 보존되어 worker crash 시에도 복구 가능
-//   - 파싱 실패한 raw 가 잔존 → LLM 으로 새 rule 생성 (이슈 #149) 후 재처리 가능
+//   - 파싱 실패한 raw 가 잔존 → LLM 으로 새 rule 생성 후 재처리 가능
 type ChainHandler struct {
 	Crawler        SourceCrawler
 	DefaultChain   Handler       // gq → browser (현재 동작 — 룰 미등록 host 의 기본)
-	ChromedpChains []Handler     // worker_id 별 browser only chain (이슈 #230)
+	ChromedpChains []Handler     // worker_id 별 browser only chain
 	Resolver       rule.Resolver // optional. nil 이면 항상 DefaultChain 사용
 	RawSvc         service.RawContentService
 	Producer       queue.Producer
@@ -57,7 +57,7 @@ type ChainHandler struct {
 // ChromedpChains 가 nil/empty 이면 룰 = 'chromedp' 매칭이어도 DefaultChain fallback (warn 로그).
 // Resolver 가 nil 이면 룰 조회 없이 항상 DefaultChain — 기존 동작 100% 보존.
 //
-// 이슈 #230 — chromedpChains 길이는 chromedp pool 의 WorkerCount 와 일치해야 함 (호출자 책임).
+// chromedpChains 길이는 chromedp pool 의 WorkerCount 와 일치해야 함 (호출자 책임).
 // 단일 Chrome 운영 호환 모드 (sub-issue #229 머지 직후 시점) 에서는 길이 1 의 slice 로 호출.
 func NewChainHandler(
 	crawler SourceCrawler,
@@ -120,7 +120,7 @@ func (h *ChainHandler) resolveChromedpChain(ctx context.Context) Handler {
 //   - isChromedp=true: 호출자 (Handle) 가 republish 분기로 진입 (chain 자체는 사용 안 함)
 //   - isChromedp=false: chain 직접 호출
 //
-// 이슈 #230 — ChromedpChains 가 worker_id 별 slice 가 되면서 selectChain 단계에서는 어느 슬롯을
+// ChromedpChains 가 worker_id 별 slice 가 되면서 selectChain 단계에서는 어느 슬롯을
 // 쓸지 결정하지 않음 (republish 후 ChromedpJobHandler 가 slot 선택). Handle 의 분기 식별을
 // chain 포인터 비교 대신 isChromedp 플래그로 안전하게 처리.
 //
@@ -205,11 +205,11 @@ func extractHost(rawURL string) string {
 //
 // 항상 nil Content slice 를 반환 — 파싱은 parser worker 가 TopicFetched 를 consume 하여 처리.
 //
-// 이슈 #218: chromedp 처리는 별도 worker pool 로 격리. selectChain 결과가 chromedp 매칭이거나
+// chromedp 처리는 별도 worker pool 로 격리. selectChain 결과가 chromedp 매칭이거나
 // DefaultChain 의 GoQuery 가 lazy detect 시 sentinel 반환하면 직접 호출 대신 TopicCrawlChromedp
 // 로 republish — Chrome 자원 동시 호출량을 chromedp pool 의 semaphore 로 제어.
 //
-// 이슈 #230 — selectChain 이 (chain, isChromedp) tuple 반환. ChromedpChains slice 모델로
+// selectChain 이 (chain, isChromedp) tuple 반환. ChromedpChains slice 모델로
 // 변경되어 chain 포인터 비교가 부적합 → isChromedp 플래그로 분기.
 func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
 	if h.DefaultChain == nil || h.Log == nil || h.RawSvc == nil || h.Producer == nil {
@@ -218,7 +218,7 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 
 	chain, isChromedp := h.selectChain(ctx, job)
 
-	// 이슈 #218: chromedp 매칭 (force_fetcher 또는 Resolver 룰) → 직접 호출 안 하고 republish.
+	// chromedp 매칭 (force_fetcher 또는 Resolver 룰) → 직접 호출 안 하고 republish.
 	if isChromedp {
 		if err := h.republishToChromedpQueue(ctx, job); err != nil {
 			return nil, fmt.Errorf("republish to chromedp queue for %s: %w", job.Target.URL, err)
@@ -228,7 +228,7 @@ func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.
 
 	raw, err := chain.Handle(ctx, job)
 	if err != nil {
-		// 이슈 #218: GoQuery 의 lazy detect sentinel — chromedp pool 로 republish 후 정상 종료.
+		// GoQuery 의 lazy detect sentinel — chromedp pool 로 republish 후 정상 종료.
 		if errors.Is(err, ErrLazyContentNeedsBrowser) {
 			if pubErr := h.republishToChromedpQueue(ctx, job); pubErr != nil {
 				return nil, fmt.Errorf("republish to chromedp queue (lazy detect) for %s: %w", job.Target.URL, pubErr)
@@ -279,7 +279,7 @@ func (h *ChainHandler) processFetchedRaw(ctx context.Context, job *core.CrawlJob
 	return nil
 }
 
-// HandleChromedpOnly 는 ChromedpChains 중 worker_id 슬롯을 호출하여 chromedp 단독 fetch 를 수행합니다 (이슈 #218, #230).
+// HandleChromedpOnly 는 ChromedpChains 중 worker_id 슬롯을 호출하여 chromedp 단독 fetch 를 수행합니다.
 //
 // chromedp pool 의 ChromedpJobHandler 가 같은 ChainHandler 인스턴스를 Registry 에서 lookup 하여
 // 본 메소드 호출 — Resolver / force_fetcher / republish 분기 skip 하고 ctx 의 worker_id 로
@@ -313,7 +313,7 @@ func (h *ChainHandler) HandleChromedpOnly(ctx context.Context, job *core.CrawlJo
 	return nil, h.processFetchedRaw(ctx, job, raw, "chromedp")
 }
 
-// republishToChromedpQueue 는 본 job 을 TopicCrawlChromedp 로 다시 발행합니다 (이슈 #218).
+// republishToChromedpQueue 는 본 job 을 TopicCrawlChromedp 로 다시 발행합니다.
 //
 // chromedp 처리 책임을 본 worker (goquery pool) 에서 분리 — 별도 chromedp worker pool 이 receive
 // 후 semaphore 로 Chrome 자원 보호. force_fetcher metadata + token 은 보존하여 chromedp pool 의

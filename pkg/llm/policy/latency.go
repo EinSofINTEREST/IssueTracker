@@ -11,7 +11,7 @@ import (
 
 // LatencyWeighted orders candidates by ascending observed latency (lower is better).
 //
-// LatencyWeighted 는 동적 EMA latency 가 낮은 후보를 우선합니다 (이슈 #144 Phase 2.B).
+// LatencyWeighted 는 동적 EMA latency 가 낮은 후보를 우선합니다.
 //
 // Latency source 우선순위:
 //  1. MeasuredProvider.Stats().LatencyMs() (실측 EMA) — 호출 이력이 있으면 본 값을 사용

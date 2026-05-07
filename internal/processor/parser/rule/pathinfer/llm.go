@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// LLMClient 는 InferLLM 이 사용하는 최소 LLM 호출 인터페이스입니다 (이슈 #173 단계 3).
+// LLMClient 는 InferLLM 이 사용하는 최소 LLM 호출 인터페이스입니다.
 //
 // pathinfer 가 pkg/llm 을 직접 import 하지 않도록 작은 abstraction —
 // 호출자 (단계 4 의 hybrid 흐름) 가 pkg/llm.Provider 위에 adapter 를 만들어 주입합니다.
@@ -34,7 +34,7 @@ type LLMSamples struct {
 // llmSystemPrompt 는 모든 InferLLM 호출에 공통으로 사용되는 system 프롬프트입니다.
 //
 // 응답 형식 강제 — markdown 펜스 / prose 없이 단일 RE2 패턴 라인만 반환하도록 지시.
-// 본 PR scope: pathinfer 패키지 안 inline 상수. 이슈 #171 (프롬프트 외부 파일) 머지 후 그곳으로 이전 가능.
+// pathinfer 패키지 안 inline 상수. 그곳으로 이전 가능.
 const llmSystemPrompt = `You are an expert at writing URL path regular expressions.
 
 Strict rules:
@@ -56,7 +56,7 @@ Non-article URLs (negative — must NOT match):
 
 Respond with ONLY the regex pattern.`
 
-// InferLLM 은 LLMClient 를 사용해 path_pattern regex 를 추론합니다 (이슈 #173 단계 3).
+// InferLLM 은 LLMClient 를 사용해 path_pattern regex 를 추론합니다.
 //
 // 흐름:
 //  1. samples.Articles 가 cfg.minSamples 미만이면 ("", false, nil) — pathinfer.InferHeuristic 과 동일 정책
@@ -123,11 +123,11 @@ func joinOrNone(items []string) string {
 	return b.String()
 }
 
-// extractPattern 은 LLM 응답에서 첫 번째 RE2 패턴 라인을 추출합니다 (이슈 #173 단계 3).
+// extractPattern 은 LLM 응답에서 첫 번째 RE2 패턴 라인을 추출합니다.
 //
 // 처리 우선순위:
 //  1. markdown 코드 펜스 (```...```) 가 응답 어느 위치에든 있으면 → 펜스 내부 첫 비어있지 않은 라인 우선 사용
-//     (LLM 이 prose 먼저 출력 후 펜스로 regex 를 감싸는 케이스 cover — PR #187 CodeRabbit 피드백)
+//     (LLM 이 prose 먼저 출력 후 펜스로 regex 를 감싸는 케이스 cover)
 //  2. 펜스 없으면 응답 첫 비어있지 않은 라인 사용
 //  3. 라인 trim (whitespace 제거)
 //  4. 빈 결과 → ""
@@ -144,7 +144,7 @@ func extractPattern(resp string) string {
 			line := strings.TrimSpace(raw)
 			if strings.HasPrefix(line, "```") {
 				// single-line fence — ```pattern``` 형식 — 안의 패턴을 즉시 추출
-				// (PR #187 gemini 피드백, ``` 가 한 라인에 양쪽으로 있는 경우).
+				// (``` 가 한 라인에 양쪽으로 있는 경우).
 				if strings.HasSuffix(line, "```") && len(line) > 6 {
 					if inner := strings.TrimSpace(line[3 : len(line)-3]); inner != "" {
 						return inner
@@ -169,7 +169,7 @@ func extractPattern(resp string) string {
 	return ""
 }
 
-// validateLLMResult 는 LLM 응답 regex 가 모든 검증 단계를 통과하는지 확인합니다 (이슈 #173 단계 3).
+// validateLLMResult 는 LLM 응답 regex 가 모든 검증 단계를 통과하는지 확인합니다.
 //
 // 검증 단계:
 //  1. RE2 컴파일 가능

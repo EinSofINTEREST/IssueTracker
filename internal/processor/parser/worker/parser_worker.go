@@ -1,4 +1,4 @@
-// Package worker 는 fetcher 와 분리된 parser worker 를 제공합니다 (이슈 #134).
+// Package worker 는 fetcher 와 분리된 parser worker 를 제공합니다.
 //
 // Package worker provides a parser worker decoupled from fetcher workers.
 //
@@ -12,7 +12,7 @@
 //
 // 실패 정책:
 //   - rule.Error (parse_failure / empty_selector / no_rule): raw 잔존 + Kafka commit (재시도 X)
-//     → LLM 으로 새 rule 생성 (이슈 #149) 후 cleanup cron 이전에 재처리 가능
+//     → LLM 으로 새 rule 생성 후 cleanup cron 이전에 재처리 가능
 //   - 기타 transient 에러: commit 안 함 → Kafka 재배달 → 재시도
 package worker
 
@@ -57,42 +57,42 @@ type ParserWorker struct {
 	contentSvc service.ContentService
 	publisher  general.JobPublisher
 	parser     *rule.Parser
-	resolver   *rule.Resolver              // 이슈 #173 단계 4-1 — sample 누적 시 매칭된 rule lookup
+	resolver   *rule.Resolver              // sample 누적 시 매칭된 rule lookup
 	sampleSvc  storage.SampleURLRepository // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
 	procLock   locks.ProcessingLock        // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
 	llmGen     *llmgen.Generator           // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 
-	// failureCounter: host 단위 fetcher 실패 카운터 (이슈 #220).
+	// failureCounter: host 단위 fetcher 실패 카운터.
 	// nil 시 noopFailureCounter 로 fallback — 카운팅 자체 비활성.
 	// rule.ErrParseFailure / rule.ErrEmptySelector 또는 빈본문 발생 시 Record 호출.
 	failureCounter fetcherRule.FailureCounter
 
-	// rawIDTracker: 같은 실패 시점에 host 별 raw_id 추적 (이슈 #221).
+	// rawIDTracker: 같은 실패 시점에 host 별 raw_id 추적.
 	// nil 시 noopRawIDTracker — republish 비활성 (단계 3 trigger 가 빈 raw_id 받음).
 	rawIDTracker fetcherRule.RawIDTracker
 
-	// upgrader: 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish 트리거 (이슈 #221).
+	// upgrader: 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish 트리거.
 	// nil 허용 — nil 이면 thresholdReached 신호 발신만 (자동 전환 비활성).
 	upgrader *fetcherRule.Upgrader
 
 	emptyBodyTitleMin   int
 	emptyBodyContentMin int
 
-	// guard: PipelineGuard — Category cycle 종료 시 Release 호출용 (이슈 #285).
+	// guard: PipelineGuard — Category cycle 종료 시 Release 호출용.
 	// nil 허용 — nil 이면 release skip (TTL fallback 으로 자동 회수).
 	guard PipelineGuard
 
-	// blacklist: page-parse 블랙리스트 Matcher (이슈 #295).
+	// blacklist: page-parse 블랙리스트 Matcher.
 	// nil 허용 — nil 이면 차단 비활성 (모든 카테고리 링크가 그대로 발행).
 	// processCategoryPage 의 publisher.Publish 직전에 Filter 호출.
 	blacklist *rule.BlacklistMatcher
 
-	// staleCounter: stale rule 재학습 트리거 카운터 (이슈 #282).
+	// staleCounter: stale rule 재학습 트리거 카운터.
 	// nil 허용 — nil 이면 stale 재학습 비활성 (chromedp 자동 전환만 동작).
 	// ErrParseFailure / ErrEmptySelector 발생 시 Record 호출, threshold 도달 시
 	// llmGen.EnqueueStale 트리거.
 	staleCounter llmgen.StaleCounter
-	// staleThreshold: window 내 stale failure 임계값 (이슈 #282, PR #294 CodeRabbit 피드백).
+	// staleThreshold: window 내 stale failure 임계값.
 	// 임계 도달 첫 회 (count == staleThreshold) 만 enqueue — count > threshold 인 후속 호출은
 	// 카운트만 누적하고 enqueue 회피 (window 내 동일 host 의 version churn / 비용 spike 방지).
 	staleThreshold int
@@ -103,7 +103,7 @@ type ParserWorker struct {
 	wg sync.WaitGroup
 }
 
-// PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 최소 인터페이스입니다 (이슈 #285).
+// PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 최소 인터페이스입니다.
 //
 // parser_worker 는 release 만 필요하므로 locks.PipelineGuard 의 전체 surface 가 아닌 Release 만
 // 노출 — interface segregation 원칙. locks.PipelineGuard 는 구조적 타이핑으로 본 인터페이스 만족.
@@ -115,15 +115,15 @@ type PipelineGuard interface {
 //
 //   - publisher 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 건너뜀 (이런 모드는 보통 운영 금지)
 //   - procLock 은 nil 허용 — nil 이면 NoopProcessingLock 으로 fallback (단일 인스턴스 환경에서 dedup 비활성)
-//   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성, 이슈 #149)
-//   - resolver / sampleSvc 는 nil 허용 — nil 이면 sample 누적 skip (이슈 #173 단계 4-1, 정밀화 워크플로 비활성)
-//   - failureCounter 는 nil 허용 — nil 이면 NoopFailureCounter 로 fallback (이슈 #220 카운팅 비활성)
-//   - rawIDTracker 는 nil 허용 — nil 이면 NoopRawIDTracker 로 fallback (이슈 #221 republish 비활성)
+//   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
+//   - resolver / sampleSvc 는 nil 허용 — nil 이면 sample 누적 skip
+//   - failureCounter 는 nil 허용 — nil 이면 NoopFailureCounter 로 fallback
+//   - rawIDTracker 는 nil 허용 — nil 이면 NoopRawIDTracker 로 fallback
 //
-// 이슈 #161 (도메인 중립화) 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
+// 도메인 중립화 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
 // 결과는 contentSvc.Store 로 contents 단일 테이블에 저장됩니다.
 //
-// 이슈 #178: ProcessingLock 으로 fetcher / parser / validator 가 동일 인터페이스로 단계별 dedup.
+// ProcessingLock 으로 fetcher / parser / validator 가 동일 인터페이스로 단계별 dedup.
 // parser 단계는 raw.URL 단위로 acquire — Kafka rebalance 시 같은 raw 가 두 worker 에 도달해도 1회만 파싱.
 func NewParserWorker(
 	consumer *queue.KafkaConsumer,
@@ -177,13 +177,13 @@ func NewParserWorker(
 	}
 }
 
-// SetPipelineGuard 는 Category cycle 완료 시 marker release 용 PipelineGuard 를 주입합니다 (이슈 #285).
+// SetPipelineGuard 는 Category cycle 완료 시 marker release 용 PipelineGuard 를 주입합니다.
 // nil 주입 시 release 비활성 (TTL fallback). Start 호출 전 wiring 단계에서 1회 설정.
 func (w *ParserWorker) SetPipelineGuard(g PipelineGuard) {
 	w.guard = g
 }
 
-// SetBlacklist 는 page-parse 블랙리스트 Matcher 를 주입합니다 (이슈 #295).
+// SetBlacklist 는 page-parse 블랙리스트 Matcher 를 주입합니다.
 //
 // nil 주입 시 차단 비활성 (모든 카테고리 링크가 그대로 article job 으로 발행).
 // Start 호출 전 wiring 단계에서 1회 설정.
@@ -191,7 +191,7 @@ func (w *ParserWorker) SetBlacklist(b *rule.BlacklistMatcher) {
 	w.blacklist = b
 }
 
-// SetStaleCounter 는 stale rule 재학습 트리거 카운터 + 임계값을 주입합니다 (이슈 #282).
+// SetStaleCounter 는 stale rule 재학습 트리거 카운터 + 임계값을 주입합니다.
 //
 // nil counter 주입 시 stale 재학습 비활성 (기존 chromedp 자동 전환만 동작).
 // threshold <= 0 이면 threshold-crossing gate 비활성 — counter.Record 의 thresholdReached 만으로 트리거
@@ -287,7 +287,7 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 		"url":    ref.URL,
 	})
 
-	// 이슈 #178: parser 단계 ProcessingLock — 같은 URL 의 동시 파싱을 차단.
+	// parser 단계 ProcessingLock — 같은 URL 의 동시 파싱을 차단.
 	// Kafka rebalance / 재배달 시 같은 raw 가 두 parser worker 에 도달해도 1회만 처리.
 	// ref.URL 은 fetcher 가 정규화한 URL — Ingestion Lock 키와 같은 정규형 사용.
 	procKey := locks.ProcessingKey(locks.StageParser, ref.URL)
@@ -300,7 +300,7 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 		return nil
 	} else {
 		defer func() {
-			// 셧다운 시 ctx cancel 되어도 락 해제 보장 + trace ID 등 메타데이터 보존 (PR #180 gemini 피드백).
+			// 셧다운 시 ctx cancel 되어도 락 해제 보장 + trace ID 등 메타데이터 보존.
 			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			if releaseErr := w.procLock.Release(releaseCtx, procKey); releaseErr != nil {
@@ -337,7 +337,7 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 }
 
 func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, jobTimeout time.Duration, llmRetryCount int, mlog *logger.Logger) error {
-	// Category cycle 종료 시 PipelineGuard marker release (이슈 #285) — defer 로 어떤 경로
+	// Category cycle 종료 시 PipelineGuard marker release — defer 로 어떤 경로
 	// (성공 / handleRuleError / 0 links / publish 실패) 든 release 보장. Release 실패는 non-fatal
 	// (TTL fallback 으로 자동 회수).
 	defer w.releaseCategoryMarker(ctx, raw.URL, mlog)
@@ -360,7 +360,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 
 	urls := uniqueURLs(items, maxChainedURLs)
 
-	// 이슈 #295/#297: page-parse 블랙리스트 적용 — mode 별 분기:
+	// page-parse 블랙리스트 적용 — mode 별 분기:
 	//   - 'drop' 매칭     : 어느 슬라이스에도 미포함 (완전 drop, fetch / parse 안 함)
 	//   - 'extract_links_only' 매칭 : list 로 강제 발행 → fetch + ParseLinks 만 진행 (ParsePage skip)
 	//   - 매칭 X         : 정상 article 로 발행
@@ -407,7 +407,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 	return nil
 }
 
-// releaseCategoryMarker 는 Category cycle 종료 시 PipelineGuard marker 를 release 합니다 (이슈 #285).
+// releaseCategoryMarker 는 Category cycle 종료 시 PipelineGuard marker 를 release 합니다.
 //
 // guard 미설정 시 noop. Release 실패는 non-fatal — TTL 만료 fallback 으로 자동 회수.
 // ctx.WithoutCancel 로 parent ctx 취소 신호 분리 — shutdown 중에도 release 시도 보장.
@@ -436,7 +436,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, llmRetryCount, crawlerName, 0, mlog)
 	}
 
-	// 이슈 #220: parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달이면
+	// parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달이면
 	// 빈본문 신호로 host 카운터에 누적. 정상 흐름은 차단하지 않음 (downstream validator 가
 	// 별도 정책으로 처리).
 	w.recordEmptyBodyIfApplicable(ctx, raw, rawID, page, mlog)
@@ -446,7 +446,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 		return fmt.Errorf("publish article content: %w", err)
 	}
 
-	// 이슈 #173 단계 4-1: 정상 파싱 성공 시 sample URL 누적 — 단계 4-2 의 정밀화 트리거 입력.
+	// 정상 파싱 성공 시 sample URL 누적 — 단계 4-2 의 정밀화 트리거 입력.
 	// 누적 실패는 정상 흐름 차단 안 함 (warn 로그).
 	w.accumulateSample(ctx, raw, mlog)
 
@@ -456,13 +456,13 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 
 // handleRuleError 는 rule.Error (parse 실패) 와 그 외 에러를 구분합니다.
 //
-//   - rule.ErrNoRule + llmGen 활성화 → LLM rule generator 비동기 enqueue (이슈 #149) + raw 잔존 + commit
+//   - rule.ErrNoRule + llmGen 활성화 → LLM rule generator 비동기 enqueue + raw 잔존 + commit
 //   - 기타 rule.Error → raw 잔존 + commit (warn 로그) — 운영자 review 윈도우
 //   - 기타 → 호출자에게 error 전파 → commit 안 함 → 재시도
 //
-// 이슈 #220 (page 단계 한정): rule.ErrParseFailure / rule.ErrEmptySelector 는 host 단위 카운터로
+// rule.ErrParseFailure / rule.ErrEmptySelector 는 host 단위 카운터로
 // 누적 — 임계값 도달 시 단계 3 (#221) 의 chromedp 자동 전환 트리거 입력. ErrNoRule 은 LLM 자동
-// rule 생성 (이슈 #149) 의 책임 영역이라 카운팅 제외 (다른 정책으로 처리됨).
+// rule 생성 의 책임 영역이라 카운팅 제외 (다른 정책으로 처리됨).
 func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
@@ -472,11 +472,11 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 			"target_type": string(targetType),
 		}).WithError(err).Warn("rule-based parse failed, raw retained for LLM retry")
 
-		// ErrNoRule + llmGen 활성화 → LLM 자동 rule 생성 비동기 트리거 (이슈 #149)
-		// crawlerName 은 validate 실패 시 재큐 메시지 헤더 복원용 (이슈 #237 피드백).
-		// jobTimeout 은 pending 재투입 시 카테고리 chained job timeout 보존 (이슈 #262 리뷰).
+		// ErrNoRule + llmGen 활성화 → LLM 자동 rule 생성 비동기 트리거
+		// crawlerName 은 validate 실패 시 재큐 메시지 헤더 복원용.
+		// jobTimeout 은 pending 재투입 시 카테고리 chained job timeout 보존.
 		//
-		// 이슈 #287: Resolver miss (ErrNoRule) 가 운영자가 의도적으로 disable 한 룰 잔존
+		// Resolver miss (ErrNoRule) 가 운영자가 의도적으로 disable 한 룰 잔존
 		// 인 경우 LLM 재학습 트리거 회피 — 매 fetch 마다 LLM 호출 → ErrDuplicate 흐름이
 		// 운영자의 의도된 disable 을 무력화하지 않도록.
 		// HasAnyRule lookup 실패는 best-effort (fail-open — 기존 동작 유지하여 LLM enqueue 진행).
@@ -494,7 +494,7 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 					}).Warn("rule exists but all disabled — skipping LLM regen (manual re-enable required)")
 				case herr != nil && ctx.Err() == nil:
 					// lookup 실패 — fail-open (warn 로그 + 기존 LLM enqueue 경로 진행).
-					// ctx.Err() 체크: shutdown 중 cancellation 을 lookup 장애로 오인 회피 (PR #291 gemini).
+					// ctx.Err() 체크: shutdown 중 cancellation 을 lookup 장애로 오인 회피.
 					mlog.WithFields(map[string]interface{}{
 						"host":        rerr.Host,
 						"target_type": string(targetType),
@@ -506,10 +506,10 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 			}
 		}
 
-		// 이슈 #220: page 단계의 ParseFailure / EmptySelector 만 host 카운터에 누적.
+		// page 단계의 ParseFailure / EmptySelector 만 host 카운터에 누적.
 		// list (category) 는 본질적으로 다른 selector 셋이라 chromedp 전환 신호로 부적절.
-		// 이슈 #221: 같은 시점에 raw_id 를 host 별 추적 — 단계 3 의 republish 대상 수집.
-		// 이슈 #282: 동일 시점에 stale counter 누적 — 임계 도달 시 LLM 재학습 트리거.
+		// 같은 시점에 raw_id 를 host 별 추적 — 단계 3 의 republish 대상 수집.
+		// 동일 시점에 stale counter 누적 — 임계 도달 시 LLM 재학습 트리거.
 		if targetType == storage.TargetTypePage &&
 			(rerr.Code == rule.ErrParseFailure || rerr.Code == rule.ErrEmptySelector) {
 			w.recordHostFailure(ctx, rerr.Host, rawID, fetcherRule.FailureReasonRuleParseFailure, mlog)
@@ -525,12 +525,12 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 }
 
 // recordHostFailure 는 host 단위 fetcher 실패 카운터에 1건 누적하고 raw_id 를 host Set 에
-// 추적합니다 (이슈 #220 + #221).
+// 추적합니다.
 //
 // 카운팅 / 트래킹 자체 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지 (Redis 장애가
 // parse 실패 처리 흐름을 막지 않도록).
 //
-// 이슈 #221: 카운터가 thresholdReached=true 반환하면 Upgrader.Trigger 를 별도 goroutine 으로
+// 카운터가 thresholdReached=true 반환하면 Upgrader.Trigger 를 별도 goroutine 으로
 // 비동기 호출 — parser 본 흐름의 latency 차단 회피. Upgrader 가 nil 이면 신호만 발신.
 //
 // rawID 는 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상으로 사용. 빈 문자열이면
@@ -554,7 +554,7 @@ func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string
 			}).WithError(err).Warn("raw id tracker track failed (non-fatal)")
 		}
 	}
-	// 이슈 #221: 임계값 도달 시 자동 chromedp 전환 + 실패 raw republish trigger.
+	// 임계값 도달 시 자동 chromedp 전환 + 실패 raw republish trigger.
 	// 비동기 — parser 흐름의 latency 차단 회피. Upgrader 자체가 in-flight dedup / 이미 chromedp
 	// skip 등 안전망 보유.
 	//
@@ -572,13 +572,13 @@ func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string
 }
 
 // recordStaleAndMaybeRelearn 은 stale rule 발생 1건을 (host, target_type) 카운터에 누적하고
-// 임계 도달 시 LLM 재학습을 트리거합니다 (이슈 #282).
+// 임계 도달 시 LLM 재학습을 트리거합니다.
 //
 // 동작 요건 (모두 충족 시만 enqueue):
 //  1. staleCounter / llmGen 둘 다 wiring 됨 (둘 중 하나 nil 이면 noop)
 //  2. host != "" — 빈 host 는 카운팅 skip
 //  3. counter.Record 가 thresholdReached=true 반환
-//  4. resolver 의 HasAnyRule 결과 — 운영자가 모든 rule 을 disable 한 host 는 skip (이슈 #287 동일 정책)
+//  4. resolver 의 HasAnyRule 결과 — 운영자가 모든 rule 을 disable 한 host 는 skip
 //
 // 카운팅 / lookup 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지. 임계 도달 후 EnqueueStale
 // 은 비동기 (Generator 내부 goroutine) 라 본 함수 latency 영향 없음.
@@ -600,7 +600,7 @@ func (w *ParserWorker) recordStaleAndMaybeRelearn(ctx context.Context, host stri
 	if !thresholdReached {
 		return
 	}
-	// 이슈 #282 PR #294 CodeRabbit 피드백: thresholdReached 는 window 내 count >= threshold 일 때
+	// thresholdReached 는 window 내 count >= threshold 일 때
 	// 매번 true 이므로, 첫 crossing (count == threshold) 만 enqueue 하여 동일 window 안의 중복
 	// version 생성 / 비용 spike 회피. staleThreshold == 0 이면 호환 모드 (gate 비활성).
 	if w.staleThreshold > 0 && count != w.staleThreshold {
@@ -613,7 +613,7 @@ func (w *ParserWorker) recordStaleAndMaybeRelearn(ctx context.Context, host stri
 		return
 	}
 
-	// 운영자 disable 잔존 검증 — 같은 fail-open 정책 (이슈 #287).
+	// 운영자 disable 잔존 검증 — 같은 fail-open 정책.
 	shouldEnqueue := true
 	if w.resolver != nil {
 		exists, hasEnabled, herr := w.resolver.HasAnyRule(ctx, host, targetType)
@@ -654,12 +654,12 @@ func hostOf(rawURL string) string {
 }
 
 // recordEmptyBodyIfApplicable 는 page 의 Title / MainContent 길이가 임계값 미달이면
-// host 카운터에 empty_body 신호로 누적합니다 (이슈 #220).
+// host 카운터에 empty_body 신호로 누적합니다.
 //
 // 임계값 어느 한쪽 미달이어도 신호 발신 — chromedp 전환 후 둘 다 정상 추출되는 케이스 가정.
 // 임계값이 0 이면 해당 필드 검증 비활성 (운영 옵션).
 //
-// 이슈 #221: rawID 도 host 별 추적 — 단계 3 의 republish 대상 수집.
+// rawID 도 host 별 추적 — 단계 3 의 republish 대상 수집.
 func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawContent, rawID string, page *parser.Page, mlog *logger.Logger) {
 	if w.emptyBodyTitleMin <= 0 && w.emptyBodyContentMin <= 0 {
 		return
@@ -748,13 +748,13 @@ func (w *ParserWorker) publishContents(ctx context.Context, contents []*core.Con
 }
 
 const (
-	// maxLLMRetries 는 LLM selector 검증 실패 시 raw content 를 재큐잉할 최대 횟수입니다 (이슈 #237).
+	// maxLLMRetries 는 LLM selector 검증 실패 시 raw content 를 재큐잉할 최대 횟수입니다.
 	// 이 값을 초과하면 재큐잉 없이 raw 를 TTL cleanup 에 맡깁니다.
 	maxLLMRetries = 3
 )
 
 // RequeueForLLMRetry 는 LLM selector 검증 실패 시 raw content 를 issuetracker.fetched 에
-// 재발행합니다 (이슈 #237). llmgen.Generator 의 validateFailureHandler 로 등록됩니다.
+// 재발행합니다. llmgen.Generator 의 validateFailureHandler 로 등록됩니다.
 //
 // llmRetryCount >= maxLLMRetries 이면 재큐잉을 중단하고 Warn 로그만 남깁니다 — 무한루프 방지.
 // targetType, crawlerName 은 Kafka 메시지 헤더로 설정 — 재큐 후 processMessage 가 올바른
@@ -796,7 +796,7 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 		Value: payload,
 		Headers: map[string]string{
 			// storageToFetcherTargetType: storage "list"/"page" → fetcher "category"/"article"
-			// 파서 워커가 target_type 을 core.TargetType 으로 읽으므로 변환 필수 (이슈 #262 리뷰).
+			// 파서 워커가 target_type 을 core.TargetType 으로 읽으므로 변환 필수.
 			"target_type": storageToFetcherTargetType(targetType),
 			"crawler":     crawlerName,
 		},
@@ -819,17 +819,17 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 	}).Info("raw content requeued for llm retry after selector validation failure")
 }
 
-// RequeueParsing 은 pending 대기 URL 목록을 issuetracker.fetched 에 재발행합니다 (이슈 #262).
+// RequeueParsing 은 pending 대기 URL 목록을 issuetracker.fetched 에 재발행합니다.
 // llmgen.Generator 의 RequeueFunc 로 등록됩니다.
 //
 // 룰 생성 완료 후 호출 — 대기 중이던 URL 이 새 룰로 재파싱될 수 있도록 TopicFetched 에 투입.
-// Kafka 발행에 실패한 항목을 반환 — Generator 가 pending queue 에 재적재 (이슈 #262 리뷰).
+// Kafka 발행에 실패한 항목을 반환 — Generator 가 pending queue 에 재적재.
 func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.PendingItem) (failed []llmgen.PendingItem) {
 	// WithoutCancel 은 루프 외부에서 1회 — 루프마다 새 컨텍스트 파생 불필요 (Gemini 피드백).
 	baseCtx := context.WithoutCancel(ctx)
 	for _, item := range items {
 		// LLMRetryCount 를 ref 에 반영하여 직렬화 — item.RawRef 는 원본(0)이므로 별도 세팅 필요
-		// (이슈 #262 리뷰: PendingItem.LLMRetryCount 가 payload 에서 유실되는 버그).
+		//.
 		ref := item.RawRef
 		ref.LLMRetryCount = item.LLMRetryCount
 		payload, err := json.Marshal(ref)
@@ -846,10 +846,10 @@ func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.Pendin
 			Topic: queue.TopicFetched,
 			Value: payload,
 			Headers: map[string]string{
-				// storage "list"/"page" → fetcher "category"/"article" 변환 (이슈 #262 리뷰).
+				// storage "list"/"page" → fetcher "category"/"article" 변환.
 				"target_type": storageToFetcherTargetType(item.TargetType),
 				"crawler":     item.CrawlerName,
-				// timeout_ms 보존 — 카테고리 재투입 시 chained job timeout 유지 (이슈 #262 리뷰).
+				// timeout_ms 보존 — 카테고리 재투입 시 chained job timeout 유지.
 				"timeout_ms": strconv.FormatInt(item.TimeoutMs, 10),
 			},
 		}
@@ -873,7 +873,7 @@ func (w *ParserWorker) deleteRaw(ctx context.Context, rawID string, mlog *logger
 	}
 }
 
-// accumulateSample 은 정상 파싱 성공한 article 의 URL 을 sample 에 누적합니다 (이슈 #173 단계 4-1).
+// accumulateSample 은 정상 파싱 성공한 article 의 URL 을 sample 에 누적합니다.
 //
 // 누적 조건 (모두 충족 시만):
 //  1. resolver / sampleSvc 둘 다 wiring 됨
@@ -883,7 +883,7 @@ func (w *ParserWorker) deleteRaw(ctx context.Context, rawID string, mlog *logger
 //
 // 모든 실패 (lookup 실패 / Insert 에러 / cap 도달) 는 정상 흐름 차단 X — DEBUG/WARN 로그만.
 //
-// 변수명 matchedRule: import 된 rule 패키지와의 shadowing 회피 (PR #189 gemini 피드백).
+// 변수명 matchedRule: import 된 rule 패키지와의 shadowing 회피.
 func (w *ParserWorker) accumulateSample(ctx context.Context, raw *core.RawContent, mlog *logger.Logger) {
 	if w.resolver == nil || w.sampleSvc == nil {
 		return
@@ -934,7 +934,7 @@ func uniqueURLs(items []parser.LinkItem, limit int) []string {
 	return urls
 }
 
-// ShouldEnqueueLLMOnNoRule 은 ErrNoRule 상황에서 HasAnyRule 결과로 LLM Enqueue 여부를 결정합니다 (이슈 #287).
+// ShouldEnqueueLLMOnNoRule 은 ErrNoRule 상황에서 HasAnyRule 결과로 LLM Enqueue 여부를 결정합니다.
 //
 // 정책:
 //   - lookup 실패 (err != nil)         : fail-open — true (기존 동작 유지)
@@ -957,7 +957,7 @@ func ShouldEnqueueLLMOnNoRule(exists, hasEnabled bool, lookupErr error) bool {
 // TopicFetched 헤더에서 사용하는 core.TargetType 문자열 ("category"/"article") 로 변환합니다.
 //
 // 초기 fetcher 는 core.TargetType 값을 target_type 헤더로 발행하므로,
-// RequeueParsing / RequeueForLLMRetry 에서 재발행 시 동일 변환이 필요합니다 (이슈 #262 리뷰).
+// RequeueParsing / RequeueForLLMRetry 에서 재발행 시 동일 변환이 필요합니다.
 func storageToFetcherTargetType(t storage.TargetType) string {
 	if t == storage.TargetTypeList {
 		return string(core.TargetTypeCategory)

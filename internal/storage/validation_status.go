@@ -1,4 +1,4 @@
-// Package storage — validation status lifecycle constants (이슈 #135 / 이슈 #161).
+// Package storage — validation status lifecycle constants.
 package storage
 
 // ValidationStatus values represent the lifecycle state of a validator's content review.
@@ -13,7 +13,7 @@ package storage
 //   - Passed   : validator 통과 (issuetracker.validated 발행 직후)
 //   - Rejected : validator maxRetries 영구 실패 (contentSvc.Delete 직전)
 //
-// 본 상수는 contents 테이블의 validation_status 컬럼 값과 1:1 매핑됩니다 (이슈 #161 도메인
+// 본 상수는 contents 테이블의 validation_status 컬럼 값과 1:1 매핑됩니다  (도메인
 // 중립화로 news_articles 에서 contents 로 이전).
 const (
 	ValidationStatusPending  = "pending"

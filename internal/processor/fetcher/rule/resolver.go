@@ -1,4 +1,4 @@
-// Package rule 는 fetcher 단계의 host 단위 정책 (fetcher_rules) 을 매핑하는 Resolver 를 제공합니다 (이슈 #175 단계 1, sub-issue #219).
+// Package rule 는 fetcher 단계의 host 단위 정책 (fetcher_rules) 을 매핑하는 Resolver 를 제공합니다.
 //
 // fetcher_rules 테이블에 등록된 host 는 본 Resolver 가 해당 fetcher (goquery / chromedp) 를
 // 반환합니다. 미등록 host 는 ResolveResult{Found: false} 가 되어 호출자 (ChainHandler) 가
@@ -67,7 +67,7 @@ type dbResolver struct {
 
 // NewResolver 는 새 dbResolver 를 생성합니다.
 //
-// repo 가 nil 이면 wiring 오류 — error 반환 (이슈 #208 panic-on-nil 정책).
+// repo 가 nil 이면 wiring 오류 — error 반환.
 // ttl 이 0 이하이면 DefaultCacheTTL 사용.
 func NewResolver(repo storage.FetcherRuleRepository, log *logger.Logger, ttl time.Duration) (Resolver, error) {
 	if repo == nil {

@@ -48,7 +48,7 @@ type ContentService interface {
 	// 존재하지 않아도 에러를 반환하지 않습니다.
 	Delete(ctx context.Context, id string) error
 
-	// UpdateValidationStatus updates validator result metadata for the given content id (이슈 #135 / #161).
+	// UpdateValidationStatus updates validator result metadata for the given content id.
 	// 자세한 내용은 storage.ContentRepository.UpdateValidationStatus 참조.
 	UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error
 }

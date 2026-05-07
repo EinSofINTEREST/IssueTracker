@@ -8,7 +8,7 @@ import (
 
 // FixedOrder pins routing to an explicit list of provider names, ignoring others.
 //
-// FixedOrder 는 호출자가 지정한 provider 이름 슬라이스를 그대로 우선순위로 사용합니다 (이슈 #144).
+// FixedOrder 는 호출자가 지정한 provider 이름 슬라이스를 그대로 우선순위로 사용합니다.
 // candidates 중 names 에 매칭되는 provider 만 지정 순서로 반환하며, 매칭되지 않는 candidate 는
 // 결과에서 제외됩니다 — "이 provider 만 쓴다" 는 명시적 정책 (단일 provider 운영, 무료 한도 내
 // 제한, A/B 비교용 강제 핀 등에 사용).

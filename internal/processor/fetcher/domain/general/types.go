@@ -1,5 +1,5 @@
 // Package general 은 임의 웹페이지 (뉴스/블로그/제품/일반 문서) 크롤링·파싱을 위한
-// 도메인 중립 추상화를 제공합니다 (이슈 #100 / #139 통합).
+// 도메인 중립 추상화를 제공합니다.
 //
 // Package general provides domain-neutral abstractions for crawling arbitrary web pages
 // (news, blogs, product pages, generic documents). 기존 news 도메인을 흡수합니다 —

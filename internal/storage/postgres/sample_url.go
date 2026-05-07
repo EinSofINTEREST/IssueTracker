@@ -13,7 +13,7 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// pgSampleURLRepository 는 pgx/v5 기반 SampleURLRepository 구현체입니다 (이슈 #173 단계 4-1).
+// pgSampleURLRepository 는 pgx/v5 기반 SampleURLRepository 구현체입니다.
 type pgSampleURLRepository struct {
 	pool *pgxpool.Pool
 }
@@ -38,7 +38,7 @@ INSERT INTO parsing_rule_sample_urls (rule_id, url)
 VALUES ($1, $2)
 `
 
-// Insert 는 sample URL 을 누적합니다 (이슈 #173 단계 4-1).
+// Insert 는 sample URL 을 누적합니다.
 //
 // 정책:
 //   - 같은 (rule_id, url) 이미 있으면 storage.ErrDuplicate 반환 — 호출자가 무시 가능 (이미 누적됨)

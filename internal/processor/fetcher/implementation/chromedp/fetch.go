@@ -113,7 +113,7 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 			"timeout_ms": c.config.Timeout.Milliseconds(),
 		}).Warn("page render timed out, attempting graceful capture")
 
-		// 이슈 #146: timeout = 정상 종료 시그널로 취급. 캡처 실패/검증 실패해도
+		// timeout = 정상 종료 시그널로 취급. 캡처 실패/검증 실패해도
 		// 에러로 끌어올리지 않고 partial_load=true 의 (가능하면 빈 HTML) 응답으로
 		// downgrade. 호출자(parser)는 빈 HTML 을 받으면 자연스럽게 링크 0건 처리하므로
 		// 시스템이 안정적으로 흘러간다. Navigate 자체가 한 번도 응답을 못 받은 케이스
@@ -134,7 +134,7 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 
 		// Navigate 자체 실패 가드 (CodeRabbit 피드백): main-document 응답이 한 번도
 		// 도착하지 않았고 (statusCode == 0) 캡처도 빈 결과면 페이지가 사실상 미응답.
-		// 이슈 #146 acceptance criteria "Navigate 자체 실패 (네트워크 오류) 는 기존대로
+		// acceptance criteria: "Navigate 자체 실패 (네트워크 오류) 는 기존대로
 		// CDP_002 에러" 를 충족하기 위해 명시적으로 CDP_002 에러로 분류한다.
 		statusMu.Lock()
 		preCheckStatus := statusCode
@@ -179,12 +179,12 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		capturedStatus = 200
 	}
 
-	// HTTP 상태코드 검사 (이슈 #75: core 공통 분기)
+	// HTTP 상태코드 검사 (core 공통 분기)
 	if err := core.CheckHTTPStatus(target.URL, capturedStatus); err != nil {
 		return nil, err
 	}
 
-	// RawContent 조립 (이슈 #75: core 공통 생성자)
+	// RawContent 조립 (core 공통 생성자)
 	// chromedp 는 raw HTTP header 에 접근하지 않으므로 nil 전달 → 빈 map 으로 보정됨.
 	rawContent := core.NewRawContent(c.name, c.sourceInfo, target, html, capturedStatus, nil)
 

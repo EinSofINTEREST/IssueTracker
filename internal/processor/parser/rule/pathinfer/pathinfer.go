@@ -1,5 +1,5 @@
 // Package pathinfer 는 같은 호스트의 sample URL 들로부터 path_pattern regex 를
-// 알고리즘 기반으로 추론합니다 (이슈 #173 단계 2).
+// 알고리즘 기반으로 추론합니다.
 //
 // 본 패키지는 **LLM 의존 없는 결정적 휴리스틱** 만 다룹니다 — 70-80% 의 단순 ID
 // 패턴 (numeric/UUID/slug/연도-월) 케이스를 cover. 모호한 케이스는 ok=false 로
@@ -66,7 +66,7 @@ type PathSamples struct {
 	Articles []string
 }
 
-// InferHeuristic 은 PathSamples 로부터 path_pattern regex 를 추론합니다 (이슈 #173 단계 2).
+// InferHeuristic 은 PathSamples 로부터 path_pattern regex 를 추론합니다.
 //
 // opts 로 동작 override 가능 — WithMinSamples 등 (운영자 환경변수 주입용).
 // 미지정 시 default config (DefaultMinSamples = 3) 적용.
@@ -132,7 +132,7 @@ func InferHeuristic(samples PathSamples, opts ...Option) (string, bool) {
 	// 검증: 입력 samples 전체가 결과 regex 에 매칭되는지 확인 — hallucination 방어.
 	// splitSegments 가 leading/trailing slash 를 trim 후 분리했으므로, 검증도 정규화된
 	// 형태 ("/" + trimmed) 로 매칭 — 그렇지 않으면 trailing slash 있는 path 는 자체 거부됨
-	// (PR #183 gemini 피드백).
+	//.
 	re, err := regexp.Compile(result)
 	if err != nil {
 		return "", false
@@ -181,7 +181,7 @@ func inferVariablePattern(values []string) (string, bool) {
 	case allMatch(values, regexUUID):
 		return `([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`, true
 	case allMatch(values, regexYear):
-		// 외곽 capturing group 으로 4자리 연도 전체를 capture (PR #183 gemini 피드백)
+		// 외곽 capturing group 으로 4자리 연도 전체를 capture
 		// — 다른 패턴 (numeric/UUID/slug/month) 과 capture 일관성 보장.
 		return `((19|20)\d{2})`, true
 	case allMatch(values, regexMonth):

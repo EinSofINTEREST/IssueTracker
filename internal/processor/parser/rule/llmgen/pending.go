@@ -14,28 +14,28 @@ import (
 const pendingKeyPrefix = "llmgen:pending:"
 
 // defaultPendingTTL 은 pending LIST 키의 기본 TTL 입니다.
-// rule 생성이 계속 실패해도 Redis 메모리가 무기한 증가하지 않도록 제한합니다 (이슈 #262 리뷰).
+// rule 생성이 계속 실패해도 Redis 메모리가 무기한 증가하지 않도록 제한합니다.
 const defaultPendingTTL = 24 * time.Hour
 
 // defaultPendingMaxLen 은 (host, targetType) 당 pending LIST 의 최대 항목 수입니다.
-// noisy host 하나가 Redis 메모리를 독점하지 않도록 상한을 둡니다 (이슈 #262 리뷰).
+// noisy host 하나가 Redis 메모리를 독점하지 않도록 상한을 둡니다.
 const defaultPendingMaxLen = 1000
 
-// PendingItem 은 in-flight 중 대기 중인 URL 의 재투입에 필요한 정보입니다 (이슈 #262).
+// PendingItem 은 in-flight 중 대기 중인 URL 의 재투입에 필요한 정보입니다.
 type PendingItem struct {
 	RawRef        core.RawContentRef `json:"raw_ref"`
 	CrawlerName   string             `json:"crawler_name"`
 	LLMRetryCount int                `json:"llm_retry_count"`
 	TargetType    storage.TargetType `json:"target_type"`
-	// TimeoutMs 는 원본 crawl job 의 timeout — 카테고리 재투입 시 chained job timeout 보존 (이슈 #262 리뷰).
+	// TimeoutMs 는 원본 crawl job 의 timeout — 카테고리 재투입 시 chained job timeout 보존.
 	TimeoutMs int64 `json:"timeout_ms"`
 }
 
-// RequeueFunc 는 pending 대기 URL 목록을 파서 워커에 재투입하는 콜백 타입입니다 (이슈 #262).
+// RequeueFunc 는 pending 대기 URL 목록을 파서 워커에 재투입하는 콜백 타입입니다.
 // Kafka 발행에 실패한 항목을 반환하면 Generator 가 pending queue 에 재적재합니다.
 type RequeueFunc func(ctx context.Context, items []PendingItem) (failed []PendingItem)
 
-// PendingQueue 는 (host, targetType) 단위 대기 URL 목록을 저장/조회하는 인터페이스입니다 (이슈 #262).
+// PendingQueue 는 (host, targetType) 단위 대기 URL 목록을 저장/조회하는 인터페이스입니다.
 type PendingQueue interface {
 	// Push 는 대기 항목을 큐에 적재합니다.
 	Push(ctx context.Context, host string, targetType storage.TargetType, item PendingItem) error
@@ -44,7 +44,7 @@ type PendingQueue interface {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RedisPendingQueue — Redis LIST 기반 구현 (이슈 #262)
+// RedisPendingQueue — Redis LIST 기반 구현
 // ─────────────────────────────────────────────────────────────────────────────
 
 // luaFlush 는 LRANGE + DEL 을 원자적으로 수행하는 Lua 스크립트입니다.
@@ -73,7 +73,7 @@ func NewRedisPendingQueue(rdb *goredis.Client) *RedisPendingQueue {
 func (r *RedisPendingQueue) Push(ctx context.Context, host string, targetType storage.TargetType, item PendingItem) error {
 	key := r.key(host, targetType)
 
-	// 길이 상한 초과 시 skip — noisy host 가 Redis 메모리를 독점하지 않도록 (이슈 #262 리뷰).
+	// 길이 상한 초과 시 skip — noisy host 가 Redis 메모리를 독점하지 않도록.
 	llen, err := r.rdb.LLen(ctx, key).Result()
 	if err != nil && err != goredis.Nil {
 		return fmt.Errorf("redis pending llen %s: %w", key, err)
@@ -87,7 +87,7 @@ func (r *RedisPendingQueue) Push(ctx context.Context, host string, targetType st
 		return fmt.Errorf("marshal pending item: %w", err)
 	}
 
-	// RPUSH + EXPIRE 를 pipeline 으로 묶어 TTL 갱신 보장 (이슈 #262 리뷰).
+	// RPUSH + EXPIRE 를 pipeline 으로 묶어 TTL 갱신 보장.
 	pipe := r.rdb.Pipeline()
 	pipe.RPush(ctx, key, data)
 	pipe.Expire(ctx, key, r.ttl)

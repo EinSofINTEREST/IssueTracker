@@ -23,7 +23,7 @@ type RawContentService interface {
 	GetByID(ctx context.Context, id string) (*core.RawContent, error)
 
 	// Delete는 ID로 RawContent를 삭제합니다 (idempotent — 미존재여도 nil).
-	// parser worker (이슈 #134) 가 파싱 완료된 raw_contents row 를 즉시 정리할 때 사용 (Claim Check 패턴).
+	// parser worker 가 파싱 완료된 raw_contents row 를 즉시 정리할 때 사용 (Claim Check 패턴).
 	Delete(ctx context.Context, id string) error
 
 	// List는 필터 조건에 맞는 RawContent 목록을 반환합니다.

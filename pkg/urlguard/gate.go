@@ -29,7 +29,7 @@ type Gate struct {
 
 // NewGate 는 주어진 guard 와 log 로 새 Gate 를 생성합니다.
 // guard 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리. 비활성화는 AllowAllGuard{}
-// 명시 주입으로 표현 (이슈 #208).
+// 명시 주입으로 표현.
 // log 가 nil 이면 logger.FromContext(context.Background()) 의 기본 logger 를 사용.
 func NewGate(guard Guard, log *logger.Logger) (*Gate, error) {
 	if guard == nil {

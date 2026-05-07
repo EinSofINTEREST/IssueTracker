@@ -1,4 +1,4 @@
-// Package openai 는 OpenAI ChatGPT API 의 llm.Provider 구현입니다 (이슈 #140).
+// Package openai 는 OpenAI ChatGPT API 의 llm.Provider 구현입니다.
 //
 // Package openai implements the llm.Provider interface against OpenAI's
 // chat completions REST API.
@@ -20,7 +20,7 @@ const (
 	defaultModel   = "gpt-4o-mini"
 )
 
-// init 은 factory (llm.New) 에서 본 provider 를 사용할 수 있게 등록합니다 (이슈 #140).
+// init 은 factory (llm.New) 에서 본 provider 를 사용할 수 있게 등록합니다.
 func init() {
 	llm.RegisterProvider(providerName, func(cfg llm.Config) (llm.Provider, error) {
 		opts := []Option{}

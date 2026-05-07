@@ -12,7 +12,7 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// RawIDTracker 는 host 단위로 실패한 raw_id 를 timestamp 순으로 추적합니다 (이슈 #221).
+// RawIDTracker 는 host 단위로 실패한 raw_id 를 timestamp 순으로 추적합니다.
 //
 // 단계 3 의 자동 chromedp 전환 trigger 가 PeekByHost 로 가장 최근 실패 raw_id 들을 가져와
 // 새 CrawlJob 으로 republish 합니다. raw_contents 테이블에 host 컬럼이 없어서 Redis ZSET 으로
@@ -71,7 +71,7 @@ type redisRawIDTracker struct {
 
 // NewRedisRawIDTracker 는 Redis ZSET 기반 RawIDTracker 를 생성합니다.
 //
-// client 가 nil 이거나 ttl 이 비정상이면 error 반환 (이슈 #208 정책).
+// client 가 nil 이거나 ttl 이 비정상이면 error 반환.
 // keyPrefix 가 빈 문자열이면 "fetcher:failed_raws" 사용.
 // ttl 은 host 별 ZSET 의 자연 정리 시간 — FailureCounter 의 window 와 동기화 권장.
 func NewRedisRawIDTracker(client *goredis.Client, ttl time.Duration, keyPrefix string, log *logger.Logger) (RawIDTracker, error) {

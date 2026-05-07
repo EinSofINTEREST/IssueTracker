@@ -1,4 +1,4 @@
-// Package validator 는 LLM 으로 생성된 CSS 셀렉터의 의미 검증을 담당합니다 (이슈 #257).
+// Package validator 는 LLM 으로 생성된 CSS 셀렉터의 의미 검증을 담당합니다.
 //
 // 역할: DOM 매칭 검증 (validateSelectors) 이 통과한 뒤, 실제 추출 내용이 뉴스 기사의
 // 제목·본문·날짜로서 의미상 유효한지 LLM 으로 확인합니다.
@@ -59,7 +59,7 @@ func extractContent(html string, sm storage.SelectorMap) (extractedContent, erro
 		ec.Title = strings.TrimSpace(doc.Find(sm.Title.CSS).First().Text())
 	}
 	if sm.MainContent != nil && sm.MainContent.CSS != "" {
-		// Multi=false(기본) 이면 첫 번째 매칭만 사용 — 실제 parser 동작과 일치해야 의미 검증이 유효 (이슈 #265 리뷰).
+		// Multi=false(기본) 이면 첫 번째 매칭만 사용 — 실제 parser 동작과 일치해야 의미 검증이 유효.
 		var body string
 		if sm.MainContent.Multi {
 			var parts []string
@@ -95,7 +95,7 @@ func extractContent(html string, sm storage.SelectorMap) (extractedContent, erro
 			ec.ItemContainer = string(runes[:200]) + "…"
 		}
 		// ItemLink 는 ItemContainer 내부에서 수집 — 전체 문서에서 수집하면 네비게이션/푸터 링크가
-		// 섞여 잘못된 list rule 이 의미 검증을 통과할 수 있음 (이슈 #265 리뷰).
+		// 섞여 잘못된 list rule 이 의미 검증을 통과할 수 있음.
 		if sm.ItemLink != nil && sm.ItemLink.CSS != "" {
 			container.Find(sm.ItemLink.CSS).Each(func(i int, s *goquery.Selection) {
 				if i >= 3 {

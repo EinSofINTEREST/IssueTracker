@@ -1,6 +1,6 @@
 // Package types 는 validate 단계의 검증 인터페이스와 결과 타입을 정의합니다.
 //
-// Sub-package 인 이유 (이슈 #206 후속):
+// Sub-package 인 이유:
 //
 //	validate/news + validate/community sub-validator 가 본 타입을 import 하고,
 //	validate (parent) 도 dispatch 함수 NewValidator 에서 sub-validator 를 import.

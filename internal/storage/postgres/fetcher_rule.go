@@ -20,7 +20,7 @@ func canonicalizeHost(host string) string {
 	return strings.ToLower(strings.TrimSpace(host))
 }
 
-// pgFetcherRuleRepository 는 pgx/v5 기반 FetcherRuleRepository 구현체입니다 (이슈 #175 단계 1).
+// pgFetcherRuleRepository 는 pgx/v5 기반 FetcherRuleRepository 구현체입니다.
 type pgFetcherRuleRepository struct {
 	pool *pgxpool.Pool
 }
@@ -30,7 +30,7 @@ type pgFetcherRuleRepository struct {
 // log 인자는 향후 query latency / error log 등 운영 가시성 추가를 대비해 시그니처에 유지하되,
 // 현재 구현에서는 사용하지 않습니다 — 다른 Repository 들과 일관된 시그니처.
 //
-// pool 이 nil 이면 error 반환 (이슈 #208 의 panic-on-nil → error 마이그레이션 정책).
+// pool 이 nil 이면 error 반환.
 func NewFetcherRuleRepository(pool *pgxpool.Pool, log *logger.Logger) (storage.FetcherRuleRepository, error) {
 	if pool == nil {
 		return nil, errors.New("postgres: NewFetcherRuleRepository requires non-nil pool")
@@ -152,7 +152,7 @@ func (r *pgFetcherRuleRepository) Delete(ctx context.Context, host string) error
 	return nil
 }
 
-// sqlBulkDowngradeAutoUpgraded 는 자동 upgrade 로 chromedp 가 된 모든 host 를 goquery 로 다시 내립니다 (이슈 #224).
+// sqlBulkDowngradeAutoUpgraded 는 자동 upgrade 로 chromedp 가 된 모든 host 를 goquery 로 다시 내립니다.
 //
 // 매칭 조건은 reason='auto_upgrade_validation' AND fetcher='chromedp' — manual rule 보호 + 미래 자동 reason 영향 차단.
 // DELETE 대신 UPDATE — created_at 등 audit trail 보존.

@@ -1,4 +1,4 @@
-// 본 파일은 validate 단계의 processor.Stage 래퍼를 제공합니다 (이슈 #206).
+// 본 파일은 validate 단계의 processor.Stage 래퍼를 제공합니다.
 //
 // validate 는 단일 worker 만 갖는 단순 stage — Worker.Start/Stop 을 그대로 위임.
 
@@ -20,7 +20,7 @@ type Stage struct {
 }
 
 // NewStage 는 wired Worker 를 받아 validate.Stage 를 반환합니다.
-// worker 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+// worker 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
 func NewStage(worker *Worker) (*Stage, error) {
 	if worker == nil {
 		return nil, errors.New("validate: NewStage requires non-nil Worker")

@@ -29,7 +29,7 @@ func randNonce() string {
 	return hex.EncodeToString(b)
 }
 
-// FailureReason 은 카운터에 INCR 되는 실패의 분류입니다 (이슈 #220).
+// FailureReason 은 카운터에 INCR 되는 실패의 분류입니다.
 //
 // 카운터 자체는 reason 별 분리 없이 host 단위로 누적 — reason 은 audit log / metric 차원.
 type FailureReason string
@@ -38,7 +38,7 @@ const (
 	// FailureReasonRuleParseFailure: rule.Error 의 parse_failure / empty_selector 류 (selector 매칭 0건 / required selector 부재).
 	FailureReasonRuleParseFailure FailureReason = "rule_parse_failure"
 	// FailureReasonRuleNoRule: rule.Error 의 no_rule (host 에 active rule 없음).
-	// 본 sub 의 카운팅 대상에서 제외 권장 — 이 경우는 LLM 자동 rule 생성 (이슈 #149) 의 책임 영역.
+	// 본 sub 의 카운팅 대상에서 제외 권장 — 이 경우는 LLM 자동 rule 생성 의 책임 영역.
 	// 그러나 운영자 분석을 위해 호출자가 선택 가능하도록 reason 정의는 유지.
 	FailureReasonRuleNoRule FailureReason = "rule_no_rule"
 	// FailureReasonEmptyBody: parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달.
@@ -46,7 +46,7 @@ const (
 	FailureReasonEmptyBody FailureReason = "empty_body"
 )
 
-// FailureCounter 는 host 단위 fetcher 실패를 sliding window 로 카운팅합니다 (이슈 #220).
+// FailureCounter 는 host 단위 fetcher 실패를 sliding window 로 카운팅합니다.
 //
 // 단계 3 (#221) 의 chromedp 자동 전환 트리거가 ThresholdReached=true 신호를 받아 fetcher_rules
 // UPSERT + 실패 raw republish 를 발동합니다. 본 sub 는 카운팅 + 임계값 도달 신호까지만.
@@ -90,7 +90,7 @@ type redisFailureCounter struct {
 
 // NewRedisFailureCounter 는 Redis 기반 sliding window FailureCounter 를 생성합니다.
 //
-// client 가 nil 이거나 threshold/window 가 비정상이면 error 반환 (이슈 #208 정책).
+// client 가 nil 이거나 threshold/window 가 비정상이면 error 반환.
 // keyPrefix 는 멀티 환경 분리용 ("dev", "prod" 등). 빈 문자열이면 "fetcher:fail" 사용.
 func NewRedisFailureCounter(client *goredis.Client, threshold int, window time.Duration, keyPrefix string, log *logger.Logger) (FailureCounter, error) {
 	if client == nil {

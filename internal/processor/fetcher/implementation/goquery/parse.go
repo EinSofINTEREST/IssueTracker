@@ -35,7 +35,7 @@ func (c *GoqueryCrawler) FetchAndParse(ctx context.Context, target core.Target, 
 	}
 	defer resp.Body.Close()
 
-	// fetch.go 와 동일하게 body 전체를 메모리에 읽은 뒤 charset 감지 (이슈 #253).
+	// fetch.go 와 동일하게 body 전체를 메모리에 읽은 뒤 charset 감지.
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err

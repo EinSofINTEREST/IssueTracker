@@ -1,4 +1,4 @@
-// Package wiring 은 환경변수 / config 기반 LLM provider 조립 헬퍼를 제공합니다 (이슈 #276).
+// Package wiring 은 환경변수 / config 기반 LLM provider 조립 헬퍼를 제공합니다.
 //
 // cmd/* 바이너리가 환경변수만으로 chain provider 를 구성할 수 있도록, config 로딩 ↔ provider 생성 ↔
 // 정책 wrapping 을 한 곳에 모아 재사용. llmgen / refiner 등 LLM 소비자가 동일 provider 를 공유합니다.
@@ -15,7 +15,7 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// lookupProviderAPIKey 는 provider 별 표준 환경변수의 *값* 을 반환합니다 (이슈 #216).
+// lookupProviderAPIKey 는 provider 별 표준 환경변수의 *값* 을 반환합니다.
 //
 // config 의 lookupLLMAPIKey 는 미발견 시 LLM_API_KEY 로 cascade 하여 모든 provider 에 동일 key 가
 // 적용되는 부작용이 있으므로, chain 구성 시에는 본 helper 로 provider 별 key 만 직접 조회합니다.
@@ -35,7 +35,7 @@ func lookupProviderAPIKey(name string) string {
 // normalizePrimary 는 LLM_PROVIDER 의 alias 를 fallbackOrder 의 정식 이름으로 정규화합니다.
 //
 // 예: cfg.Provider="claude" → "anthropic" 으로 매핑하여 chain 의 anthropic 항목에 LLM_API_KEY
-// fallback / LLM_MODEL override 가 정확히 적용되도록 보장 (PR #280 gemini 리뷰).
+// fallback / LLM_MODEL override 가 정확히 적용되도록 보장.
 func normalizePrimary(name string) string {
 	if name == "claude" {
 		return "anthropic"
@@ -43,14 +43,14 @@ func normalizePrimary(name string) string {
 	return name
 }
 
-// fallbackOrder 는 fixed-order fallback chain 의 시도 순서입니다 (이슈 #216).
+// fallbackOrder 는 fixed-order fallback chain 의 시도 순서입니다.
 //
 // 현재는 gemini → openai → anthropic 으로 hardcoded — 비용 / 한도 / 가용성 우선순위 기준.
 // 향후 capability 기반 metric 정책 (cost / latency / 성공률) 도입 시 본 슬라이스 대신
 // pkg/llm/policy 의 dynamic policy (CheapestFirst / Latency / Hybrid 등) 로 NewFixedOrder 만 교체.
 var fallbackOrder = []string{"gemini", "openai", "anthropic"}
 
-// BuildProvider 는 LLMConfig (환경변수) 에 따라 fixed-order fallback chain 을 구성합니다 (이슈 #216).
+// BuildProvider 는 LLMConfig (환경변수) 에 따라 fixed-order fallback chain 을 구성합니다.
 //
 // fallback 순서: gemini → openai → anthropic (hardcoded — 향후 metric 기반 정책으로 대체).
 // 각 provider 는 자신의 API key 가 환경변수에 설정된 경우에만 chain 후보에 포함:
@@ -64,7 +64,7 @@ var fallbackOrder = []string{"gemini", "openai", "anthropic"}
 //   - LLM_ENABLED=false → nil
 //   - 모든 provider 가 API key 부재 / 생성 실패 → nil + warn
 //
-// 정책 적용 (이슈 #144 PolicyProvider):
+// 정책 적용:
 //   - policy.NewFixedOrder(fallbackOrder...) 로 후보를 정해진 순서로 정렬
 //   - 향후 metric 기반 정책 도입 시 본 함수의 policy 객체만 교체하면 됨
 //
@@ -85,7 +85,7 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 	}
 
 	// LLM_PROVIDER alias (예: "claude" → "anthropic") 정규화 — fallbackOrder 의 정식 이름과 매칭하여
-	// LLM_API_KEY fallback / LLM_MODEL override 가 올바른 chain 항목에 적용되도록 보장 (PR #280 리뷰).
+	// LLM_API_KEY fallback / LLM_MODEL override 가 올바른 chain 항목에 적용되도록 보장.
 	primaryName := normalizePrimary(cfg.Provider)
 
 	candidates := make([]llm.Provider, 0, len(fallbackOrder))
@@ -129,7 +129,7 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 	pol := policy.NewFixedOrder(fallbackOrder...)
 	composed := chain.NewWithPolicy(pol, candidates, chain.WithPolicyLogger(log))
 
-	// 로그 필드 의미 (PR #280 Copilot 리뷰):
+	// 로그 필드 의미:
 	//   - chain          : 실제 활성화되어 시도되는 provider 시퀀스 (정책 적용 전 후보 목록)
 	//   - first_in_chain : chain[0] — 매 호출의 첫 시도 대상 (디버깅용)
 	//   - configured_primary : LLM_PROVIDER 가 가리키는 사용자 의도 (alias 정규화 후)
