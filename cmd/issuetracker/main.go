@@ -26,6 +26,7 @@ import (
 	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/publisher"
 	"issuetracker/internal/scheduler"
+	"issuetracker/internal/storage"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -129,7 +130,7 @@ func main() {
 	}
 	// parsing_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
 	// 호출처가 명시적 Invalidate 를 까먹어도 stale cache 발생 X — single source of truth.
-	parsingRuleRepo = rule.WrapWithInvalidator(parsingRuleRepo, ruleResolver)
+	parsingRuleRepo = storage.WrapWithInvalidator(parsingRuleRepo, ruleResolver)
 	ruleParser, err := rule.NewParser(ruleResolver)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule parser")
