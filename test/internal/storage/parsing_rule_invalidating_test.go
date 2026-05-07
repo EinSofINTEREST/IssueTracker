@@ -1,4 +1,4 @@
-package rule_test
+package storage_test
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/storage"
 )
 
@@ -111,7 +110,7 @@ func (r *recordingRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]
 func TestInvalidatingRepo_Insert_Success_TriggersInvalidate(t *testing.T) {
 	inner := &recordingRepo{}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
 	err := repo.Insert(context.Background(), rec)
@@ -123,7 +122,7 @@ func TestInvalidatingRepo_Insert_Success_TriggersInvalidate(t *testing.T) {
 func TestInvalidatingRepo_Insert_ErrDuplicate_TriggersInvalidate(t *testing.T) {
 	inner := &recordingRepo{insertErr: storage.ErrDuplicate}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
 	err := repo.Insert(context.Background(), rec)
@@ -138,7 +137,7 @@ func TestInvalidatingRepo_Insert_ErrDuplicate_TriggersInvalidate(t *testing.T) {
 func TestInvalidatingRepo_InsertNextVersion_Success_TriggersInvalidate(t *testing.T) {
 	inner := &recordingRepo{}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	rec := &storage.ParsingRuleRecord{HostPattern: "stale.example.com", TargetType: storage.TargetTypePage}
 	err := repo.InsertNextVersion(context.Background(), rec)
@@ -151,7 +150,7 @@ func TestInvalidatingRepo_InsertNextVersion_Success_TriggersInvalidate(t *testin
 func TestInvalidatingRepo_InsertNextVersion_ErrDuplicate_TriggersInvalidate(t *testing.T) {
 	inner := &recordingRepo{insertErr: storage.ErrDuplicate}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	err := repo.InsertNextVersion(context.Background(), &storage.ParsingRuleRecord{HostPattern: "x", TargetType: storage.TargetTypePage})
 	require.ErrorIs(t, err, storage.ErrDuplicate)
@@ -161,7 +160,7 @@ func TestInvalidatingRepo_InsertNextVersion_ErrDuplicate_TriggersInvalidate(t *t
 func TestInvalidatingRepo_Insert_OtherError_NoInvalidate(t *testing.T) {
 	inner := &recordingRepo{insertErr: errors.New("db down")}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
 	err := repo.Insert(context.Background(), rec)
@@ -176,7 +175,7 @@ func TestInvalidatingRepo_Insert_OtherError_NoInvalidate(t *testing.T) {
 func TestInvalidatingRepo_Update_Success_TriggersInvalidate(t *testing.T) {
 	inner := &recordingRepo{}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypeList}
 	err := repo.Update(context.Background(), rec)
@@ -188,7 +187,7 @@ func TestInvalidatingRepo_Update_Success_TriggersInvalidate(t *testing.T) {
 func TestInvalidatingRepo_Update_Error_NoInvalidate(t *testing.T) {
 	inner := &recordingRepo{updateErr: errors.New("constraint violation")}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	err := repo.Update(context.Background(), &storage.ParsingRuleRecord{})
 	require.Error(t, err)
@@ -206,7 +205,7 @@ func TestInvalidatingRepo_UpdatePathPattern_Success_PrefetchesAndInvalidates(t *
 		},
 	}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	err := repo.UpdatePathPattern(context.Background(), 42, "/news/.*", "refiner v1")
 	require.NoError(t, err)
@@ -222,7 +221,7 @@ func TestInvalidatingRepo_UpdatePathPattern_Error_NoInvalidate(t *testing.T) {
 		updatePathErr: errors.New("not found"),
 	}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	err := repo.UpdatePathPattern(context.Background(), 1, "/", "")
 	require.Error(t, err)
@@ -234,7 +233,7 @@ func TestInvalidatingRepo_UpdatePathPattern_PrefetchFails_NoInvalidate(t *testin
 		getByIDErr: errors.New("db down"),
 	}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	// pre-fetch 실패해도 update 자체는 진행 (성공 가정).
 	err := repo.UpdatePathPattern(context.Background(), 1, "/", "")
@@ -253,7 +252,7 @@ func TestInvalidatingRepo_Delete_Success_PrefetchesAndInvalidates(t *testing.T) 
 		},
 	}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	err := repo.Delete(context.Background(), 99)
 	require.NoError(t, err)
@@ -268,7 +267,7 @@ func TestInvalidatingRepo_Delete_PrefetchFails_NoInvalidate(t *testing.T) {
 		getByIDErr: errors.New("db down"),
 	}
 	inv := &recordingInvalidator{}
-	repo := rule.WrapWithInvalidator(inner, inv)
+	repo := storage.WrapWithInvalidator(inner, inv)
 
 	err := repo.Delete(context.Background(), 1)
 	require.NoError(t, err)
@@ -283,7 +282,7 @@ func TestInvalidatingRepo_Delete_PrefetchFails_NoInvalidate(t *testing.T) {
 
 func TestInvalidatingRepo_NilInvalidator_NoOp(t *testing.T) {
 	inner := &recordingRepo{}
-	repo := rule.WrapWithInvalidator(inner, nil)
+	repo := storage.WrapWithInvalidator(inner, nil)
 
 	err := repo.Insert(context.Background(), &storage.ParsingRuleRecord{HostPattern: "x", TargetType: storage.TargetTypePage})
 	require.NoError(t, err)
@@ -293,6 +292,6 @@ func TestInvalidatingRepo_NilInvalidator_NoOp(t *testing.T) {
 
 func TestWrapWithInvalidator_NilInner_Panics(t *testing.T) {
 	assert.Panics(t, func() {
-		_ = rule.WrapWithInvalidator(nil, &recordingInvalidator{})
+		_ = storage.WrapWithInvalidator(nil, &recordingInvalidator{})
 	}, "nil inner 는 wiring 버그 — panic 으로 즉시 노출")
 }

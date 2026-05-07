@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sort"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -294,118 +293,6 @@ func TestBlacklistMatcher_InvalidateAll_ClearsCache(t *testing.T) {
 	_, _ = m.IsBlocked(context.Background(), "https://a.example.com/x")
 	_, _ = m.IsBlocked(context.Background(), "https://b.example.com/x")
 	assert.Equal(t, int64(4), atomic.LoadInt64(&repo.findCalls))
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// invalidatingBlacklistRepo decorator
-// ─────────────────────────────────────────────────────────────────────────────
-
-type recordingBlacklistInvalidator struct {
-	mu    sync.Mutex
-	hosts []string
-}
-
-func (r *recordingBlacklistInvalidator) Invalidate(host string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.hosts = append(r.hosts, host)
-}
-
-func (r *recordingBlacklistInvalidator) snapshot() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]string, len(r.hosts))
-	copy(out, r.hosts)
-	return out
-}
-
-func TestInvalidatingBlacklistRepo_Insert_Success_Invalidates(t *testing.T) {
-	inner := &fakeBlacklistRepo{}
-	inv := &recordingBlacklistInvalidator{}
-	repo := rule.WrapBlacklistWithInvalidator(inner, inv)
-
-	err := repo.Insert(context.Background(), &storage.BlacklistRecord{
-		HostPattern: "ads.example.com", Source: storage.BlacklistSourceManual, Enabled: true,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot())
-}
-
-func TestInvalidatingBlacklistRepo_Insert_DuplicateAlsoInvalidates(t *testing.T) {
-	inner := &fakeBlacklistRepo{insertErr: storage.ErrDuplicate}
-	inv := &recordingBlacklistInvalidator{}
-	repo := rule.WrapBlacklistWithInvalidator(inner, inv)
-
-	err := repo.Insert(context.Background(), &storage.BlacklistRecord{
-		HostPattern: "ads.example.com", Source: storage.BlacklistSourceManual, Enabled: true,
-	})
-	require.ErrorIs(t, err, storage.ErrDuplicate)
-	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot(), "ErrDuplicate 도 invalidate")
-}
-
-func TestInvalidatingBlacklistRepo_Update_Success_Invalidates(t *testing.T) {
-	inner := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", Enabled: true},
-	}}
-	inv := &recordingBlacklistInvalidator{}
-	repo := rule.WrapBlacklistWithInvalidator(inner, inv)
-
-	err := repo.Update(context.Background(), &storage.BlacklistRecord{
-		ID: 1, HostPattern: "ads.example.com", Reason: "updated", Enabled: false,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot())
-}
-
-// PR #296 CodeRabbit Major: Update 는 host 변경 안 하므로 호출자가 rec.HostPattern 을 비워
-// 보낼 수 있음. 사전 GetByID 로 authoritative host 를 얻어 invalidate 해야 cache 누락 0.
-func TestInvalidatingBlacklistRepo_Update_EmptyHostInArg_StillInvalidatesActualHost(t *testing.T) {
-	inner := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", Enabled: true},
-	}}
-	inv := &recordingBlacklistInvalidator{}
-	repo := rule.WrapBlacklistWithInvalidator(inner, inv)
-
-	// 호출자가 host 비워 보내도 (Update 는 host 변경 안 함이라 정당) DB 의 실제 host 로 invalidate.
-	err := repo.Update(context.Background(), &storage.BlacklistRecord{
-		ID: 1, Reason: "updated", Enabled: false,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot(),
-		"empty HostPattern arg 여도 사전 GetByID 로 실제 host 발견 후 invalidate")
-}
-
-func TestInvalidatingBlacklistRepo_Delete_PrefetchesAndInvalidates(t *testing.T) {
-	inner := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", Enabled: true},
-	}}
-	inv := &recordingBlacklistInvalidator{}
-	repo := rule.WrapBlacklistWithInvalidator(inner, inv)
-
-	err := repo.Delete(context.Background(), 1)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot())
-}
-
-func TestInvalidatingBlacklistRepo_Delete_PrefetchFails_NoInvalidate(t *testing.T) {
-	inner := &fakeBlacklistRepo{getByIDErr: errors.New("db down")}
-	inv := &recordingBlacklistInvalidator{}
-	repo := rule.WrapBlacklistWithInvalidator(inner, inv)
-
-	err := repo.Delete(context.Background(), 1)
-	require.NoError(t, err, "Delete 자체는 성공할 수 있음")
-	assert.Empty(t, inv.snapshot(), "pre-fetch 실패 시 invalidate skip — TTL fallback")
-}
-
-func TestInvalidatingBlacklistRepo_NilInvalidator_NoOp(t *testing.T) {
-	inner := &fakeBlacklistRepo{}
-	repo := rule.WrapBlacklistWithInvalidator(inner, nil)
-
-	err := repo.Insert(context.Background(), &storage.BlacklistRecord{
-		HostPattern: "ads.example.com", Source: storage.BlacklistSourceManual, Enabled: true,
-	})
-	require.NoError(t, err)
-	// nil invalidator 일 때 panic 없이 통과만 검증.
 }
 
 func TestBlacklistMatcher_NewWithNilRepo_Errors(t *testing.T) {
