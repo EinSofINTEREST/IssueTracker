@@ -44,12 +44,17 @@ type inflightLocker struct {
 }
 
 // NewInflightLocker 는 Redis 기반 InflightLocker 를 생성합니다.
-// ttl ≤ 0 이면 DefaultInflightLockTTL 로 보정합니다.
-func NewInflightLocker(rdb *goredis.Client, ttl time.Duration) storage.InflightLocker {
+//
+// rdb 가 nil 이면 error 반환 — wiring 시 panic-on-nil 정책 (다른 redisstore 생성자와 일관).
+// ttl ≤ 0 이면 DefaultInflightLockTTL 로 보정.
+func NewInflightLocker(rdb *goredis.Client, ttl time.Duration) (storage.InflightLocker, error) {
+	if rdb == nil {
+		return nil, errors.New("redisstore: NewInflightLocker requires non-nil redis client")
+	}
 	if ttl <= 0 {
 		ttl = DefaultInflightLockTTL
 	}
-	return &inflightLocker{rdb: rdb, ttl: ttl, tokens: make(map[string]string)}
+	return &inflightLocker{rdb: rdb, ttl: ttl, tokens: make(map[string]string)}, nil
 }
 
 func (r *inflightLocker) TryAcquire(ctx context.Context, host string, targetType storage.TargetType) (bool, error) {

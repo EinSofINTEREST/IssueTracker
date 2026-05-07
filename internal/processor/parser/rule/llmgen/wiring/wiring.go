@@ -32,7 +32,11 @@ func Build(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *
 		return nil, fmt.Errorf("construct llmgen generator: %w", err)
 	}
 	if redisClient != nil {
-		gen.SetLocker(redisstore.NewInflightLocker(redisClient.Raw(), redisstore.DefaultInflightLockTTL))
+		locker, lockerErr := redisstore.NewInflightLocker(redisClient.Raw(), redisstore.DefaultInflightLockTTL)
+		if lockerErr != nil {
+			return nil, fmt.Errorf("construct redis inflight locker: %w", lockerErr)
+		}
+		gen.SetLocker(locker)
 		log.Info("llmgen: Redis 분산 inflight lock 활성화")
 	}
 	return gen, nil

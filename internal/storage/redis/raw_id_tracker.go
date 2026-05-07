@@ -24,6 +24,7 @@ type rawIDTracker struct {
 	client    *goredis.Client
 	keyPrefix string
 	ttl       time.Duration
+	now       func() time.Time // 테스트 주입용 — 일반 사용 시 nil → time.Now
 	log       *logger.Logger
 }
 
@@ -59,7 +60,11 @@ func (r *rawIDTracker) Track(ctx context.Context, host, rawID string) error {
 		return nil
 	}
 	key := r.keyFor(host)
-	score := float64(time.Now().UnixNano())
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
+	score := float64(now.UnixNano())
 
 	pipe := r.client.Pipeline()
 	pipe.ZAdd(ctx, key, goredis.Z{Score: score, Member: rawID})
