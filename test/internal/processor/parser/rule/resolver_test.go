@@ -95,6 +95,10 @@ func (r *fakeRepo) HasAnyRule(_ context.Context, host string, t storage.TargetTy
 	return r.hasAnyExists, r.hasAnyEnabled, nil
 }
 func (r *fakeRepo) hasAnyCalls() int { return int(atomic.LoadInt64(&r.hasAnyRuleCalls)) }
+func (r *fakeRepo) InsertNextVersion(_ context.Context, _ *storage.ParsingRuleRecord) error {
+	return nil
+}
+
 func (r *fakeRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
@@ -302,6 +306,65 @@ func TestResolver_PathPattern_LongerPatternWinsOverCatchAll(t *testing.T) {
 	got, err = r.Resolve(context.Background(), "news.example.com", "/article/123", storage.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.default", got.Selectors.Title.CSS, "specific 미매칭 시 catch-all fallback")
+}
+
+// 이슈 #282: stale relearn 으로 같은 path_pattern 의 v=2 가 추가됐을 때, version DESC 정렬상
+// v=2 가 우선 채택. 같은 LENGTH 내 tie-breaker 로 version 작용 검증 (postgres ORDER BY
+// LENGTH DESC, version DESC 와 일치).
+func TestResolver_PathPattern_HigherVersionWinsForSamePattern(t *testing.T) {
+	v1 := samplePageRule("news.example.com")
+	v1.ID = 10
+	v1.Version = 1
+	v1.PathPattern = "^/article/(\\d+)$"
+	v1.Selectors.Title = &storage.FieldSelector{CSS: "h1.old"}
+
+	v2 := samplePageRule("news.example.com")
+	v2.ID = 11
+	v2.Version = 2
+	v2.PathPattern = "^/article/(\\d+)$" // 동일 path_pattern (stale relearn 결과)
+	v2.Selectors.Title = &storage.FieldSelector{CSS: "h1.new"}
+
+	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{v1, v2}}
+	r, _ := rule.NewResolver(repo)
+
+	got, err := r.Resolve(context.Background(), "news.example.com", "/article/123", storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.Equal(t, "h1.new", got.Selectors.Title.CSS, "동일 path_pattern 은 version DESC 로 더 높은 v 가 우선")
+	assert.Equal(t, 2, got.Version)
+}
+
+// 이슈 #282 Phase 2: refiner 가 catch-all 을 보존하고 정밀 path_pattern 으로 새 row 를 추가했을 때:
+//   - 매칭 path: 정밀 rule 채택 (LENGTH DESC 우선)
+//   - 미매칭 path: catch-all fallback (silent miss 방지)
+func TestResolver_PathPattern_RefinedAndCatchAll_FallbackForNonMatching(t *testing.T) {
+	// catch-all (v1, llm-auto, path="") — 보존된 fallback
+	catchAll := samplePageRule("news.example.com")
+	catchAll.ID = 100
+	catchAll.SourceName = "llm-auto"
+	catchAll.Version = 1
+	catchAll.PathPattern = ""
+	catchAll.Selectors.Title = &storage.FieldSelector{CSS: "h1.catchall"}
+
+	// 정밀 (v1, llm-auto, path="^/article/(\d+)$") — refiner 가 InsertNextVersion 으로 추가
+	refined := samplePageRule("news.example.com")
+	refined.ID = 101
+	refined.SourceName = "llm-auto"
+	refined.Version = 1
+	refined.PathPattern = `^/article/(\d+)$`
+	refined.Selectors.Title = &storage.FieldSelector{CSS: "h1.refined"}
+
+	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{catchAll, refined}}
+	r, _ := rule.NewResolver(repo)
+
+	// 매칭 path → refined 채택
+	got, err := r.Resolve(context.Background(), "news.example.com", "/article/42", storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.Equal(t, "h1.refined", got.Selectors.Title.CSS, "정밀 path_pattern 이 매칭 path 우선 채택")
+
+	// 미매칭 path → catch-all fallback (silent miss X)
+	got, err = r.Resolve(context.Background(), "news.example.com", "/about/team", storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.Equal(t, "h1.catchall", got.Selectors.Title.CSS, "정밀 미매칭 path 는 catch-all fallback")
 }
 
 // path_pattern 이 모두 매칭 안 되고 catch-all 도 없으면 ErrNoRule.

@@ -10,9 +10,11 @@
 //     c. pathinfer.InferHeuristic(samples) 시도 — 성공하면 algorithm 방식 채택.
 //     d. 실패 + LLMClient != nil 이면 pathinfer.InferLLM(samples) 시도 — 성공하면 llm 방식 채택.
 //     e. 결과 regex 가 비어있으면 skip (다음 polling 에서 재시도 — sample 누적 추가 후 재평가).
-//     f. ParsingRuleRepository.UpdatePathPattern — rule.PathPattern + description (정밀화 시각/방식) 갱신.
+//     f. ParsingRuleRepository.InsertNextVersion — 기존 catch-all (v1) 보존 + 정밀 path_pattern 으로
+//     새 version (v2) INSERT (이슈 #282 Phase 2). v2 가 매칭 안 되는 path 는 v1 (catch-all)
+//     로 fallback — 정밀화 적용 범위가 좁아도 silent miss 없음.
 //     g. resolver.Invalidate(host, type) — cache flush (다음 lookup 부터 갱신된 rule 적용).
-//     h. SampleURLRepository.Purge(rule.ID) — sample 정리 (다음 cycle 에서 재누적).
+//     h. SampleURLRepository.Purge(rule.ID) — 기존 catch-all (v1) 의 sample 정리 (다음 cycle 에서 재누적).
 //
 // 모든 실패는 non-fatal — 단계별 Warn 로그만 기록하고 다음 rule / 다음 cycle 로 진행.
 //
@@ -314,19 +316,48 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 	}
 
 	desc := buildDescription(rec.Description, method, len(paths))
-	if err := r.rules.UpdatePathPattern(ctx, rec.ID, pattern, desc); err != nil {
+
+	// 이슈 #282 Phase 2: catch-all (v1) 을 보존하고 정밀 path_pattern 으로 새 version (v2) INSERT.
+	// 기존 UpdatePathPattern 은 v1 의 path_pattern 을 직접 mutation 하여 catch-all 을 잃었음 —
+	// 정밀화 적용 범위 (예: /news/123) 외 path 는 매칭되는 룰이 사라져 silent miss 발생.
+	// InsertNextVersion 은 v1 그대로 두고 v2 추가 — Resolver 가 LENGTH(path_pattern) DESC + version DESC
+	// 정렬로 v2 를 우선 시도하고 매칭 실패 시 v1 catch-all 로 자연 fallback.
+	//
+	// 새 record 의 selector / confidence / source / host / target / enabled 는 v1 의 값을 그대로 복사.
+	newRec := &storage.ParsingRuleRecord{
+		SourceName:  rec.SourceName,
+		HostPattern: rec.HostPattern,
+		PathPattern: pattern,
+		TargetType:  rec.TargetType,
+		Enabled:     true,
+		Selectors:   rec.Selectors,
+		Confidence:  rec.Confidence,
+		Description: desc,
+	}
+	if err := r.rules.InsertNextVersion(ctx, newRec); err != nil {
+		// ErrDuplicate 는 race window — 다른 refiner 인스턴스가 이미 동일 자연키로 v+1 INSERT 했음.
+		// 본 cycle 은 결과적으로 no-op 으로 흡수 (samples 는 그대로 두고 다음 cycle 에서 재평가).
+		if errors.Is(err, storage.ErrDuplicate) {
+			rlog.WithFields(map[string]interface{}{
+				"pattern": pattern,
+				"method":  method,
+			}).Debug("insert next version raced with another refiner — skipping")
+			r.metrics.RecordAttempt(ResultSkipped, method)
+			return
+		}
 		rlog.WithFields(map[string]interface{}{
 			"pattern": pattern,
 			"method":  method,
-		}).WithError(err).Warn("update path_pattern failed")
+		}).WithError(err).Warn("insert next version failed")
 		r.metrics.RecordAttempt(ResultError, method)
 		return
 	}
 
-	// 2) cache flush 는 invalidatingRepo decorator 가 UpdatePathPattern 성공 후 자동 호출 (이슈 #288).
+	// 2) cache flush 는 invalidatingRepo decorator 가 InsertNextVersion 성공 후 자동 호출 (이슈 #288).
 	//    refiner 의 명시적 Invalidate 책임 제거 — single source of truth.
 
-	// 3) sample purge — 다음 cycle 에서 재누적 (다른 path 패턴 발견 가능성 대비).
+	// 3) sample purge — 기존 catch-all (v1) 의 누적 sample 정리. 다음 cycle 에서 v2 미매칭 path 가
+	//    v1 으로 fallback 하면 sample 이 다시 v1.ID 에 누적됨 (refiner 가 추가 정밀화 시도).
 	if err := r.samples.Purge(ctx, rec.ID); err != nil {
 		rlog.WithError(err).Warn("sample purge failed (non-fatal — next cycle will re-evaluate)")
 	}
@@ -335,7 +366,9 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 		"pattern":      pattern,
 		"method":       method,
 		"sample_count": len(paths),
-	}).Info("path_pattern refined")
+		"new_rule_id":  newRec.ID,
+		"new_version":  newRec.Version,
+	}).Info("path_pattern refined via version bump (v1 catch-all preserved)")
 	r.metrics.RecordAttempt(ResultSuccess, method)
 }
 

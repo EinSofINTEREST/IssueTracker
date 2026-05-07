@@ -82,6 +82,16 @@ type ParserWorker struct {
 	// nil 허용 — nil 이면 release skip (TTL fallback 으로 자동 회수).
 	guard PipelineGuard
 
+	// staleCounter: stale rule 재학습 트리거 카운터 (이슈 #282).
+	// nil 허용 — nil 이면 stale 재학습 비활성 (chromedp 자동 전환만 동작).
+	// ErrParseFailure / ErrEmptySelector 발생 시 Record 호출, threshold 도달 시
+	// llmGen.EnqueueStale 트리거.
+	staleCounter llmgen.StaleCounter
+	// staleThreshold: window 내 stale failure 임계값 (이슈 #282, PR #294 CodeRabbit 피드백).
+	// 임계 도달 첫 회 (count == staleThreshold) 만 enqueue — count > threshold 인 후속 호출은
+	// 카운트만 누적하고 enqueue 회피 (window 내 동일 host 의 version churn / 비용 spike 방지).
+	staleThreshold int
+
 	workerCount int
 	log         *logger.Logger
 
@@ -166,6 +176,17 @@ func NewParserWorker(
 // nil 주입 시 release 비활성 (TTL fallback). Start 호출 전 wiring 단계에서 1회 설정.
 func (w *ParserWorker) SetPipelineGuard(g PipelineGuard) {
 	w.guard = g
+}
+
+// SetStaleCounter 는 stale rule 재학습 트리거 카운터 + 임계값을 주입합니다 (이슈 #282).
+//
+// nil counter 주입 시 stale 재학습 비활성 (기존 chromedp 자동 전환만 동작).
+// threshold <= 0 이면 threshold-crossing gate 비활성 — counter.Record 의 thresholdReached 만으로 트리거
+// (window 내 매 후속 호출마다 enqueue 가능, 호환 fallback).
+// Start 호출 전 wiring 단계에서 1회 설정.
+func (w *ParserWorker) SetStaleCounter(c llmgen.StaleCounter, threshold int) {
+	w.staleCounter = c
+	w.staleThreshold = threshold
 }
 
 // Start 는 worker goroutines 를 기동합니다 (non-blocking).
@@ -441,9 +462,11 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 		// 이슈 #220: page 단계의 ParseFailure / EmptySelector 만 host 카운터에 누적.
 		// list (category) 는 본질적으로 다른 selector 셋이라 chromedp 전환 신호로 부적절.
 		// 이슈 #221: 같은 시점에 raw_id 를 host 별 추적 — 단계 3 의 republish 대상 수집.
+		// 이슈 #282: 동일 시점에 stale counter 누적 — 임계 도달 시 LLM 재학습 트리거.
 		if targetType == storage.TargetTypePage &&
 			(rerr.Code == rule.ErrParseFailure || rerr.Code == rule.ErrEmptySelector) {
 			w.recordHostFailure(ctx, rerr.Host, rawID, fetcherRule.FailureReasonRuleParseFailure, mlog)
+			w.recordStaleAndMaybeRelearn(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName, jobTimeout, mlog)
 		}
 
 		_ = rawID // 본 시그니처에선 rawID 직접 사용 안 함, 향후 audit log 에서 활용
@@ -499,6 +522,78 @@ func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string
 			w.upgrader.Trigger(triggerCtx, host)
 		}()
 	}
+}
+
+// recordStaleAndMaybeRelearn 은 stale rule 발생 1건을 (host, target_type) 카운터에 누적하고
+// 임계 도달 시 LLM 재학습을 트리거합니다 (이슈 #282).
+//
+// 동작 요건 (모두 충족 시만 enqueue):
+//  1. staleCounter / llmGen 둘 다 wiring 됨 (둘 중 하나 nil 이면 noop)
+//  2. host != "" — 빈 host 는 카운팅 skip
+//  3. counter.Record 가 thresholdReached=true 반환
+//  4. resolver 의 HasAnyRule 결과 — 운영자가 모든 rule 을 disable 한 host 는 skip (이슈 #287 동일 정책)
+//
+// 카운팅 / lookup 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지. 임계 도달 후 EnqueueStale
+// 은 비동기 (Generator 내부 goroutine) 라 본 함수 latency 영향 없음.
+func (w *ParserWorker) recordStaleAndMaybeRelearn(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) {
+	if w.staleCounter == nil || w.llmGen == nil {
+		return
+	}
+	if host == "" {
+		return
+	}
+	count, thresholdReached, err := w.staleCounter.Record(ctx, host, targetType)
+	if err != nil {
+		mlog.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+		}).WithError(err).Warn("stale counter record failed (non-fatal)")
+		return
+	}
+	if !thresholdReached {
+		return
+	}
+	// 이슈 #282 PR #294 CodeRabbit 피드백: thresholdReached 는 window 내 count >= threshold 일 때
+	// 매번 true 이므로, 첫 crossing (count == threshold) 만 enqueue 하여 동일 window 안의 중복
+	// version 생성 / 비용 spike 회피. staleThreshold == 0 이면 호환 모드 (gate 비활성).
+	if w.staleThreshold > 0 && count != w.staleThreshold {
+		mlog.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+			"count":       count,
+			"threshold":   w.staleThreshold,
+		}).Debug("stale threshold already crossed in current window — skipping duplicate enqueue")
+		return
+	}
+
+	// 운영자 disable 잔존 검증 — 같은 fail-open 정책 (이슈 #287).
+	shouldEnqueue := true
+	if w.resolver != nil {
+		exists, hasEnabled, herr := w.resolver.HasAnyRule(ctx, host, targetType)
+		shouldEnqueue = ShouldEnqueueLLMOnNoRule(exists, hasEnabled, herr)
+		if herr == nil && exists && !hasEnabled {
+			mlog.WithFields(map[string]interface{}{
+				"host":        host,
+				"target_type": string(targetType),
+				"count":       count,
+			}).Warn("stale threshold reached but rule disabled — skipping LLM relearn (manual re-enable required)")
+		} else if herr != nil && ctx.Err() == nil {
+			mlog.WithFields(map[string]interface{}{
+				"host":        host,
+				"target_type": string(targetType),
+			}).WithError(herr).Warn("HasAnyRule lookup failed during stale relearn, falling through to enqueue")
+		}
+	}
+	if !shouldEnqueue {
+		return
+	}
+
+	mlog.WithFields(map[string]interface{}{
+		"host":        host,
+		"target_type": string(targetType),
+		"count":       count,
+	}).Info("stale rule relearn triggered — enqueueing LLM regen via version bump")
+	w.llmGen.EnqueueStale(ctx, host, targetType, raw, llmRetryCount, crawlerName, jobTimeout)
 }
 
 // hostOf 는 raw.URL 에서 host 만 추출합니다 (port 제거).

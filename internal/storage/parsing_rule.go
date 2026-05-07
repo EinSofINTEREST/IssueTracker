@@ -208,6 +208,23 @@ type ParsingRuleRepository interface {
 	// FindActiveCandidates 의 첫 항목 (length DESC 정렬, '' 포함) 을 반환합니다.
 	FindActive(ctx context.Context, host string, targetType TargetType) (*ParsingRuleRecord, error)
 
+	// InsertNextVersion 은 (source_name, host_pattern, path_pattern, target_type) 자연키의 다음
+	// version 으로 rec 을 INSERT 합니다 (이슈 #282).
+	//
+	// 사용처:
+	//   - Stale rule 재학습: 기존 v1 (catch-all enabled=true) 잔존 + 신규 v2 (정밀 / 갱신 selector)
+	//     → Resolver 가 LENGTH(path_pattern) DESC + version DESC 로 우선순위 결정
+	//   - Refiner path_pattern 정밀화: catch-all (v1, path="") + 정밀 (v2, path="/news/.*") 공존
+	//     → v2 미매칭 path 는 v1 catch-all 로 fallback (silent miss 회피)
+	//
+	// 동작:
+	//   1. (source_name, host_pattern, path_pattern, target_type) 의 MAX(version) 조회
+	//   2. 없으면 version=1 로 INSERT, 있으면 max+1 로 INSERT
+	//   3. 자연키 충돌 (race window) 시 ErrDuplicate 반환 — 호출자 retry 또는 흡수
+	//
+	// rec.Version 은 입력 무관 (자동 계산). 성공 시 rec.ID / Version / CreatedAt / UpdatedAt 채워짐.
+	InsertNextVersion(ctx context.Context, r *ParsingRuleRecord) error
+
 	// HasAnyRule 은 (host_pattern, target_type) 에 대한 룰 존재 여부를 반환합니다 (이슈 #287).
 	//
 	// FindActiveCandidates 와 달리 enabled 필터 없음 — disabled 룰도 \"존재함\" 으로 카운트.
