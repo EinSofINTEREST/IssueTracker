@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"issuetracker/pkg/llm/prompt"
 )
 
 // LLMClient 는 InferLLM 이 사용하는 최소 LLM 호출 인터페이스입니다.
@@ -31,44 +33,20 @@ type LLMSamples struct {
 	NonArticles []string
 }
 
-// llmSystemPrompt 는 모든 InferLLM 호출에 공통으로 사용되는 system 프롬프트입니다.
-//
-// 응답 형식 강제 — markdown 펜스 / prose 없이 단일 RE2 패턴 라인만 반환하도록 지시.
-// pathinfer 패키지 안 inline 상수. 그곳으로 이전 가능.
-const llmSystemPrompt = `You are an expert at writing URL path regular expressions.
-
-Strict rules:
-1. Respond with ONLY a single RE2-compatible regex pattern on the first line — no prose, no markdown fences, no explanation.
-2. The regex must match ALL provided positive (article) URL paths.
-3. The regex must NOT match any of the provided negative (non-article) URL paths.
-4. Avoid trivially broad patterns (e.g. ".*", "^/.*$", ".+") — produce a pattern that is as specific as possible while satisfying rules 2 and 3.
-5. Anchor the pattern with ^ and $ if appropriate.
-6. Use only standard RE2 syntax (no lookaround, no backreferences).`
-
-// llmUserPromptTemplate 은 LLMSamples 를 채워 user 프롬프트를 생성합니다.
-const llmUserPromptTemplate = `Given these URL paths from the same site, generate a single RE2 regex that matches the article URLs but not the non-article URLs.
-
-Article URLs (positive — must match):
-%s
-
-Non-article URLs (negative — must NOT match):
-%s
-
-Respond with ONLY the regex pattern.`
-
 // InferLLM 은 LLMClient 를 사용해 path_pattern regex 를 추론합니다.
 //
 // 흐름:
 //  1. samples.Articles 가 cfg.minSamples 미만이면 ("", false, nil) — pathinfer.InferHeuristic 과 동일 정책
-//  2. LLM 호출 (system + user 프롬프트)
+//  2. loader 로 system / user prompt 빌드 후 LLM 호출
 //  3. 응답에서 첫 번째 RE2 패턴 라인 추출 (markdown 펜스 무시)
 //  4. 검증 (validateLLMResult): 컴파일 / positive / negative / trivially-broad
 //  5. 검증 통과 시 (regex, true, nil), 실패 시 ("", false, nil) — 호출자가 catch-all 또는 다른 fallback 으로 분기
 //
 // LLM 호출 자체의 에러 (network / API) 는 (regex="", ok=false, err=원본) 로 반환 — 호출자가 retry / 알림 결정.
+// loader 로드 실패는 wiring/배포 누락 — error 반환으로 즉시 가시화.
 //
 // opts 로 default override 가능 (WithMinSamples 등 — InferHeuristic 과 동일).
-func InferLLM(ctx context.Context, samples LLMSamples, client LLMClient, opts ...Option) (string, bool, error) {
+func InferLLM(ctx context.Context, samples LLMSamples, client LLMClient, loader prompt.Loader, opts ...Option) (string, bool, error) {
 	cfg := config{minSamples: DefaultMinSamples}
 	for _, o := range opts {
 		o(&cfg)
@@ -80,9 +58,20 @@ func InferLLM(ctx context.Context, samples LLMSamples, client LLMClient, opts ..
 	if client == nil {
 		return "", false, errors.New("InferLLM: nil LLMClient")
 	}
+	if loader == nil {
+		return "", false, errors.New("InferLLM: nil prompt loader")
+	}
 
-	user := buildUserPrompt(samples)
-	resp, err := client.Generate(ctx, llmSystemPrompt, user)
+	system, err := loader.Load("pathinfer/system")
+	if err != nil {
+		return "", false, fmt.Errorf("load pathinfer system prompt: %w", err)
+	}
+	user, err := buildUserPrompt(samples, loader)
+	if err != nil {
+		return "", false, err
+	}
+
+	resp, err := client.Generate(ctx, system, user)
 	if err != nil {
 		return "", false, fmt.Errorf("llm generate: %w", err)
 	}
@@ -102,10 +91,17 @@ func InferLLM(ctx context.Context, samples LLMSamples, client LLMClient, opts ..
 //
 // Articles / NonArticles 가 비어있으면 "(none)" 으로 표시 — LLM 이 빈 슬라이스를 "negative 없음"
 // 으로 정확히 해석하도록.
-func buildUserPrompt(samples LLMSamples) string {
+func buildUserPrompt(samples LLMSamples, loader prompt.Loader) (string, error) {
+	template, err := loader.Load("pathinfer/user")
+	if err != nil {
+		return "", fmt.Errorf("load pathinfer user prompt: %w", err)
+	}
 	pos := joinOrNone(samples.Articles)
 	neg := joinOrNone(samples.NonArticles)
-	return fmt.Sprintf(llmUserPromptTemplate, pos, neg)
+	return prompt.Render(template,
+		"{{ARTICLES}}", pos,
+		"{{NON_ARTICLES}}", neg,
+	), nil
 }
 
 func joinOrNone(items []string) string {

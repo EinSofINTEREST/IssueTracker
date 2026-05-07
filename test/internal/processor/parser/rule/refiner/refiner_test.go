@@ -18,8 +18,16 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/rule/refiner"
 	"issuetracker/internal/storage"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
+
+// pathinferLoader 는 LLM fallback 활성 케이스에서 InferLLM 이 요구하는 prompt asset 을
+// 제공합니다. 운영의 scripts/prompts/pathinfer/{system,user}.txt 와 동일한 placeholder 사용.
+var pathinferLoader = prompt.MapLoader{
+	"pathinfer/system": "RE2 expert",
+	"pathinfer/user":   "Articles:\n{{ARTICLES}}\n\nNon:\n{{NON_ARTICLES}}",
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // In-memory mocks
@@ -326,7 +334,7 @@ func TestRunOnce_AlgorithmFails_LLMFallback(t *testing.T) {
 	// LLM 이 모든 sample 을 매칭하는 정직한 패턴 응답.
 	llm := &fakeLLM{resp: `^/.+/\d+$`}
 
-	r := newRefiner(t, rules, samples, refiner.WithLLMClient(llm))
+	r := newRefiner(t, rules, samples, refiner.WithLLMClient(llm), refiner.WithPromptLoader(pathinferLoader))
 	require.NoError(t, r.RunOnce(context.Background()))
 
 	calls := rules.insertCalls()
@@ -371,7 +379,7 @@ func TestRunOnce_LLMError_NoUpdate(t *testing.T) {
 
 	llm := &fakeLLM{err: errors.New("llm down")}
 
-	r := newRefiner(t, rules, samples, refiner.WithLLMClient(llm))
+	r := newRefiner(t, rules, samples, refiner.WithLLMClient(llm), refiner.WithPromptLoader(pathinferLoader))
 	require.NoError(t, r.RunOnce(context.Background()))
 
 	assert.Empty(t, rules.insertCalls(), "LLM error should not result in insert")
