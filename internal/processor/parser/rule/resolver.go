@@ -275,6 +275,7 @@ func (r *Resolver) HasAnyRule(ctx context.Context, host string, targetType stora
 	}
 
 	r.mu.Lock()
+	r.evictHasAnyExpiringSoon()
 	r.hasAnyCache[key] = hasAnyEntry{
 		exists:     exists,
 		hasEnabled: hasEnabled,
@@ -317,6 +318,27 @@ func (r *Resolver) evictExpiringSoon() {
 	}
 	if !first {
 		delete(r.cache, oldestKey)
+	}
+}
+
+// evictHasAnyExpiringSoon 은 hasAnyCache 가 maxEntries 초과 시 만료 임박 entry 를 제거합니다 (이슈 #287).
+// evictExpiringSoon 과 동일 정책 — host 폭증 시 OOM 방어. 호출자는 r.mu hold.
+func (r *Resolver) evictHasAnyExpiringSoon() {
+	if len(r.hasAnyCache) < r.maxEntries {
+		return
+	}
+	var oldestKey cacheKey
+	var oldestExpiry time.Time
+	first := true
+	for k, e := range r.hasAnyCache {
+		if first || e.expiresAt.Before(oldestExpiry) {
+			oldestKey = k
+			oldestExpiry = e.expiresAt
+			first = false
+		}
+	}
+	if !first {
+		delete(r.hasAnyCache, oldestKey)
 	}
 }
 
