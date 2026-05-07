@@ -78,7 +78,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	loader, warn := prompt.NewDefaultLoader()
+	promptCfg, err := config.LoadPrompt()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load prompt config")
+	}
+	loader, warn := prompt.NewDefaultLoader(promptCfg.Dir, promptCfg.DirSet)
 	if warn != "" {
 		log.Warn(warn)
 	}

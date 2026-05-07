@@ -95,17 +95,16 @@ func TestChainLoader_NilReceiver_ReturnsError(t *testing.T) {
 	require.Error(t, err, "nil 수신자도 panic 없이 에러 반환")
 }
 
-func TestNewDefaultLoader_NoEnv_NoDefaultDir_EmbedOnly(t *testing.T) {
-	t.Setenv(prompt.EnvPromptsDir, "")
-	// DefaultDir ("pkg/llm/prompt/assets") 는 cwd 기준 — 테스트가 임시 디렉토리에서 돌면 부재.
+func TestNewDefaultLoader_DirUnset_NoDefaultDir_EmbedOnly(t *testing.T) {
+	// DefaultDir ("pkg/llm/prompt/assets") 는 cwd 기준 — 임시 디렉토리에서 돌면 부재.
 	tmp := t.TempDir()
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(tmp))
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 
-	loader, warn := prompt.NewDefaultLoader()
-	assert.Empty(t, warn, "default 부재는 silent — embed 로 graceful fallback")
+	loader, warn := prompt.NewDefaultLoader("", false)
+	assert.Empty(t, warn, "DirSet=false + DefaultDir 부재 → silent embed-only")
 	require.NotNil(t, loader)
 
 	// embed 가 실 동작하는지 한 번 호출 — assets 안의 파일이 로드되어야 함.
@@ -114,13 +113,23 @@ func TestNewDefaultLoader_NoEnv_NoDefaultDir_EmbedOnly(t *testing.T) {
 	assert.NotEmpty(t, body)
 }
 
-func TestNewDefaultLoader_EnvSet_UsesFile(t *testing.T) {
+func TestNewDefaultLoader_DirSetEmpty_EmbedOnly(t *testing.T) {
+	// DirSet=true + Dir="" → embed 강제. DefaultDir auto-detection 우회.
+	loader, warn := prompt.NewDefaultLoader("", true)
+	require.NotNil(t, loader)
+	assert.Empty(t, warn, "embed 강제는 warn 없음")
+
+	body, err := loader.Load("llmgen/system")
+	require.NoError(t, err)
+	assert.NotEmpty(t, body)
+}
+
+func TestNewDefaultLoader_DirSetValid_UsesFile(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "custom"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom", "ovr.txt"), []byte("from-file"), 0o600))
-	t.Setenv(prompt.EnvPromptsDir, dir)
 
-	loader, warn := prompt.NewDefaultLoader()
+	loader, warn := prompt.NewDefaultLoader(dir, true)
 	require.Empty(t, warn)
 
 	body, err := loader.Load("custom/ovr")
@@ -133,10 +142,8 @@ func TestNewDefaultLoader_EnvSet_UsesFile(t *testing.T) {
 	assert.NotEmpty(t, body)
 }
 
-func TestNewDefaultLoader_EnvSet_BadDir_FallbackToEmbed(t *testing.T) {
-	t.Setenv(prompt.EnvPromptsDir, "/nonexistent/path/should/not/exist")
-
-	loader, warn := prompt.NewDefaultLoader()
+func TestNewDefaultLoader_DirSetBad_FallbackToEmbed(t *testing.T) {
+	loader, warn := prompt.NewDefaultLoader("/nonexistent/path/should/not/exist", true)
 	require.NotNil(t, loader)
 	assert.NotEmpty(t, warn, "잘못된 경로는 warn 메시지로 호출자에게 전달")
 
