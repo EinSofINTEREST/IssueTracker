@@ -18,7 +18,8 @@ const (
 	TargetTypeList TargetType = "list"
 )
 
-// 호환성 — 기존 TargetTypeArticle 명칭이 코드/DB 에 잔존할 수 있어 별칭 유지.
+// TargetTypeArticle 은 TargetTypePage 의 호환 별칭입니다 — 기존 코드/DB 에 잔존할 수 있어 유지.
+//
 // Deprecated: TargetTypePage 사용 권장 (도메인 일반화).
 const TargetTypeArticle = TargetTypePage
 

@@ -23,6 +23,8 @@ type BrowserFetcher struct {
 	initialized bool
 }
 
+// NewBrowserFetcher 는 chromedp 기반 BrowserFetcher 를 생성합니다.
+// 첫 Fetch 호출 시점에 lazy initialize — 사용 안 되는 instance 의 Chrome 자원 점유 회피.
 func NewBrowserFetcher(crawler *cdp.ChromedpCrawler, config core.Config) *BrowserFetcher {
 	return &BrowserFetcher{crawler: crawler, config: config}
 }

@@ -48,6 +48,8 @@ type GoQueryFetchHandler struct {
 	lazyKeywords []string
 }
 
+// NewGoQueryFetchHandler 는 정적 HTML 처리를 담당하는 fetch handler 를 생성합니다.
+// lazyKeywords 가 HTML 에 매칭되면 chromedp 로의 escalate 신호 (ErrLazyContentNeedsBrowser) 를 반환합니다.
 func NewGoQueryFetchHandler(fetcher Fetcher, log *logger.Logger, lazyKeywords ...string) *GoQueryFetchHandler {
 	return &GoQueryFetchHandler{
 		baseHandler:  baseHandler{log: log},
@@ -110,6 +112,8 @@ type BrowserFetchHandler struct {
 	fetcher Fetcher
 }
 
+// NewBrowserFetchHandler 는 chromedp 헤드리스 브라우저 기반 fetch handler 를 생성합니다.
+// 브라우저 렌더 실패 시 chain 위임 없이 job 실패로 종결합니다.
 func NewBrowserFetchHandler(fetcher Fetcher, log *logger.Logger) *BrowserFetchHandler {
 	return &BrowserFetchHandler{baseHandler: baseHandler{log: log}, fetcher: fetcher}
 }
