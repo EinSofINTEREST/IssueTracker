@@ -24,6 +24,7 @@ import (
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/chain"
 	"issuetracker/pkg/llm/policy"
+	"issuetracker/pkg/llm/prompt"
 	_ "issuetracker/pkg/llm/providers"
 	"issuetracker/pkg/logger"
 )
@@ -77,7 +78,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	semPool := validator.NewPool(log, validator.NewLLMValidator(llmProvider))
+	loader, err := prompt.NewFileLoader(prompt.DefaultDir)
+	if err != nil {
+		log.WithError(err).Fatal("failed to init prompt loader")
+	}
+	llmValidator, err := validator.NewLLMValidator(llmProvider, loader)
+	if err != nil {
+		log.WithError(err).Fatal("failed to init llm validator")
+	}
+	semPool := validator.NewPool(log, llmValidator)
 	res, verr := semPool.Validate(ctx, string(htmlBytes), record.Selectors, record.TargetType)
 
 	fmt.Printf("검증 결과: valid=%v\nreason: %s\n", res.Valid, res.Reason)

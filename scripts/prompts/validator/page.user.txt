@@ -1,0 +1,11 @@
+Target type: article page
+
+Extracted content:
+- title: {{TITLE}}
+- body (first 500 chars): {{BODY}}
+{{PUBLISHED_AT_LINE}}
+Validation criteria:
+- title: non-empty, looks like a news headline (not a menu item, ad, or boilerplate)
+- body: at least 100 characters, looks like article content (not navigation, ads, or repeated short phrases)
+{{PUBLISHED_AT_CRITERIA}}
+Is this extraction semantically valid for a news article scraper?

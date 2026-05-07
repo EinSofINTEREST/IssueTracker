@@ -3,11 +3,13 @@ package validator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/llm"
+	"issuetracker/pkg/llm/prompt"
 )
 
 // llmValidationResponse 는 LLM 의 검증 응답 JSON 구조입니다.
@@ -19,11 +21,18 @@ type llmValidationResponse struct {
 // LLMValidator 는 pkg/llm.Provider 기반 의미 검증 구현체입니다.
 type LLMValidator struct {
 	provider llm.Provider
+	loader   prompt.Loader
 }
 
-// NewLLMValidator 는 LLMValidator 를 생성합니다. provider 는 비-nil 이어야 합니다.
-func NewLLMValidator(provider llm.Provider) *LLMValidator {
-	return &LLMValidator{provider: provider}
+// NewLLMValidator 는 LLMValidator 를 생성합니다. provider / loader 모두 비-nil 이어야 합니다.
+func NewLLMValidator(provider llm.Provider, loader prompt.Loader) (*LLMValidator, error) {
+	if provider == nil {
+		return nil, errors.New("validator: nil llm provider")
+	}
+	if loader == nil {
+		return nil, errors.New("validator: nil prompt loader")
+	}
+	return &LLMValidator{provider: provider, loader: loader}, nil
 }
 
 func (v *LLMValidator) Validate(ctx context.Context, html string, selectors storage.SelectorMap, targetType storage.TargetType) (Result, error) {
@@ -32,11 +41,18 @@ func (v *LLMValidator) Validate(ctx context.Context, html string, selectors stor
 		return Result{}, fmt.Errorf("extract content for validation: %w", err)
 	}
 
-	prompt := buildValidationPrompt(ec, targetType)
+	system, err := v.loader.Load("validator/system")
+	if err != nil {
+		return Result{}, fmt.Errorf("load validator system prompt: %w", err)
+	}
+	user, err := buildValidationPrompt(ec, targetType, v.loader)
+	if err != nil {
+		return Result{}, err
+	}
 	resp, err := v.provider.Generate(ctx, llm.Request{
 		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: validationSystemPrompt},
-			{Role: llm.RoleUser, Content: prompt},
+			{Role: llm.RoleSystem, Content: system},
+			{Role: llm.RoleUser, Content: user},
 		},
 		TaskHint:  llm.TaskHintJSON,
 		MaxTokens: 256,
@@ -55,43 +71,40 @@ func (v *LLMValidator) Validate(ctx context.Context, html string, selectors stor
 	return Result(vr), nil
 }
 
-const validationSystemPrompt = `You are a CSS selector quality validator for a news crawler.
-Given text extracted from a news website using CSS selectors, determine if the extraction is semantically correct.
-Respond ONLY with JSON: {"valid": true or false, "reason": "one sentence explanation"}`
-
-func buildValidationPrompt(ec extractedContent, targetType storage.TargetType) string {
-	var sb strings.Builder
-
+func buildValidationPrompt(ec extractedContent, targetType storage.TargetType, loader prompt.Loader) (string, error) {
 	switch targetType {
 	case storage.TargetTypeList:
-		sb.WriteString("Target type: list page (category/index page)\n\n")
-		sb.WriteString("Extracted content:\n")
-		fmt.Fprintf(&sb, "- item_container (first element text): %q\n", ec.ItemContainer)
-		if len(ec.ItemLinks) > 0 {
-			fmt.Fprintf(&sb, "- item_links (first %d): %v\n", len(ec.ItemLinks), ec.ItemLinks)
+		template, err := loader.Load("validator/list.user")
+		if err != nil {
+			return "", fmt.Errorf("load validator list user prompt: %w", err)
 		}
-		sb.WriteString("\nValidation criteria:\n")
-		sb.WriteString("- item_links should look like URLs or article titles (not empty, not boilerplate navigation)\n")
-		sb.WriteString("- item_container should contain multiple article entries\n")
+		linksLine := ""
+		if len(ec.ItemLinks) > 0 {
+			linksLine = fmt.Sprintf("- item_links (first %d): %v\n", len(ec.ItemLinks), ec.ItemLinks)
+		}
+		return prompt.Render(template,
+			"{{ITEM_CONTAINER}}", fmt.Sprintf("%q", ec.ItemContainer),
+			"{{ITEM_LINKS_LINE}}", linksLine,
+		), nil
 
 	default: // TargetTypePage
-		sb.WriteString("Target type: article page\n\n")
-		sb.WriteString("Extracted content:\n")
-		fmt.Fprintf(&sb, "- title: %q\n", ec.Title)
-		fmt.Fprintf(&sb, "- body (first 500 chars): %q\n", ec.Body)
-		if ec.PublishedAt != "" {
-			fmt.Fprintf(&sb, "- published_at: %q\n", ec.PublishedAt)
+		template, err := loader.Load("validator/page.user")
+		if err != nil {
+			return "", fmt.Errorf("load validator page user prompt: %w", err)
 		}
-		sb.WriteString("\nValidation criteria:\n")
-		sb.WriteString("- title: non-empty, looks like a news headline (not a menu item, ad, or boilerplate)\n")
-		sb.WriteString("- body: at least 100 characters, looks like article content (not navigation, ads, or repeated short phrases)\n")
+		publishedLine := ""
+		publishedCriteria := ""
 		if ec.PublishedAt != "" {
-			sb.WriteString("- published_at: looks like a date/time string\n")
+			publishedLine = fmt.Sprintf("- published_at: %q\n", ec.PublishedAt)
+			publishedCriteria = "- published_at: looks like a date/time string\n"
 		}
+		return prompt.Render(template,
+			"{{TITLE}}", fmt.Sprintf("%q", ec.Title),
+			"{{BODY}}", fmt.Sprintf("%q", ec.Body),
+			"{{PUBLISHED_AT_LINE}}", publishedLine,
+			"{{PUBLISHED_AT_CRITERIA}}", publishedCriteria,
+		), nil
 	}
-
-	sb.WriteString("\nIs this extraction semantically valid for a news article scraper?")
-	return sb.String()
 }
 
 // parseValidationResponse 는 LLM 응답에서 JSON 객체를 추출하여 파싱합니다.
