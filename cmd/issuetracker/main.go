@@ -127,6 +127,9 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")
 	}
+	// 이슈 #288: parsing_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
+	// 호출처가 명시적 Invalidate 를 까먹어도 stale cache 발생 X — single source of truth.
+	parsingRuleRepo = rule.WrapWithInvalidator(parsingRuleRepo, ruleResolver)
 	ruleParser, err := rule.NewParser(ruleResolver)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule parser")

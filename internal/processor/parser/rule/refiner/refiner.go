@@ -323,8 +323,8 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 		return
 	}
 
-	// 2) cache flush — 다음 lookup 부터 갱신된 rule 적용.
-	r.resolver.Invalidate(rec.HostPattern, rec.TargetType)
+	// 2) cache flush 는 invalidatingRepo decorator 가 UpdatePathPattern 성공 후 자동 호출 (이슈 #288).
+	//    refiner 의 명시적 Invalidate 책임 제거 — single source of truth.
 
 	// 3) sample purge — 다음 cycle 에서 재누적 (다른 path 패턴 발견 가능성 대비).
 	if err := r.samples.Purge(ctx, rec.ID); err != nil {
