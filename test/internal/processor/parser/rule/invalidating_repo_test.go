@@ -211,16 +211,35 @@ func TestInvalidatingRepo_UpdatePathPattern_PrefetchFails_NoInvalidate(t *testin
 // Delete
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestInvalidatingRepo_Delete_NoInvalidate(t *testing.T) {
-	inner := &recordingRepo{}
+func TestInvalidatingRepo_Delete_Success_PrefetchesAndInvalidates(t *testing.T) {
+	inner := &recordingRepo{
+		getByIDResult: &storage.ParsingRuleRecord{
+			ID: 99, HostPattern: "delete.example.com", TargetType: storage.TargetTypePage,
+		},
+	}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	err := repo.Delete(context.Background(), 99)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inner.getByIDCalls, "host/type 미지로 사전 GetByID 1회")
+	assert.Equal(t, 1, inner.deleteCalls)
+	assert.Equal(t, 1, inv.callCount())
+	assert.Equal(t, invalidateCall{Host: "delete.example.com", Type: storage.TargetTypePage}, inv.lastCall())
+}
+
+func TestInvalidatingRepo_Delete_PrefetchFails_NoInvalidate(t *testing.T) {
+	inner := &recordingRepo{
+		getByIDErr: errors.New("db down"),
+	}
 	inv := &recordingInvalidator{}
 	repo := rule.WrapWithInvalidator(inner, inv)
 
 	err := repo.Delete(context.Background(), 1)
 	require.NoError(t, err)
-	assert.Equal(t, 1, inner.deleteCalls)
+	assert.Equal(t, 1, inner.deleteCalls, "Delete 자체는 진행")
 	assert.Equal(t, 0, inv.callCount(),
-		"Delete 는 ID 만 받음 — host/type 미상이라 호출자가 명시 Invalidate 책임 (decorator 가 강제하지 않음)")
+		"pre-fetch 실패 시 host/type 미상으로 invalidate skip (TTL fallback)")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

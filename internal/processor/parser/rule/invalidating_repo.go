@@ -26,13 +26,13 @@ type CacheInvalidator interface {
 //   - Insert 성공          → Invalidate (host, target_type)
 //   - Insert ErrDuplicate  → Invalidate (row 가 DB 에 이미 존재 — cache 불일치 가능성)
 //   - Update 성공          → Invalidate (host, target_type)
-//   - UpdatePathPattern 성공 → Invalidate (record 의 host/type 사전 lookup 필요 — 후술)
-//   - Delete 성공          → ID 만 알 수 있어 host/type 미상 — 호출자가 명시적 Invalidate 책임 (또는 InvalidateAll 권장)
+//   - UpdatePathPattern 성공 → 사전 GetByID 로 host/type lookup 후 Invalidate
+//   - Delete 성공          → 사전 GetByID 로 host/type lookup 후 Invalidate (PR #292 gemini 리뷰 — 일관성)
 //
-// UpdatePathPattern 의 호스트 정보 부재:
+// UpdatePathPattern / Delete 의 호스트 정보 부재:
 //
-//	본 메소드는 ID 인자만 받음 — host/type 을 모름. 추가 GetByID round-trip 으로 사전 조회 후 invalidate.
-//	refiner 는 호출 빈도 낮으므로 (default 5분 주기) 추가 read 부담 무시 수준.
+//	두 메소드는 ID 인자만 받음 — host/type 을 모름. 추가 GetByID round-trip 으로 사전 조회 후 invalidate.
+//	refiner / admin 도구는 호출 빈도 낮으므로 추가 read 부담 무시 수준.
 //
 // CacheInvalidator 가 nil 이면 noop wrapper — invalidate 만 skip 하고 inner 호출은 그대로 진행.
 type invalidatingRepo struct {
@@ -102,11 +102,19 @@ func (r *invalidatingRepo) UpdatePathPattern(ctx context.Context, id int64, patt
 	return nil
 }
 
-// Delete wraps inner.Delete. ID 만 받으므로 host/type 미상 — 호출자가 사전 GetByID 로 lookup
-// 하여 결과를 토대로 명시 Invalidate 호출 책임. 본 decorator 는 GetByID round-trip 을 강제하지
-// 않음 (Delete 가 정상 흐름에선 거의 호출되지 않으며, 운영자 admin 도구가 호출할 가능성 큼).
+// Delete wraps inner.Delete + 사전 GetByID 로 host/type 조회 후 invalidate (PR #292 gemini 리뷰).
+//
+// UpdatePathPattern 과 동일 패턴 — decorator 의 일관성 보장 (mutation→invalidate 결합 누락 0).
+// pre-fetch 실패 시 invalidate skip — TTL fallback 으로 자연 회수.
 func (r *invalidatingRepo) Delete(ctx context.Context, id int64) error {
-	return r.inner.Delete(ctx, id)
+	rec, lookupErr := r.inner.GetByID(ctx, id)
+	if err := r.inner.Delete(ctx, id); err != nil {
+		return err
+	}
+	if lookupErr == nil && rec != nil {
+		r.invalidate(rec.HostPattern, rec.TargetType)
+	}
+	return nil
 }
 
 // 이하 read-only / find 메소드는 단순 위임 — invalidate 트리거 없음.
