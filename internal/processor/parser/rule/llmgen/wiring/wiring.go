@@ -13,21 +13,22 @@ import (
 	"issuetracker/internal/storage"
 	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/pkg/llm"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/redis"
 )
 
-// Build 는 LLM provider + repository + resolver 로 llmgen.Generator 를 구성합니다.
+// Build 는 LLM provider + repository + resolver + prompt loader 로 llmgen.Generator 를 구성합니다.
 //
 // provider 는 호출자가 직접 주입 — 일반적으로 pkg/llm/wiring.BuildProvider 결과를 그대로 전달.
 // provider 가 nil (LLM 비활성) 이면 (nil, nil) 반환 — parser worker 는 ErrNoRule 시 raw 만 잔존.
 // llmgen.New 자체 실패는 wiring 버그 — 호출자 (main) 에서 Fatal 결정.
 // redisClient 가 nil 이면 in-process memInflightLocker 로 graceful degrade.
-func Build(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, redisClient *redis.Client, log *logger.Logger) (*llmgen.Generator, error) {
+func Build(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, redisClient *redis.Client, log *logger.Logger) (*llmgen.Generator, error) {
 	if provider == nil {
 		return nil, nil
 	}
-	gen, err := llmgen.New(provider, repo, resolver, log)
+	gen, err := llmgen.New(provider, repo, resolver, promptLoader, log)
 	if err != nil {
 		return nil, fmt.Errorf("construct llmgen generator: %w", err)
 	}

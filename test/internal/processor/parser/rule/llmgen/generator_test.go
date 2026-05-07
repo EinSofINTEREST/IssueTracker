@@ -16,6 +16,7 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/llm"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
 
@@ -155,10 +156,19 @@ const sampleListHTML = `<!DOCTYPE html><html><body>
 </ul>
 </body></html>`
 
+// testPromptLoader 는 단위 테스트용 in-memory prompt loader 입니다.
+// llmgen 의 system / user prompt 를 최소 형태로 stub — placeholder 가 그대로 잔존해도 테스트
+// 단위 (provider 가 fakeProvider 라 실제 LLM 호출 없음) 에선 의미 없음.
+var testPromptLoader = prompt.MapLoader{
+	"llmgen/system":    "test system prompt",
+	"llmgen/page.user": "host={{HOST}} type={{TARGET_TYPE}} html={{HTML}}",
+	"llmgen/list.user": "host={{HOST}} type={{TARGET_TYPE}} html={{HTML}}",
+}
+
 func newGenerator(t *testing.T, provider llm.Provider, repo storage.ParsingRuleRepository) (*llmgen.Generator, *rule.Resolver) {
 	t.Helper()
 	resolver, _ := rule.NewResolver(&noopFindRepo{}, rule.WithCacheTTL(time.Minute))
-	g, err := llmgen.New(provider, repo, resolver, logger.New(logger.DefaultConfig()))
+	g, err := llmgen.New(provider, repo, resolver, testPromptLoader, logger.New(logger.DefaultConfig()))
 	require.NoError(t, err)
 	return g, resolver
 }
