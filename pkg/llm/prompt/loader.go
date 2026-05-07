@@ -18,7 +18,7 @@ import (
 )
 
 // EnvPromptsDir 는 prompts 디렉토리를 override 하는 환경변수 이름입니다.
-const EnvPromptsDir = "ISSUETRACKER_PROMPTS_DIR"
+const EnvPromptsDir = "LLM_PROMPT_DIR"
 
 // DefaultDir 는 환경변수 미설정 시 사용하는 prompts 디렉토리 (cwd 기준 상대 경로).
 const DefaultDir = "scripts/prompts"

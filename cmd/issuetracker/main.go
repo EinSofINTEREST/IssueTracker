@@ -354,9 +354,9 @@ func main() {
 	// LLM 비활성 환경에서 prompt 디렉토리 부재로 인한 boot 실패 회피.
 	var promptLoader prompt.Loader
 	if llmProvider != nil {
-		promptDir := os.Getenv("LLM_PROMPT_DIR")
+		promptDir := os.Getenv(prompt.EnvPromptsDir)
 		if promptDir == "" {
-			promptDir = "scripts/prompts"
+			promptDir = prompt.DefaultDir
 		}
 		fl, plErr := prompt.NewFileLoader(promptDir)
 		if plErr != nil {
