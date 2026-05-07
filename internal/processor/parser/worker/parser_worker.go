@@ -360,32 +360,47 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 
 	urls := uniqueURLs(items, maxChainedURLs)
 
-	// 이슈 #295: page-parse 블랙리스트 적용 — 매칭 URL 은 article job 발행 단계에서 drop.
-	// fetch / parse 자체가 발생 안 함. Matcher 미설정 (nil) 이면 모든 URL 통과.
-	blockedCount := 0
+	// 이슈 #295/#297: page-parse 블랙리스트 적용 — mode 별 분기:
+	//   - 'drop' 매칭     : 어느 슬라이스에도 미포함 (완전 drop, fetch / parse 안 함)
+	//   - 'extract_links_only' 매칭 : list 로 강제 발행 → fetch + ParseLinks 만 진행 (ParsePage skip)
+	//   - 매칭 X         : 정상 article 로 발행
+	// Matcher 미설정 (nil) 이면 모든 URL 을 article 로 통과 (기능 OFF).
+	articleURLs := urls
+	var listURLs []string
+	droppedCount := 0
 	if w.blacklist != nil && len(urls) > 0 {
-		filtered := w.blacklist.Filter(ctx, urls)
-		blockedCount = len(urls) - len(filtered)
-		urls = filtered
-		if len(urls) == 0 {
-			mlog.WithFields(map[string]interface{}{
-				"crawler":       crawlerName,
-				"blocked_count": blockedCount,
-			}).Info("all category links blocked by blacklist — no chained jobs published")
-			w.deleteRaw(ctx, rawID, mlog)
-			return nil
+		decision := w.blacklist.Classify(ctx, urls)
+		articleURLs = decision.Allowed
+		listURLs = decision.ExtractLinksOnly
+		droppedCount = len(urls) - len(decision.Allowed) - len(decision.ExtractLinksOnly)
+	}
+
+	if len(articleURLs) == 0 && len(listURLs) == 0 {
+		mlog.WithFields(map[string]interface{}{
+			"crawler":       crawlerName,
+			"dropped_count": droppedCount,
+		}).Info("all category links blocked by blacklist — no chained jobs published")
+		w.deleteRaw(ctx, rawID, mlog)
+		return nil
+	}
+
+	if len(articleURLs) > 0 {
+		if err := w.publisher.Publish(ctx, crawlerName, articleURLs, core.TargetTypeArticle, jobTimeout); err != nil {
+			return fmt.Errorf("publish chained article jobs: %w", err)
+		}
+	}
+	if len(listURLs) > 0 {
+		if err := w.publisher.Publish(ctx, crawlerName, listURLs, core.TargetTypeCategory, jobTimeout); err != nil {
+			return fmt.Errorf("publish chained list jobs (extract_links_only): %w", err)
 		}
 	}
 
-	if err := w.publisher.Publish(ctx, crawlerName, urls, core.TargetTypeArticle, jobTimeout); err != nil {
-		return fmt.Errorf("publish chained article jobs: %w", err)
-	}
-
 	mlog.WithFields(map[string]interface{}{
-		"crawler":       crawlerName,
-		"url_count":     len(urls),
-		"blocked_count": blockedCount,
-	}).Info("chained article jobs published from category page")
+		"crawler":            crawlerName,
+		"article_count":      len(articleURLs),
+		"list_count":         len(listURLs),
+		"dropped_count":      droppedCount,
+	}).Info("chained jobs published from category page")
 
 	// 카테고리 페이지는 contents/news_articles 에 저장하지 않음 — raw 즉시 정리
 	w.deleteRaw(ctx, rawID, mlog)
