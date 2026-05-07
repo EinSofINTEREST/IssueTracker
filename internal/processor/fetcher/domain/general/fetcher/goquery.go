@@ -16,6 +16,7 @@ type GoqueryFetcher struct {
 	crawler *goquery.GoqueryCrawler
 }
 
+// NewGoqueryFetcher 는 GoqueryCrawler 를 wrap 한 GoqueryFetcher 를 생성합니다.
 func NewGoqueryFetcher(crawler *goquery.GoqueryCrawler) *GoqueryFetcher {
 	return &GoqueryFetcher{crawler: crawler}
 }
