@@ -407,7 +407,34 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 		// ErrNoRule + llmGen 활성화 → LLM 자동 rule 생성 비동기 트리거 (이슈 #149)
 		// crawlerName 은 validate 실패 시 재큐 메시지 헤더 복원용 (이슈 #237 피드백).
 		// jobTimeout 은 pending 재투입 시 카테고리 chained job timeout 보존 (이슈 #262 리뷰).
-		if rerr.Code == rule.ErrNoRule && w.llmGen != nil {
+		//
+		// 이슈 #287: Resolver miss (ErrNoRule) 가 운영자가 의도적으로 disable 한 룰 잔존
+		// 인 경우 LLM 재학습 트리거 회피 — 매 fetch 마다 LLM 호출 → ErrDuplicate 흐름이
+		// 운영자의 의도된 disable 을 무력화하지 않도록.
+		// HasAnyRule lookup 실패는 best-effort (기존 동작 유지하여 LLM enqueue 진행).
+		if rerr.Code == rule.ErrNoRule && w.llmGen != nil && w.resolver != nil {
+			exists, hasEnabled, herr := w.resolver.HasAnyRule(ctx, rerr.Host, targetType)
+			switch {
+			case herr != nil:
+				// lookup 실패 — fail-open (warn 로그 + 기존 LLM enqueue 경로 진행).
+				mlog.WithFields(map[string]interface{}{
+					"host":        rerr.Host,
+					"target_type": string(targetType),
+				}).WithError(herr).Warn("HasAnyRule lookup failed, falling through to LLM enqueue")
+				w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName, jobTimeout)
+			case exists && !hasEnabled:
+				// 운영자가 모든 룰을 disable 한 호스트 — LLM 재학습 회피, 운영 가시성 로그.
+				mlog.WithFields(map[string]interface{}{
+					"host":        rerr.Host,
+					"target_type": string(targetType),
+				}).Warn("rule exists but all disabled — skipping LLM regen (manual re-enable required)")
+			default:
+				// !exists 또는 (exists && hasEnabled) — 둘 다 LLM enqueue 진행.
+				// 후자는 cache stale 의심 케이스로 generator pre-check (PR #274) 가 차단.
+				w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName, jobTimeout)
+			}
+		} else if rerr.Code == rule.ErrNoRule && w.llmGen != nil {
+			// resolver 미주입 환경 (테스트 등) — 기존 동작 유지.
 			w.llmGen.Enqueue(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName, jobTimeout)
 		}
 

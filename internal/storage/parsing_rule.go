@@ -187,6 +187,19 @@ type ParsingRuleRepository interface {
 	// FindActiveCandidates 의 첫 항목 (length DESC 정렬, '' 포함) 을 반환합니다.
 	FindActive(ctx context.Context, host string, targetType TargetType) (*ParsingRuleRecord, error)
 
+	// HasAnyRule 은 (host_pattern, target_type) 에 대한 룰 존재 여부를 반환합니다 (이슈 #287).
+	//
+	// FindActiveCandidates 와 달리 enabled 필터 없음 — disabled 룰도 \"존재함\" 으로 카운트.
+	//
+	// 반환:
+	//   - exists       : 어느 row 라도 (enabled / disabled 무관) 있으면 true
+	//   - hasEnabled   : exists=true 일 때 enabled=TRUE row 가 하나라도 있으면 true
+	//   - err          : DB 조회 실패
+	//
+	// 용도: parser_worker 가 ErrNoRule 시 LLM 재학습 트리거 여부 결정 — disabled 룰만 잔존인
+	// host 는 운영자 수동 재활성 영역으로 분류.
+	HasAnyRule(ctx context.Context, hostPattern string, targetType TargetType) (exists, hasEnabled bool, err error)
+
 	// FindByNaturalKey 는 자연키 (source_name, host_pattern, path_pattern, target_type, version)
 	// 로 단일 rule 을 조회합니다 (이슈 #274). enabled 필터 없음 — disabled 룰도 반환.
 	//

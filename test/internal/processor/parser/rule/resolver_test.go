@@ -21,6 +21,13 @@ type fakeRepo struct {
 	rules           []*storage.ParsingRuleRecord // FindActiveCandidates 매칭 후보
 	notFound        bool                         // true 면 항상 빈 슬라이스 (negative cache 시뮬레이션)
 	findActiveCalls int64
+
+	// hasAnyRule 시뮬레이션 (이슈 #287)
+	hasAnyExists      bool
+	hasAnyEnabled     bool
+	hasAnyErr         error
+	hasAnyRuleCalls   int64
+	hasAnyRuleAllRows bool // true: rules 슬라이스 기반 동적 결과 (HostPattern/TargetType 매칭)
 }
 
 func (r *fakeRepo) Insert(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
@@ -67,6 +74,27 @@ func (r *fakeRepo) FindActiveCandidates(_ context.Context, host string, t storag
 
 func (r *fakeRepo) calls() int { return int(atomic.LoadInt64(&r.findActiveCalls)) }
 
+func (r *fakeRepo) HasAnyRule(_ context.Context, host string, t storage.TargetType) (bool, bool, error) {
+	atomic.AddInt64(&r.hasAnyRuleCalls, 1)
+	if r.hasAnyErr != nil {
+		return false, false, r.hasAnyErr
+	}
+	if r.hasAnyRuleAllRows {
+		// rules 슬라이스 기반 — enabled 무관 매칭 row 가 있으면 exists=true.
+		exists, hasEnabled := false, false
+		for _, rec := range r.rules {
+			if rec.HostPattern == host && rec.TargetType == t {
+				exists = true
+				if rec.Enabled {
+					hasEnabled = true
+				}
+			}
+		}
+		return exists, hasEnabled, nil
+	}
+	return r.hasAnyExists, r.hasAnyEnabled, nil
+}
+func (r *fakeRepo) hasAnyCalls() int { return int(atomic.LoadInt64(&r.hasAnyRuleCalls)) }
 func (r *fakeRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
@@ -342,4 +370,72 @@ func TestResolver_ResolveByURL_PathPatternMatching(t *testing.T) {
 	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/12345?utm=x", storage.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.article", got.Selectors.Title.CSS, "URL.Path 가 path_pattern 매칭")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HasAnyRule (이슈 #287)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestResolver_HasAnyRule_NoRule(t *testing.T) {
+	repo := &fakeRepo{} // exists=false, enabled=false default
+	r, _ := rule.NewResolver(repo)
+
+	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.False(t, exists)
+	assert.False(t, enabled)
+}
+
+func TestResolver_HasAnyRule_EnabledRule(t *testing.T) {
+	repo := &fakeRepo{hasAnyExists: true, hasAnyEnabled: true}
+	r, _ := rule.NewResolver(repo)
+
+	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.True(t, enabled)
+}
+
+func TestResolver_HasAnyRule_DisabledRuleOnly(t *testing.T) {
+	repo := &fakeRepo{hasAnyExists: true, hasAnyEnabled: false}
+	r, _ := rule.NewResolver(repo)
+
+	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.True(t, exists, "disabled 룰만 있어도 exists=true")
+	assert.False(t, enabled)
+}
+
+func TestResolver_HasAnyRule_CachesResult(t *testing.T) {
+	repo := &fakeRepo{hasAnyExists: true, hasAnyEnabled: true}
+	r, _ := rule.NewResolver(repo)
+
+	for i := 0; i < 5; i++ {
+		_, _, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, repo.hasAnyCalls(), "5회 호출 중 DB lookup 은 1회 — 캐시 적중 4회")
+}
+
+func TestResolver_HasAnyRule_InvalidatedOnRuleChange(t *testing.T) {
+	repo := &fakeRepo{hasAnyExists: true, hasAnyEnabled: true}
+	r, _ := rule.NewResolver(repo)
+
+	_, _, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.Equal(t, 1, repo.hasAnyCalls())
+
+	r.Invalidate("example.com", storage.TargetTypePage)
+
+	_, _, err = r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.Equal(t, 2, repo.hasAnyCalls(), "Invalidate 후 lookup 재실행")
+}
+
+func TestResolver_HasAnyRule_LookupErrorPropagated(t *testing.T) {
+	repo := &fakeRepo{hasAnyErr: errors.New("db down")}
+	r, _ := rule.NewResolver(repo)
+
+	_, _, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	require.Error(t, err)
 }

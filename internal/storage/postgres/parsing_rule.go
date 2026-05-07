@@ -188,6 +188,29 @@ func (r *pgParsingRuleRepository) FindByNaturalKey(ctx context.Context, sourceNa
 	return rec, nil
 }
 
+// sqlHasAnyRule 은 (host_pattern, target_type) 에 대한 enabled / disabled 무관 존재 여부를
+// 1 row 로 반환합니다 (이슈 #287).
+//
+// COALESCE + bool_or 로 NULL 안전성 확보 — row 없으면 (FALSE, FALSE) 반환.
+const sqlHasAnyRule = `
+SELECT
+  EXISTS(SELECT 1 FROM parsing_rules WHERE host_pattern=$1 AND target_type=$2) AS exists_any,
+  COALESCE((SELECT bool_or(enabled) FROM parsing_rules WHERE host_pattern=$1 AND target_type=$2), FALSE) AS has_enabled
+`
+
+// HasAnyRule 은 (host_pattern, target_type) 룰 존재 여부 + enabled 여부를 1 round-trip 으로 반환합니다 (이슈 #287).
+//
+// FindActiveCandidates 와 달리 enabled 필터 없음 — disabled 룰도 \"존재함\" 으로 카운트.
+// 결과는 (exists, hasEnabled).
+func (r *pgParsingRuleRepository) HasAnyRule(ctx context.Context, hostPattern string, targetType storage.TargetType) (bool, bool, error) {
+	row := r.pool.QueryRow(ctx, sqlHasAnyRule, hostPattern, string(targetType))
+	var exists, hasEnabled bool
+	if err := row.Scan(&exists, &hasEnabled); err != nil {
+		return false, false, fmt.Errorf("has any rule (%s, %s): %w", hostPattern, targetType, err)
+	}
+	return exists, hasEnabled, nil
+}
+
 // sqlFindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 후보 슬라이스로 반환합니다 (이슈 #173).
 //
 // 정렬:

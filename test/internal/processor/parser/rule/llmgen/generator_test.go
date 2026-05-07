@@ -83,6 +83,9 @@ func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.Target
 func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil
 }
+func (r *recordingRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
+	return false, false, nil
+}
 func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -148,6 +151,9 @@ func (noopFindRepo) FindActive(_ context.Context, _ string, _ storage.TargetType
 }
 func (noopFindRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
 	return nil, nil
+}
+func (noopFindRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
+	return false, false, nil
 }
 func (noopFindRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
 	return nil, storage.ErrNotFound

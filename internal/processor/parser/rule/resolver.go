@@ -54,10 +54,21 @@ type Resolver struct {
 	cache map[cacheKey]cacheEntry
 	now   func() time.Time // 테스트 주입 (실시각 → fake clock)
 
+	// hasAnyCache 는 HasAnyRule 결과 (exists, hasEnabled) 를 보관합니다 (이슈 #287).
+	// negativeCacheTTL 과 동일 짧은 TTL — disabled 룰 토글 / 신규 룰 학습이 빠르게 반영되도록.
+	hasAnyCache map[cacheKey]hasAnyEntry
+
 	// regexCache 는 path_pattern 별 compile 결과를 보관합니다 (이슈 #173).
 	// 같은 패턴의 재컴파일을 회피 — 운영 중 동일 host 의 후보 슬라이스가 cache 만료 시마다
 	// 다시 fetch 되어도 regex 객체는 재사용. sync.Map 으로 lock-free read.
 	regexCache sync.Map // map[string]*compiledPattern
+}
+
+// hasAnyEntry 는 HasAnyRule 결과 캐시 entry 입니다 (이슈 #287).
+type hasAnyEntry struct {
+	exists     bool
+	hasEnabled bool
+	expiresAt  time.Time
 }
 
 // compiledPattern 은 path_pattern 의 컴파일 결과 (또는 컴파일 실패) 를 보관합니다.
@@ -117,6 +128,7 @@ func NewResolver(repo storage.ParsingRuleRepository, opts ...Option) (*Resolver,
 		negativeCacheTTL: DefaultNegativeCacheTTL,
 		maxEntries:       DefaultMaxCacheEntries,
 		cache:            make(map[cacheKey]cacheEntry),
+		hasAnyCache:      make(map[cacheKey]hasAnyEntry),
 		now:              time.Now,
 	}
 	for _, o := range opts {
@@ -213,10 +225,14 @@ func (r *Resolver) compileRegex(pattern string) *compiledPattern {
 }
 
 // Invalidate 는 (host, type) 의 cache entry 를 즉시 제거합니다 — 운영자가 rule 변경 직후 호출.
+//
+// 이슈 #287: hasAnyCache 도 함께 invalidate — 룰 INSERT/UPDATE/DELETE 시 enabled 상태 변동 가능.
 func (r *Resolver) Invalidate(host string, targetType storage.TargetType) {
 	host = strings.ToLower(host)
+	key := cacheKey{host: host, targetType: targetType}
 	r.mu.Lock()
-	delete(r.cache, cacheKey{host: host, targetType: targetType})
+	delete(r.cache, key)
+	delete(r.hasAnyCache, key)
 	r.mu.Unlock()
 }
 
@@ -224,7 +240,48 @@ func (r *Resolver) Invalidate(host string, targetType storage.TargetType) {
 func (r *Resolver) InvalidateAll() {
 	r.mu.Lock()
 	r.cache = make(map[cacheKey]cacheEntry)
+	r.hasAnyCache = make(map[cacheKey]hasAnyEntry)
 	r.mu.Unlock()
+}
+
+// HasAnyRule 은 (host, target_type) 룰의 존재 여부 + enabled 여부를 short-TTL 캐시 + DB lookup 으로 반환합니다 (이슈 #287).
+//
+// 반환:
+//   - exists     : enabled / disabled 무관 row 존재 여부
+//   - hasEnabled : enabled=TRUE row 존재 여부
+//   - err        : DB 조회 실패 (캐시 hit 시 nil)
+//
+// 용도: parser_worker 의 ErrNoRule 분기에서 \"진짜 부재\" 와 \"운영자 disable 잔존\" 을 구분 —
+// 후자는 LLM 재학습 트리거 회피 (수동 재활성 영역).
+//
+// 캐시 정책:
+//   - TTL = negativeCacheTTL (default 30s) — Resolve 의 negative cache 와 동일 짧은 TTL
+//     운영자 enabled 토글 / 신규 INSERT 가 빠르게 반영되도록.
+//   - Invalidate(host, type) 호출 시 본 캐시도 함께 무효화 — Resolve 캐시와 일관.
+func (r *Resolver) HasAnyRule(ctx context.Context, host string, targetType storage.TargetType) (exists, hasEnabled bool, err error) {
+	host = strings.ToLower(host)
+	key := cacheKey{host: host, targetType: targetType}
+
+	r.mu.RLock()
+	if entry, ok := r.hasAnyCache[key]; ok && r.now().Before(entry.expiresAt) {
+		r.mu.RUnlock()
+		return entry.exists, entry.hasEnabled, nil
+	}
+	r.mu.RUnlock()
+
+	exists, hasEnabled, err = r.repo.HasAnyRule(ctx, host, targetType)
+	if err != nil {
+		return false, false, err
+	}
+
+	r.mu.Lock()
+	r.hasAnyCache[key] = hasAnyEntry{
+		exists:     exists,
+		hasEnabled: hasEnabled,
+		expiresAt:  r.now().Add(r.negativeCacheTTL),
+	}
+	r.mu.Unlock()
+	return exists, hasEnabled, nil
 }
 
 // lookupCache 는 캐시 조회 결과를 반환합니다 (이슈 #173).
