@@ -59,7 +59,7 @@ const (
 type Upgrader struct {
 	repo     storage.FetcherRuleRepository
 	resolver Resolver
-	tracker  RawIDTracker
+	tracker  storage.RawIDTracker
 	rawSvc   service.RawContentService
 	producer queue.Producer
 	redis    *goredis.Client // SETNX in-flight lock 용. nil 이면 lock 비활성 (단일 인스턴스 환경).
@@ -73,7 +73,7 @@ type Upgrader struct {
 func NewUpgrader(
 	repo storage.FetcherRuleRepository,
 	resolver Resolver,
-	tracker RawIDTracker,
+	tracker storage.RawIDTracker,
 	rawSvc service.RawContentService,
 	producer queue.Producer,
 	redisClient *goredis.Client,

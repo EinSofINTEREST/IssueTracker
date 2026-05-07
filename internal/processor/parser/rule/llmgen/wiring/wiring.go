@@ -11,6 +11,7 @@ import (
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
+	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/redis"
@@ -31,7 +32,7 @@ func Build(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *
 		return nil, fmt.Errorf("construct llmgen generator: %w", err)
 	}
 	if redisClient != nil {
-		gen.SetLocker(llmgen.NewRedisInflightLocker(redisClient.Raw(), llmgen.DefaultInflightLockTTL))
+		gen.SetLocker(redisstore.NewInflightLocker(redisClient.Raw(), redisstore.DefaultInflightLockTTL))
 		log.Info("llmgen: Redis 분산 inflight lock 활성화")
 	}
 	return gen, nil

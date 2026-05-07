@@ -28,6 +28,7 @@ import (
 	"issuetracker/internal/scheduler"
 	"issuetracker/internal/storage"
 	pgstore "issuetracker/internal/storage/postgres"
+	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
@@ -359,9 +360,9 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to load fetcher auto-upgrade config")
 	}
-	var failureCounter fetcherRule.FailureCounter = fetcherRule.NewNoopFailureCounter()
+	var failureCounter storage.FailureCounter = storage.NewNoopFailureCounter()
 	if fetcherUpgradeCfg.Enabled && redisClientShared != nil {
-		fc, fcErr := fetcherRule.NewRedisFailureCounter(
+		fc, fcErr := redisstore.NewFailureCounter(
 			redisClientShared.Raw(),
 			fetcherUpgradeCfg.Threshold,
 			fetcherUpgradeCfg.Window,
@@ -387,9 +388,9 @@ func main() {
 
 	// host 단위 실패 raw_id 추적기 — 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상 수집에 사용.
 	// 카운터와 같은 lifecycle (window TTL 동기화) — Redis 미연결 시 Noop.
-	var rawIDTracker fetcherRule.RawIDTracker = fetcherRule.NewNoopRawIDTracker()
+	var rawIDTracker storage.RawIDTracker = storage.NewNoopRawIDTracker()
 	if fetcherUpgradeCfg.Enabled && redisClientShared != nil {
-		t, tErr := fetcherRule.NewRedisRawIDTracker(
+		t, tErr := redisstore.NewRawIDTracker(
 			redisClientShared.Raw(),
 			fetcherUpgradeCfg.Window,
 			"", // default keyPrefix "fetcher:failed_raws"
@@ -480,7 +481,7 @@ func main() {
 		log.WithError(err).Fatal("failed to load stale relearn config")
 	}
 	if staleRelearnCfg.Enabled && redisClientShared != nil && llmGen != nil {
-		sc, scErr := llmgen.NewRedisStaleCounter(
+		sc, scErr := redisstore.NewStaleCounter(
 			redisClientShared.Raw(),
 			staleRelearnCfg.Threshold,
 			staleRelearnCfg.Window,

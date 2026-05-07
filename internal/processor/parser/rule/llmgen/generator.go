@@ -113,10 +113,10 @@ type Generator struct {
 	// nil 이면 호출 안 함.
 	validateFailureHandler func(context.Context, core.RawContentRef, int, storage.TargetType, string)
 
-	locker       InflightLocker    // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
-	pendingQueue PendingQueue      // nil 이면 pending URL 보존 비활성
-	requeueFn    RequeueFunc       // nil 이면 재투입 비활성
-	semValidator SelectorValidator // nil 이면 의미 검증 건너뜀
+	locker       storage.InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
+	pendingQueue PendingQueue           // nil 이면 pending URL 보존 비활성
+	requeueFn    RequeueFunc            // nil 이면 재투입 비활성
+	semValidator SelectorValidator      // nil 이면 의미 검증 건너뜀
 	wg           sync.WaitGroup
 	stopped      atomic.Bool
 }
@@ -138,9 +138,9 @@ func (g *Generator) SetPendingQueue(pq PendingQueue, fn RequeueFunc) {
 // SetLocker 는 분산 Lock 구현체를 교체합니다.
 // nil 이면 기본 in-process memInflightLocker 로 fallback.
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
-func (g *Generator) SetLocker(l InflightLocker) {
+func (g *Generator) SetLocker(l storage.InflightLocker) {
 	if l == nil {
-		g.locker = newMemInflightLocker()
+		g.locker = storage.NewMemInflightLocker()
 		return
 	}
 	g.locker = l
@@ -182,7 +182,7 @@ func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *ru
 		repo:     repo,
 		resolver: resolver,
 		log:      log,
-		locker:   newMemInflightLocker(),
+		locker:   storage.NewMemInflightLocker(),
 	}, nil
 }
 

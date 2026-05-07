@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
 )
 
@@ -138,6 +137,6 @@ func (c *countingLocker) releaseCalls() int {
 	return c.release
 }
 
-// Ensure test fakes implement llmgen.InflightLocker
-var _ llmgen.InflightLocker = (*alwaysLockedLocker)(nil)
-var _ llmgen.InflightLocker = (*countingLocker)(nil)
+// Ensure test fakes implement storage.InflightLocker
+var _ storage.InflightLocker = (*alwaysLockedLocker)(nil)
+var _ storage.InflightLocker = (*countingLocker)(nil)
