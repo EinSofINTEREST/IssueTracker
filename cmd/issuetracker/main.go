@@ -17,7 +17,6 @@ import (
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/claudegen"
-	"issuetracker/internal/processor/parser/rule/llmgen"
 	llmgenwiring "issuetracker/internal/processor/parser/rule/llmgen/wiring"
 	refinerwiring "issuetracker/internal/processor/parser/rule/refiner/wiring"
 	"issuetracker/internal/processor/parser/rule/validator"
@@ -517,10 +516,11 @@ func main() {
 	// 룰 생성 완료 시 대기 URL 을 issuetracker.fetched 에 재발행 — 새 룰로 재파싱.
 	// Redis 미설정 시 graceful degrade (pending URL 보존 없이 기존 skip 동작 유지).
 	if llmGen != nil && redisClientShared != nil {
-		llmGen.SetPendingQueue(
-			llmgen.NewRedisPendingQueue(redisClientShared.Raw()),
-			pw.RequeueParsing,
-		)
+		pq, pqErr := redisstore.NewPendingQueue(redisClientShared.Raw())
+		if pqErr != nil {
+			log.WithError(pqErr).Fatal("failed to construct redis pending queue")
+		}
+		llmGen.SetPendingQueue(pq, pw.RequeueParsing)
 		log.Info("llmgen: Redis 기반 pending URL 큐 활성화")
 	}
 
