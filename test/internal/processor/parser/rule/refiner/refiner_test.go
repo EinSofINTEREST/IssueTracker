@@ -26,13 +26,23 @@ import (
 // ─────────────────────────────────────────────────────────────────────────────
 
 // fakeRulesRepo 는 ParsingRuleRepository 의 in-memory 구현입니다.
-// List / UpdatePathPattern / FindActiveCandidates 만 사용 — 나머지는 zero stub.
+// List / InsertNextVersion / FindActiveCandidates 만 사용 — 나머지는 zero stub.
 type fakeRulesRepo struct {
-	mu      sync.Mutex
-	records []*storage.ParsingRuleRecord
-	updates []updateCall
-	listErr error
-	upErr   error
+	mu       sync.Mutex
+	records  []*storage.ParsingRuleRecord
+	inserts  []insertCall   // 이슈 #282 Phase 2: 새 InsertNextVersion 추적
+	updates  []updateCall   // 호환성 — UpdatePathPattern guard 단위 테스트 보존
+	listErr  error
+	insErr   error          // InsertNextVersion 강제 에러 (호환: 기존 upErr 와 의미 통합)
+	insIsDup bool           // InsertNextVersion 가 storage.ErrDuplicate 반환하도록
+	nextID   int64
+}
+
+type insertCall struct {
+	sourceName  string
+	hostPattern string
+	pathPattern string
+	description string
 }
 
 type updateCall struct {
@@ -55,7 +65,41 @@ func (r *fakeRulesRepo) FindActiveCandidates(_ context.Context, _ string, _ stor
 func (r *fakeRulesRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
 	return false, false, nil
 }
-func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, _ *storage.ParsingRuleRecord) error {
+
+// InsertNextVersion 은 자연키의 MAX(version)+1 로 새 record 를 기록하고 sequential ID 를 할당합니다 (이슈 #282).
+func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, rec *storage.ParsingRuleRecord) error {
+	if r.insErr != nil {
+		return r.insErr
+	}
+	if r.insIsDup {
+		return storage.ErrDuplicate
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	maxVer := 0
+	for _, existing := range r.records {
+		if existing.SourceName == rec.SourceName &&
+			existing.HostPattern == rec.HostPattern &&
+			existing.PathPattern == rec.PathPattern &&
+			existing.TargetType == rec.TargetType {
+			if existing.Version > maxVer {
+				maxVer = existing.Version
+			}
+		}
+	}
+	r.nextID++
+	rec.ID = r.nextID
+	rec.Version = maxVer + 1
+	rec.CreatedAt = time.Now()
+	rec.UpdatedAt = rec.CreatedAt
+	clone := *rec
+	r.records = append(r.records, &clone)
+	r.inserts = append(r.inserts, insertCall{
+		sourceName:  rec.SourceName,
+		hostPattern: rec.HostPattern,
+		pathPattern: rec.PathPattern,
+		description: rec.Description,
+	})
 	return nil
 }
 
@@ -82,9 +126,6 @@ func (r *fakeRulesRepo) List(_ context.Context, f storage.ParsingRuleFilter) ([]
 }
 func (r *fakeRulesRepo) Delete(_ context.Context, _ int64) error { return nil }
 func (r *fakeRulesRepo) UpdatePathPattern(_ context.Context, id int64, pattern, description string) error {
-	if r.upErr != nil {
-		return r.upErr
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, rec := range r.records {
@@ -108,6 +149,14 @@ func (r *fakeRulesRepo) updateCalls() []updateCall {
 	defer r.mu.Unlock()
 	out := make([]updateCall, len(r.updates))
 	copy(out, r.updates)
+	return out
+}
+
+func (r *fakeRulesRepo) insertCalls() []insertCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]insertCall, len(r.inserts))
+	copy(out, r.inserts)
 	return out
 }
 
@@ -213,9 +262,9 @@ func newRefiner(t *testing.T, rules storage.ParsingRuleRepository, samples stora
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestRunOnce_AlgorithmSuccess_UpdatesPathPattern(t *testing.T) {
+func TestRunOnce_AlgorithmSuccess_InsertsNextVersion(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}, nextID: 1}
 	samples := newFakeSamplesRepo()
 
 	// numeric ID 패턴 — InferHeuristic 이 ^/article/(\d+)$ 추론.
@@ -230,11 +279,27 @@ func TestRunOnce_AlgorithmSuccess_UpdatesPathPattern(t *testing.T) {
 	r := newRefiner(t, rules, samples)
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	calls := rules.updateCalls()
-	require.Len(t, calls, 1, "expected 1 UpdatePathPattern call")
-	assert.Equal(t, int64(1), calls[0].id)
-	assert.Contains(t, calls[0].pattern, `(\d+)`, "pattern should contain numeric capture group")
-	assert.Contains(t, calls[0].desc, "method=algorithm")
+	calls := rules.insertCalls()
+	require.Len(t, calls, 1, "expected 1 InsertNextVersion call (catch-all v1 보존 + 정밀 v2 추가)")
+	assert.Equal(t, "news.example.com", calls[0].hostPattern)
+	assert.Contains(t, calls[0].pathPattern, `(\d+)`, "path_pattern should contain numeric capture group")
+	assert.Contains(t, calls[0].description, "method=algorithm")
+
+	// 기존 catch-all (path="") 은 records 에 그대로 보존 + 새 정밀 rule 추가됐어야 함.
+	// path_pattern 자체가 다르므로 새 record 는 자체 자연키의 v=1 이 됨 (catch-all v=1 과 공존).
+	rules.mu.Lock()
+	hasCatchAll, hasRefined := false, false
+	for _, rr := range rules.records {
+		if rr.PathPattern == "" && rr.Enabled {
+			hasCatchAll = true
+		}
+		if rr.PathPattern != "" && rr.Enabled {
+			hasRefined = true
+		}
+	}
+	rules.mu.Unlock()
+	assert.True(t, hasCatchAll, "catch-all must remain after refinement (fallback for non-matching paths)")
+	assert.True(t, hasRefined, "refined record must exist after InsertNextVersion")
 
 	assert.Equal(t, 1, samples.purgeCount(1), "samples should be purged after refinement")
 }
@@ -251,7 +316,7 @@ func TestRunOnce_BelowThreshold_NoUpdate(t *testing.T) {
 	r := newRefiner(t, rules, samples)
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	assert.Empty(t, rules.updateCalls(), "no update expected below threshold")
+	assert.Empty(t, rules.insertCalls(), "no insert expected below threshold")
 	assert.Zero(t, samples.purgeCount(1), "no purge expected below threshold")
 }
 
@@ -268,7 +333,7 @@ func TestRunOnce_AlreadyRefined_Skipped(t *testing.T) {
 	r := newRefiner(t, rules, samples)
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	assert.Empty(t, rules.updateCalls(), "already-refined rule must not be updated")
+	assert.Empty(t, rules.insertCalls(), "already-refined rule must not be re-inserted")
 }
 
 func TestRunOnce_AlgorithmFails_LLMFallback(t *testing.T) {
@@ -291,10 +356,10 @@ func TestRunOnce_AlgorithmFails_LLMFallback(t *testing.T) {
 	r := newRefiner(t, rules, samples, refiner.WithLLMClient(llm))
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	calls := rules.updateCalls()
+	calls := rules.insertCalls()
 	require.Len(t, calls, 1)
-	assert.Equal(t, `^/.+/\d+$`, calls[0].pattern)
-	assert.Contains(t, calls[0].desc, "method=llm")
+	assert.Equal(t, `^/.+/\d+$`, calls[0].pathPattern)
+	assert.Contains(t, calls[0].description, "method=llm")
 	assert.Equal(t, int64(1), atomic.LoadInt64(&llm.hits))
 }
 
@@ -314,7 +379,7 @@ func TestRunOnce_AlgorithmFails_NoLLM_Skipped(t *testing.T) {
 	r := newRefiner(t, rules, samples) // LLM 없음
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	assert.Empty(t, rules.updateCalls())
+	assert.Empty(t, rules.insertCalls())
 	assert.Zero(t, samples.purgeCount(1))
 }
 
@@ -336,7 +401,7 @@ func TestRunOnce_LLMError_NoUpdate(t *testing.T) {
 	r := newRefiner(t, rules, samples, refiner.WithLLMClient(llm))
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	assert.Empty(t, rules.updateCalls(), "LLM error should not result in update")
+	assert.Empty(t, rules.insertCalls(), "LLM error should not result in insert")
 }
 
 func TestRunOnce_NonAutoRule_Skipped(t *testing.T) {
@@ -352,7 +417,7 @@ func TestRunOnce_NonAutoRule_Skipped(t *testing.T) {
 	r := newRefiner(t, rules, samples)
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	assert.Empty(t, rules.updateCalls())
+	assert.Empty(t, rules.insertCalls())
 }
 
 func TestRunOnce_DisabledRule_Skipped(t *testing.T) {
@@ -367,7 +432,7 @@ func TestRunOnce_DisabledRule_Skipped(t *testing.T) {
 	r := newRefiner(t, rules, samples)
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	assert.Empty(t, rules.updateCalls())
+	assert.Empty(t, rules.insertCalls())
 }
 
 func TestRunOnce_ListError_Returned(t *testing.T) {
@@ -381,11 +446,11 @@ func TestRunOnce_ListError_Returned(t *testing.T) {
 	assert.Contains(t, err.Error(), "db down")
 }
 
-func TestRunOnce_UpdateError_NoPurge(t *testing.T) {
+func TestRunOnce_InsertError_NoPurge(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
 	rules := &fakeRulesRepo{
 		records: []*storage.ParsingRuleRecord{rec},
-		upErr:   errors.New("update failed"),
+		insErr:  errors.New("insert failed"),
 	}
 	samples := newFakeSamplesRepo()
 	for _, u := range []string{
@@ -399,12 +464,36 @@ func TestRunOnce_UpdateError_NoPurge(t *testing.T) {
 	r := newRefiner(t, rules, samples)
 	require.NoError(t, r.RunOnce(context.Background()))
 
-	assert.Zero(t, samples.purgeCount(1), "purge should not run after update failure")
+	assert.Zero(t, samples.purgeCount(1), "purge should not run after insert failure")
 }
 
-// PR #191 CodeRabbit: optimistic guard 가 stale candidate (이미 다른 인스턴스가 정밀화 완료) 에
-// 대해 ErrNotFound 반환 → refiner 가 Invalidate / Purge 모두 skip.
-func TestRunOnce_StaleGuard_NoPurge(t *testing.T) {
+// 이슈 #282 Phase 2: ErrDuplicate (다른 refiner instance 가 이미 동일 자연키로 v+1 INSERT) 시
+// 본 cycle 은 no-op (purge skip). 다음 cycle 에서 재평가.
+func TestRunOnce_InsertDuplicate_Skipped(t *testing.T) {
+	rec := newCatchAllRule(1, "news.example.com")
+	rules := &fakeRulesRepo{
+		records:  []*storage.ParsingRuleRecord{rec},
+		insIsDup: true,
+	}
+	samples := newFakeSamplesRepo()
+	for _, u := range []string{
+		"https://news.example.com/article/100",
+		"https://news.example.com/article/200",
+		"https://news.example.com/article/300",
+	} {
+		require.NoError(t, samples.Insert(context.Background(), 1, u))
+	}
+
+	r := newRefiner(t, rules, samples)
+	require.NoError(t, r.RunOnce(context.Background()))
+
+	assert.Zero(t, samples.purgeCount(1), "duplicate race must not purge — next cycle re-evaluates")
+}
+
+// 호환성: UpdatePathPattern 의 optimistic guard 자체 contract 는 mock 에 보존되어야 함 (PR #191 CodeRabbit).
+// refiner 는 본 메소드를 더 이상 호출하지 않지만 (Phase 2 InsertNextVersion 전환), repository
+// 인터페이스의 contract 자체는 운영 코드 다른 경로에서 사용 — guard 회귀 방지용 테스트.
+func TestRulesRepo_UpdatePathPattern_StaleGuard(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
 	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
@@ -510,13 +599,15 @@ func TestRunOnce_RecordsMetrics(t *testing.T) {
 	rules.mu.Unlock()
 	require.NoError(t, samples.Insert(context.Background(), 2, "https://news2.example.com/article/100"))
 	require.NoError(t, r.RunOnce(context.Background()))
-	// rec1 의 path_pattern 이 (1) 에서 갱신되어 catch-all 필터 skip — 이번 cycle 에서는 rec2 만 평가.
+	// 이슈 #282 Phase 2: rec1 (catch-all) 은 InsertNextVersion 후에도 records 에 보존되며,
+	// 두 번째 cycle 에서 sample 이 0 (purge 직후) 이라 "skipped/none" 으로 다시 카운트됨.
+	// rec2 도 sample 미달로 "skipped/none" — 두 번째 cycle 에서 skipped 가 2 누적.
 
 	expected := `
 # HELP refinement_attempts_total path_pattern refinement attempts labeled by result/method.
 # TYPE refinement_attempts_total counter
 refinement_attempts_total{method="algorithm",result="success"} 1
-refinement_attempts_total{method="none",result="skipped"} 1
+refinement_attempts_total{method="none",result="skipped"} 2
 `
 	require.NoError(t,
 		testutil.GatherAndCompare(registry, strings.NewReader(expected), "refinement_attempts_total"),
