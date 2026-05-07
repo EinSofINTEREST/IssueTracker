@@ -1,0 +1,23 @@
+Host: {{HOST}}
+Target type: {{TARGET_TYPE}}
+
+Required JSON shape (omit fields you cannot identify):
+{
+  "title":        {"css": "<selector for page title>"},
+  "main_content": {"css": "<selector for primary article body>", "multi": true},
+  "summary":      {"css": "<selector for description/summary, often meta>", "attribute": "content"},
+  "author":       {"css": "<selector for author name>"},
+  "published_at": {"css": "<selector for publish datetime>", "attribute": "datetime"},
+  "category":     {"css": "<selector for section/category>"},
+  "tags":         {"css": "<selector for tag links>", "multi": true},
+  "images":       {"css": "<selector for content images>", "attribute": "src", "multi": true}
+}
+
+Goal: extract a single content page (article / blog post / document).
+
+HTML sample (truncated to {{MAX_HTML_BYTES}} bytes if longer):
+---
+{{HTML}}
+---
+
+Return ONLY the JSON object.

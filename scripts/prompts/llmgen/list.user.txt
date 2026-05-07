@@ -1,0 +1,19 @@
+Host: {{HOST}}
+Target type: {{TARGET_TYPE}}
+
+Required JSON shape (omit fields you cannot identify):
+{
+  "item_container": {"css": "<selector for each list item root>"},
+  "item_link":      {"css": "<selector inside item for the article link>", "attribute": "href"},
+  "item_title":     {"css": "<selector inside item for the title text>"},
+  "item_snippet":   {"css": "<selector inside item for the short summary>"}
+}
+
+Goal: extract a list of article links from a hub/category page.
+
+HTML sample (truncated to {{MAX_HTML_BYTES}} bytes if longer):
+---
+{{HTML}}
+---
+
+Return ONLY the JSON object.

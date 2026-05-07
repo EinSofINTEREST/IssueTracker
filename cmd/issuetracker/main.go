@@ -31,6 +31,7 @@ import (
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
+	"issuetracker/pkg/llm/prompt"
 	llmwiring "issuetracker/pkg/llm/wiring"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/metrics"
@@ -347,7 +348,21 @@ func main() {
 	//
 	// 동일 provider 를 refiner 와 공유 — 환경변수 1세트로 동시 제어.
 	llmProvider := llmwiring.BuildProvider(log)
-	llmGen, err := llmgenwiring.Build(llmProvider, parsingRuleRepo, ruleResolver, redisClientShared, log)
+
+	// LLM prompt loader — 외부 파일 (LLM_PROMPT_DIR, default scripts/prompts) 에서 로드.
+	// 디렉토리 / 필수 파일 부재 시 Generator 가 첫 LLM 호출에서 fail. deployment 에 본 디렉토리
+	// 포함 보장이 운영자 책임 (이슈 #313 — embed fallback 은 후속 sub-issue).
+	promptDir := os.Getenv("LLM_PROMPT_DIR")
+	if promptDir == "" {
+		promptDir = "scripts/prompts"
+	}
+	promptLoader, err := prompt.NewFileLoader(promptDir)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct prompt loader")
+	}
+	log.WithFields(map[string]interface{}{"prompt_dir": promptDir}).Info("LLM prompt loader enabled")
+
+	llmGen, err := llmgenwiring.Build(llmProvider, parsingRuleRepo, ruleResolver, promptLoader, redisClientShared, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build llmgen generator")
 	}

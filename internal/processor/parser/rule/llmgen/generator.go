@@ -37,6 +37,7 @@ import (
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/llm"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
 
@@ -104,11 +105,12 @@ func (e *selectorValidationError) Unwrap() error { return e.cause }
 //   - Stop(ctx) 호출 시 새 Enqueue 차단 + 진행 중 goroutine 의 완료 대기 (graceful shutdown)
 //   - Stop 후 Enqueue 는 noop (race 안전)
 type Generator struct {
-	provider  llm.Provider
-	extractor SelectorExtractor // nil 이면 provider 로 fallback
-	repo      storage.ParsingRuleRepository
-	resolver  *rule.Resolver
-	log       *logger.Logger
+	provider     llm.Provider
+	extractor    SelectorExtractor // nil 이면 provider 로 fallback
+	repo         storage.ParsingRuleRepository
+	resolver     *rule.Resolver
+	promptLoader prompt.Loader
+	log          *logger.Logger
 
 	// validateFailureHandler 는 selector 검증 실패 시 호출되는 콜백입니다.
 	// 인자: (ctx, ref, llmRetryCount, targetType, crawlerName).
@@ -167,9 +169,9 @@ func (g *Generator) SetExtractor(e SelectorExtractor) {
 
 // New 는 Generator 를 생성합니다.
 //
-// provider / repo / resolver / log 모두 비-nil 필수. 하나라도 nil 이면 error —
+// provider / repo / resolver / promptLoader / log 모두 비-nil 필수. 하나라도 nil 이면 error —
 // 호출자 (cmd/main) 가 boot fatal 처리.
-func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, log *logger.Logger) (*Generator, error) {
+func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, log *logger.Logger) (*Generator, error) {
 	if provider == nil {
 		return nil, errors.New("llmgen: New requires non-nil provider")
 	}
@@ -179,15 +181,19 @@ func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *ru
 	if resolver == nil {
 		return nil, errors.New("llmgen: New requires non-nil resolver")
 	}
+	if promptLoader == nil {
+		return nil, errors.New("llmgen: New requires non-nil promptLoader")
+	}
 	if log == nil {
 		return nil, errors.New("llmgen: New requires non-nil log")
 	}
 	return &Generator{
-		provider: provider,
-		repo:     repo,
-		resolver: resolver,
-		log:      log,
-		locker:   storage.NewMemInflightLocker(),
+		provider:     provider,
+		repo:         repo,
+		resolver:     resolver,
+		promptLoader: promptLoader,
+		log:          log,
+		locker:       storage.NewMemInflightLocker(),
 	}, nil
 }
 
@@ -488,7 +494,10 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		}
 	} else {
 		// 기존 LLM provider 경로 (Gemini Flash 등)
-		system, user := BuildPrompt(host, targetType, html)
+		system, user, bpErr := BuildPrompt(g.promptLoader, host, targetType, html)
+		if bpErr != nil {
+			return fmt.Errorf("build llmgen prompt: %w", bpErr)
+		}
 		resp, err := g.provider.Generate(ctx, llm.Request{
 			Messages: []llm.Message{
 				{Role: llm.RoleSystem, Content: system},

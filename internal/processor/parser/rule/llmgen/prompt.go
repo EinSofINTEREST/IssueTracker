@@ -2,9 +2,11 @@ package llmgen
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"issuetracker/internal/storage"
+	"issuetracker/pkg/llm/prompt"
 )
 
 // promptMaxHTMLBytes 는 프롬프트에 첨부할 HTML 의 최대 바이트 수입니다.
@@ -20,64 +22,30 @@ const promptMaxHTMLBytes = 32 * 1024
 // LLM 응답 형식 강제 — 반드시 단일 JSON 객체로 응답하도록 지시.
 // JSON 구조는 storage.SelectorMap 의 JSON tag 와 1:1 매핑되어 그대로 unmarshal 가능.
 //
+// loader 는 외부 파일 (scripts/prompts/llmgen/...) 에서 prompt 본문을 로드.
 // 반환값: (system, user) — Provider 호출 시 RoleSystem + RoleUser 메시지로 분리 전달.
-func BuildPrompt(host string, targetType storage.TargetType, html string) (system, user string) {
-	system = systemPrompt
-	user = buildUserPrompt(host, targetType, truncateHTML(html))
-	return system, user
-}
-
-const systemPrompt = `You are an expert web scraper. Given an HTML sample of a webpage, extract CSS selectors for the most important fields and return them as a single JSON object.
-
-Strict rules:
-1. Respond ONLY with a single JSON object — no prose, no markdown fences, no comments.
-2. Use only selectors that actually appear in the provided HTML — do not invent.
-3. Prefer stable selectors (semantic tags, ARIA roles, id/class with meaningful names) over brittle ones (auto-generated hashes, nth-child indices).
-4. If a field cannot be confidently identified, omit it (do not guess).
-5. The "css" value must be a valid goquery selector. The "attribute" value must be empty for text content, or the HTML attribute name (e.g. "href", "src", "datetime", "content").
-6. Use "multi": true only when the field contains multiple distinct values (tags, image lists, paragraph blocks).`
-
-// buildUserPrompt 는 target_type 별로 요청 필드를 다르게 안내합니다.
-func buildUserPrompt(host string, targetType storage.TargetType, html string) string {
-	var fieldsGuide string
-	switch targetType {
-	case storage.TargetTypeList:
-		fieldsGuide = `Required JSON shape (omit fields you cannot identify):
-{
-  "item_container": {"css": "<selector for each list item root>"},
-  "item_link":      {"css": "<selector inside item for the article link>", "attribute": "href"},
-  "item_title":     {"css": "<selector inside item for the title text>"},
-  "item_snippet":   {"css": "<selector inside item for the short summary>"}
-}
-
-Goal: extract a list of article links from a hub/category page.`
-	default: // TargetTypePage and unknown — default to single-page extraction.
-		fieldsGuide = `Required JSON shape (omit fields you cannot identify):
-{
-  "title":        {"css": "<selector for page title>"},
-  "main_content": {"css": "<selector for primary article body>", "multi": true},
-  "summary":      {"css": "<selector for description/summary, often meta>", "attribute": "content"},
-  "author":       {"css": "<selector for author name>"},
-  "published_at": {"css": "<selector for publish datetime>", "attribute": "datetime"},
-  "category":     {"css": "<selector for section/category>"},
-  "tags":         {"css": "<selector for tag links>", "multi": true},
-  "images":       {"css": "<selector for content images>", "attribute": "src", "multi": true}
-}
-
-Goal: extract a single content page (article / blog post / document).`
+func BuildPrompt(loader prompt.Loader, host string, targetType storage.TargetType, html string) (system, user string, err error) {
+	system, err = loader.Load("llmgen/system")
+	if err != nil {
+		return "", "", fmt.Errorf("load llmgen system prompt: %w", err)
 	}
 
-	return fmt.Sprintf(`Host: %s
-Target type: %s
+	userPromptName := "llmgen/page.user"
+	if targetType == storage.TargetTypeList {
+		userPromptName = "llmgen/list.user"
+	}
+	template, err := loader.Load(userPromptName)
+	if err != nil {
+		return "", "", fmt.Errorf("load %s prompt: %w", userPromptName, err)
+	}
 
-%s
-
-HTML sample (truncated to %d bytes if longer):
----
-%s
----
-
-Return ONLY the JSON object.`, host, string(targetType), fieldsGuide, promptMaxHTMLBytes, html)
+	user = prompt.Render(template,
+		"{{HOST}}", host,
+		"{{TARGET_TYPE}}", string(targetType),
+		"{{MAX_HTML_BYTES}}", strconv.Itoa(promptMaxHTMLBytes),
+		"{{HTML}}", truncateHTML(html),
+	)
+	return system, user, nil
 }
 
 // truncateHTML 은 HTML 을 promptMaxHTMLBytes 까지 잘라냅니다 (UTF-8 경계 안전).
