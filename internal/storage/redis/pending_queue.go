@@ -28,6 +28,19 @@ local items = redis.call("LRANGE", KEYS[1], 0, -1)
 redis.call("DEL", KEYS[1])
 return items`
 
+// luaPush 는 LLEN + RPUSH + EXPIRE 를 원자적으로 수행하는 Lua 스크립트입니다.
+// LLEN 후 RPUSH 의 check-then-act race 회피 — 동일 host 다발 호출 시 maxLen 초과 차단.
+//
+// 반환값: -1 = 큐가 maxLen 도달 (drop) / >= 0 = push 후 길이.
+const luaPush = `
+local len = redis.call("LLEN", KEYS[1])
+if len >= tonumber(ARGV[1]) then
+    return -1
+end
+redis.call("RPUSH", KEYS[1], ARGV[2])
+redis.call("EXPIRE", KEYS[1], ARGV[3])
+return len + 1`
+
 // pendingQueue 는 Redis LIST 기반 PendingQueue 구현입니다.
 //
 // 운영 정책:
@@ -57,21 +70,15 @@ func NewPendingQueue(rdb *goredis.Client) (storage.PendingQueue, error) {
 func (r *pendingQueue) Push(ctx context.Context, host string, targetType storage.TargetType, payload []byte) error {
 	key := r.key(host, targetType)
 
-	// 길이 상한 초과 시 skip — noisy host 가 Redis 메모리를 독점하지 않도록.
-	llen, err := r.rdb.LLen(ctx, key).Result()
-	if err != nil && !errors.Is(err, goredis.Nil) {
-		return fmt.Errorf("redis pending llen %s: %w", key, err)
-	}
-	if llen >= r.maxLen {
-		return fmt.Errorf("redis pending queue full (%s, len=%d): item dropped", key, llen)
-	}
-
-	// RPUSH + EXPIRE 를 pipeline 으로 묶어 TTL 갱신 보장.
-	pipe := r.rdb.Pipeline()
-	pipe.RPush(ctx, key, payload)
-	pipe.Expire(ctx, key, r.ttl)
-	if _, err := pipe.Exec(ctx); err != nil {
+	// 단일 EVAL 로 길이 체크 + RPUSH + EXPIRE 원자 실행 — 동시 호출 시 maxLen 초과 방지.
+	result, err := r.rdb.Eval(ctx, luaPush, []string{key},
+		r.maxLen, payload, int64(r.ttl.Seconds()),
+	).Int64()
+	if err != nil {
 		return fmt.Errorf("redis pending push %s: %w", key, err)
+	}
+	if result == -1 {
+		return fmt.Errorf("redis pending queue full (%s, max=%d): item dropped", key, r.maxLen)
 	}
 	return nil
 }
