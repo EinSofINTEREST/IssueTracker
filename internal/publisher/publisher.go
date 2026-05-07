@@ -57,15 +57,18 @@ type PipelineGuard interface {
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
 //   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — 워커 동시 실행 중 변경에도 race 없음
 //
-// URL dedup — Ingestion Lock (이슈 #178, 이슈 #126 의 단일 책임화):
+// URL dedup — Pipeline Guard (이슈 #285) / Ingestion Lock (이슈 #178):
 //   - SetNormalizer 로 pkg/links.Normalizer 를 주입하면 publish 직전 모든 URL 정규화
-//     (정규화된 URL 이 Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두에 일관)
-//   - SetIngestionLock 으로 IngestionLock 을 설정하면 message build 직전에 atomic SETNX
-//     — 이미 진입한 URL 은 publish 에서 제외 (다운스트림 worker 에서도 다시 차단 불필요)
-//   - TargetTypeCategory 는 lock 미적용 (카테고리 페이지는 매 주기 새 기사 추출이 목적)
+//     (정규화된 URL 이 marker 키 / Kafka payload / 다운스트림 dedup 모두에 일관)
+//   - SetPipelineGuard 우선 — 모든 target type 에 적용:
+//     · TargetTypeCategory: 단명 TTL (default 60s, PIPELINE_GUARD_CATEGORY_TTL)
+//     · TargetTypeArticle : default TTL (24h, REDIS_INGESTION_LOCK_TTL)
+//   - SetIngestionLock fallback (backward compat) — guard 미주입 시:
+//     · TargetTypeArticle 만 적용
+//     · TargetTypeCategory 는 lock 미적용 (legacy 경로 — 카테고리 매 주기 갱신 의도)
 //   - lock 조회 실패는 fail-open (해당 URL publish 진행) — Redis 일시 장애로 publish 가
 //     멈추지 않도록
-//   - 미설정 시 dedup 비활성 (기존 동작 유지)
+//   - 둘 다 미설정 시 dedup 비활성 (기존 동작 유지)
 type Publisher struct {
 	producer   queue.Producer
 	resolver   PriorityResolver
