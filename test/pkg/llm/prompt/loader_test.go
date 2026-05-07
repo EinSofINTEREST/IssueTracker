@@ -129,3 +129,9 @@ func TestRender_UnknownPlaceholder_LeftUntouched(t *testing.T) {
 	out := prompt.Render("Hello {{NAME}} and {{UNKNOWN}}", "{{NAME}}", "World")
 	assert.Equal(t, "Hello World and {{UNKNOWN}}", out)
 }
+
+func TestRender_OddLengthReplacements_Panics(t *testing.T) {
+	assert.Panics(t, func() {
+		prompt.Render("template", "{{KEY}}", "value", "{{ORPHAN}}")
+	}, "Render 가 odd-length 인자에 명시적 panic")
+}

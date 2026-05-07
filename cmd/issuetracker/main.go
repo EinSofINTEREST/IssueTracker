@@ -349,18 +349,22 @@ func main() {
 	// 동일 provider 를 refiner 와 공유 — 환경변수 1세트로 동시 제어.
 	llmProvider := llmwiring.BuildProvider(log)
 
-	// LLM prompt loader — 외부 파일 (LLM_PROMPT_DIR, default scripts/prompts) 에서 로드.
-	// 디렉토리 / 필수 파일 부재 시 Generator 가 첫 LLM 호출에서 fail. deployment 에 본 디렉토리
-	// 포함 보장이 운영자 책임 (이슈 #313 — embed fallback 은 후속 sub-issue).
-	promptDir := os.Getenv("LLM_PROMPT_DIR")
-	if promptDir == "" {
-		promptDir = "scripts/prompts"
+	// LLM prompt loader — provider 가 nil (LLM_ENABLED=false 또는 API key 부재) 이면
+	// promptLoader 도 미생성. wiring.Build 가 provider==nil 시 short-circuit 하므로
+	// LLM 비활성 환경에서 prompt 디렉토리 부재로 인한 boot 실패 회피.
+	var promptLoader prompt.Loader
+	if llmProvider != nil {
+		promptDir := os.Getenv("LLM_PROMPT_DIR")
+		if promptDir == "" {
+			promptDir = "scripts/prompts"
+		}
+		fl, plErr := prompt.NewFileLoader(promptDir)
+		if plErr != nil {
+			log.WithError(plErr).Fatal("failed to construct prompt loader")
+		}
+		promptLoader = fl
+		log.WithFields(map[string]interface{}{"prompt_dir": promptDir}).Info("LLM prompt loader enabled")
 	}
-	promptLoader, err := prompt.NewFileLoader(promptDir)
-	if err != nil {
-		log.WithError(err).Fatal("failed to construct prompt loader")
-	}
-	log.WithFields(map[string]interface{}{"prompt_dir": promptDir}).Info("LLM prompt loader enabled")
 
 	llmGen, err := llmgenwiring.Build(llmProvider, parsingRuleRepo, ruleResolver, promptLoader, redisClientShared, log)
 	if err != nil {

@@ -111,10 +111,16 @@ func (m MapLoader) Load(name string) (string, error) {
 // replacements 는 ("{{KEY}}", value) 의 짝수 슬라이스 — strings.NewReplacer 와 동일 인자 형식.
 // template 안에 정의되지 않은 placeholder 는 그대로 잔존 — 호출자가 필요한 경우 별도 검증.
 //
+// 홀수 인자 시 panic — strings.NewReplacer 의 panic 보다 본 패키지 컨텍스트가 명확하도록
+// 우선 검증 후 호출자 실수를 즉시 가시화.
+//
 // Go text/template 의 의존성 회피 — 운영자가 Go template 문법 몰라도 단순 {{KEY}} 치환만 가능.
 func Render(template string, replacements ...string) string {
 	if len(replacements) == 0 {
 		return template
+	}
+	if len(replacements)%2 != 0 {
+		panic(fmt.Sprintf("prompt: Render requires even number of replacements (got %d): %v", len(replacements), replacements))
 	}
 	return strings.NewReplacer(replacements...).Replace(template)
 }
