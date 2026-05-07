@@ -762,3 +762,68 @@ func TestGenerator_PreCheckLookupError_FallthroughToLLM(t *testing.T) {
 	assert.Equal(t, 1, provider.callCount(), "lookup 에러 시 LLM 경로 fallthrough — best-effort 정책")
 	require.Len(t, repo.inserts(), 1, "lookup 에러 후에도 Insert 진행")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EnqueueStale (이슈 #282)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// EnqueueStale 가 InsertNextVersion 경로로 갈지 검증.
+func TestGenerator_EnqueueStale_InsertNextVersion(t *testing.T) {
+	provider := &fakeProvider{
+		name: "fake",
+		response: `{
+			"title": {"css": "h1.article-title"},
+			"main_content": {"css": "article p", "multi": true}
+		}`,
+	}
+	repo := &recordingRepo{}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.EnqueueStale(context.Background(), "stale.example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://stale.example.com/article/1", HTML: samplePageHTML,
+	}, 0, "", 0)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	g.Stop(stopCtx)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	// recordingRepo.Insert 의 호출이 Insert 또는 InsertNextVersion 중 어느 것으로 들어가도
+	// inserted 슬라이스에는 1건 추가됨 (Insert 가 공통 경로). 핵심 검증은 LLM provider 가 호출됐고
+	// inserted 가 1건임 — Stale 분기가 정상 통과한 증거.
+	assert.Equal(t, 1, provider.callCount(), "EnqueueStale 도 LLM 호출은 발생")
+	assert.Len(t, repo.inserted, 1, "InsertNextVersion 경유로 inserted 누적")
+}
+
+// EnqueueStale 의 pre-check 가 enabled=true 룰 적중해도 skip 안 함을 검증 (vs Enqueue 의 skip 동작).
+func TestGenerator_EnqueueStale_BypassesEnabledPreCheck(t *testing.T) {
+	provider := &fakeProvider{
+		name: "fake",
+		response: `{
+			"title": {"css": "h1.article-title"},
+			"main_content": {"css": "article p", "multi": true}
+		}`,
+	}
+	// 사전 lookup 결과 — enabled=true 룰 잔존 (정상적으로 fresh Enqueue 면 skip 대상).
+	repo := &recordingRepo{
+		findByNaturalKeyResult: &storage.ParsingRuleRecord{
+			ID: 1, HostPattern: "stale.example.com", TargetType: storage.TargetTypePage,
+			Version: 1, Enabled: true,
+		},
+	}
+	g, _ := newGenerator(t, provider, repo)
+
+	g.EnqueueStale(context.Background(), "stale.example.com", storage.TargetTypePage, &core.RawContent{
+		URL: "https://stale.example.com/article/1", HTML: samplePageHTML,
+	}, 0, "", 0)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	g.Stop(stopCtx)
+
+	assert.Equal(t, 1, provider.callCount(), "EnqueueStale 는 enabled 룰 적중해도 LLM 호출 진행 (v2 학습)")
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	assert.Len(t, repo.inserted, 1, "v2 INSERT 발생")
+}

@@ -200,6 +200,24 @@ func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *ru
 // 동일 (host, type) 에 대한 in-flight 호출이 이미 있으면 즉시 skip.
 // Stop 호출 후의 Enqueue 는 즉시 noop.
 func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration) {
+	g.enqueueImpl(ctx, host, targetType, raw, llmRetryCount, crawlerName, jobTimeout, false)
+}
+
+// EnqueueStale 은 stale rule 재학습 모드로 LLM 호출을 비동기 시작합니다 (이슈 #282).
+//
+// 차이점 (vs Enqueue):
+//   - pre-check 의 enabled=true 룰 적중 시 skip 안 함 — v2 학습 진행
+//   - 마지막 INSERT 가 InsertNextVersion 사용 — 기존 v1 보존 + v2 추가
+//
+// 호출 시점: parser_worker 가 ErrParseFailure / ErrEmptySelector 임계 도달 시 호출.
+// disabled 룰 잔존 host 는 운영자 의도 존중 — pre-check 에서 skip.
+func (g *Generator) EnqueueStale(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration) {
+	g.enqueueImpl(ctx, host, targetType, raw, llmRetryCount, crawlerName, jobTimeout, true)
+}
+
+// enqueueImpl 은 Enqueue / EnqueueStale 의 공통 구현입니다 (이슈 #282).
+// stale=true 면 InsertNextVersion 경로 (v2 추가), false 면 기존 Insert 경로 (v1).
+func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration, stale bool) {
 	if g.stopped.Load() {
 		return
 	}
@@ -284,7 +302,7 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 			}
 		}()
 
-		err := g.runOnce(bgCtx, host, targetType, urlSnapshot, htmlSnapshot)
+		err := g.runOnce(bgCtx, host, targetType, urlSnapshot, htmlSnapshot, stale)
 		if err != nil {
 			logger.FromContext(bgCtx).WithFields(map[string]interface{}{
 				"host":        host,
@@ -365,21 +383,31 @@ func (g *Generator) Stop(ctx context.Context) {
 
 // runOnce 는 단일 추출 + validation + INSERT + cache invalidate 의 동기 실행입니다.
 // 호출자 (Enqueue 의 goroutine) 가 in-flight 슬롯 release 책임.
-func (g *Generator) runOnce(ctx context.Context, host string, targetType storage.TargetType, sampleURL, html string) error {
+func (g *Generator) runOnce(ctx context.Context, host string, targetType storage.TargetType, sampleURL, html string, stale bool) error {
 	// 사전 lookup (이슈 #274) — 동일 자연키 룰이 이미 DB 에 존재하면 LLM 호출 회피.
 	// PR #275 리뷰 반영:
 	//   - enabled=true 룰 적중 시에만 skip (resolver 가 enabled=TRUE 만 조회하므로 disabled 는 사실상 부재)
 	//   - ErrNotFound 만 normal miss, 그 외 에러는 warn 로그 — DB 장애 silent fallthrough 회피
+	//   - stale=true (이슈 #282): v2 학습 진행 — pre-check enabled hit 분기에서 skip 안 함
 	existing, err := g.repo.FindByNaturalKey(ctx, LLMAutoSourceName, host, "", targetType, 1)
 	switch {
 	case err == nil && existing != nil && existing.Enabled:
-		g.resolver.Invalidate(host, targetType)
-		g.log.WithFields(map[string]interface{}{
-			"host":        host,
-			"target_type": string(targetType),
-			"rule_id":     existing.ID,
-		}).Info("llmgen pre-check hit — enabled rule already exists, skipping LLM call")
-		return nil
+		if stale {
+			// stale 재학습: v1 enabled 그대로 유지하면서 v2 추가 — pre-check 통과.
+			g.log.WithFields(map[string]interface{}{
+				"host":        host,
+				"target_type": string(targetType),
+				"existing_v1": existing.ID,
+			}).Info("llmgen stale relearn — proceeding to v2 generation (existing v1 preserved)")
+		} else {
+			g.resolver.Invalidate(host, targetType)
+			g.log.WithFields(map[string]interface{}{
+				"host":        host,
+				"target_type": string(targetType),
+				"rule_id":     existing.ID,
+			}).Info("llmgen pre-check hit — enabled rule already exists, skipping LLM call")
+			return nil
+		}
 	case err == nil && existing != nil && !existing.Enabled:
 		// 운영자가 disable 한 룰이 잔존 — 자동 재활성은 정책상 보수적으로 회피.
 		// LLM 재호출도 결과적으로 ErrDuplicate 로 reject 될 것이므로 LLM 비용 절감 + 운영 가시성을 위해 skip + warn.
@@ -469,13 +497,20 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		SourceName:  LLMAutoSourceName,
 		HostPattern: host,
 		TargetType:  targetType,
-		Version:     1,
+		Version:     1,    // stale 모드 시 InsertNextVersion 가 자동으로 max+1 로 덮어씀 (이슈 #282)
 		Enabled:     true, // CSS selector 검증 통과 = 품질 게이트 — 즉시 활성화하여 pending 재투입이 유효하도록
 		Selectors:   selectors,
 		Confidence:  confidence,
 		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, modelName),
 	}
-	if err := g.repo.Insert(ctx, record); err != nil {
+	var insertErr error
+	if stale {
+		// stale 재학습: 기존 v1 보존 + v2 추가 (이슈 #282).
+		insertErr = g.repo.InsertNextVersion(ctx, record)
+	} else {
+		insertErr = g.repo.Insert(ctx, record)
+	}
+	if err := insertErr; err != nil {
 		// 동일 자연키 (source_name, host_pattern, path_pattern, target_type, version) 룰이 이미
 		// DB 에 존재 — 정상 경로로 흡수 (이슈 #274).
 		// 발생 시나리오: 이전 실행이 INSERT 한 룰이 잔존하나 resolver lookup 이 stale 캐시 등으로
