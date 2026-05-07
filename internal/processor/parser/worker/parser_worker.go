@@ -396,10 +396,10 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 	}
 
 	mlog.WithFields(map[string]interface{}{
-		"crawler":            crawlerName,
-		"article_count":      len(articleURLs),
-		"list_count":         len(listURLs),
-		"dropped_count":      droppedCount,
+		"crawler":       crawlerName,
+		"article_count": len(articleURLs),
+		"list_count":    len(listURLs),
+		"dropped_count": droppedCount,
 	}).Info("chained jobs published from category page")
 
 	// 카테고리 페이지는 contents/news_articles 에 저장하지 않음 — raw 즉시 정리
