@@ -65,11 +65,11 @@ type ParserWorker struct {
 	// failureCounter: host 단위 fetcher 실패 카운터.
 	// nil 시 noopFailureCounter 로 fallback — 카운팅 자체 비활성.
 	// rule.ErrParseFailure / rule.ErrEmptySelector 또는 빈본문 발생 시 Record 호출.
-	failureCounter fetcherRule.FailureCounter
+	failureCounter storage.FailureCounter
 
 	// rawIDTracker: 같은 실패 시점에 host 별 raw_id 추적.
 	// nil 시 noopRawIDTracker — republish 비활성 (단계 3 trigger 가 빈 raw_id 받음).
-	rawIDTracker fetcherRule.RawIDTracker
+	rawIDTracker storage.RawIDTracker
 
 	// upgrader: 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish 트리거.
 	// nil 허용 — nil 이면 thresholdReached 신호 발신만 (자동 전환 비활성).
@@ -91,7 +91,7 @@ type ParserWorker struct {
 	// nil 허용 — nil 이면 stale 재학습 비활성 (chromedp 자동 전환만 동작).
 	// ErrParseFailure / ErrEmptySelector 발생 시 Record 호출, threshold 도달 시
 	// llmGen.EnqueueStale 트리거.
-	staleCounter llmgen.StaleCounter
+	staleCounter storage.StaleCounter
 	// staleThreshold: window 내 stale failure 임계값.
 	// 임계 도달 첫 회 (count == staleThreshold) 만 enqueue — count > threshold 인 후속 호출은
 	// 카운트만 누적하고 enqueue 회피 (window 내 동일 host 의 version churn / 비용 spike 방지).
@@ -136,8 +136,8 @@ func NewParserWorker(
 	sampleSvc storage.SampleURLRepository,
 	procLock locks.ProcessingLock,
 	llmGen *llmgen.Generator,
-	failureCounter fetcherRule.FailureCounter,
-	rawIDTracker fetcherRule.RawIDTracker,
+	failureCounter storage.FailureCounter,
+	rawIDTracker storage.RawIDTracker,
 	upgrader *fetcherRule.Upgrader,
 	emptyBodyTitleMin int,
 	emptyBodyContentMin int,
@@ -151,10 +151,10 @@ func NewParserWorker(
 		procLock = locks.NoopProcessingLock{}
 	}
 	if failureCounter == nil {
-		failureCounter = fetcherRule.NewNoopFailureCounter()
+		failureCounter = storage.NewNoopFailureCounter()
 	}
 	if rawIDTracker == nil {
-		rawIDTracker = fetcherRule.NewNoopRawIDTracker()
+		rawIDTracker = storage.NewNoopRawIDTracker()
 	}
 	return &ParserWorker{
 		consumer:            consumer,
@@ -197,7 +197,7 @@ func (w *ParserWorker) SetBlacklist(b *rule.BlacklistMatcher) {
 // threshold <= 0 이면 threshold-crossing gate 비활성 — counter.Record 의 thresholdReached 만으로 트리거
 // (window 내 매 후속 호출마다 enqueue 가능, 호환 fallback).
 // Start 호출 전 wiring 단계에서 1회 설정.
-func (w *ParserWorker) SetStaleCounter(c llmgen.StaleCounter, threshold int) {
+func (w *ParserWorker) SetStaleCounter(c storage.StaleCounter, threshold int) {
 	w.staleCounter = c
 	w.staleThreshold = threshold
 }
@@ -512,7 +512,7 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 		// 동일 시점에 stale counter 누적 — 임계 도달 시 LLM 재학습 트리거.
 		if targetType == storage.TargetTypePage &&
 			(rerr.Code == rule.ErrParseFailure || rerr.Code == rule.ErrEmptySelector) {
-			w.recordHostFailure(ctx, rerr.Host, rawID, fetcherRule.FailureReasonRuleParseFailure, mlog)
+			w.recordHostFailure(ctx, rerr.Host, rawID, storage.FailureReasonRuleParseFailure, mlog)
 			w.recordStaleAndMaybeRelearn(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName, jobTimeout, mlog)
 		}
 
@@ -535,7 +535,7 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 //
 // rawID 는 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상으로 사용. 빈 문자열이면
 // Tracker 가 noop.
-func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string, reason fetcherRule.FailureReason, mlog *logger.Logger) {
+func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string, reason storage.FailureReason, mlog *logger.Logger) {
 	if w.failureCounter == nil {
 		return
 	}
@@ -681,9 +681,9 @@ func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *cor
 		"host":         host,
 		"title_length": titleLen,
 		"body_length":  bodyLen,
-		"reason":       string(fetcherRule.FailureReasonEmptyBody),
+		"reason":       string(storage.FailureReasonEmptyBody),
 	}).Warn("empty body detected — recording host failure")
-	w.recordHostFailure(ctx, host, rawID, fetcherRule.FailureReasonEmptyBody, mlog)
+	w.recordHostFailure(ctx, host, rawID, storage.FailureReasonEmptyBody, mlog)
 }
 
 // publishContents 는 *core.Content 슬라이스를 contents 저장 + ContentRef 발행 (TopicNormalized).

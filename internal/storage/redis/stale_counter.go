@@ -1,4 +1,4 @@
-package llmgen
+package redisstore
 
 import (
 	"context"
@@ -15,36 +15,11 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// StaleCounter 는 stale rule 발생을 (host, target_type) 단위 sliding window 로 카운팅합니다.
+// staleCounter 는 Redis sorted set 기반 sliding window StaleCounter 구현체입니다.
 //
-// 기존 fetcher 의 FailureCounter (chromedp 업그레이드용) 와 별개의 keyspace / 임계값 보유:
-//   - 임계값: STALE_RELEARN_THRESHOLD (default 10) — chromedp 업그레이드보다 높은 임계
-//     (chromedp 가 먼저 시도되고, 그래도 fail 지속 시 LLM 재학습)
-//   - 윈도우: STALE_RELEARN_WINDOW (default 2h) — 더 긴 관찰 기간
-//
-// thresholdReached=true 시 호출자 (parser_worker) 가 Generator.EnqueueStale 호출.
-// goroutine-safe 필수.
-type StaleCounter interface {
-	// Record 는 (host, target_type) 의 stale parse failure 1건을 누적합니다.
-	// 반환: (count 누적값, thresholdReached 임계 도달 여부, err 카운팅 실패).
-	Record(ctx context.Context, host string, targetType storage.TargetType) (count int, thresholdReached bool, err error)
-}
-
-// noopStaleCounter — 비활성 (STALE_RELEARN_ENABLED=false 또는 Redis 미연결) 시 사용.
-type noopStaleCounter struct{}
-
-// NewNoopStaleCounter 는 항상 (0, false, nil) 을 반환하는 StaleCounter 입니다.
-func NewNoopStaleCounter() StaleCounter { return noopStaleCounter{} }
-
-func (noopStaleCounter) Record(_ context.Context, _ string, _ storage.TargetType) (int, bool, error) {
-	return 0, false, nil
-}
-
-// redisStaleCounter — Redis sorted set 기반 sliding window 구현체.
-//
-// FailureCounter 와 동일 알고리즘 — ZADD + ZREMRANGEBYSCORE + EXPIRE + ZCARD 의 단일 PIPELINE.
-// 차이점: keyspace 분리 ("stale:relearn:<host>:<type>") + 별도 threshold/window.
-type redisStaleCounter struct {
+// FailureCounter 와 동일 알고리즘 (ZADD + ZREMRANGEBYSCORE + EXPIRE + ZCARD 단일 PIPELINE).
+// keyspace 만 분리: "stale:relearn:<host>:<type>".
+type staleCounter struct {
 	client    *goredis.Client
 	threshold int
 	window    time.Duration
@@ -53,24 +28,24 @@ type redisStaleCounter struct {
 	log       *logger.Logger
 }
 
-// NewRedisStaleCounter 는 Redis 기반 stale counter 를 생성합니다.
+// NewStaleCounter 는 Redis 기반 StaleCounter 를 생성합니다.
 //
 // client nil / threshold<1 / window<=0 시 error.
 // keyPrefix 가 빈 문자열이면 "stale:relearn" 사용.
-func NewRedisStaleCounter(client *goredis.Client, threshold int, window time.Duration, keyPrefix string, log *logger.Logger) (StaleCounter, error) {
+func NewStaleCounter(client *goredis.Client, threshold int, window time.Duration, keyPrefix string, log *logger.Logger) (storage.StaleCounter, error) {
 	if client == nil {
-		return nil, errors.New("llmgen: NewRedisStaleCounter requires non-nil redis client")
+		return nil, errors.New("redisstore: NewStaleCounter requires non-nil redis client")
 	}
 	if threshold < 1 {
-		return nil, fmt.Errorf("llmgen: NewRedisStaleCounter requires threshold >= 1, got %d", threshold)
+		return nil, fmt.Errorf("redisstore: NewStaleCounter requires threshold >= 1, got %d", threshold)
 	}
 	if window <= 0 {
-		return nil, fmt.Errorf("llmgen: NewRedisStaleCounter requires positive window, got %s", window)
+		return nil, fmt.Errorf("redisstore: NewStaleCounter requires positive window, got %s", window)
 	}
 	if keyPrefix == "" {
 		keyPrefix = "stale:relearn"
 	}
-	return &redisStaleCounter{
+	return &staleCounter{
 		client:    client,
 		threshold: threshold,
 		window:    window,
@@ -79,11 +54,11 @@ func NewRedisStaleCounter(client *goredis.Client, threshold int, window time.Dur
 	}, nil
 }
 
-func (r *redisStaleCounter) keyFor(host string, t storage.TargetType) string {
+func (r *staleCounter) keyFor(host string, t storage.TargetType) string {
 	return r.keyPrefix + ":" + host + ":" + string(t)
 }
 
-func (r *redisStaleCounter) Record(ctx context.Context, host string, t storage.TargetType) (int, bool, error) {
+func (r *staleCounter) Record(ctx context.Context, host string, t storage.TargetType) (int, bool, error) {
 	if host == "" {
 		return 0, false, nil
 	}

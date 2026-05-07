@@ -1,4 +1,4 @@
-package rule_test
+package redisstore_test
 
 import (
 	"context"
@@ -8,7 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	fetcherRule "issuetracker/internal/processor/fetcher/rule"
+	"issuetracker/internal/storage"
+	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/pkg/config"
 	pkgredis "issuetracker/pkg/redis"
 )
@@ -38,7 +39,7 @@ func uniqueKeyPrefix(t *testing.T) string {
 // TestNewRedisFailureCounter_NilClient_ReturnsError:
 // 이슈 #208 panic-on-nil → error 정책. nil client 는 wiring 오류라 즉시 error.
 func TestNewRedisFailureCounter_NilClient_ReturnsError(t *testing.T) {
-	_, err := fetcherRule.NewRedisFailureCounter(nil, 5, time.Hour, "", newTestLogger())
+	_, err := redisstore.NewFailureCounter(nil, 5, time.Hour, "", newTestLogger())
 	assert.Error(t, err)
 }
 
@@ -46,10 +47,10 @@ func TestNewRedisFailureCounter_NilClient_ReturnsError(t *testing.T) {
 // threshold 0 또는 음수 → 카운터 자체 무의미. 즉시 error.
 func TestNewRedisFailureCounter_BadThreshold_ReturnsError(t *testing.T) {
 	client := newTestRedisClient(t)
-	_, err := fetcherRule.NewRedisFailureCounter(client.Raw(), 0, time.Hour, "", newTestLogger())
+	_, err := redisstore.NewFailureCounter(client.Raw(), 0, time.Hour, "", newTestLogger())
 	assert.Error(t, err)
 
-	_, err = fetcherRule.NewRedisFailureCounter(client.Raw(), -1, time.Hour, "", newTestLogger())
+	_, err = redisstore.NewFailureCounter(client.Raw(), -1, time.Hour, "", newTestLogger())
 	assert.Error(t, err)
 }
 
@@ -57,7 +58,7 @@ func TestNewRedisFailureCounter_BadThreshold_ReturnsError(t *testing.T) {
 // window 0 또는 음수 → sliding window 의미 없음. 즉시 error.
 func TestNewRedisFailureCounter_BadWindow_ReturnsError(t *testing.T) {
 	client := newTestRedisClient(t)
-	_, err := fetcherRule.NewRedisFailureCounter(client.Raw(), 5, 0, "", newTestLogger())
+	_, err := redisstore.NewFailureCounter(client.Raw(), 5, 0, "", newTestLogger())
 	assert.Error(t, err)
 }
 
@@ -66,10 +67,10 @@ func TestNewRedisFailureCounter_BadWindow_ReturnsError(t *testing.T) {
 func TestRedisFailureCounter_Record_FirstHitBelowThreshold(t *testing.T) {
 	client := newTestRedisClient(t)
 	prefix := uniqueKeyPrefix(t)
-	c, err := fetcherRule.NewRedisFailureCounter(client.Raw(), 5, time.Hour, prefix, newTestLogger())
+	c, err := redisstore.NewFailureCounter(client.Raw(), 5, time.Hour, prefix, newTestLogger())
 	require.NoError(t, err)
 
-	count, reached, err := c.Record(context.Background(), "edition.cnn.com", fetcherRule.FailureReasonRuleParseFailure)
+	count, reached, err := c.Record(context.Background(), "edition.cnn.com", storage.FailureReasonRuleParseFailure)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 	assert.False(t, reached)
@@ -85,29 +86,29 @@ func TestRedisFailureCounter_Record_FirstHitBelowThreshold(t *testing.T) {
 func TestRedisFailureCounter_Record_AccumulatesUntilThreshold(t *testing.T) {
 	client := newTestRedisClient(t)
 	prefix := uniqueKeyPrefix(t)
-	c, err := fetcherRule.NewRedisFailureCounter(client.Raw(), 3, time.Hour, prefix, newTestLogger())
+	c, err := redisstore.NewFailureCounter(client.Raw(), 3, time.Hour, prefix, newTestLogger())
 	require.NoError(t, err)
 
 	host := "naver.com"
 	ctx := context.Background()
 
-	count, reached, err := c.Record(ctx, host, fetcherRule.FailureReasonRuleParseFailure)
+	count, reached, err := c.Record(ctx, host, storage.FailureReasonRuleParseFailure)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 	assert.False(t, reached)
 
-	count, reached, err = c.Record(ctx, host, fetcherRule.FailureReasonEmptyBody)
+	count, reached, err = c.Record(ctx, host, storage.FailureReasonEmptyBody)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
 	assert.False(t, reached)
 
-	count, reached, err = c.Record(ctx, host, fetcherRule.FailureReasonRuleParseFailure)
+	count, reached, err = c.Record(ctx, host, storage.FailureReasonRuleParseFailure)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 	assert.True(t, reached)
 
 	// 임계값 도달 이후 추가 record 도 threshold=true 유지 (windowing 안에서는 cumulative).
-	count, reached, err = c.Record(ctx, host, fetcherRule.FailureReasonEmptyBody)
+	count, reached, err = c.Record(ctx, host, storage.FailureReasonEmptyBody)
 	require.NoError(t, err)
 	assert.Equal(t, 4, count)
 	assert.True(t, reached)
@@ -124,21 +125,21 @@ func TestRedisFailureCounter_Record_AccumulatesUntilThreshold(t *testing.T) {
 func TestRedisFailureCounter_Record_PrunesOldEntries(t *testing.T) {
 	client := newTestRedisClient(t)
 	prefix := uniqueKeyPrefix(t)
-	c, err := fetcherRule.NewRedisFailureCounter(client.Raw(), 5, 50*time.Millisecond, prefix, newTestLogger())
+	c, err := redisstore.NewFailureCounter(client.Raw(), 5, 50*time.Millisecond, prefix, newTestLogger())
 	require.NoError(t, err)
 
 	host := "yonhap.co.kr"
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
-		_, _, err := c.Record(ctx, host, fetcherRule.FailureReasonRuleParseFailure)
+		_, _, err := c.Record(ctx, host, storage.FailureReasonRuleParseFailure)
 		require.NoError(t, err)
 	}
 
 	// window 만료 대기 + 새 record 로 ZREMRANGEBYSCORE 발동 확인.
 	time.Sleep(80 * time.Millisecond)
 
-	count, reached, err := c.Record(ctx, host, fetcherRule.FailureReasonRuleParseFailure)
+	count, reached, err := c.Record(ctx, host, storage.FailureReasonRuleParseFailure)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "이전 3건은 window 밖이라 제거됨, 새 1건만 남아야 함")
 	assert.False(t, reached)
@@ -152,10 +153,10 @@ func TestRedisFailureCounter_Record_PrunesOldEntries(t *testing.T) {
 // 빈 host 는 즉시 (0, false, nil) — Redis 호출 없음.
 func TestRedisFailureCounter_EmptyHost_ReturnsZero(t *testing.T) {
 	client := newTestRedisClient(t)
-	c, err := fetcherRule.NewRedisFailureCounter(client.Raw(), 5, time.Hour, "", newTestLogger())
+	c, err := redisstore.NewFailureCounter(client.Raw(), 5, time.Hour, "", newTestLogger())
 	require.NoError(t, err)
 
-	count, reached, err := c.Record(context.Background(), "", fetcherRule.FailureReasonRuleParseFailure)
+	count, reached, err := c.Record(context.Background(), "", storage.FailureReasonRuleParseFailure)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 	assert.False(t, reached)
@@ -164,9 +165,9 @@ func TestRedisFailureCounter_EmptyHost_ReturnsZero(t *testing.T) {
 // TestNoopFailureCounter_AlwaysReturnsZero:
 // FETCHER_AUTO_UPGRADE_ENABLED=false 또는 Redis 미연결 시 사용. 항상 (0, false, nil).
 func TestNoopFailureCounter_AlwaysReturnsZero(t *testing.T) {
-	c := fetcherRule.NewNoopFailureCounter()
+	c := storage.NewNoopFailureCounter()
 
-	count, reached, err := c.Record(context.Background(), "any.host.com", fetcherRule.FailureReasonRuleParseFailure)
+	count, reached, err := c.Record(context.Background(), "any.host.com", storage.FailureReasonRuleParseFailure)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 	assert.False(t, reached)

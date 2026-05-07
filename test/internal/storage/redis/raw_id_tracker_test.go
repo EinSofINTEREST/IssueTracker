@@ -1,4 +1,4 @@
-package rule_test
+package redisstore_test
 
 import (
 	"context"
@@ -8,13 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	fetcherRule "issuetracker/internal/processor/fetcher/rule"
+	"issuetracker/internal/storage"
+	redisstore "issuetracker/internal/storage/redis"
 )
 
 // TestNewRedisRawIDTracker_NilClient_ReturnsError:
 // 이슈 #208 panic-on-nil → error 정책.
 func TestNewRedisRawIDTracker_NilClient_ReturnsError(t *testing.T) {
-	_, err := fetcherRule.NewRedisRawIDTracker(nil, time.Hour, "", nil)
+	_, err := redisstore.NewRawIDTracker(nil, time.Hour, "", nil)
 	assert.Error(t, err)
 }
 
@@ -22,7 +23,7 @@ func TestNewRedisRawIDTracker_NilClient_ReturnsError(t *testing.T) {
 // ttl 0 또는 음수 → 의미 없음.
 func TestNewRedisRawIDTracker_BadTTL_ReturnsError(t *testing.T) {
 	client := newTestRedisClient(t)
-	_, err := fetcherRule.NewRedisRawIDTracker(client.Raw(), 0, "", nil)
+	_, err := redisstore.NewRawIDTracker(client.Raw(), 0, "", nil)
 	assert.Error(t, err)
 }
 
@@ -31,7 +32,7 @@ func TestNewRedisRawIDTracker_BadTTL_ReturnsError(t *testing.T) {
 func TestRedisRawIDTracker_TrackAndPeek_Basic(t *testing.T) {
 	client := newTestRedisClient(t)
 	prefix := uniqueKeyPrefix(t)
-	tr, err := fetcherRule.NewRedisRawIDTracker(client.Raw(), time.Hour, prefix, nil)
+	tr, err := redisstore.NewRawIDTracker(client.Raw(), time.Hour, prefix, nil)
 	require.NoError(t, err)
 
 	host := "edition.cnn.com"
@@ -63,7 +64,7 @@ func TestRedisRawIDTracker_TrackAndPeek_Basic(t *testing.T) {
 func TestRedisRawIDTracker_PeekByHost_RecencyOrder(t *testing.T) {
 	client := newTestRedisClient(t)
 	prefix := uniqueKeyPrefix(t)
-	tr, err := fetcherRule.NewRedisRawIDTracker(client.Raw(), time.Hour, prefix, nil)
+	tr, err := redisstore.NewRawIDTracker(client.Raw(), time.Hour, prefix, nil)
 	require.NoError(t, err)
 
 	host := "naver.com"
@@ -89,7 +90,7 @@ func TestRedisRawIDTracker_PeekByHost_RecencyOrder(t *testing.T) {
 func TestRedisRawIDTracker_PeekByHost_RespectsLimit(t *testing.T) {
 	client := newTestRedisClient(t)
 	prefix := uniqueKeyPrefix(t)
-	tr, err := fetcherRule.NewRedisRawIDTracker(client.Raw(), time.Hour, prefix, nil)
+	tr, err := redisstore.NewRawIDTracker(client.Raw(), time.Hour, prefix, nil)
 	require.NoError(t, err)
 
 	host := "yonhap.co.kr"
@@ -113,7 +114,7 @@ func TestRedisRawIDTracker_PeekByHost_RespectsLimit(t *testing.T) {
 func TestRedisRawIDTracker_RemoveByHost_RemovesOnlyListed(t *testing.T) {
 	client := newTestRedisClient(t)
 	prefix := uniqueKeyPrefix(t)
-	tr, err := fetcherRule.NewRedisRawIDTracker(client.Raw(), time.Hour, prefix, nil)
+	tr, err := redisstore.NewRawIDTracker(client.Raw(), time.Hour, prefix, nil)
 	require.NoError(t, err)
 
 	host := "daum.net"
@@ -138,7 +139,7 @@ func TestRedisRawIDTracker_RemoveByHost_RemovesOnlyListed(t *testing.T) {
 // 빈 host / 빈 rawID / limit<=0 모두 noop.
 func TestRedisRawIDTracker_EmptyArgs_NoOp(t *testing.T) {
 	client := newTestRedisClient(t)
-	tr, err := fetcherRule.NewRedisRawIDTracker(client.Raw(), time.Hour, "", nil)
+	tr, err := redisstore.NewRawIDTracker(client.Raw(), time.Hour, "", nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -162,7 +163,7 @@ func TestRedisRawIDTracker_EmptyArgs_NoOp(t *testing.T) {
 // 키 없음 → 빈 슬라이스.
 func TestRedisRawIDTracker_PeekByHost_NonexistentKey_ReturnsEmpty(t *testing.T) {
 	client := newTestRedisClient(t)
-	tr, err := fetcherRule.NewRedisRawIDTracker(client.Raw(), time.Hour, "test:nonexistent:"+t.Name(), nil)
+	tr, err := redisstore.NewRawIDTracker(client.Raw(), time.Hour, "test:nonexistent:"+t.Name(), nil)
 	require.NoError(t, err)
 
 	peeked, err := tr.PeekByHost(context.Background(), "no-such-host", 10)
@@ -173,7 +174,7 @@ func TestRedisRawIDTracker_PeekByHost_NonexistentKey_ReturnsEmpty(t *testing.T) 
 // TestNoopRawIDTracker_AllNoop:
 // Noop tracker 의 모든 메소드 nil.
 func TestNoopRawIDTracker_AllNoop(t *testing.T) {
-	tr := fetcherRule.NewNoopRawIDTracker()
+	tr := storage.NewNoopRawIDTracker()
 	ctx := context.Background()
 
 	require.NoError(t, tr.Track(ctx, "host.com", "raw-1"))
@@ -183,16 +184,4 @@ func TestNoopRawIDTracker_AllNoop(t *testing.T) {
 	assert.Empty(t, peeked)
 
 	require.NoError(t, tr.RemoveByHost(ctx, "host.com", []string{"raw-1"}))
-}
-
-// TestForceFetcherToken_InitAndValidate:
-// process-local token 초기화 후 ValidateForceFetcherToken 가 일치 시 true.
-func TestForceFetcherToken_InitAndValidate(t *testing.T) {
-	require.NoError(t, fetcherRule.InitForceFetcherToken())
-
-	tok := fetcherRule.ForceFetcherTokenValue()
-	assert.NotEmpty(t, tok)
-	assert.True(t, fetcherRule.ValidateForceFetcherToken(tok))
-	assert.False(t, fetcherRule.ValidateForceFetcherToken(""))
-	assert.False(t, fetcherRule.ValidateForceFetcherToken("wrong-token"))
 }
