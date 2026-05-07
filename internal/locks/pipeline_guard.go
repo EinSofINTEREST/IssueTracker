@@ -55,17 +55,24 @@ func NewPipelineGuard(lock IngestionLock, categoryTTL time.Duration) *PipelineGu
 //   - acquired=false : 이미 pipeline 안 (다른 publish 가 marker 점유) — 호출자가 skip
 //   - err != nil     : Redis 일시 장애 등 — 호출자 정책 (보통 fail-open) 으로 처리
 //
-// targetType 별 TTL:
+// targetType 별 TTL (PR #286 gemini 리뷰 — 명시적 switch 로 안전성 강화):
 //   - core.TargetTypeCategory : categoryTTL (단명, default 60s)
-//   - 그 외 (Article 등)       : IngestionLock 의 default TTL (24h)
+//   - core.TargetTypeArticle  : IngestionLock 의 default TTL (24h)
+//   - 그 외 (Sitemap 등 미래 target type) : IngestionLock default TTL fallback
+//     — 새 target type 도입 시 본 switch 에 명시적 case 추가 권장.
 func (g *PipelineGuard) CheckAndAcquire(ctx context.Context, url string, targetType core.TargetType) (bool, error) {
 	if g == nil || g.lock == nil {
 		return false, errors.New("pipeline guard lock is nil")
 	}
-	if targetType == core.TargetTypeCategory {
+	switch targetType {
+	case core.TargetTypeCategory:
 		return g.lock.AcquireWithTTL(ctx, url, g.categoryTTL)
+	case core.TargetTypeArticle:
+		return g.lock.Acquire(ctx, url)
+	default:
+		// 알려지지 않은 target type — default TTL 적용 + Sitemap 등 추가 시 명시적 case 도입 권장.
+		return g.lock.Acquire(ctx, url)
 	}
-	return g.lock.Acquire(ctx, url)
 }
 
 // Release 는 url 의 pipeline marker 를 즉시 제거합니다.

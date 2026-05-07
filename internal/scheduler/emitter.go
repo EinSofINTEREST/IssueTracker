@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/pkg/links"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -32,9 +33,10 @@ type PipelineGuard interface {
 // cycle 이 진행 중이면 silent skip. Scheduler 의 정기 갱신 의도는 보존 (다음 주기 자연 진입).
 // 미주입 (nil) 이면 가드 비활성 (기존 동작 유지).
 type JobEmitter struct {
-	producer queue.Producer
-	guard    PipelineGuard
-	log      *logger.Logger
+	producer   queue.Producer
+	guard      PipelineGuard
+	normalizer *links.Normalizer
+	log        *logger.Logger
 }
 
 // NewJobEmitter는 새 JobEmitter를 생성합니다.
@@ -46,13 +48,29 @@ func NewJobEmitter(producer queue.Producer, log *logger.Logger) *JobEmitter {
 // nil 주입 시 가드 비활성. Emit 호출 도중 변경하지 말 것 (race) — wiring 단계에서 1회.
 func (e *JobEmitter) SetGuard(g PipelineGuard) { e.guard = g }
 
+// SetNormalizer 는 guard 호출 전 URL 정규화에 사용할 Normalizer 를 주입합니다 (PR #286 gemini 리뷰).
+//
+// publisher 가 SetNormalizer 로 사용하는 것과 동일 normalizer 를 공유해야 marker 키가 일치 —
+// 같은 logical URL 이 다른 입구 (scheduler / publisher) 에서 다른 Redis 키를 갖지 않도록.
+// nil 주입 시 정규화 비활성 (entry.URL 원본 그대로 guard 에 전달).
+func (e *JobEmitter) SetNormalizer(n *links.Normalizer) { e.normalizer = n }
+
 // Emit은 job.Priority에 따라 Kafka crawl 토픽에 CrawlJob을 발행합니다.
 //
 // PipelineGuard 가 주입되어 있고 같은 URL 의 cycle 이 진행 중이면 (acquired=false) silent skip
 // (debug 로그 + nil 반환). guard 조회 실패는 fail-open (warn 로그 + publish 진행).
 func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 	if e.guard != nil {
-		acquired, gerr := e.guard.CheckAndAcquire(ctx, job.Target.URL, job.Target.Type)
+		// guard 키 일관성 (PR #286 gemini): publisher 도 동일 normalizer 적용 후 CheckAndAcquire 함.
+		// scheduler 에서도 같은 정규형으로 marker 잡아야 동일 URL 이 두 입구에서 같은 키 사용.
+		// 정규화 실패는 fail-open — 원본으로 fallback (정규화 자체 장애가 emit 차단 회피).
+		guardURL := job.Target.URL
+		if e.normalizer != nil {
+			if normalized, nerr := e.normalizer.Normalize(guardURL); nerr == nil && normalized != "" {
+				guardURL = normalized
+			}
+		}
+		acquired, gerr := e.guard.CheckAndAcquire(ctx, guardURL, job.Target.Type)
 		if gerr != nil {
 			e.log.WithFields(map[string]interface{}{
 				"job_id":  job.ID,

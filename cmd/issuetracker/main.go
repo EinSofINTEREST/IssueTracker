@@ -515,6 +515,8 @@ func main() {
 	emitter := scheduler.NewJobEmitter(crawlerProducer, log)
 	if pipelineGuard != nil {
 		emitter.SetGuard(pipelineGuard)
+		// publisher 와 동일 normalizer 공유 — marker 키 일관성 (PR #286 gemini 리뷰).
+		emitter.SetNormalizer(links.NewNormalizer())
 		log.Info("scheduler emitter pipeline guard enabled (이슈 #285)")
 	}
 	entries := scheduler.DefaultEntries(schedulerCfg)
