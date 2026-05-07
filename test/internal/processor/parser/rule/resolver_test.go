@@ -95,6 +95,10 @@ func (r *fakeRepo) HasAnyRule(_ context.Context, host string, t storage.TargetTy
 	return r.hasAnyExists, r.hasAnyEnabled, nil
 }
 func (r *fakeRepo) hasAnyCalls() int { return int(atomic.LoadInt64(&r.hasAnyRuleCalls)) }
+func (r *fakeRepo) InsertNextVersion(_ context.Context, _ *storage.ParsingRuleRecord) error {
+	return nil
+}
+
 func (r *fakeRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }

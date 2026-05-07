@@ -200,6 +200,35 @@ func (r *pgParsingRuleRepository) FindByNaturalKey(ctx context.Context, sourceNa
 	return rec, nil
 }
 
+const sqlMaxVersionByNaturalKey = `
+SELECT COALESCE(MAX(version), 0)
+FROM parsing_rules
+WHERE source_name = $1
+  AND host_pattern = $2
+  AND path_pattern = $3
+  AND target_type  = $4
+`
+
+// InsertNextVersion 은 자연키의 max(version)+1 로 rec 을 INSERT 합니다 (이슈 #282).
+//
+// race window: MAX 조회와 INSERT 사이에 다른 인스턴스가 같은 version 을 INSERT 할 수 있음.
+// 자연키 unique 제약이 ErrDuplicate 로 반응 — 호출자가 retry 또는 흡수 책임.
+func (r *pgParsingRuleRepository) InsertNextVersion(ctx context.Context, rec *storage.ParsingRuleRecord) error {
+	if rec.PathPattern != "" {
+		if _, reErr := regexp.Compile(rec.PathPattern); reErr != nil {
+			return fmt.Errorf("%w: path_pattern %q is not a valid regex: %v", storage.ErrInvalid, rec.PathPattern, reErr)
+		}
+	}
+	var maxVersion int
+	if err := r.pool.QueryRow(ctx, sqlMaxVersionByNaturalKey,
+		rec.SourceName, rec.HostPattern, rec.PathPattern, string(rec.TargetType),
+	).Scan(&maxVersion); err != nil {
+		return fmt.Errorf("query max version: %w", err)
+	}
+	rec.Version = maxVersion + 1
+	return r.Insert(ctx, rec)
+}
+
 // sqlHasAnyRule 은 (host_pattern, target_type) 에 대한 enabled / disabled 무관 존재 여부를
 // 1 row 로 반환합니다 (이슈 #287).
 //

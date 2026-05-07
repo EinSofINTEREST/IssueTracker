@@ -55,6 +55,10 @@ func (r *fakeRulesRepo) FindActiveCandidates(_ context.Context, _ string, _ stor
 func (r *fakeRulesRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
 	return false, false, nil
 }
+func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, _ *storage.ParsingRuleRecord) error {
+	return nil
+}
+
 func (r *fakeRulesRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }

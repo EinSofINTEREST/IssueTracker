@@ -62,6 +62,17 @@ func (r *invalidatingRepo) invalidate(host string, t storage.TargetType) {
 	}
 }
 
+// InsertNextVersion wraps inner.InsertNextVersion + invalidates on success or ErrDuplicate (이슈 #282).
+//
+// 같은 (host, target_type) 에 대한 재학습 시 cache 가 stale 일 수 있으므로 invalidate 보장.
+func (r *invalidatingRepo) InsertNextVersion(ctx context.Context, rec *storage.ParsingRuleRecord) error {
+	err := r.inner.InsertNextVersion(ctx, rec)
+	if err == nil || errors.Is(err, storage.ErrDuplicate) {
+		r.invalidate(rec.HostPattern, rec.TargetType)
+	}
+	return err
+}
+
 // Insert wraps inner.Insert + invalidates on success or ErrDuplicate.
 //
 // ErrDuplicate 시에도 invalidate — INSERT 실패했지만 동일 자연키 row 가 이미 DB 에 존재하므로

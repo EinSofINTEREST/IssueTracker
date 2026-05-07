@@ -53,15 +53,23 @@ type recordingRepo struct {
 	getByIDResult *storage.ParsingRuleRecord
 	getByIDErr    error
 
-	insertCalls     int
-	updateCalls     int
-	updatePathCalls int
-	deleteCalls     int
-	getByIDCalls    int
+	insertCalls            int
+	insertNextVersionCalls int
+	updateCalls            int
+	updatePathCalls        int
+	deleteCalls            int
+	getByIDCalls           int
 }
 
 func (r *recordingRepo) Insert(_ context.Context, _ *storage.ParsingRuleRecord) error {
 	r.insertCalls++
+	return r.insertErr
+}
+func (r *recordingRepo) InsertNextVersion(_ context.Context, rec *storage.ParsingRuleRecord) error {
+	r.insertNextVersionCalls++
+	if rec.Version == 0 {
+		rec.Version = 1
+	}
 	return r.insertErr
 }
 func (r *recordingRepo) Update(_ context.Context, _ *storage.ParsingRuleRecord) error {
@@ -121,6 +129,33 @@ func TestInvalidatingRepo_Insert_ErrDuplicate_TriggersInvalidate(t *testing.T) {
 	err := repo.Insert(context.Background(), rec)
 	require.ErrorIs(t, err, storage.ErrDuplicate)
 	assert.Equal(t, 1, inv.callCount(), "ErrDuplicate 도 invalidate — cache 가 stale 일 가능성")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// InsertNextVersion (이슈 #282)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestInvalidatingRepo_InsertNextVersion_Success_TriggersInvalidate(t *testing.T) {
+	inner := &recordingRepo{}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	rec := &storage.ParsingRuleRecord{HostPattern: "stale.example.com", TargetType: storage.TargetTypePage}
+	err := repo.InsertNextVersion(context.Background(), rec)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inner.insertNextVersionCalls)
+	assert.Equal(t, 1, inv.callCount(), "version bump 후 cache invalidate")
+	assert.Equal(t, invalidateCall{Host: "stale.example.com", Type: storage.TargetTypePage}, inv.lastCall())
+}
+
+func TestInvalidatingRepo_InsertNextVersion_ErrDuplicate_TriggersInvalidate(t *testing.T) {
+	inner := &recordingRepo{insertErr: storage.ErrDuplicate}
+	inv := &recordingInvalidator{}
+	repo := rule.WrapWithInvalidator(inner, inv)
+
+	err := repo.InsertNextVersion(context.Background(), &storage.ParsingRuleRecord{HostPattern: "x", TargetType: storage.TargetTypePage})
+	require.ErrorIs(t, err, storage.ErrDuplicate)
+	assert.Equal(t, 1, inv.callCount(), "ErrDuplicate (race window) 도 invalidate")
 }
 
 func TestInvalidatingRepo_Insert_OtherError_NoInvalidate(t *testing.T) {
