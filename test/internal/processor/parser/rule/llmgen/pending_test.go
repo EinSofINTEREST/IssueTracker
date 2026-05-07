@@ -18,25 +18,29 @@ import (
 // pendingQueue 통합 테스트 — memPendingQueue (in-process fake)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// memPendingQueue 는 테스트용 in-process PendingQueue 구현입니다.
+// memPendingQueue 는 테스트용 in-process storage.PendingQueue 구현입니다.
+// payload 는 raw bytes 로 보관 — Generator 가 marshal/unmarshal 책임을 가짐.
 type memPendingQueue struct {
 	mu    sync.Mutex
-	items map[string][]llmgen.PendingItem
+	items map[string][][]byte
 }
 
 func newMemPendingQueue() *memPendingQueue {
-	return &memPendingQueue{items: make(map[string][]llmgen.PendingItem)}
+	return &memPendingQueue{items: make(map[string][][]byte)}
 }
 
-func (m *memPendingQueue) Push(_ context.Context, host string, targetType storage.TargetType, item llmgen.PendingItem) error {
+func (m *memPendingQueue) Push(_ context.Context, host string, targetType storage.TargetType, payload []byte) error {
 	key := host + ":" + string(targetType)
 	m.mu.Lock()
-	m.items[key] = append(m.items[key], item)
+	// payload 를 복사하여 호출자 측 buffer 변경에 영향 받지 않도록.
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+	m.items[key] = append(m.items[key], cp)
 	m.mu.Unlock()
 	return nil
 }
 
-func (m *memPendingQueue) Flush(_ context.Context, host string, targetType storage.TargetType) ([]llmgen.PendingItem, error) {
+func (m *memPendingQueue) Flush(_ context.Context, host string, targetType storage.TargetType) ([][]byte, error) {
 	key := host + ":" + string(targetType)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -51,8 +55,8 @@ func (m *memPendingQueue) count(host string, targetType storage.TargetType) int 
 	return len(m.items[host+":"+string(targetType)])
 }
 
-// Ensure memPendingQueue implements llmgen.PendingQueue
-var _ llmgen.PendingQueue = (*memPendingQueue)(nil)
+// Ensure memPendingQueue implements storage.PendingQueue
+var _ storage.PendingQueue = (*memPendingQueue)(nil)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests

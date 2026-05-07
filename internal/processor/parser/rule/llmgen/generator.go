@@ -114,7 +114,7 @@ type Generator struct {
 	validateFailureHandler func(context.Context, core.RawContentRef, int, storage.TargetType, string)
 
 	locker       storage.InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
-	pendingQueue PendingQueue           // nil 이면 pending URL 보존 비활성
+	pendingQueue storage.PendingQueue   // nil 이면 pending URL 보존 비활성
 	requeueFn    RequeueFunc            // nil 이면 재투입 비활성
 	semValidator SelectorValidator      // nil 이면 의미 검증 건너뜀
 	wg           sync.WaitGroup
@@ -130,7 +130,7 @@ func (g *Generator) SetValidateFailureHandler(fn func(context.Context, core.RawC
 // SetPendingQueue 는 대기 URL 큐와 재투입 콜백을 등록합니다.
 // 둘 다 비-nil 이어야 활성화됩니다. Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로
 // 초기화 시 1회만 호출합니다.
-func (g *Generator) SetPendingQueue(pq PendingQueue, fn RequeueFunc) {
+func (g *Generator) SetPendingQueue(pq storage.PendingQueue, fn RequeueFunc) {
 	g.pendingQueue = pq
 	g.requeueFn = fn
 }
@@ -266,7 +266,13 @@ func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType sto
 				TargetType:    targetType,
 				TimeoutMs:     jobTimeout.Milliseconds(),
 			}
-			if perr := g.pendingQueue.Push(context.WithoutCancel(ctx), host, targetType, item); perr != nil {
+			payload, mErr := json.Marshal(item)
+			if mErr != nil {
+				g.log.WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+				}).WithError(mErr).Warn("llmgen pending item marshal failed")
+			} else if perr := g.pendingQueue.Push(context.WithoutCancel(ctx), host, targetType, payload); perr != nil {
 				g.log.WithFields(map[string]interface{}{
 					"host":        host,
 					"target_type": string(targetType),
@@ -324,16 +330,37 @@ func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType sto
 		// 락 해제 후 새 runOnce 가 다음 flush 에서 처리.
 		// Kafka publish 실패 항목은 requeueFn 이 반환 → pending 에 재적재.
 		if g.pendingQueue != nil && g.requeueFn != nil {
-			items, ferr := g.pendingQueue.Flush(bgCtx, host, targetType)
+			payloads, ferr := g.pendingQueue.Flush(bgCtx, host, targetType)
 			if ferr != nil {
 				logger.FromContext(bgCtx).WithFields(map[string]interface{}{
 					"host":        host,
 					"target_type": string(targetType),
 				}).WithError(ferr).Warn("llmgen pending queue flush failed")
-			} else if len(items) > 0 {
+			} else if len(payloads) > 0 {
+				items := make([]PendingItem, 0, len(payloads))
+				for _, raw := range payloads {
+					var item PendingItem
+					if err := json.Unmarshal(raw, &item); err != nil {
+						logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+							"host":        host,
+							"target_type": string(targetType),
+						}).WithError(err).Warn("llmgen pending payload unmarshal failed — dropping")
+						continue
+					}
+					items = append(items, item)
+				}
 				failed := g.requeueFn(bgCtx, items)
 				for _, item := range failed {
-					if perr := g.pendingQueue.Push(bgCtx, host, targetType, item); perr != nil {
+					payload, mErr := json.Marshal(item)
+					if mErr != nil {
+						logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+							"host":        host,
+							"target_type": string(targetType),
+							"url":         item.RawRef.URL,
+						}).WithError(mErr).Warn("llmgen failed-item marshal failed")
+						continue
+					}
+					if perr := g.pendingQueue.Push(bgCtx, host, targetType, payload); perr != nil {
 						logger.FromContext(bgCtx).WithFields(map[string]interface{}{
 							"host":        host,
 							"target_type": string(targetType),
