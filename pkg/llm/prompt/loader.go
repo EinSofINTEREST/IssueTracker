@@ -17,11 +17,18 @@ import (
 	"sync"
 )
 
-// EnvPromptsDir 는 prompts 디렉토리를 override 하는 환경변수 이름입니다.
+// EnvPromptsDir 는 외부 prompt 디렉토리를 지정하는 환경변수 이름입니다.
+//
+// 미설정 / 빈 문자열 / 디렉토리 부재 시 NewDefaultLoader 가 EmbedLoader (binary 내장) 만
+// 사용. 값이 있고 유효하면 file → embed 우선순위의 ChainLoader 로 wrap.
 const EnvPromptsDir = "LLM_PROMPT_DIR"
 
-// DefaultDir 는 환경변수 미설정 시 사용하는 prompts 디렉토리 (cwd 기준 상대 경로).
-const DefaultDir = "scripts/prompts"
+// DefaultDir 는 환경변수 미설정 시 시도하는 prompts 디렉토리 (cwd 기준 상대 경로).
+//
+// 운영자가 별도 경로를 잡지 않은 dev / 로컬 실행 환경에서 source tree 의 assets/ 가 자동
+// override 로 작동하도록 default 를 source tree 위치로 설정 — production 빌드는 일반적으로
+// 본 경로가 부재하므로 자연스럽게 embed-only 동작.
+const DefaultDir = "pkg/llm/prompt/assets"
 
 // Loader 는 prompt name (예: "llmgen/system") 으로 prompt 본문을 반환하는 인터페이스입니다.
 //
@@ -92,6 +99,35 @@ func (l *FileLoader) Load(name string) (string, error) {
 	l.cache[name] = body
 	l.mu.Unlock()
 	return body, nil
+}
+
+// NewDefaultLoader 는 환경변수 + embed fallback 정책을 반영한 Loader 를 반환합니다.
+//
+// 동작:
+//   - EnvPromptsDir 가 빈 값 → EmbedLoader 만 (production 권장 / 외부 튜닝 비활성)
+//   - EnvPromptsDir 가 값을 가지고 디렉토리 유효 → ChainLoader(FileLoader, EmbedLoader)
+//   - 디렉토리 stat 실패 → EmbedLoader fallback (warn 메시지를 반환 string 으로 함께 전달)
+//
+// 두 번째 반환값 (warn) 은 호출자가 logger 로 기록하도록 — pkg/llm/prompt 가 logger 의존성
+// 갖지 않게 분리. 빈 문자열이면 warning 없음.
+//
+// fail-fast 가 아닌 graceful — prompt 자산 부재로 부팅 막히는 가용성 사고 방지가 본 함수의 목적.
+func NewDefaultLoader() (Loader, string) {
+	embed := NewEmbedLoader()
+	dir := os.Getenv(EnvPromptsDir)
+	if dir == "" {
+		// 환경변수 미설정 시 DefaultDir 시도 — dev 환경 편의.
+		// 부재하면 조용히 embed 만 사용 (production 정상 경로).
+		if _, err := os.Stat(DefaultDir); err != nil {
+			return embed, ""
+		}
+		dir = DefaultDir
+	}
+	fl, err := NewFileLoader(dir)
+	if err != nil {
+		return embed, fmt.Sprintf("prompt: file loader for %q unavailable, falling back to embed-only: %v", dir, err)
+	}
+	return NewChainLoader(fl, embed), ""
 }
 
 // MapLoader 는 테스트 / dev 환경용 in-memory Loader 입니다.
