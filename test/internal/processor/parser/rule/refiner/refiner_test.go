@@ -31,9 +31,8 @@ type fakeRulesRepo struct {
 	mu       sync.Mutex
 	records  []*storage.ParsingRuleRecord
 	inserts  []insertCall // 이슈 #282 Phase 2: 새 InsertNextVersion 추적
-	updates  []updateCall // 호환성 — UpdatePathPattern guard 단위 테스트 보존
 	listErr  error
-	insErr   error // InsertNextVersion 강제 에러 (호환: 기존 upErr 와 의미 통합)
+	insErr   error // InsertNextVersion 강제 에러
 	insIsDup bool  // InsertNextVersion 가 storage.ErrDuplicate 반환하도록
 	nextID   int64
 }
@@ -43,12 +42,6 @@ type insertCall struct {
 	hostPattern string
 	pathPattern string
 	description string
-}
-
-type updateCall struct {
-	id      int64
-	pattern string
-	desc    string
 }
 
 func (r *fakeRulesRepo) Insert(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
@@ -125,31 +118,11 @@ func (r *fakeRulesRepo) List(_ context.Context, f storage.ParsingRuleFilter) ([]
 	return out, nil
 }
 func (r *fakeRulesRepo) Delete(_ context.Context, _ int64) error { return nil }
-func (r *fakeRulesRepo) UpdatePathPattern(_ context.Context, id int64, pattern, description string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, rec := range r.records {
-		if rec.ID != id {
-			continue
-		}
-		// optimistic guard 미러링 (PR #191 CodeRabbit 피드백): postgres 구현과 동일 contract.
-		if rec.SourceName != llmgen.LLMAutoSourceName || !rec.Enabled || rec.PathPattern != "" {
-			return storage.ErrNotFound
-		}
-		r.updates = append(r.updates, updateCall{id: id, pattern: pattern, desc: description})
-		rec.PathPattern = pattern
-		rec.Description = description
-		return nil
-	}
-	return storage.ErrNotFound
-}
 
-func (r *fakeRulesRepo) updateCalls() []updateCall {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]updateCall, len(r.updates))
-	copy(out, r.updates)
-	return out
+// UpdatePathPattern 은 ParsingRuleRepository 인터페이스 충족용 stub — 이슈 #282 Phase 2 이후
+// refiner 는 본 메소드를 호출하지 않음 (InsertNextVersion 으로 전환). 호출 시 단순 ErrNotFound.
+func (r *fakeRulesRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) error {
+	return storage.ErrNotFound
 }
 
 func (r *fakeRulesRepo) insertCalls() []insertCall {
@@ -488,36 +461,6 @@ func TestRunOnce_InsertDuplicate_Skipped(t *testing.T) {
 	require.NoError(t, r.RunOnce(context.Background()))
 
 	assert.Zero(t, samples.purgeCount(1), "duplicate race must not purge — next cycle re-evaluates")
-}
-
-// 호환성: UpdatePathPattern 의 optimistic guard 자체 contract 는 mock 에 보존되어야 함 (PR #191 CodeRabbit).
-// refiner 는 본 메소드를 더 이상 호출하지 않지만 (Phase 2 InsertNextVersion 전환), repository
-// 인터페이스의 contract 자체는 운영 코드 다른 경로에서 사용 — guard 회귀 방지용 테스트.
-func TestRulesRepo_UpdatePathPattern_StaleGuard(t *testing.T) {
-	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
-	samples := newFakeSamplesRepo()
-	for _, u := range []string{
-		"https://news.example.com/article/100",
-		"https://news.example.com/article/200",
-		"https://news.example.com/article/300",
-	} {
-		require.NoError(t, samples.Insert(context.Background(), 1, u))
-	}
-
-	// List 직후 다른 instance 가 이미 정밀화 완료 → PathPattern 비어있지 않은 상태로 선반영.
-	// 본 refiner cycle 의 UpdatePathPattern 은 guard 실패로 ErrNotFound 반환되어야 함.
-	rec.PathPattern = `^/article/(\d+)$`
-
-	r := newRefiner(t, rules, samples)
-	require.NoError(t, r.RunOnce(context.Background()))
-
-	// candidates List 시점에 PathPattern != "" 이면 refiner 가 위에서 catch-all 필터링으로 skip —
-	// 본 케이스는 List 시점 catch-all 이었다가 update 직전에 변경된 race 시뮬레이션.
-	// 현재 구조에서는 List 직후 바로 refineOne 들어가므로, race 시뮬은 직접 UpdatePathPattern 호출로 검증.
-	// 본 테스트는 mock 의 guard 동작 자체를 검증.
-	err := rules.UpdatePathPattern(context.Background(), 1, `^/x/(\d+)$`, "stale write")
-	require.ErrorIs(t, err, storage.ErrNotFound, "guard must reject stale (non-catch-all) candidate")
 }
 
 func TestRun_RespectsCancellation(t *testing.T) {
