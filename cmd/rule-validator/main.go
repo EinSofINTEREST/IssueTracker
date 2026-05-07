@@ -78,9 +78,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	loader, err := prompt.NewFileLoader(prompt.DefaultDir)
+	promptCfg, err := config.LoadPrompt()
 	if err != nil {
-		log.WithError(err).Fatal("failed to init prompt loader")
+		log.WithError(err).Fatal("failed to load prompt config")
+	}
+	loader, warn := prompt.NewDefaultLoader(promptCfg.Dir, promptCfg.DirSet)
+	if warn != "" {
+		log.Warn(warn)
 	}
 	llmValidator, err := validator.NewLLMValidator(llmProvider, loader)
 	if err != nil {

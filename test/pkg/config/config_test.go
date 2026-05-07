@@ -1,8 +1,11 @@
 package config_test
 
 import (
+	"os"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"issuetracker/pkg/config"
 )
@@ -787,5 +790,46 @@ func TestLoadShutdown_InvalidValues(t *testing.T) {
 				t.Fatalf("%s=%q 는 거부되어야 함", tt.key, tt.value)
 			}
 		})
+	}
+}
+
+func TestLoadPrompt_Unset(t *testing.T) {
+	t.Setenv("LLM_PROMPT_DIR", "")
+	// LookupEnv 는 빈 값으로 set 된 상태도 ok=true 이므로, 본 case 는 명시적으로 unset 시킨다.
+	require.NoError(t, os.Unsetenv("LLM_PROMPT_DIR"))
+
+	cfg, err := config.LoadPrompt("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+	if cfg.DirSet {
+		t.Errorf("DirSet: got true, want false (env unset)")
+	}
+	if cfg.Dir != "" {
+		t.Errorf("Dir: got %q, want empty (env unset)", cfg.Dir)
+	}
+}
+
+func TestLoadPrompt_SetEmpty(t *testing.T) {
+	t.Setenv("LLM_PROMPT_DIR", "")
+
+	cfg, err := config.LoadPrompt("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+	if !cfg.DirSet {
+		t.Errorf("DirSet: got false, want true (env set to empty)")
+	}
+	if cfg.Dir != "" {
+		t.Errorf("Dir: got %q, want empty", cfg.Dir)
+	}
+}
+
+func TestLoadPrompt_SetValue(t *testing.T) {
+	t.Setenv("LLM_PROMPT_DIR", "/custom/path")
+
+	cfg, err := config.LoadPrompt("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+	if !cfg.DirSet {
+		t.Errorf("DirSet: got false, want true")
+	}
+	if cfg.Dir != "/custom/path" {
+		t.Errorf("Dir: got %q, want /custom/path", cfg.Dir)
 	}
 }

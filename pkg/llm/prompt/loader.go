@@ -17,11 +17,18 @@ import (
 	"sync"
 )
 
-// EnvPromptsDir 는 prompts 디렉토리를 override 하는 환경변수 이름입니다.
+// EnvPromptsDir 는 외부 prompt 디렉토리를 지정하는 환경변수 이름입니다.
+//
+// 미설정 / 빈 문자열 / 디렉토리 부재 시 NewDefaultLoader 가 EmbedLoader (binary 내장) 만
+// 사용. 값이 있고 유효하면 file → embed 우선순위의 ChainLoader 로 wrap.
 const EnvPromptsDir = "LLM_PROMPT_DIR"
 
-// DefaultDir 는 환경변수 미설정 시 사용하는 prompts 디렉토리 (cwd 기준 상대 경로).
-const DefaultDir = "scripts/prompts"
+// DefaultDir 는 환경변수 미설정 시 시도하는 prompts 디렉토리 (cwd 기준 상대 경로).
+//
+// 운영자가 별도 경로를 잡지 않은 dev / 로컬 실행 환경에서 source tree 의 assets/ 가 자동
+// override 로 작동하도록 default 를 source tree 위치로 설정 — production 빌드는 일반적으로
+// 본 경로가 부재하므로 자연스럽게 embed-only 동작.
+const DefaultDir = "pkg/llm/prompt/assets"
 
 // Loader 는 prompt name (예: "llmgen/system") 으로 prompt 본문을 반환하는 인터페이스입니다.
 //
@@ -92,6 +99,46 @@ func (l *FileLoader) Load(name string) (string, error) {
 	l.cache[name] = body
 	l.mu.Unlock()
 	return body, nil
+}
+
+// NewDefaultLoader 는 환경변수 입력 + embed fallback 정책을 반영한 Loader 를 반환합니다.
+//
+// 환경변수 read 는 본 함수에서 직접 하지 않고 호출자 (cmd/*) 가 pkg/config.LoadPrompt 로 읽은
+// (dir, dirSet) primitives 를 전달 — pkg/llm/prompt 가 pkg/config 에 의존하지 않도록 분리,
+// 단위 테스트에서 t.Setenv 없이 임의 입력으로 분기 검증 가능.
+//
+// 동작:
+//   - dirSet=false → DefaultDir auto-detection 시도, 부재 시 embed-only (dev 편의)
+//   - dirSet=true, dir="" → embed-only 강제 (production 권장 / 외부 튜닝 비활성)
+//   - dirSet=true, dir=값, 디렉토리 유효 → ChainLoader(FileLoader, EmbedLoader)
+//   - dirSet=true, dir=값, 디렉토리 무효 → embed-only fallback (warn 메시지 반환)
+//
+// 두 번째 반환값 (warn) 은 호출자가 logger 로 기록하도록 — pkg/llm/prompt 가 logger 의존성
+// 갖지 않게 분리. 빈 문자열이면 warning 없음.
+//
+// fail-fast 가 아닌 graceful — prompt 자산 부재로 부팅 막히는 가용성 사고 방지가 본 함수의 목적.
+func NewDefaultLoader(dir string, dirSet bool) (Loader, string) {
+	embed := NewEmbedLoader()
+	var resolvedDir string
+	switch {
+	case !dirSet:
+		// 미설정 → DefaultDir 시도 (dev 환경 편의).
+		// 부재하면 조용히 embed 만 사용 (production 정상 경로).
+		if _, err := os.Stat(DefaultDir); err != nil {
+			return embed, ""
+		}
+		resolvedDir = DefaultDir
+	case dir == "":
+		// 빈 값 명시 → embed 강제 (외부 파일 무시).
+		return embed, ""
+	default:
+		resolvedDir = dir
+	}
+	fl, err := NewFileLoader(resolvedDir)
+	if err != nil {
+		return embed, fmt.Sprintf("prompt: file loader for %q unavailable, falling back to embed-only: %v", resolvedDir, err)
+	}
+	return NewChainLoader(fl, embed), ""
 }
 
 // MapLoader 는 테스트 / dev 환경용 in-memory Loader 입니다.

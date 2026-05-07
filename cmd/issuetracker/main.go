@@ -354,16 +354,19 @@ func main() {
 	// LLM 비활성 환경에서 prompt 디렉토리 부재로 인한 boot 실패 회피.
 	var promptLoader prompt.Loader
 	if llmProvider != nil {
-		promptDir := os.Getenv(prompt.EnvPromptsDir)
-		if promptDir == "" {
-			promptDir = prompt.DefaultDir
+		promptCfg, pcErr := config.LoadPrompt()
+		if pcErr != nil {
+			log.WithError(pcErr).Fatal("failed to load prompt config")
 		}
-		fl, plErr := prompt.NewFileLoader(promptDir)
-		if plErr != nil {
-			log.WithError(plErr).Fatal("failed to construct prompt loader")
+		loader, warn := prompt.NewDefaultLoader(promptCfg.Dir, promptCfg.DirSet)
+		if warn != "" {
+			log.Warn(warn)
 		}
-		promptLoader = fl
-		log.WithFields(map[string]interface{}{"prompt_dir": promptDir}).Info("LLM prompt loader enabled")
+		promptLoader = loader
+		log.WithFields(map[string]interface{}{
+			"env_dir":     promptCfg.Dir,
+			"env_dir_set": promptCfg.DirSet,
+		}).Info("LLM prompt loader enabled (file → embed chain)")
 	}
 
 	llmGen, err := llmgenwiring.Build(llmProvider, parsingRuleRepo, ruleResolver, promptLoader, redisClientShared, log)
