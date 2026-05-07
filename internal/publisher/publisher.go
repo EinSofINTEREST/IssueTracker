@@ -40,6 +40,14 @@ type IngestionLock interface {
 	Acquire(ctx context.Context, url string) (bool, error)
 }
 
+// PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 target type 별 정책으로 체크합니다 (이슈 #285).
+//
+// publisher 가 internal/locks 를 직접 import 하지 않도록 별도 정의 — 구조적 타이핑으로
+// locks.PipelineGuard 가 그대로 만족.
+type PipelineGuard interface {
+	CheckAndAcquire(ctx context.Context, url string, targetType core.TargetType) (bool, error)
+}
+
 // Publisher는 크롤된 페이지에서 발견된 URL을 새 CrawlJob으로 변환하여
 // 우선순위에 맞는 Kafka crawl 토픽에 발행합니다.
 //
@@ -49,21 +57,25 @@ type IngestionLock interface {
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
 //   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — 워커 동시 실행 중 변경에도 race 없음
 //
-// URL dedup — Ingestion Lock (이슈 #178, 이슈 #126 의 단일 책임화):
+// URL dedup — Pipeline Guard (이슈 #285) / Ingestion Lock (이슈 #178):
 //   - SetNormalizer 로 pkg/links.Normalizer 를 주입하면 publish 직전 모든 URL 정규화
-//     (정규화된 URL 이 Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두에 일관)
-//   - SetIngestionLock 으로 IngestionLock 을 설정하면 message build 직전에 atomic SETNX
-//     — 이미 진입한 URL 은 publish 에서 제외 (다운스트림 worker 에서도 다시 차단 불필요)
-//   - TargetTypeCategory 는 lock 미적용 (카테고리 페이지는 매 주기 새 기사 추출이 목적)
+//     (정규화된 URL 이 marker 키 / Kafka payload / 다운스트림 dedup 모두에 일관)
+//   - SetPipelineGuard 우선 — 모든 target type 에 적용:
+//     · TargetTypeCategory: 단명 TTL (default 60s, PIPELINE_GUARD_CATEGORY_TTL)
+//     · TargetTypeArticle : default TTL (24h, REDIS_INGESTION_LOCK_TTL)
+//   - SetIngestionLock fallback (backward compat) — guard 미주입 시:
+//     · TargetTypeArticle 만 적용
+//     · TargetTypeCategory 는 lock 미적용 (legacy 경로 — 카테고리 매 주기 갱신 의도)
 //   - lock 조회 실패는 fail-open (해당 URL publish 진행) — Redis 일시 장애로 publish 가
 //     멈추지 않도록
-//   - 미설정 시 dedup 비활성 (기존 동작 유지)
+//   - 둘 다 미설정 시 dedup 비활성 (기존 동작 유지)
 type Publisher struct {
 	producer   queue.Producer
 	resolver   PriorityResolver
 	gate       atomic.Pointer[urlguard.Gate]
 	normalizer atomic.Pointer[links.Normalizer]
 	lock       atomic.Pointer[ingestionLockRef]
+	guard      atomic.Pointer[guardRef]
 	log        *logger.Logger
 }
 
@@ -71,6 +83,11 @@ type Publisher struct {
 // IngestionLock 인터페이스를 감싸 atomic 교체를 지원하는 wrapper 입니다.
 type ingestionLockRef struct {
 	l IngestionLock
+}
+
+// guardRef 는 PipelineGuard 의 atomic 교체용 wrapper 입니다 (이슈 #285).
+type guardRef struct {
+	g PipelineGuard
 }
 
 // New는 새 Publisher를 생성합니다.
@@ -103,12 +120,28 @@ func (p *Publisher) SetNormalizer(n *links.Normalizer) {
 // 설정합니다 (이슈 #178). nil 전달 시 dedup 비활성 (기존 동작 유지).
 //
 // atomic 으로 race-safe 한 swap 보장.
+//
+// Deprecated (이슈 #285): SetPipelineGuard 사용 권장 — target type 별 TTL 정책 적용.
+// 본 메소드는 backward compat 로 유지 — guard 미설정 시 fallback 으로 사용됨.
 func (p *Publisher) SetIngestionLock(l IngestionLock) {
 	if l == nil {
 		p.lock.Store(nil)
 		return
 	}
 	p.lock.Store(&ingestionLockRef{l: l})
+}
+
+// SetPipelineGuard 는 publish 진입 시 target type 별 정책으로 marker 를 잡을 PipelineGuard 를
+// 설정합니다 (이슈 #285).
+//
+// guard 가 설정되어 있으면 IngestionLock 보다 우선 — 모든 target type 에 적용 (Article 24h,
+// Category 단명 TTL). nil 전달 시 가드 비활성 — IngestionLock fallback (있으면).
+func (p *Publisher) SetPipelineGuard(g PipelineGuard) {
+	if g == nil {
+		p.guard.Store(nil)
+		return
+	}
+	p.guard.Store(&guardRef{g: g})
 }
 
 // Publish는 발견된 URL 목록으로 CrawlJob을 생성하고 한 번의 배치 요청으로 Kafka에 발행합니다.
@@ -147,11 +180,17 @@ func (p *Publisher) Publish(
 		}
 	}
 
-	// Ingestion Lock (이슈 #178): atomic SETNX 로 진입 marker 잡기
-	// - TargetTypeCategory 는 lock 미적용 (카테고리는 매 주기 새 기사 추출이 목적)
-	// - lock 조회 실패는 fail-open (해당 URL 통과 + WARN 로그) — Redis 일시 장애로
-	//   publish 가 멈추지 않도록
-	if r := p.lock.Load(); r != nil && targetType != core.TargetTypeCategory {
+	// Pipeline Guard (이슈 #285) / Ingestion Lock (이슈 #178):
+	// - PipelineGuard 우선 — target type 별 TTL 정책 (Article 24h / Category 단명)
+	// - IngestionLock fallback — Article 만 적용 (Category 우회) — backward compat
+	// - 둘 다 미설정 시 dedup 비활성
+	// - 조회 실패는 fail-open — Redis 일시 장애가 publish 를 영구 차단하지 않도록
+	if gr := p.guard.Load(); gr != nil {
+		urls = p.acquireViaGuard(ctx, urls, crawlerName, gr.g, targetType)
+		if len(urls) == 0 {
+			return nil
+		}
+	} else if r := p.lock.Load(); r != nil && targetType != core.TargetTypeCategory {
 		urls = p.acquireIngestion(ctx, urls, crawlerName, r.l)
 		if len(urls) == 0 {
 			return nil
@@ -223,6 +262,39 @@ func (p *Publisher) normalizeURLs(urls []string, n *links.Normalizer, crawlerNam
 	return out
 }
 
+// acquireViaGuard 는 PipelineGuard 로 target type 별 TTL 정책을 적용하여 진입 marker 를 잡습니다 (이슈 #285).
+//
+// 동작 정책은 acquireIngestion 과 동일 — fail-open / ctx 취소 / 정규화 가정 등.
+// 차이점: lock.Acquire 대신 guard.CheckAndAcquire(targetType) 호출 — Category 는 단명 TTL 적용.
+func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerName string, guard PipelineGuard, targetType core.TargetType) []string {
+	out := make([]string, 0, len(urls))
+	l := p.log.WithFields(map[string]interface{}{
+		"crawler":     crawlerName,
+		"stage":       "publisher",
+		"target_type": string(targetType),
+	})
+
+	for i, url := range urls {
+		if err := ctx.Err(); err != nil {
+			l.WithError(err).Warn("context cancelled during pipeline guard acquire, allowing remaining URLs")
+			return append(out, urls[i:]...)
+		}
+
+		acquired, err := guard.CheckAndAcquire(ctx, url, targetType)
+		if err != nil {
+			l.WithField("url", url).WithError(err).Warn("pipeline guard check failed, allowing publish")
+			out = append(out, url)
+			continue
+		}
+		if !acquired {
+			l.WithField("url", url).Debug("url already in pipeline, skipping publish")
+			continue
+		}
+		out = append(out, url)
+	}
+	return out
+}
+
 // acquireIngestion 은 IngestionLock 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
 // 반환합니다 (이슈 #178).
 //
@@ -236,6 +308,9 @@ func (p *Publisher) normalizeURLs(urls []string, n *links.Normalizer, crawlerNam
 // 결과 슬라이스는 입력과 다른 underlying array 로 새로 할당됩니다 (입력 mutate 없음).
 //
 // 성능: crawler/stage sub-logger 를 루프 외부에서 1회 생성하여 재사용.
+//
+// Deprecated (이슈 #285): SetPipelineGuard 사용 시 acquireViaGuard 가 우선 — 본 메소드는
+// guard 미주입 환경의 backward compat fallback.
 func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionLock) []string {
 	out := make([]string, 0, len(urls))
 	l := p.log.WithFields(map[string]interface{}{

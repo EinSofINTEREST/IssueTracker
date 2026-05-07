@@ -39,6 +39,12 @@ type IngestionLock interface {
 	// 두 URL 이 다른 marker 를 갖지 않도록.
 	Acquire(ctx context.Context, url string) (acquired bool, err error)
 
+	// AcquireWithTTL 은 Acquire 와 동일하되 호출별 TTL 을 지정합니다 (이슈 #285).
+	//
+	// 용도: PipelineGuard 가 target type 에 따라 Article (24h) / Category (단명) 로 다른
+	// TTL 적용. ttl<=0 이면 default TTL fallback.
+	AcquireWithTTL(ctx context.Context, url string, ttl time.Duration) (acquired bool, err error)
+
 	// Invalidate 는 명시적으로 URL marker 를 제거합니다 — 운영자 강제 재크롤 시.
 	// 정상 흐름에선 호출하지 않음 (TTL 자연 만료).
 	Invalidate(ctx context.Context, url string) error
@@ -82,6 +88,19 @@ func (l *RedisIngestionLock) Acquire(ctx context.Context, url string) (bool, err
 	return l.locker.AcquireLock(ctx, ingestionKey(url), l.ttl)
 }
 
+// AcquireWithTTL 은 호출별 TTL 로 marker 를 set 시도합니다 (이슈 #285).
+//
+// ttl<=0 이면 RedisIngestionLock 의 default TTL 사용. nil receiver / nil locker 보호는 Acquire 와 동일.
+func (l *RedisIngestionLock) AcquireWithTTL(ctx context.Context, url string, ttl time.Duration) (bool, error) {
+	if l == nil || l.locker == nil {
+		return false, errors.New("ingestion lock locker is nil")
+	}
+	if ttl <= 0 {
+		ttl = l.ttl
+	}
+	return l.locker.AcquireLock(ctx, ingestionKey(url), ttl)
+}
+
 // Invalidate 는 URL marker 를 즉시 제거합니다.
 //
 // nil receiver / nil locker 보호 — Acquire 와 동일 정책.
@@ -110,6 +129,11 @@ type NoopIngestionLock struct{}
 
 // Acquire always returns acquired=true (Noop).
 func (NoopIngestionLock) Acquire(_ context.Context, _ string) (bool, error) { return true, nil }
+
+// AcquireWithTTL always returns acquired=true (Noop) — TTL 인자는 무시.
+func (NoopIngestionLock) AcquireWithTTL(_ context.Context, _ string, _ time.Duration) (bool, error) {
+	return true, nil
+}
 
 // Invalidate is a no-op.
 func (NoopIngestionLock) Invalidate(_ context.Context, _ string) error { return nil }
