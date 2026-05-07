@@ -38,10 +38,6 @@ type PriorityResolver interface {
 // 구현체는 goroutine-safe 해야 합니다.
 type IngestionLock interface {
 	Acquire(ctx context.Context, url string) (bool, error)
-	// AcquireWithTTL 은 호출별 TTL 로 marker 를 set 시도합니다 (이슈 #285).
-	// publisher 가 target type 별로 다른 TTL (Article=24h / Category=단명) 을 적용.
-	// ttl<=0 이면 구현체 default TTL 적용.
-	AcquireWithTTL(ctx context.Context, url string, ttl time.Duration) (bool, error)
 }
 
 // PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 target type 별 정책으로 체크합니다 (이슈 #285).

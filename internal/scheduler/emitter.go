@@ -19,10 +19,14 @@ var ErrEmitSkipped = errors.New("emit skipped — url already in pipeline")
 
 // PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 체크하는 인터페이스입니다 (이슈 #285).
 //
-// emitter 가 internal/locks 를 직접 import 하지 않도록 별도 정의 — 구조적 타이핑으로
-// locks.PipelineGuard 가 그대로 만족.
+// emitter 가 internal/locks 의 전체 surface 가 아닌 필요한 메소드만 노출 — interface segregation.
+// locks.PipelineGuard 는 구조적 타이핑으로 본 인터페이스 만족.
+//
+// Release: CheckAndAcquire 가 marker 를 잡았으나 후속 producer.Publish 가 실패한 경우 marker 를
+// 즉시 해제 — 다음 retry 가 silent skip 으로 잃어버리지 않도록 (PR #286 CodeRabbit 리뷰).
 type PipelineGuard interface {
 	CheckAndAcquire(ctx context.Context, url string, targetType core.TargetType) (bool, error)
+	Release(ctx context.Context, url string) error
 }
 
 // JobEmitter는 Scheduler 전용 Emitter 구현체입니다.
@@ -60,16 +64,18 @@ func (e *JobEmitter) SetNormalizer(n *links.Normalizer) { e.normalizer = n }
 // PipelineGuard 가 주입되어 있고 같은 URL 의 cycle 이 진행 중이면 (acquired=false) silent skip
 // (debug 로그 + nil 반환). guard 조회 실패는 fail-open (warn 로그 + publish 진행).
 func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
-	if e.guard != nil {
-		// guard 키 일관성 (PR #286 gemini): publisher 도 동일 normalizer 적용 후 CheckAndAcquire 함.
-		// scheduler 에서도 같은 정규형으로 marker 잡아야 동일 URL 이 두 입구에서 같은 키 사용.
-		// 정규화 실패는 fail-open — 원본으로 fallback (정규화 자체 장애가 emit 차단 회피).
-		guardURL := job.Target.URL
-		if e.normalizer != nil {
-			if normalized, nerr := e.normalizer.Normalize(guardURL); nerr == nil && normalized != "" {
-				guardURL = normalized
-			}
+	// guard 키 일관성 (PR #286 gemini): publisher 도 동일 normalizer 적용 후 CheckAndAcquire 함.
+	// scheduler 에서도 같은 정규형으로 marker 잡아야 동일 URL 이 두 입구에서 같은 키 사용.
+	// 정규화 실패는 fail-open — 원본으로 fallback (정규화 자체 장애가 emit 차단 회피).
+	guardURL := job.Target.URL
+	if e.normalizer != nil {
+		if normalized, nerr := e.normalizer.Normalize(guardURL); nerr == nil && normalized != "" {
+			guardURL = normalized
 		}
+	}
+	guardAcquired := false // publish 실패 시 release 호출 여부 추적 (PR #286 CodeRabbit 리뷰)
+
+	if e.guard != nil {
 		acquired, gerr := e.guard.CheckAndAcquire(ctx, guardURL, job.Target.Type)
 		if gerr != nil {
 			e.log.WithFields(map[string]interface{}{
@@ -85,11 +91,14 @@ func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 				"target_type": string(job.Target.Type),
 			}).Debug("scheduler emit skipped — url already in pipeline")
 			return ErrEmitSkipped
+		} else {
+			guardAcquired = true
 		}
 	}
 
 	data, err := job.Marshal()
 	if err != nil {
+		e.releaseGuardOnFailure(ctx, guardURL, guardAcquired, job)
 		return fmt.Errorf("marshal job %s: %w", job.ID, err)
 	}
 
@@ -106,6 +115,9 @@ func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 	}
 
 	if err := e.producer.Publish(ctx, msg); err != nil {
+		// publish 실패 시 marker 즉시 해제 — 다음 retry 가 false acquired 로 silent skip 되지 않도록
+		// (PR #286 CodeRabbit 리뷰).
+		e.releaseGuardOnFailure(ctx, guardURL, guardAcquired, job)
 		return fmt.Errorf("emit job %s to %s: %w", job.ID, topic, err)
 	}
 
@@ -118,6 +130,23 @@ func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 	}).Debug("seed job emitted to kafka")
 
 	return nil
+}
+
+// releaseGuardOnFailure 는 CheckAndAcquire 가 marker 를 잡았으나 후속 marshal/publish 가 실패한 경우
+// marker 를 즉시 해제합니다 (PR #286 CodeRabbit 리뷰).
+//
+// guardAcquired=false 이거나 guard=nil 이면 noop. Release 실패는 non-fatal — TTL fallback 으로
+// 자연 해제 (Category 60s).
+func (e *JobEmitter) releaseGuardOnFailure(ctx context.Context, url string, guardAcquired bool, job *core.CrawlJob) {
+	if !guardAcquired || e.guard == nil {
+		return
+	}
+	if rerr := e.guard.Release(ctx, url); rerr != nil {
+		e.log.WithFields(map[string]interface{}{
+			"job_id": job.ID,
+			"url":    url,
+		}).WithError(rerr).Warn("pipeline guard release failed after publish error (TTL fallback applies)")
+	}
 }
 
 // crawlTopic은 Priority에 대응하는 Kafka crawl 토픽 이름을 반환합니다.
