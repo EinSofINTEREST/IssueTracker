@@ -458,6 +458,13 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		}
 	}
 
+	// 프로그래매틱 검증 (이슈 #283) — 각 selector 를 sample HTML 에 적용 후 hit_rate 계산.
+	// hit_rate < confidenceThreshold 인 selector 는 nil 로 drop — 신뢰할 수 없는 selector 가
+	// DB 에 들어가 하류 parser 가 빈 값 / 잘못된 값을 추출하지 않도록.
+	// published_at 은 form 검증 (time.Parse) 통과 시에만 hit 로 카운트.
+	confidence := ComputeFieldConfidence(selectors, html)
+	selectors = ApplyConfidenceFilter(selectors, confidence)
+
 	record := &storage.ParsingRuleRecord{
 		SourceName:  LLMAutoSourceName,
 		HostPattern: host,
@@ -465,6 +472,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		Version:     1,
 		Enabled:     true, // CSS selector 검증 통과 = 품질 게이트 — 즉시 활성화하여 pending 재투입이 유효하도록
 		Selectors:   selectors,
+		Confidence:  confidence,
 		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, modelName),
 	}
 	if err := g.repo.Insert(ctx, record); err != nil {

@@ -136,9 +136,30 @@ type ParsingRuleRecord struct {
 	Version     int        // 활성 row 안에서 같은 (source, host, path, type) 의 최신 버전
 	Enabled     bool
 	Selectors   SelectorMap // JSONB — application 측 struct 로 직렬화
+
+	// Confidence 는 필드별 selector 추출 신뢰도 metadata 입니다 (이슈 #283).
+	//
+	// LLM 자동 생성 룰이 INSERT 시점에 각 selector 를 sample HTML 에 적용하여 hit_rate 계산.
+	// 하류 validator 는 본 metadata 로 host 별 차별화된 정책 적용 가능 (예: published_at hit_rate=0
+	// 인 host 는 published_at 누락을 reject 하지 않음 — sub-issue 로 분리).
+	//
+	// nil 또는 빈 map 은 "metadata 미상" 의미 — 기존 룰 / 운영자 manual 등록 룰에 대해
+	// validator 는 보수적 default 정책 (모든 필드 reliable 가정) 적용.
+	Confidence  map[string]FieldConfidence
 	Description string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// FieldConfidence 는 단일 필드의 추출 신뢰도 (이슈 #283).
+//
+//   - HitRate     : 0.0~1.0 — sample 중 selector 가 매칭 + 유효 결과를 산출한 비율
+//   - SampleCount : 분모 — 신뢰도 계산에 사용된 sample 수 (단일 sample 환경은 1)
+//
+// published_at 등 형식 검증이 필요한 필드는 추가로 형식 검증 (예: time.Parse) 통과해야 hit 로 계수.
+type FieldConfidence struct {
+	HitRate     float64 `json:"hit_rate"`
+	SampleCount int     `json:"sample_count"`
 }
 
 // ParsingRuleFilter 는 List 조회 시 필터 조건입니다.
