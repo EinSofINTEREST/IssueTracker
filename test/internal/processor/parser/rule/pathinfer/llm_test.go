@@ -14,7 +14,7 @@ import (
 )
 
 // testLoader 는 InferLLM 이 요구하는 prompt asset 을 in-memory 로 제공합니다.
-// 실 운영의 scripts/prompts/pathinfer/{system,user}.txt 와 동일한 placeholder 사용.
+// 실 운영의 pkg/llm/prompt/assets/pathinfer/{system,user}.txt 와 동일한 placeholder 사용.
 var testLoader = prompt.MapLoader{
 	"pathinfer/system": "You are an expert at RE2 regex.\nRespond with ONLY a single regex pattern.",
 	"pathinfer/user":   "Articles (positive):\n{{ARTICLES}}\n\nNon-articles (negative):\n{{NON_ARTICLES}}",

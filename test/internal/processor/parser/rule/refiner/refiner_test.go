@@ -23,7 +23,7 @@ import (
 )
 
 // pathinferLoader 는 LLM fallback 활성 케이스에서 InferLLM 이 요구하는 prompt asset 을
-// 제공합니다. 운영의 scripts/prompts/pathinfer/{system,user}.txt 와 동일한 placeholder 사용.
+// 제공합니다. 운영의 pkg/llm/prompt/assets/pathinfer/{system,user}.txt 와 동일한 placeholder 사용.
 var pathinferLoader = prompt.MapLoader{
 	"pathinfer/system": "RE2 expert",
 	"pathinfer/user":   "Articles:\n{{ARTICLES}}\n\nNon:\n{{NON_ARTICLES}}",
