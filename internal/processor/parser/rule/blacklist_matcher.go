@@ -25,6 +25,13 @@ const DefaultBlacklistNegativeCacheTTL = 30 * time.Second
 // DefaultBlacklistMaxCacheEntries 는 host 단위 cache 의 최대 entry 수입니다.
 const DefaultBlacklistMaxCacheEntries = 10_000
 
+// DefaultBlacklistMaxRegexEntries 는 path_pattern regex 컴파일 결과 cache 의 최대 entry 수입니다.
+//
+// PR #296 gemini 피드백: sync.Map 은 키 공간이 작고 bounded 일 때만 권장 — 향후 auto source
+// 등장 시 unique pattern 수가 증가할 수 있어 메모리 unbounded growth 가능. cap + simple evict
+// 로 보호.
+const DefaultBlacklistMaxRegexEntries = 10_000
+
 // BlacklistMatcher 는 (host, path) 매칭으로 blacklist 차단 여부를 판단합니다 (이슈 #295).
 //
 // Resolver 와 동일 패턴 — host 단위 후보 슬라이스를 cache + DB lookup, application 측에서
@@ -37,11 +44,13 @@ type BlacklistMatcher struct {
 	cacheTTL         time.Duration
 	negativeCacheTTL time.Duration
 	maxEntries       int
+	maxRegexEntries  int
 
 	mu    sync.RWMutex
 	cache map[string]blacklistCacheEntry // key: host
 
-	regexCache sync.Map // pattern (string) → *blacklistCompiledPattern
+	regexMu    sync.RWMutex
+	regexCache map[string]*blacklistCompiledPattern // pattern → compiled (cap + simple evict)
 
 	now func() time.Time
 }
@@ -86,6 +95,15 @@ func WithBlacklistMaxCacheEntries(n int) BlacklistMatcherOption {
 	}
 }
 
+// WithBlacklistMaxRegexEntries 는 path_pattern regex 컴파일 cache 의 최대 entry 수를 override 합니다 (PR #296 gemini).
+func WithBlacklistMaxRegexEntries(n int) BlacklistMatcherOption {
+	return func(m *BlacklistMatcher) {
+		if n > 0 {
+			m.maxRegexEntries = n
+		}
+	}
+}
+
 // NewBlacklistMatcher 는 BlacklistRepository 를 사용하는 Matcher 를 생성합니다.
 // repo 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
 func NewBlacklistMatcher(repo storage.BlacklistRepository, opts ...BlacklistMatcherOption) (*BlacklistMatcher, error) {
@@ -97,7 +115,9 @@ func NewBlacklistMatcher(repo storage.BlacklistRepository, opts ...BlacklistMatc
 		cacheTTL:         DefaultBlacklistCacheTTL,
 		negativeCacheTTL: DefaultBlacklistNegativeCacheTTL,
 		maxEntries:       DefaultBlacklistMaxCacheEntries,
+		maxRegexEntries:  DefaultBlacklistMaxRegexEntries,
 		cache:            make(map[string]blacklistCacheEntry),
+		regexCache:       make(map[string]*blacklistCompiledPattern),
 		now:              time.Now,
 	}
 	for _, o := range opts {
@@ -222,14 +242,36 @@ func (m *BlacklistMatcher) pathMatches(pattern, path string) bool {
 	return cp.re.MatchString(path)
 }
 
+// compileRegex 는 pattern 의 컴파일 결과를 cache + reuse 합니다 (PR #296 gemini 피드백 반영).
+//
+// sync.Map 대신 mutex-protected map 으로 변경 — maxRegexEntries cap 적용 + simple evict (1 random).
+// auto source 등 unique pattern 수 증가 시 unbounded growth 회피.
 func (m *BlacklistMatcher) compileRegex(pattern string) *blacklistCompiledPattern {
-	if v, ok := m.regexCache.Load(pattern); ok {
-		return v.(*blacklistCompiledPattern)
+	m.regexMu.RLock()
+	if cp, ok := m.regexCache[pattern]; ok {
+		m.regexMu.RUnlock()
+		return cp
 	}
+	m.regexMu.RUnlock()
+
 	re, err := regexp.Compile(pattern)
 	cp := &blacklistCompiledPattern{re: re, err: err}
-	actual, _ := m.regexCache.LoadOrStore(pattern, cp)
-	return actual.(*blacklistCompiledPattern)
+
+	m.regexMu.Lock()
+	defer m.regexMu.Unlock()
+	// race winner 가 이미 채워뒀으면 그쪽 결과 반환 (LoadOrStore 동등 동작).
+	if existing, ok := m.regexCache[pattern]; ok {
+		return existing
+	}
+	if len(m.regexCache) >= m.maxRegexEntries {
+		// cache map 와 동일 정책 — 임의 1개 evict (LRU 도입 비용 대비 효과 낮음).
+		for k := range m.regexCache {
+			delete(m.regexCache, k)
+			break
+		}
+	}
+	m.regexCache[pattern] = cp
+	return cp
 }
 
 // invalidatingBlacklistRepo 는 BlacklistRepository 를 wrap 하여 mutation 후 자동으로 Matcher 의

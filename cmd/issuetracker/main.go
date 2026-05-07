@@ -148,8 +148,11 @@ func main() {
 		if bmErr != nil {
 			log.WithError(bmErr).Fatal("failed to construct blacklist matcher")
 		}
-		// invalidatingBlacklistRepo decorator — mutation → host cache invalidate 자동 결합.
-		_ = rule.WrapBlacklistWithInvalidator(blacklistRepo, bm)
+		// invalidatingBlacklistRepo decorator — mutation → host cache invalidate 자동 결합 (PR #296 gemini).
+		// blacklistRepo 변수에 재할당하여 향후 application 코드 (운영 CLI / 자동 색출 등) 가 본
+		// 변수를 통해 mutation 호출 시 cache invalidate 가 자동 결합되도록 — parsing_rules 의 동일 패턴.
+		blacklistRepo = rule.WrapBlacklistWithInvalidator(blacklistRepo, bm)
+		_ = blacklistRepo // 본 PR scope 에서는 mutation 경로 부재 — 향후 wiring 대비 wrapper 보존
 		blacklistMatcher = bm
 		log.Info("page-parse blacklist enabled (parsing_blacklist DB-backed)")
 	} else {
