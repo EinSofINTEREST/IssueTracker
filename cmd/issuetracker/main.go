@@ -547,9 +547,11 @@ func main() {
 	// DOM 매칭 검증 통과 후 추출 내용이 실제 뉴스 제목/본문인지 LLM 으로 의미 검증.
 	// llmProvider 가 nil(LLM 비활성) 이면 의미 검증 건너뜀 — DOM 검증만 수행.
 	if llmGen != nil && llmProvider != nil {
-		semPool := validator.NewPool(log,
-			validator.NewLLMValidator(llmProvider),
-		)
+		llmValidator, vErr := validator.NewLLMValidator(llmProvider, promptLoader)
+		if vErr != nil {
+			log.WithError(vErr).Fatal("failed to construct llm validator")
+		}
+		semPool := validator.NewPool(log, llmValidator)
 		llmGen.SetSelectorValidator(validator.NewLLMGenAdapter(semPool))
 		log.Info("llmgen: 의미 검증 ValidatorPool 활성화")
 	}
@@ -567,8 +569,10 @@ func main() {
 	case llmGen == nil:
 		// LLM_ENABLED=false / API key 부재 등으로 llmGen 비활성 — silent skip 회피.
 		log.Warn("LLM_EXTRACTOR=claude-code requested but LLM generator is disabled (check LLM_ENABLED / API key); claudegen extractor not registered")
+	case promptLoader == nil:
+		log.Warn("LLM_EXTRACTOR=claude-code requested but prompt loader is disabled; claudegen extractor not registered")
 	default:
-		worker, werr := claudegen.NewFromEnv(log)
+		worker, werr := claudegen.NewFromEnv(promptLoader, log)
 		if werr != nil {
 			log.WithError(werr).Warn("claudegen worker construction failed, falling back to default extractor")
 		} else if serr := worker.Start(ctx); serr != nil {
@@ -584,7 +588,7 @@ func main() {
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
 	// metricsRegistry 는 nil 허용 — Record* 호출이 noop.
-	pathRefiner, err := refinerwiring.Build(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
+	pathRefiner, err := refinerwiring.Build(llmProvider, promptLoader, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build refiner")
 	}

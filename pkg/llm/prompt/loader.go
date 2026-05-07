@@ -17,6 +17,12 @@ import (
 	"sync"
 )
 
+// EnvPromptsDir 는 prompts 디렉토리를 override 하는 환경변수 이름입니다.
+const EnvPromptsDir = "ISSUETRACKER_PROMPTS_DIR"
+
+// DefaultDir 는 환경변수 미설정 시 사용하는 prompts 디렉토리 (cwd 기준 상대 경로).
+const DefaultDir = "scripts/prompts"
+
 // Loader 는 prompt name (예: "llmgen/system") 으로 prompt 본문을 반환하는 인터페이스입니다.
 //
 // name 은 디렉토리 separator 로 sub-package 와 prompt 파일을 구분 — FileLoader 는 자동으로
