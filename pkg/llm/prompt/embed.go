@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -42,14 +43,15 @@ func (l *EmbedLoader) Load(name string) (string, error) {
 	if name == "" {
 		return "", errors.New("prompt: EmbedLoader.Load requires non-empty name")
 	}
-	path := embedRoot + "/" + name + ".txt"
-	data, err := embeddedAssets.ReadFile(path)
+	// embed.FS 경로는 항상 슬래시 — path.Join 으로 중복 슬래시 등 정규화.
+	p := path.Join(embedRoot, name+".txt")
+	data, err := embeddedAssets.ReadFile(p)
 	if err != nil {
-		return "", fmt.Errorf("prompt: embedded read %q: %w", path, err)
+		return "", fmt.Errorf("prompt: embedded read %q: %w", p, err)
 	}
 	body := string(data)
 	if strings.TrimSpace(body) == "" {
-		return "", fmt.Errorf("prompt: embedded %q is empty", path)
+		return "", fmt.Errorf("prompt: embedded %q is empty", p)
 	}
 	return body, nil
 }
@@ -65,11 +67,11 @@ type ChainLoader struct {
 }
 
 // NewChainLoader 는 loaders 순서대로 시도하는 ChainLoader 를 생성합니다.
-// loaders 가 비어있으면 nil — 호출자는 빈 chain 을 만들 이유가 없음.
+//
+// 호출자 안전성: 항상 비-nil 포인터 반환. 빈 loaders 도 허용되며, Load 호출 시 명시적
+// 에러 반환 (silent ("",nil) 회피). 이전 nil 반환 정책은 Loader 인터페이스에 담길 때
+// nil 수신자 패닉을 유발할 수 있어 폐기.
 func NewChainLoader(loaders ...Loader) *ChainLoader {
-	if len(loaders) == 0 {
-		return nil
-	}
 	return &ChainLoader{loaders: loaders}
 }
 
@@ -77,7 +79,12 @@ func NewChainLoader(loaders ...Loader) *ChainLoader {
 //
 // 첫 번째 성공 결과를 즉시 반환. 모든 Loader 실패 시 첫 번째 (1번 chain) 의 에러 반환 —
 // 운영자가 의도한 우선순위의 실패가 가장 진단에 유용 (embed fallback 은 거의 항상 성공).
+//
+// nil 수신자 또는 빈 chain 은 명시적 에러 — silent 성공 회피.
 func (c *ChainLoader) Load(name string) (string, error) {
+	if c == nil || len(c.loaders) == 0 {
+		return "", errors.New("prompt: no loaders available in chain")
+	}
 	var firstErr error
 	for _, l := range c.loaders {
 		body, err := l.Load(name)

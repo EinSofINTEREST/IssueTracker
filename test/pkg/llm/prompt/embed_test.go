@@ -81,8 +81,18 @@ func TestChainLoader_AllFail_ReturnsFirstError(t *testing.T) {
 	assert.Contains(t, err.Error(), "err-A")
 }
 
-func TestNewChainLoader_Empty_ReturnsNil(t *testing.T) {
-	assert.Nil(t, prompt.NewChainLoader())
+func TestNewChainLoader_Empty_ReturnsErrorOnLoad(t *testing.T) {
+	chain := prompt.NewChainLoader()
+	require.NotNil(t, chain, "빈 chain 도 비-nil 반환 — 인터페이스 변수에서 nil 수신자 패닉 회피")
+
+	_, err := chain.Load("any")
+	require.Error(t, err, "빈 chain 의 Load 는 silent ('',nil) 가 아닌 명시적 에러")
+}
+
+func TestChainLoader_NilReceiver_ReturnsError(t *testing.T) {
+	var chain *prompt.ChainLoader
+	_, err := chain.Load("any")
+	require.Error(t, err, "nil 수신자도 panic 없이 에러 반환")
 }
 
 func TestNewDefaultLoader_NoEnv_NoDefaultDir_EmbedOnly(t *testing.T) {
