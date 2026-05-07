@@ -158,6 +158,9 @@ func (m *BlacklistMatcher) IsBlocked(ctx context.Context, rawURL string) (bool, 
 //
 // 동일 호스트가 반복되는 카테고리 페이지 링크 시나리오에서 host cache 가 재사용되어 비용
 // 거의 없음. 개별 IsBlocked 호출 에러는 best-effort — 해당 URL 만 통과 (차단 안 함).
+//
+// Deprecated: 이슈 #297 에서 mode 컬럼 도입 후 Classify 사용 권장 — Filter 는 Allowed 만 반환하여
+// 'extract_links_only' 모드의 URL 도 함께 drop 됨. 호환성을 위해 메소드는 유지.
 func (m *BlacklistMatcher) Filter(ctx context.Context, urls []string) []string {
 	if len(urls) == 0 {
 		return urls
@@ -175,6 +178,75 @@ func (m *BlacklistMatcher) Filter(ctx context.Context, urls []string) []string {
 		}
 	}
 	return out
+}
+
+// BlacklistDecision 은 Classify 의 결과 — mode 별로 URL 슬라이스를 분리합니다 (이슈 #297).
+//
+// 호출자 (parser_worker) 는 슬라이스별로 다른 publish 분기를 적용:
+//   - Allowed          : blacklist 매칭 X 또는 lookup 에러 (best-effort 통과) — 정상 article 발행
+//   - ExtractLinksOnly : mode='extract_links_only' 매칭 — list 로 강제 발행 (ParseLinks 만)
+//   - 'drop' 매칭 URL 은 어느 슬라이스에도 들어가지 않음 (완전 drop)
+type BlacklistDecision struct {
+	Allowed          []string
+	ExtractLinksOnly []string
+}
+
+// Classify 는 입력 URL 슬라이스를 mode 별로 분류합니다 (이슈 #297).
+//
+// 매칭 정책:
+//  1. blacklist row 매칭 X → Allowed
+//  2. lookup 에러 → Allowed (best-effort, 안전 fallback)
+//  3. mode='extract_links_only' 매칭 → ExtractLinksOnly
+//  4. mode='drop' 매칭 → 어느 슬라이스에도 미포함 (완전 drop)
+//
+// 같은 host 의 여러 row 가 매칭하면 LENGTH(path_pattern) DESC 정렬상 첫 매칭 row 의 mode 채택.
+func (m *BlacklistMatcher) Classify(ctx context.Context, urls []string) BlacklistDecision {
+	out := BlacklistDecision{
+		Allowed:          make([]string, 0, len(urls)),
+		ExtractLinksOnly: make([]string, 0),
+	}
+	for _, u := range urls {
+		mode, err := m.matchedMode(ctx, u)
+		if err != nil {
+			// best-effort: lookup 에러 시 Allowed 통과 — Filter 와 동일 정책.
+			out.Allowed = append(out.Allowed, u)
+			continue
+		}
+		switch mode {
+		case "":
+			out.Allowed = append(out.Allowed, u)
+		case storage.BlacklistModeExtractLinksOnly:
+			out.ExtractLinksOnly = append(out.ExtractLinksOnly, u)
+		case storage.BlacklistModeDrop:
+			// 완전 drop — 어느 슬라이스에도 미포함.
+		default:
+			// 알 수 없는 mode (DB CHECK 가 막지만 방어 fallback) — drop 으로 간주하여 미포함.
+		}
+	}
+	return out
+}
+
+// matchedMode 는 rawURL 에 매칭되는 첫 blacklist row 의 mode 를 반환합니다.
+//
+// 매칭 없음: ("", nil). lookup 에러: ("", err). 매칭됨: (mode, nil).
+// LENGTH(path_pattern) DESC 정렬 후보에서 첫 매칭 row 의 mode 사용 — 더 구체적 path 우선.
+func (m *BlacklistMatcher) matchedMode(ctx context.Context, rawURL string) (storage.BlacklistMode, error) {
+	host, path, err := extractHostPath(rawURL)
+	if err != nil {
+		return "", nil
+	}
+	host = strings.ToLower(host)
+
+	rows, lookupErr := m.lookup(ctx, host)
+	if lookupErr != nil {
+		return "", lookupErr
+	}
+	for _, r := range rows {
+		if m.pathMatches(r.PathPattern, path) {
+			return r.Mode, nil
+		}
+	}
+	return "", nil
 }
 
 // Invalidate 는 host 단위 cache entry 를 즉시 제거합니다.

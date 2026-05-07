@@ -3,6 +3,7 @@ package rule_test
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -89,6 +90,13 @@ func (r *fakeBlacklistRepo) FindEnabledByHost(_ context.Context, host string) ([
 			out = append(out, existing)
 		}
 	}
+	// postgres ORDER BY LENGTH(path_pattern) DESC, id DESC 시뮬레이션 — 더 구체적 path 우선.
+	sort.SliceStable(out, func(i, j int) bool {
+		if len(out[i].PathPattern) != len(out[j].PathPattern) {
+			return len(out[i].PathPattern) > len(out[j].PathPattern)
+		}
+		return out[i].ID > out[j].ID
+	})
 	return out, nil
 }
 
@@ -403,6 +411,89 @@ func TestInvalidatingBlacklistRepo_NilInvalidator_NoOp(t *testing.T) {
 func TestBlacklistMatcher_NewWithNilRepo_Errors(t *testing.T) {
 	_, err := rule.NewBlacklistMatcher(nil)
 	require.Error(t, err)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Classify (이슈 #297) — mode 별 분류
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestBlacklistMatcher_Classify_DropMatch_ExcludedFromAllSlices(t *testing.T) {
+	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Mode: storage.BlacklistModeDrop, Enabled: true},
+	}}
+	m, _ := rule.NewBlacklistMatcher(repo)
+
+	in := []string{
+		"https://news.example.com/article/1",
+		"https://ads.example.com/banner",
+	}
+	d := m.Classify(context.Background(), in)
+	assert.Equal(t, []string{"https://news.example.com/article/1"}, d.Allowed)
+	assert.Empty(t, d.ExtractLinksOnly, "drop 매칭은 ExtractLinksOnly 에 들어가지 않음")
+}
+
+func TestBlacklistMatcher_Classify_ExtractLinksOnly_RoutedToOwnSlice(t *testing.T) {
+	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+		{ID: 1, HostPattern: "sitemap.example.com", PathPattern: "", Mode: storage.BlacklistModeExtractLinksOnly, Enabled: true},
+	}}
+	m, _ := rule.NewBlacklistMatcher(repo)
+
+	in := []string{
+		"https://news.example.com/article/1",
+		"https://sitemap.example.com/index",
+	}
+	d := m.Classify(context.Background(), in)
+	assert.Equal(t, []string{"https://news.example.com/article/1"}, d.Allowed)
+	assert.Equal(t, []string{"https://sitemap.example.com/index"}, d.ExtractLinksOnly,
+		"extract_links_only 매칭은 별도 슬라이스로 라우팅")
+}
+
+func TestBlacklistMatcher_Classify_MixedModes(t *testing.T) {
+	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Mode: storage.BlacklistModeDrop, Enabled: true},
+		{ID: 2, HostPattern: "sitemap.example.com", PathPattern: "", Mode: storage.BlacklistModeExtractLinksOnly, Enabled: true},
+	}}
+	m, _ := rule.NewBlacklistMatcher(repo)
+
+	in := []string{
+		"https://news.example.com/a",
+		"https://ads.example.com/banner",
+		"https://sitemap.example.com/i",
+		"https://news.example.com/b",
+	}
+	d := m.Classify(context.Background(), in)
+	assert.Equal(t, []string{"https://news.example.com/a", "https://news.example.com/b"}, d.Allowed)
+	assert.Equal(t, []string{"https://sitemap.example.com/i"}, d.ExtractLinksOnly)
+}
+
+func TestBlacklistMatcher_Classify_LookupError_FallbackToAllowed(t *testing.T) {
+	repo := &fakeBlacklistRepo{findErr: errors.New("db down")}
+	m, _ := rule.NewBlacklistMatcher(repo)
+
+	in := []string{"https://news.example.com/x"}
+	d := m.Classify(context.Background(), in)
+	assert.Equal(t, in, d.Allowed, "lookup 에러는 best-effort — Allowed 통과")
+	assert.Empty(t, d.ExtractLinksOnly)
+}
+
+// 같은 host 에 path 다른 두 row — LENGTH(path_pattern) DESC 정렬상 더 구체적 path 의 mode 채택.
+func TestBlacklistMatcher_Classify_LongerPathPatternModeWins(t *testing.T) {
+	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+		// catch-all (path="") — 'extract_links_only'
+		{ID: 1, HostPattern: "site.example.com", PathPattern: "", Mode: storage.BlacklistModeExtractLinksOnly, Enabled: true},
+		// 정밀 path — 'drop'
+		{ID: 2, HostPattern: "site.example.com", PathPattern: `^/promotion/.*$`, Mode: storage.BlacklistModeDrop, Enabled: true},
+	}}
+	m, _ := rule.NewBlacklistMatcher(repo)
+
+	in := []string{
+		"https://site.example.com/promotion/123", // 정밀 매칭 → drop
+		"https://site.example.com/about/team",    // 미매칭 → catch-all → extract_links_only
+	}
+	d := m.Classify(context.Background(), in)
+	assert.Empty(t, d.Allowed, "둘 다 blacklist 어딘가 매칭")
+	assert.Equal(t, []string{"https://site.example.com/about/team"}, d.ExtractLinksOnly,
+		"정밀 path 미매칭 시 catch-all 의 mode (extract_links_only) 채택")
 }
 
 // 이슈 #295: Cache TTL 짧게 설정 후 만료 후 재fetch 검증.

@@ -29,8 +29,8 @@ func NewBlacklistRepository(pool *pgxpool.Pool, log *logger.Logger) storage.Blac
 }
 
 const sqlInsertBlacklist = `
-INSERT INTO parsing_blacklist (host_pattern, path_pattern, reason, source, enabled)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO parsing_blacklist (host_pattern, path_pattern, reason, source, mode, enabled)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, created_at, updated_at
 `
 
@@ -51,8 +51,11 @@ func (r *pgBlacklistRepository) Insert(ctx context.Context, rec *storage.Blackli
 	if rec.Source == "" {
 		rec.Source = storage.BlacklistSourceManual
 	}
+	if rec.Mode == "" {
+		rec.Mode = storage.BlacklistModeDrop
+	}
 	row := r.pool.QueryRow(ctx, sqlInsertBlacklist,
-		rec.HostPattern, rec.PathPattern, rec.Reason, string(rec.Source), rec.Enabled,
+		rec.HostPattern, rec.PathPattern, rec.Reason, string(rec.Source), string(rec.Mode), rec.Enabled,
 	)
 	if err := row.Scan(&rec.ID, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 		var pgErr *pgconn.PgError
@@ -66,16 +69,19 @@ func (r *pgBlacklistRepository) Insert(ctx context.Context, rec *storage.Blackli
 
 const sqlUpdateBlacklist = `
 UPDATE parsing_blacklist
-SET reason = $2, source = $3, enabled = $4, updated_at = NOW()
+SET reason = $2, source = $3, mode = $4, enabled = $5, updated_at = NOW()
 WHERE id = $1
 RETURNING updated_at
 `
 
-// Update 는 ID 로 row 의 mutable 필드 (reason / source / enabled) 만 갱신합니다.
+// Update 는 ID 로 row 의 mutable 필드 (reason / source / mode / enabled) 만 갱신합니다.
 // 자연키 (host_pattern, path_pattern) 는 변경 불가 — 의도가 다르면 Delete + Insert.
 func (r *pgBlacklistRepository) Update(ctx context.Context, rec *storage.BlacklistRecord) error {
+	if rec.Mode == "" {
+		rec.Mode = storage.BlacklistModeDrop
+	}
 	row := r.pool.QueryRow(ctx, sqlUpdateBlacklist,
-		rec.ID, rec.Reason, string(rec.Source), rec.Enabled,
+		rec.ID, rec.Reason, string(rec.Source), string(rec.Mode), rec.Enabled,
 	)
 	if err := row.Scan(&rec.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -97,7 +103,7 @@ func (r *pgBlacklistRepository) Delete(ctx context.Context, id int64) error {
 }
 
 const sqlGetBlacklistByID = `
-SELECT id, host_pattern, path_pattern, reason, source, enabled, created_at, updated_at
+SELECT id, host_pattern, path_pattern, reason, source, mode, enabled, created_at, updated_at
 FROM parsing_blacklist
 WHERE id = $1
 `
@@ -116,7 +122,7 @@ func (r *pgBlacklistRepository) GetByID(ctx context.Context, id int64) (*storage
 }
 
 const sqlFindEnabledBlacklistByHost = `
-SELECT id, host_pattern, path_pattern, reason, source, enabled, created_at, updated_at
+SELECT id, host_pattern, path_pattern, reason, source, mode, enabled, created_at, updated_at
 FROM parsing_blacklist
 WHERE host_pattern = $1 AND enabled = TRUE
 ORDER BY LENGTH(path_pattern) DESC, id DESC
@@ -157,7 +163,7 @@ func (r *pgBlacklistRepository) List(ctx context.Context, f storage.BlacklistFil
 		limit = 50
 	}
 	q := `
-SELECT id, host_pattern, path_pattern, reason, source, enabled, created_at, updated_at
+SELECT id, host_pattern, path_pattern, reason, source, mode, enabled, created_at, updated_at
 FROM parsing_blacklist
 WHERE ($1 = '' OR host_pattern = $1)
   AND ($2 = '' OR source = $2)
@@ -196,13 +202,14 @@ type rowScanner interface {
 
 func scanBlacklist(s rowScanner) (*storage.BlacklistRecord, error) {
 	rec := &storage.BlacklistRecord{}
-	var source string
+	var source, mode string
 	if err := s.Scan(
 		&rec.ID,
 		&rec.HostPattern,
 		&rec.PathPattern,
 		&rec.Reason,
 		&source,
+		&mode,
 		&rec.Enabled,
 		&rec.CreatedAt,
 		&rec.UpdatedAt,
@@ -210,6 +217,7 @@ func scanBlacklist(s rowScanner) (*storage.BlacklistRecord, error) {
 		return nil, err
 	}
 	rec.Source = storage.BlacklistSource(source)
+	rec.Mode = storage.BlacklistMode(mode)
 	return rec, nil
 }
 
