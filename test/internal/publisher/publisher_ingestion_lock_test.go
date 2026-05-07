@@ -43,6 +43,10 @@ func (f *fakeIngestionLock) Acquire(_ context.Context, url string) (bool, error)
 	return true, nil
 }
 
+func (f *fakeIngestionLock) AcquireWithTTL(ctx context.Context, url string, _ time.Duration) (bool, error) {
+	return f.Acquire(ctx, url)
+}
+
 // PublishBatch payload helpers reused from gate test pattern.
 type lockMockProducer struct {
 	mu       sync.Mutex

@@ -887,20 +887,27 @@ type RedisConfig struct {
 	// publisher 가 atomic SETNX 로 marker 를 잡고, 본 TTL 만료 시 자연스럽게 재크롤 가능.
 	// 환경변수: REDIS_INGESTION_LOCK_TTL (default 24h).
 	IngestionLockTTL time.Duration
+
+	// PipelineGuardCategoryTTL: PipelineGuard 의 Category target 전용 단명 TTL (이슈 #285).
+	// fetch + ParseLinks 한 cycle 진행 중에만 marker 유지 — 정상 흐름은 명시적 Release,
+	// 본 TTL 은 fallback (worker 가 release 호출 못 하고 죽은 경우 자동 회수).
+	// 환경변수: PIPELINE_GUARD_CATEGORY_TTL (default 60s).
+	PipelineGuardCategoryTTL time.Duration
 }
 
 // DefaultRedisConfig는 로컬 개발 환경용 기본 RedisConfig를 반환합니다.
 func DefaultRedisConfig() RedisConfig {
 	return RedisConfig{
-		Host:             "localhost",
-		Port:             6379,
-		Password:         "",
-		DB:               0,
-		DialTimeout:      5 * time.Second,
-		ReadTimeout:      3 * time.Second,
-		WriteTimeout:     3 * time.Second,
-		PoolSize:         10,
-		IngestionLockTTL: 24 * time.Hour,
+		Host:                     "localhost",
+		Port:                     6379,
+		Password:                 "",
+		DB:                       0,
+		DialTimeout:              5 * time.Second,
+		ReadTimeout:              3 * time.Second,
+		WriteTimeout:             3 * time.Second,
+		PoolSize:                 10,
+		IngestionLockTTL:         24 * time.Hour,
+		PipelineGuardCategoryTTL: 60 * time.Second,
 	}
 }
 
@@ -991,6 +998,16 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 			return RedisConfig{}, fmt.Errorf("invalid REDIS_INGESTION_LOCK_TTL %q: must be positive", v)
 		}
 		cfg.IngestionLockTTL = d
+	}
+	if v := os.Getenv("PIPELINE_GUARD_CATEGORY_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse PIPELINE_GUARD_CATEGORY_TTL %q: %w", v, err)
+		}
+		if d <= 0 {
+			return RedisConfig{}, fmt.Errorf("invalid PIPELINE_GUARD_CATEGORY_TTL %q: must be positive", v)
+		}
+		cfg.PipelineGuardCategoryTTL = d
 	}
 
 	return cfg, nil

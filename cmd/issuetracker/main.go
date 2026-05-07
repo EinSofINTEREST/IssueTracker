@@ -238,13 +238,19 @@ func main() {
 		defer retrySchedulerStop()
 	}
 
-	// URL dedup — Ingestion Lock (이슈 #178, 이슈 #126 의 단일 책임화):
-	// Publisher 가 Kafka enqueue 직전에 정규화 + atomic SETNX 로 진입 marker 잡기.
-	// 진입 후에는 다운스트림 어느 worker 에서도 동일 URL 의 추가 fetch 발생 X (TTL 만료 시까지).
+	// URL dedup — Ingestion Lock (이슈 #178) → Pipeline Guard (이슈 #285) 통합:
+	// Publisher / Scheduler / ParserWorker 가 동일 guard 를 공유하여 target type 별 정책 적용:
+	//   - Article: 24h TTL (기존 IngestionLock 정책 유지)
+	//   - Category: 단명 TTL (default 60s) — cycle 종료 시 명시적 release + TTL fallback
 	jobPublisher.SetNormalizer(links.NewNormalizer())
+	var pipelineGuard *locks.PipelineGuard
 	if ingestionLock != nil {
-		jobPublisher.SetIngestionLock(ingestionLock)
-		log.WithField("ttl", redisCfg.IngestionLockTTL.String()).Info("publisher ingestion lock enabled")
+		pipelineGuard = locks.NewPipelineGuard(ingestionLock, redisCfg.PipelineGuardCategoryTTL)
+		jobPublisher.SetPipelineGuard(pipelineGuard)
+		log.WithFields(map[string]interface{}{
+			"article_ttl":  redisCfg.IngestionLockTTL.String(),
+			"category_ttl": redisCfg.PipelineGuardCategoryTTL.String(),
+		}).Info("publisher pipeline guard enabled (Article 24h / Category 단명)")
 	}
 
 	managerCfg := crawlerWorker.ManagerConfig{
@@ -425,6 +431,12 @@ func main() {
 		log,
 	)
 
+	// ── Pipeline Guard release (이슈 #285) ─────────────────────────────────────
+	// Category cycle 종료 시 marker release — scheduler 다음 주기에 즉시 진입 가능.
+	if pipelineGuard != nil {
+		pw.SetPipelineGuard(pipelineGuard)
+	}
+
 	// ── LLM validate 실패 재큐 (이슈 #237) ───────────────────────────────────
 	// selector 검증 실패 시 raw 를 issuetracker.fetched 에 재발행 — 룰 생성 성공 후 재파싱 기회 부여.
 	// llmGen 이 nil(LLM 비활성) 이면 wiring 불필요.
@@ -501,6 +513,10 @@ func main() {
 	}
 
 	emitter := scheduler.NewJobEmitter(crawlerProducer, log)
+	if pipelineGuard != nil {
+		emitter.SetGuard(pipelineGuard)
+		log.Info("scheduler emitter pipeline guard enabled (이슈 #285)")
+	}
 	entries := scheduler.DefaultEntries(schedulerCfg)
 	sched := scheduler.New(entries, emitter, log, schedulerCfg.MaxRetries)
 

@@ -78,10 +78,22 @@ type ParserWorker struct {
 	emptyBodyTitleMin   int
 	emptyBodyContentMin int
 
+	// guard: PipelineGuard — Category cycle 종료 시 Release 호출용 (이슈 #285).
+	// nil 허용 — nil 이면 release skip (TTL fallback 으로 자동 회수).
+	guard PipelineGuard
+
 	workerCount int
 	log         *logger.Logger
 
 	wg sync.WaitGroup
+}
+
+// PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 인터페이스입니다 (이슈 #285).
+//
+// parser_worker 가 internal/locks 를 직접 import 하지 않도록 별도 정의 — 구조적 타이핑으로
+// locks.PipelineGuard 가 그대로 만족.
+type PipelineGuard interface {
+	Release(ctx context.Context, url string) error
 }
 
 // NewParserWorker 는 ParserWorker 를 생성합니다.
@@ -148,6 +160,12 @@ func NewParserWorker(
 		workerCount:         workerCount,
 		log:                 log,
 	}
+}
+
+// SetPipelineGuard 는 Category cycle 완료 시 marker release 용 PipelineGuard 를 주입합니다 (이슈 #285).
+// nil 주입 시 release 비활성 (TTL fallback). Start 호출 전 wiring 단계에서 1회 설정.
+func (w *ParserWorker) SetPipelineGuard(g PipelineGuard) {
+	w.guard = g
 }
 
 // Start 는 worker goroutines 를 기동합니다 (non-blocking).
@@ -285,6 +303,11 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 }
 
 func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, jobTimeout time.Duration, llmRetryCount int, mlog *logger.Logger) error {
+	// Category cycle 종료 시 PipelineGuard marker release (이슈 #285) — defer 로 어떤 경로
+	// (성공 / handleRuleError / 0 links / publish 실패) 든 release 보장. Release 실패는 non-fatal
+	// (TTL fallback 으로 자동 회수).
+	defer w.releaseCategoryMarker(ctx, raw.URL, mlog)
+
 	if w.parser == nil || w.publisher == nil {
 		mlog.Debug("parser or publisher not configured, skipping category job")
 		w.deleteRaw(ctx, rawID, mlog)
@@ -314,6 +337,23 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 	// 카테고리 페이지는 contents/news_articles 에 저장하지 않음 — raw 즉시 정리
 	w.deleteRaw(ctx, rawID, mlog)
 	return nil
+}
+
+// releaseCategoryMarker 는 Category cycle 종료 시 PipelineGuard marker 를 release 합니다 (이슈 #285).
+//
+// guard 미설정 시 noop. Release 실패는 non-fatal — TTL 만료 fallback 으로 자동 회수.
+// ctx.WithoutCancel 로 parent ctx 취소 신호 분리 — shutdown 중에도 release 시도 보장.
+func (w *ParserWorker) releaseCategoryMarker(ctx context.Context, url string, mlog *logger.Logger) {
+	if w.guard == nil {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := w.guard.Release(releaseCtx, url); err != nil {
+		mlog.WithFields(map[string]interface{}{
+			"url": url,
+		}).WithError(err).Warn("pipeline guard release failed (non-fatal — TTL fallback)")
+	}
 }
 
 func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, llmRetryCount int, mlog *logger.Logger) error {
