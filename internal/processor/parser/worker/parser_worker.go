@@ -88,10 +88,10 @@ type ParserWorker struct {
 	wg sync.WaitGroup
 }
 
-// PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 인터페이스입니다 (이슈 #285).
+// PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 최소 인터페이스입니다 (이슈 #285).
 //
-// parser_worker 가 internal/locks 를 직접 import 하지 않도록 별도 정의 — 구조적 타이핑으로
-// locks.PipelineGuard 가 그대로 만족.
+// parser_worker 는 release 만 필요하므로 locks.PipelineGuard 의 전체 surface 가 아닌 Release 만
+// 노출 — interface segregation 원칙. locks.PipelineGuard 는 구조적 타이핑으로 본 인터페이스 만족.
 type PipelineGuard interface {
 	Release(ctx context.Context, url string) error
 }

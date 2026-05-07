@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -177,6 +178,11 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 	}
 
 	if err := s.emitter.Emit(ctx, job); err != nil {
+		// ErrEmitSkipped (이슈 #285): PipelineGuard 가 cycle 진행 중 판단으로 skip — non-fatal.
+		// "scheduled" / "failed" 양쪽 로그 모두 생략 (실제 발행 안 된 job 이 발행된 것처럼 보이지 않게).
+		if errors.Is(err, ErrEmitSkipped) {
+			return
+		}
 		s.log.WithFields(map[string]interface{}{
 			"job_id":  job.ID,
 			"crawler": entry.CrawlerName,

@@ -263,19 +263,6 @@ func (p *Publisher) normalizeURLs(urls []string, n *links.Normalizer, crawlerNam
 	return out
 }
 
-// acquireIngestion 은 IngestionLock 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
-// 반환합니다 (이슈 #178).
-//
-//   - acquired=true  : 신규 진입 marker 획득 — 결과 슬라이스에 포함
-//   - acquired=false : 이미 다른 publisher 또는 재배달이 marker 점유 — DEBUG 로그 후 제외
-//   - 조회 실패      : fail-open (결과 슬라이스에 포함) + WARN 로그 — Redis 일시 장애가
-//     publish 를 영구 차단하지 않도록
-//   - ctx 취소       : 즉시 종료하고 남은 URL 은 fail-open 으로 그대로 통과 — 셧다운 중
-//     무의미한 lock 호출/WARN 누적 회피. 후속 PublishBatch 가 ctx 에러로 자연 실패.
-//
-// 결과 슬라이스는 입력과 다른 underlying array 로 새로 할당됩니다 (입력 mutate 없음).
-//
-// 성능: crawler/stage sub-logger 를 루프 외부에서 1회 생성하여 재사용.
 // acquireViaGuard 는 PipelineGuard 로 target type 별 TTL 정책을 적용하여 진입 marker 를 잡습니다 (이슈 #285).
 //
 // 동작 정책은 acquireIngestion 과 동일 — fail-open / ctx 취소 / 정규화 가정 등.
@@ -309,6 +296,22 @@ func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerN
 	return out
 }
 
+// acquireIngestion 은 IngestionLock 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
+// 반환합니다 (이슈 #178).
+//
+//   - acquired=true  : 신규 진입 marker 획득 — 결과 슬라이스에 포함
+//   - acquired=false : 이미 다른 publisher 또는 재배달이 marker 점유 — DEBUG 로그 후 제외
+//   - 조회 실패      : fail-open (결과 슬라이스에 포함) + WARN 로그 — Redis 일시 장애가
+//     publish 를 영구 차단하지 않도록
+//   - ctx 취소       : 즉시 종료하고 남은 URL 은 fail-open 으로 그대로 통과 — 셧다운 중
+//     무의미한 lock 호출/WARN 누적 회피. 후속 PublishBatch 가 ctx 에러로 자연 실패.
+//
+// 결과 슬라이스는 입력과 다른 underlying array 로 새로 할당됩니다 (입력 mutate 없음).
+//
+// 성능: crawler/stage sub-logger 를 루프 외부에서 1회 생성하여 재사용.
+//
+// Deprecated (이슈 #285): SetPipelineGuard 사용 시 acquireViaGuard 가 우선 — 본 메소드는
+// guard 미주입 환경의 backward compat fallback.
 func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionLock) []string {
 	out := make([]string, 0, len(urls))
 	l := p.log.WithFields(map[string]interface{}{

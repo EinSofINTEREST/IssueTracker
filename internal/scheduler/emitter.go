@@ -2,12 +2,19 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
+
+// ErrEmitSkipped 는 PipelineGuard 가 \"이미 in-pipeline\" 으로 판단해 emit 을 건너뛴 경우 반환됩니다 (이슈 #285).
+//
+// 호출자는 errors.Is(err, ErrEmitSkipped) 로 분기하여 \"failed to publish\" / \"scheduled\" 로그를
+// 모두 생략 — 실제로 발행되지 않은 job 이 발행된 것처럼 보이는 misleading 로그 회피 (PR #286 리뷰).
+var ErrEmitSkipped = errors.New("emit skipped — url already in pipeline")
 
 // PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 체크하는 인터페이스입니다 (이슈 #285).
 //
@@ -59,7 +66,7 @@ func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 				"url":         job.Target.URL,
 				"target_type": string(job.Target.Type),
 			}).Debug("scheduler emit skipped — url already in pipeline")
-			return nil
+			return ErrEmitSkipped
 		}
 	}
 
