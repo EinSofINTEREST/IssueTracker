@@ -135,6 +135,27 @@ func main() {
 		log.WithError(err).Fatal("failed to construct rule parser")
 	}
 
+	// 이슈 #295: page-parse 블랙리스트 — 카테고리 → article job 발행 단계에서 매칭 URL 차단.
+	// Enabled=false 시 Matcher 미주입 → parser_worker 가 모든 링크 그대로 발행 (기능 OFF).
+	blacklistCfg, err := config.LoadBlacklist()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load blacklist config")
+	}
+	var blacklistMatcher *rule.BlacklistMatcher
+	if blacklistCfg.Enabled {
+		blacklistRepo := pgstore.NewBlacklistRepository(pool, log)
+		bm, bmErr := rule.NewBlacklistMatcher(blacklistRepo)
+		if bmErr != nil {
+			log.WithError(bmErr).Fatal("failed to construct blacklist matcher")
+		}
+		// invalidatingBlacklistRepo decorator — mutation → host cache invalidate 자동 결합.
+		_ = rule.WrapBlacklistWithInvalidator(blacklistRepo, bm)
+		blacklistMatcher = bm
+		log.Info("page-parse blacklist enabled (parsing_blacklist DB-backed)")
+	} else {
+		log.Info("page-parse blacklist disabled (BLACKLIST_ENABLED=false)")
+	}
+
 	// Readiness check: 사이트 등록 전 parsing_rules 가 seed 됐는지 검증.
 	// 부재 시 fail-fast — 실행 중 모든 ParsePage/ParseLinks 가 ErrNoRule 로 죽는 것보다 즉시 종료.
 	// migration 007 (또는 동등한 운영자 seed) 가 적용되어야 통과.
@@ -438,6 +459,13 @@ func main() {
 	// Category cycle 종료 시 marker release — scheduler 다음 주기에 즉시 진입 가능.
 	if pipelineGuard != nil {
 		pw.SetPipelineGuard(pipelineGuard)
+	}
+
+	// ── Page-parse 블랙리스트 (이슈 #295) ───────────────────────────────────────
+	// 카테고리에서 추출된 article URL 중 blacklist 매칭은 publisher.Publish 직전 drop.
+	// Matcher 가 nil (BLACKLIST_ENABLED=false) 이면 setter noop — 모든 링크 그대로 발행.
+	if blacklistMatcher != nil {
+		pw.SetBlacklist(blacklistMatcher)
 	}
 
 	// ── Stale rule 재학습 카운터 (이슈 #282) ───────────────────────────────────

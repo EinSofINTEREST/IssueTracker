@@ -24,7 +24,7 @@ const (
 // page-parse 차단 정책 — 매칭 URL 은 article job 발행 단계에서 drop:
 //   - HostPattern : URL host 매칭 (정확 일치, 호출자가 normalize)
 //   - PathPattern : URL path 매칭 RE2 regex. "" 이면 host 전체 차단 (catch-all).
-//                   pattern 검증은 Insert 시 application 측 RE2 컴파일.
+//     pattern 검증은 Insert 시 application 측 RE2 컴파일.
 //   - Reason      : 운영 가시성 ("ad" / "redirect" / "sponsored" / ...)
 //   - Source      : "manual" | "auto"
 //   - Enabled     : 토글 — false 면 매칭 무시 (DELETE 대안, 임시 비활성)
