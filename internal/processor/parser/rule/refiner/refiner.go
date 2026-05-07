@@ -11,8 +11,8 @@
 //     d. 실패 + LLMClient != nil 이면 pathinfer.InferLLM(samples) 시도 — 성공하면 llm 방식 채택.
 //     e. 결과 regex 가 비어있으면 skip (다음 polling 에서 재시도 — sample 누적 추가 후 재평가).
 //     f. ParsingRuleRepository.InsertNextVersion — 기존 catch-all (v1) 보존 + 정밀 path_pattern 으로
-//        새 version (v2) INSERT (이슈 #282 Phase 2). v2 가 매칭 안 되는 path 는 v1 (catch-all)
-//        로 fallback — 정밀화 적용 범위가 좁아도 silent miss 없음.
+//     새 version (v2) INSERT (이슈 #282 Phase 2). v2 가 매칭 안 되는 path 는 v1 (catch-all)
+//     로 fallback — 정밀화 적용 범위가 좁아도 silent miss 없음.
 //     g. resolver.Invalidate(host, type) — cache flush (다음 lookup 부터 갱신된 rule 적용).
 //     h. SampleURLRepository.Purge(rule.ID) — 기존 catch-all (v1) 의 sample 정리 (다음 cycle 에서 재누적).
 //

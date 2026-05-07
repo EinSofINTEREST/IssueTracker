@@ -30,11 +30,11 @@ import (
 type fakeRulesRepo struct {
 	mu       sync.Mutex
 	records  []*storage.ParsingRuleRecord
-	inserts  []insertCall   // 이슈 #282 Phase 2: 새 InsertNextVersion 추적
-	updates  []updateCall   // 호환성 — UpdatePathPattern guard 단위 테스트 보존
+	inserts  []insertCall // 이슈 #282 Phase 2: 새 InsertNextVersion 추적
+	updates  []updateCall // 호환성 — UpdatePathPattern guard 단위 테스트 보존
 	listErr  error
-	insErr   error          // InsertNextVersion 강제 에러 (호환: 기존 upErr 와 의미 통합)
-	insIsDup bool           // InsertNextVersion 가 storage.ErrDuplicate 반환하도록
+	insErr   error // InsertNextVersion 강제 에러 (호환: 기존 upErr 와 의미 통합)
+	insIsDup bool  // InsertNextVersion 가 storage.ErrDuplicate 반환하도록
 	nextID   int64
 }
 

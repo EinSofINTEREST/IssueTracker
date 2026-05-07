@@ -440,6 +440,39 @@ func main() {
 		pw.SetPipelineGuard(pipelineGuard)
 	}
 
+	// ── Stale rule 재학습 카운터 (이슈 #282) ───────────────────────────────────
+	// host 단위 stale parse failure 누적 — 임계 도달 시 Generator.EnqueueStale 트리거.
+	// FetcherAutoUpgrade 와 별개 keyspace + 더 긴 윈도우 / 더 높은 임계값 — chromedp 전환이
+	// 먼저 시도되고, 그래도 실패 지속 시 LLM 재학습 (InsertNextVersion 으로 v+1 추가).
+	staleRelearnCfg, err := config.LoadStaleRelearn()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load stale relearn config")
+	}
+	if staleRelearnCfg.Enabled && redisClientShared != nil && llmGen != nil {
+		sc, scErr := llmgen.NewRedisStaleCounter(
+			redisClientShared.Raw(),
+			staleRelearnCfg.Threshold,
+			staleRelearnCfg.Window,
+			"", // default keyPrefix "stale:relearn"
+			log,
+		)
+		if scErr != nil {
+			log.WithError(scErr).Warn("failed to construct redis stale counter, stale relearn disabled at runtime")
+		} else {
+			pw.SetStaleCounter(sc)
+			log.WithFields(map[string]interface{}{
+				"threshold": staleRelearnCfg.Threshold,
+				"window":    staleRelearnCfg.Window.String(),
+			}).Info("stale rule relearn (redis sliding window) enabled")
+		}
+	} else if !staleRelearnCfg.Enabled {
+		log.Info("stale rule relearn disabled (STALE_RELEARN_ENABLED=false)")
+	} else if redisClientShared == nil {
+		log.Warn("redis unavailable, stale rule relearn falls back to noop")
+	} else if llmGen == nil {
+		log.Info("llmgen disabled — stale rule relearn skipped (no enqueue target)")
+	}
+
 	// ── LLM validate 실패 재큐 (이슈 #237) ───────────────────────────────────
 	// selector 검증 실패 시 raw 를 issuetracker.fetched 에 재발행 — 룰 생성 성공 후 재파싱 기회 부여.
 	// llmGen 이 nil(LLM 비활성) 이면 wiring 불필요.
