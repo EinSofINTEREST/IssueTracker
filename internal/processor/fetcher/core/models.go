@@ -54,7 +54,7 @@ type RawContent struct {
 }
 
 // NewRawContent 는 fetcher 들이 공통으로 사용하는 RawContent 조립 패턴을
-// 일원화한 생성자입니다 (이슈 #75 — fetcher 공통 추출).
+// 일원화한 생성자입니다.
 //
 // 인자:
 //   - name       : crawler 이름 (ID prefix 로 사용)
@@ -120,7 +120,7 @@ type RawContentRef struct {
 	URL           string     `json:"url"`
 	FetchedAt     time.Time  `json:"fetched_at"`
 	SourceInfo    SourceInfo `json:"source_info"`
-	LLMRetryCount int        `json:"llm_retry_count,omitempty"` // 이슈 #237: LLM validate 실패 재큐 횟수
+	LLMRetryCount int        `json:"llm_retry_count,omitempty"` // LLM validate 실패 재큐 횟수
 }
 
 // ContentRef는 contents 테이블에 저장된 Content의 경량 참조입니다.

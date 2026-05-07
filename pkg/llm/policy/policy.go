@@ -1,7 +1,7 @@
 // Package policy implements LLM routing policies that order Providers per-request.
 //
 // Package policy 는 매 호출마다 비용 / 성능 / 작업 특성을 입력으로 적절한 provider 를 동적으로
-// 선택하는 routing policy 들을 제공합니다 (이슈 #144).
+// 선택하는 routing policy 들을 제공합니다.
 //
 // Policy 는 후보 provider 슬라이스를 입력받아 우선순위 순서로 정렬해 반환합니다 — 단일 선택이 아닌
 // 정렬된 슬라이스를 반환하여 chain 합성 (chain.NewWithPolicy) 과 자연스럽게 어울립니다.
@@ -42,7 +42,7 @@ type Policy interface {
 //   - 비어있으면 provider 의 default model — 현재 Provider 인터페이스에 노출 X 라
 //     향후 provider 가 자기 default 를 노출하는 메소드를 추가할 때 본 헬퍼가 그 메소드를 호출
 //
-// 본 PR scope: req.Model 만 사용. req.Model 이 비어있고 caps lookup 실패하면 zero Capabilities 사용.
+// req.Model 만 사용. req.Model 이 비어있고 caps lookup 실패하면 zero Capabilities 사용.
 func capabilityFor(caps llm.CapabilitiesProvider, p llm.Provider, req llm.Request) llm.Capabilities {
 	if caps == nil {
 		return llm.Capabilities{}

@@ -26,13 +26,13 @@ var seededHostTargets = []struct {
 }
 
 // VerifySeeded 는 seededHostTargets 의 모든 (host, target_type) 페어가 parsing_rules 테이블에
-// 활성 row 로 존재하는지 확인합니다 (이슈 #276 — main.go 에서 이동).
+// 활성 row 로 존재하는지 확인합니다.
 //
 // 부재 시 ErrNoRule 등 진단 에러를 그대로 반환 — 호출자가 Fatal 로 부팅 차단.
 // migration 007 이 적용되어야 통과 (또는 운영자가 동등한 row 를 직접 입력).
 func VerifySeeded(ctx context.Context, resolver *Resolver) error {
 	for _, r := range seededHostTargets {
-		// "/" path 로 catch-all (path_pattern='') 매칭 검증 — seed 된 host-only rule 확인 (이슈 #173).
+		// "/" path 로 catch-all (path_pattern='') 매칭 검증 — seed 된 host-only rule 확인.
 		if _, err := resolver.Resolve(ctx, r.Host, "/", r.TargetType); err != nil {
 			return fmt.Errorf("missing rule for (%s, %s): %w", r.Host, r.TargetType, err)
 		}

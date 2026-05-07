@@ -21,7 +21,7 @@ import (
 // ctx 에 이미 더 짧은 deadline 이 있으면 그것이 우선 (context.WithTimeout 이 합성).
 const resolveTimeout = 5 * time.Second
 
-// Parser 는 DB 기반 파싱 규칙으로 동작하는 단일 page parser engine 입니다 (이슈 #100).
+// Parser 는 DB 기반 파싱 규칙으로 동작하는 단일 page parser engine 입니다.
 //
 // Parser implements both parser.ContentParser and parser.LinkListParser, driven by
 // storage.ParsingRuleRecord resolved per request via Resolver. 사이트별 hardcode 파서
@@ -33,12 +33,12 @@ const resolveTimeout = 5 * time.Second
 // stateless / goroutine-safe — 모든 worker 가 단일 인스턴스 공유 가능.
 type Parser struct {
 	resolver    *Resolver
-	discovery   *PageLinkDiscovery // 이슈 #139 — full-page link discovery
+	discovery   *PageLinkDiscovery // full-page link discovery
 	dateLayouts []string           // PublishedAt try-list (앞쪽 우선)
 }
 
 // NewParser 는 Resolver 를 사용하는 Parser 를 생성합니다.
-// resolver 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+// resolver 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
 func NewParser(resolver *Resolver) (*Parser, error) {
 	if resolver == nil {
 		return nil, errors.New("rule: NewParser requires non-nil resolver")
@@ -78,7 +78,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.P
 		return nil, err
 	}
 
-	// 호출자 ctx 의 cancel/trace metadata 를 보존하면서 추가 timeout 안전망 적용 (Gemini #3).
+	// 호출자 ctx 의 cancel/trace metadata 를 보존하면서 추가 timeout 안전망 적용.
 	resolveCtx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
 	rule, err := p.resolver.ResolveByURL(resolveCtx, raw.URL, storage.TargetTypePage)
@@ -114,7 +114,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.P
 		PublishedAt: p.extractDate(doc, rule.Selectors.PublishedAt),
 	}
 
-	// Title 도 MainContent 와 동등한 필수 — selector 는 있지만 추출 결과 빈 경우도 stale 진단 (Gemini #5).
+	// Title 도 MainContent 와 동등한 필수 — selector 는 있지만 추출 결과 빈 경우도 stale 진단.
 	if page.Title == "" || page.MainContent == "" {
 		return nil, &Error{
 			Code:       ErrParseFailure,
@@ -129,7 +129,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.P
 // ParseLinks 는 RawContent 의 링크-허브 페이지를 LinkItem 슬라이스로 파싱합니다
 // (parser.LinkListParser 구현).
 //
-// 모드 분기 (이슈 #139):
+// 모드 분기:
 //   - rule.Selectors.LinkDiscovery.ArticleURLPattern 이 설정 → full-page discovery
 //     (페이지 전체 <a href> + URL pattern 필터). 사이드바 / 추천 / 관련 기사 포함.
 //   - 그렇지 않으면 → 기존 ItemContainer 경로 (정확한 컨테이너 기반 추출).
@@ -154,7 +154,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 		return nil, err
 	}
 
-	// LinkDiscovery 모드 (이슈 #139, #148) — opt-in.
+	// LinkDiscovery 모드 — opt-in.
 	// LinkDiscovery 객체 자체가 채워져 있으면 discovery 경로 (ArticleURLPattern 빈 문자열도 허용 — all-pass).
 	// LinkDiscovery 가 nil 일 때만 ItemContainer fallback.
 	if cfg := rule.Selectors.LinkDiscovery; cfg != nil {

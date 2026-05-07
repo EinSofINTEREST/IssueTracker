@@ -1,5 +1,5 @@
 // Package llm 은 외부 LLM API (Gemini / OpenAI ChatGPT / Anthropic Claude) 를
-// 동일한 추상 인터페이스로 호출할 수 있게 하는 generic client 패키지입니다 (이슈 #140).
+// 동일한 추상 인터페이스로 호출할 수 있게 하는 generic client 패키지입니다.
 //
 // Package llm provides a unified interface for invoking external LLM APIs
 // (Google Gemini, OpenAI ChatGPT, Anthropic Claude). Provider-specific request /
@@ -67,7 +67,7 @@ type Request struct {
 	// MaxTokens 는 응답 생성 시 최대 토큰 수. 0 이면 provider default.
 	MaxTokens int
 
-	// TaskHint 는 routing policy 가 작업 특성별로 적합한 provider 를 선택할 때 사용하는 hint 입니다 (이슈 #144).
+	// TaskHint 는 routing policy 가 작업 특성별로 적합한 provider 를 선택할 때 사용하는 hint 입니다.
 	// 빈 문자열이면 policy 기본 동작. 표준 값은 TaskHint* 상수 참고.
 	//
 	// TaskHint helps routing policies pick the most suitable provider per task type.

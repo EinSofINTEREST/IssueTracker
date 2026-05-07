@@ -45,7 +45,7 @@ func main() {
 
 	ctx = log.ToContext(ctx)
 
-	// ── Metrics endpoint (이슈 #165) ──────────────────────────────────────────
+	// ── Metrics endpoint ──────────────────────────────────────────
 	metricsCfg, err := config.LoadMetrics()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load metrics config")
@@ -95,7 +95,7 @@ func main() {
 	defer producer.Close()
 
 	// ── 5. Validate Worker 시작 ───────────────────────────────────────────────
-	// validator 결과 (passed/rejected) 는 contentSvc.UpdateValidationStatus 로 contents 에 기록 (이슈 #135 / #161).
+	// validator 결과 (passed/rejected) 는 contentSvc.UpdateValidationStatus 로 contents 에 기록.
 	// processor 단독 실행은 dev/test 시나리오 — Redis wiring 없이 NoopProcessingLock 사용.
 	// 다중 인스턴스 운영은 cmd/issuetracker 통합 바이너리에서 Redis 기반 ProcessingLock 공유.
 	worker := validate.NewWorker(consumer, producer, contentSvc, locks.NoopProcessingLock{}, validateWorkerCount, validateCfg)
@@ -112,7 +112,7 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	<-sigChan
-	// 셧다운 시작 시점부터 logger 에 shutting_down=true 를 부여합니다 (이슈 #72 TODO #4).
+	// 셧다운 시작 시점부터 logger 에 shutting_down=true 를 부여합니다.
 	//
 	// 적용 범위 (중요):
 	//   - 본 변수 'log' 와 shutdownCtx 를 통해 전달되는 로그에만 부착됩니다 (Stop 경로).
@@ -124,7 +124,7 @@ func main() {
 	log.Warn("shutdown signal received, draining workers...")
 	cancel()
 
-	// WithoutCancel(ctx) 로 parent cancellation 은 분리하되 ctx values (logger 등) 보존 (PR #273 리뷰).
+	// WithoutCancel(ctx) 로 parent cancellation 은 분리하되 ctx values (logger 등) 보존.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownCfg.Timeout)
 	defer shutdownCancel()
 	shutdownCtx = log.ToContext(shutdownCtx)

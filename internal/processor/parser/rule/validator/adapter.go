@@ -7,7 +7,7 @@ import (
 	"issuetracker/internal/storage"
 )
 
-// LLMGenAdapter 는 validator.Pool 을 llmgen.SelectorValidator 인터페이스로 감쌉니다 (이슈 #257).
+// LLMGenAdapter 는 validator.Pool 을 llmgen.SelectorValidator 인터페이스로 감쌉니다.
 // 두 패키지 간 import cycle 없이 연결합니다.
 type LLMGenAdapter struct {
 	pool *Pool

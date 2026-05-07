@@ -1,6 +1,6 @@
 // Package prompt loads LLM prompt templates from the filesystem.
 //
-// Package prompt 는 LLM 호출용 프롬프트를 외부 파일에서 로드합니다 (이슈 #144 Phase 4).
+// Package prompt 는 LLM 호출용 프롬프트를 외부 파일에서 로드합니다.
 //
 // **위치 정책**: 프롬프트는 binary 와 분리하여 \`scripts/prompts/<name>.txt\` (또는 .md) 로 관리합니다.
 // 이는 다음을 가능하게 합니다:

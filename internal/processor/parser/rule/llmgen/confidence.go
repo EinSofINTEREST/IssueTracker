@@ -10,7 +10,7 @@ import (
 	"issuetracker/internal/storage"
 )
 
-// confidenceThreshold 는 selector 의 hit_rate 가 본 임계값 미만이면 drop (nil) 처리됩니다 (이슈 #283).
+// confidenceThreshold 는 selector 의 hit_rate 가 본 임계값 미만이면 drop (nil) 처리됩니다.
 //
 // 단일 sample 환경에서 hit_rate 는 0.0 또는 1.0 (binary) — threshold 0.5 면 \"매칭 못함\" 만 drop.
 // 향후 multi-sample 도입 시 (sample_count > 1) 임계값이 의미 있는 분기점이 됨.
@@ -40,7 +40,7 @@ var publishedAtTimeLayouts = []string{
 	"Jan 2, 2006",
 }
 
-// ComputeFieldConfidence 는 SelectorMap 의 각 필드별 hit_rate 를 계산합니다 (이슈 #283).
+// ComputeFieldConfidence 는 SelectorMap 의 각 필드별 hit_rate 를 계산합니다.
 //
 // 단일 sample 환경 — 각 selector 를 html 에 적용 후 매칭 1건 이상이면 hit_rate=1.0, 아니면 0.0.
 // SampleCount 는 항상 1 (multi-sample 도입 시 분모 증가).
@@ -81,7 +81,7 @@ func ComputeFieldConfidence(sm storage.SelectorMap, html string) map[string]stor
 	return out
 }
 
-// ApplyConfidenceFilter 는 confidence 가 임계값 미만인 필드의 selector 를 nil 로 drop 합니다 (이슈 #283).
+// ApplyConfidenceFilter 는 confidence 가 임계값 미만인 필드의 selector 를 nil 로 drop 합니다.
 //
 // 신뢰할 수 없는 selector 가 INSERT 되면 하류 parser 가 빈 값을 추출 — host 별 \"본 필드 부재\" 학습
 // 으로 이어짐. validator 는 confidence=0 인 필드를 \"부재가 정상\" 으로 판단할 수 있음 (sub-issue).
@@ -111,7 +111,7 @@ func ApplyConfidenceFilter(sm storage.SelectorMap, confidence map[string]storage
 
 // isFieldHit 는 doc 에 selector 를 적용해 hit 여부를 반환합니다.
 //
-// hit 정의 (PR #293 CodeRabbit Major):
+// hit 정의:
 //   - DOM 매칭 1건 이상
 //   - **추출 결과 (text 또는 attribute) 가 비어있지 않음** — attribute selector 가 attribute
 //     를 못 찾거나 빈 element 매칭하면 hit 아님 (low-confidence drop 게이트 강화)

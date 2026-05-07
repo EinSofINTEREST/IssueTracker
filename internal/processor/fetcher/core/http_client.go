@@ -21,7 +21,7 @@ const (
 // defaultHTTPClient는 기본 HTTP 클라이언트를 생성합니다.
 // Connection pooling과 timeout을 적용합니다.
 //
-// HTTP/2 stream/connection error 모니터링 (이슈 #71/#117):
+// HTTP/2 stream/connection error 모니터링:
 //   - http2.ConfigureTransports 로 base transport 에 http2 transport 를 명시 구성
 //   - http2.Transport.CountError hook 으로 에러 유형별 카운트 (DefaultHTTP2ErrorCounter 누적)
 //   - 에러 발생 시 로그로 가시화 — 운영 모니터링/알림에서 빈도 추적 가능

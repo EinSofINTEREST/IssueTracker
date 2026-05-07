@@ -15,7 +15,7 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// StaleCounter 는 stale rule 발생을 (host, target_type) 단위 sliding window 로 카운팅합니다 (이슈 #282).
+// StaleCounter 는 stale rule 발생을 (host, target_type) 단위 sliding window 로 카운팅합니다.
 //
 // 기존 fetcher 의 FailureCounter (chromedp 업그레이드용) 와 별개의 keyspace / 임계값 보유:
 //   - 임계값: STALE_RELEARN_THRESHOLD (default 10) — chromedp 업그레이드보다 높은 임계
@@ -96,7 +96,7 @@ func (r *redisStaleCounter) Record(ctx context.Context, host string, t storage.T
 
 	// member 는 unique 보장용 — ns + 8 bytes random hex.
 	// rand.Read 실패 시 nonce 가 빈 문자열이 되면 동일 ns 의 동시 record 가 같은 member 가 되어
-	// ZADD 한 쪽이 무시됨 → 카운트 누락. 명시적으로 error 전파 (PR #294 gemini 피드백).
+	// ZADD 한 쪽이 무시됨 → 카운트 누락. 명시적으로 error 전파.
 	nonce, err := randStaleNonce()
 	if err != nil {
 		return 0, false, fmt.Errorf("stale counter nonce for (%s, %s): %w", host, t, err)
@@ -137,7 +137,7 @@ func (r *redisStaleCounter) Record(ctx context.Context, host string, t storage.T
 
 // randStaleNonce 는 ZADD member unique 변별자용 random hex 를 생성합니다.
 // rand.Read 실패 시 error 반환 — 호출자가 카운팅 자체를 포기 (빈 nonce fallback 은 동시 record
-// 시 member 충돌을 유발하므로 회피, PR #294 gemini 피드백).
+// 시 member 충돌을 유발하므로 회피).
 func randStaleNonce() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {

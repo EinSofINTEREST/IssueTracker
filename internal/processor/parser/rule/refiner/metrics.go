@@ -6,7 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Metrics 는 refiner 의 Prometheus collector 모음입니다 (PR #191 피드백, 이슈 #190 후속).
+// Metrics 는 refiner 의 Prometheus collector 모음입니다.
 //
 // nil-Metrics 또는 nil 내부 collector 는 모든 Record* 메소드가 noop —
 // 호출자는 nil 검사 없이 항상 호출 가능. NewMetrics(nil) 또는 NewMetrics(registry) 둘 다 허용.

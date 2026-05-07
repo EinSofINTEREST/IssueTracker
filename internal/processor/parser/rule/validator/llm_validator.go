@@ -16,7 +16,7 @@ type llmValidationResponse struct {
 	Reason string `json:"reason"`
 }
 
-// LLMValidator 는 pkg/llm.Provider 기반 의미 검증 구현체입니다 (이슈 #257).
+// LLMValidator 는 pkg/llm.Provider 기반 의미 검증 구현체입니다.
 type LLMValidator struct {
 	provider llm.Provider
 }

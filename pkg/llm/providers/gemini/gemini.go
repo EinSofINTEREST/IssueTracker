@@ -1,4 +1,4 @@
-// Package gemini 는 Google Gemini API 의 llm.Provider 구현입니다 (이슈 #140).
+// Package gemini 는 Google Gemini API 의 llm.Provider 구현입니다.
 //
 // Package gemini implements the llm.Provider interface against Google's
 // Generative Language REST API.
@@ -27,7 +27,7 @@ const (
 	defaultModel = "gemini-2.5-flash"
 )
 
-// init 은 factory (llm.New) 에서 본 provider 를 사용할 수 있게 등록합니다 (이슈 #140).
+// init 은 factory (llm.New) 에서 본 provider 를 사용할 수 있게 등록합니다.
 //
 // 사용자는 llm.Config{Provider: "gemini", APIKey: "...", Model: "..."} 으로 생성 가능.
 func init() {

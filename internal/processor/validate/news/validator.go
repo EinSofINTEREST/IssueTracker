@@ -42,7 +42,7 @@ func (v *Validator) Validate(_ context.Context, content *core.Content) types.Val
 	score := v.qualityScore(content)
 	threshold := float32(v.cfg.NewsQualityThreshold)
 
-	// 이슈 #135 — 품질 점수 임계 미달이고 다른 reject 사유 없는 경우, quality_low 에러를
+	// 품질 점수 임계 미달이고 다른 reject 사유 없는 경우, quality_low 에러를
 	// breakdown 과 함께 명시적으로 추가. 이전에는 errs=[] 인 채로 reject 되어 사후 추적 불가.
 	if score < threshold && len(errs) == 0 {
 		wordScore := v.scoreWordCount(content.WordCount)

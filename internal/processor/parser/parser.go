@@ -1,5 +1,5 @@
 // Package parser 은 모든 웹페이지 (뉴스 / 블로그 / 일반 문서) 의 핵심 내용을
-// 추출하기 위한 도메인 중립 인터페이스와 모델을 제공합니다 (이슈 #100).
+// 추출하기 위한 도메인 중립 인터페이스와 모델을 제공합니다.
 //
 // Package parser defines domain-agnostic interfaces and models for extracting
 // the main content of any web page. 사이트별 hardcode 파서를 대체하여, DB 기반 rule

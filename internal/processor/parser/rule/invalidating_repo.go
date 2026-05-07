@@ -7,7 +7,7 @@ import (
 	"issuetracker/internal/storage"
 )
 
-// CacheInvalidator 는 (host, target_type) 튜플의 cache entry 를 무효화하는 최소 인터페이스입니다 (이슈 #288).
+// CacheInvalidator 는 (host, target_type) 튜플의 cache entry 를 무효화하는 최소 인터페이스입니다.
 //
 // Resolver 가 본 인터페이스를 만족 — invalidatingRepo 가 internal/storage 를 거꾸로 import 하지 않도록
 // 별도 정의. 향후 다른 cache 보유 컴포넌트도 본 인터페이스만 구현하면 decorator 와 결합 가능.
@@ -16,7 +16,7 @@ type CacheInvalidator interface {
 }
 
 // invalidatingRepo 는 ParsingRuleRepository 를 wrap 하여 mutation 메소드 호출 후 자동으로
-// CacheInvalidator.Invalidate 를 호출하는 decorator 입니다 (이슈 #288).
+// CacheInvalidator.Invalidate 를 호출하는 decorator 입니다.
 //
 // 의도:
 //
@@ -27,7 +27,7 @@ type CacheInvalidator interface {
 //   - Insert ErrDuplicate  → Invalidate (row 가 DB 에 이미 존재 — cache 불일치 가능성)
 //   - Update 성공          → Invalidate (host, target_type)
 //   - UpdatePathPattern 성공 → 사전 GetByID 로 host/type lookup 후 Invalidate
-//   - Delete 성공          → 사전 GetByID 로 host/type lookup 후 Invalidate (PR #292 gemini 리뷰 — 일관성)
+//   - Delete 성공          → 사전 GetByID 로 host/type lookup 후 Invalidate
 //
 // UpdatePathPattern / Delete 의 호스트 정보 부재:
 //
@@ -40,7 +40,7 @@ type invalidatingRepo struct {
 	inv   CacheInvalidator
 }
 
-// WrapWithInvalidator 는 ParsingRuleRepository 를 invalidatingRepo 로 wrap 합니다 (이슈 #288).
+// WrapWithInvalidator 는 ParsingRuleRepository 를 invalidatingRepo 로 wrap 합니다.
 //
 // 사용 예 (cmd/issuetracker/main.go):
 //
@@ -62,7 +62,7 @@ func (r *invalidatingRepo) invalidate(host string, t storage.TargetType) {
 	}
 }
 
-// InsertNextVersion wraps inner.InsertNextVersion + invalidates on success or ErrDuplicate (이슈 #282).
+// InsertNextVersion wraps inner.InsertNextVersion + invalidates on success or ErrDuplicate.
 //
 // 같은 (host, target_type) 에 대한 재학습 시 cache 가 stale 일 수 있으므로 invalidate 보장.
 func (r *invalidatingRepo) InsertNextVersion(ctx context.Context, rec *storage.ParsingRuleRecord) error {
@@ -76,7 +76,7 @@ func (r *invalidatingRepo) InsertNextVersion(ctx context.Context, rec *storage.P
 // Insert wraps inner.Insert + invalidates on success or ErrDuplicate.
 //
 // ErrDuplicate 시에도 invalidate — INSERT 실패했지만 동일 자연키 row 가 이미 DB 에 존재하므로
-// cache 가 stale 일 가능성 (다른 인스턴스가 INSERT 했거나 운영자 manual). 이슈 #274 의 사후
+// cache 가 stale 일 가능성 (다른 인스턴스가 INSERT 했거나 운영자 manual). 사후
 // invalidate 로직을 본 decorator 로 통합.
 func (r *invalidatingRepo) Insert(ctx context.Context, rec *storage.ParsingRuleRecord) error {
 	err := r.inner.Insert(ctx, rec)
@@ -113,7 +113,7 @@ func (r *invalidatingRepo) UpdatePathPattern(ctx context.Context, id int64, patt
 	return nil
 }
 
-// Delete wraps inner.Delete + 사전 GetByID 로 host/type 조회 후 invalidate (PR #292 gemini 리뷰).
+// Delete wraps inner.Delete + 사전 GetByID 로 host/type 조회 후 invalidate.
 //
 // UpdatePathPattern 과 동일 패턴 — decorator 의 일관성 보장 (mutation→invalidate 결합 누락 0).
 // pre-fetch 실패 시 invalidate skip — TTL fallback 으로 자연 회수.

@@ -25,7 +25,7 @@ type inflightKey struct {
 	targetType storage.TargetType
 }
 
-// InflightLocker 는 (host, targetType) 단위 중복 실행 방지 인터페이스입니다 (이슈 #261).
+// InflightLocker 는 (host, targetType) 단위 중복 실행 방지 인터페이스입니다.
 //
 // 구현체:
 //   - memInflightLocker: in-process map 기반 (기본값, 단일 인스턴스 환경)
@@ -72,7 +72,7 @@ func (m *memInflightLocker) Release(_ context.Context, host string, targetType s
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RedisInflightLocker — 분산 Lock 구현 (이슈 #261)
+// RedisInflightLocker — 분산 Lock 구현
 // ─────────────────────────────────────────────────────────────────────────────
 
 // luaRelease 는 소유권 확인 후 삭제하는 Lua 스크립트입니다.

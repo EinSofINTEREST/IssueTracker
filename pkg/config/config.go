@@ -13,7 +13,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// MetricsConfig는 Prometheus /metrics endpoint 노출 설정을 나타냅니다 (이슈 #165).
+// MetricsConfig는 Prometheus /metrics endpoint 노출 설정을 나타냅니다.
 //
 // MetricsConfig holds settings for the Prometheus /metrics HTTP endpoint.
 type MetricsConfig struct {
@@ -45,7 +45,7 @@ func LoadMetrics(envFiles ...string) (MetricsConfig, error) {
 	return cfg, nil
 }
 
-// ShutdownConfig 는 graceful shutdown 시 대기 시간 설정입니다 (이슈 #272).
+// ShutdownConfig 는 graceful shutdown 시 대기 시간 설정입니다.
 //
 // 배경: claudegen LLM 추출기 활성 시 in-flight Extract 호출 latency 가 p95 110s 까지 늘어나,
 // 기존 hardcode 30s shutdownCtx 가 정기적으로 deadline exceeded 를 트리거. 운영자가
@@ -292,7 +292,7 @@ func LoadClassifier(envFiles ...string) (ClassifierConfig, error) {
 	return cfg, nil
 }
 
-// PathInferConfig 는 pathinfer 휴리스틱의 설정입니다 (이슈 #173 단계 2).
+// PathInferConfig 는 pathinfer 휴리스틱의 설정입니다.
 //
 // pathinfer 패키지의 InferHeuristic 동작을 운영자가 환경변수로 조정 가능하도록.
 type PathInferConfig struct {
@@ -335,14 +335,14 @@ func LoadPathInfer(envFiles ...string) (PathInferConfig, error) {
 	return cfg, nil
 }
 
-// FetcherChromedpPoolConfig 는 chromedp 전용 worker pool 의 wiring 설정입니다 (이슈 #218).
+// FetcherChromedpPoolConfig 는 chromedp 전용 worker pool 의 wiring 설정입니다.
 //
 // goquery worker pool 과 분리된 별도 Kafka consumer group 을 운영하며, worker 의 chromedp 호출
 // 직전에 Semaphore.Acquire 로 Chrome 인스턴스의 동시 navigation 수를 제한해 ResourceScheduler
 // 큐 고갈 (ERR_INSUFFICIENT_RESOURCES) 을 차단.
 //
-// 이슈 #229 — Semaphore 의미 변경 + 실효 동시성 정정 (gemini 피드백):
-// PR #227 의 글로벌 Semaphore 1 개 (전체 worker 공유) 모델에서, worker_id 별 Semaphore 1 개로
+// Semaphore 의미 변경 + 실효 동시성 정정 (gemini 피드백):
+// 글로벌 Semaphore 1 개 (전체 worker 공유) 모델에서, worker_id 별 Semaphore 1 개로
 // 분리. **단, KafkaConsumerPool 의 worker goroutine 은 jobs 채널에서 메시지를 1 개씩 꺼내
 // 순차 처리** 하므로 (pool.go 의 worker 루프 참조), 같은 worker 가 동시 2 개 이상의 Handle 을
 // 호출할 수 없음 → per-worker SemaphoreCapacity > 1 은 현 모델에서 추가 동시성 이득 없음.
@@ -368,7 +368,7 @@ type FetcherChromedpPoolConfig struct {
 	// 환경변수 FETCHER_CHROMEDP_WORKER_COUNT (default 2).
 	WorkerCount int
 
-	// SemaphoreCapacity: per-worker Semaphore 슬롯 수 (이슈 #229).
+	// SemaphoreCapacity: per-worker Semaphore 슬롯 수.
 	// **현 KafkaConsumerPool 모델에서는 1 이상 의미 없음** — worker 가 메시지를 순차 처리하므로
 	// 같은 worker 의 동시 Acquire 가 발생하지 않음. 옵션은 미래 worker-내 동시 분기 시나리오
 	// (예: 한 worker 가 메시지 1건을 여러 sub-tab 으로 분할) 대비 보존.
@@ -376,7 +376,7 @@ type FetcherChromedpPoolConfig struct {
 	// 환경변수 FETCHER_CHROMEDP_SEMAPHORE_CAPACITY (default 1).
 	SemaphoreCapacity int
 
-	// RemoteURLs: worker_id 별 Chrome 인스턴스의 CDP WebSocket URL 매핑 (이슈 #230).
+	// RemoteURLs: worker_id 별 Chrome 인스턴스의 CDP WebSocket URL 매핑.
 	// 길이는 WorkerCount 와 일치해야 하며 (LoadFetcherChromedpPool 가 검증), 사이트별 ChromedpCrawler
 	// 가 worker_id 인덱스로 자기 전용 RemoteURL 을 사용 → worker:Chrome 1:1 매핑.
 	//
@@ -389,13 +389,13 @@ type FetcherChromedpPoolConfig struct {
 
 // DefaultFetcherChromedpPoolConfig 는 기본 FetcherChromedpPoolConfig 를 반환합니다.
 //
-// 이슈 #229 — default 재조정 (gemini 피드백 반영):
+// default 재조정 (gemini 피드백 반영):
 // SemaphoreCapacity 가 현 KafkaConsumerPool 순차 처리 모델에서 1 이상 의미 없으므로 default 1.
 // 기존 운영자가 환경변수로 4 를 명시했다면 — 그 값은 무시되지 않고 그대로 적용되지만 (slot 수
 // 4 의 sem 이 worker 별로 만들어짐) 실효 동시성은 변하지 않음 (worker 1 + slot 4 = 동시 1건).
 // 처리량 변경은 WorkerCount 환경변수로만 조정 가능.
 //
-// 이슈 #230 — RemoteURLs default:
+// RemoteURLs default:
 // FETCHER_CHROMEDP_REMOTE_URLS 미지정 시 LoadFetcherChromedpPool 가 ws://localhost:9222 을
 // WorkerCount 만큼 복제하여 채움 — 기존 단일 Chrome 운영 호환 (이전 동작 100% 보존).
 // Default 함수 자체는 빈 slice 반환 — Load 가 WorkerCount 결정 후 채움.
@@ -414,7 +414,7 @@ func DefaultFetcherChromedpPoolConfig() FetcherChromedpPoolConfig {
 //   - FETCHER_CHROMEDP_POOL_ENABLED: true | false (default true)
 //   - FETCHER_CHROMEDP_WORKER_COUNT: 양의 정수 (default 2) — 실질 전체 동시 navigate 수
 //   - FETCHER_CHROMEDP_SEMAPHORE_CAPACITY: 양의 정수, per-worker (default 1, 1 이상 의미 없음)
-//   - FETCHER_CHROMEDP_REMOTE_URLS: 콤마 구분 CDP WS URL 리스트 (이슈 #230). 명시 시 가장 우선.
+//   - FETCHER_CHROMEDP_REMOTE_URLS: 콤마 구분 CDP WS URL 리스트. 명시 시 가장 우선.
 //     길이가 WorkerCount 와 일치해야 함 — 미일치 시 fail-fast.
 //   - FETCHER_CHROMEDP_REMOTE_URL_PATTERN: {n} placeholder 를 1..WorkerCount 로 치환하여 RemoteURLs
 //     자동 생성 (예: "ws://chrome-{n}:9222"). REMOTE_URLS 미지정 시 적용. {n} 누락 시 fail-fast
@@ -458,7 +458,7 @@ func LoadFetcherChromedpPool(envFiles ...string) (FetcherChromedpPoolConfig, err
 		cfg.SemaphoreCapacity = n
 	}
 
-	// 이슈 #230: RemoteURLs 처리 — 우선순위:
+	// RemoteURLs 처리 — 우선순위:
 	//   1. FETCHER_CHROMEDP_REMOTE_URLS (콤마 구분 list, 명시적 매핑)
 	//   2. FETCHER_CHROMEDP_REMOTE_URL_PATTERN ({n} placeholder, 1..WorkerCount 치환)
 	//   3. default (ws://localhost:9222 × WorkerCount — 단일 Chrome 호환)
@@ -504,7 +504,7 @@ func LoadFetcherChromedpPool(envFiles ...string) (FetcherChromedpPoolConfig, err
 	return cfg, nil
 }
 
-// FetcherAutoDowngradeConfig 는 자동 upgrade 된 host 를 주기적으로 goquery 로 되돌리는 안전장치 설정입니다 (이슈 #175 후속, sub-issue #224).
+// FetcherAutoDowngradeConfig 는 자동 upgrade 된 host 를 주기적으로 goquery 로 되돌리는 안전장치 설정입니다.
 //
 // upgrade-only 비대칭으로 인해 일시적 트래픽 에러로 잘못 upgrade 된 host 가 영원히 chromedp 로
 // 처리되어 시간 누적 시 모든 host 가 chromedp 로 수렴 → Chrome 자원 압박. 본 cron 이 주기적
@@ -563,7 +563,7 @@ func LoadFetcherAutoDowngrade(envFiles ...string) (FetcherAutoDowngradeConfig, e
 	return cfg, nil
 }
 
-// FetcherAutoUpgradeConfig 는 host 단위 fetcher 실패 누적 → chromedp 자동 전환 정책 설정입니다 (이슈 #175 단계 2, sub-issue #220).
+// FetcherAutoUpgradeConfig 는 host 단위 fetcher 실패 누적 → chromedp 자동 전환 정책 설정입니다.
 //
 // 본 단계는 카운팅 + 임계값 도달 신호 발신까지만 — 실제 fetcher_rules UPSERT / 실패 raw republish 는 단계 3 (#221) 의 책임.
 //
@@ -581,7 +581,7 @@ type FetcherAutoUpgradeConfig struct {
 	// Window: sliding window 길이. 환경변수 FETCHER_AUTO_UPGRADE_WINDOW (Go duration, default 1h).
 	Window time.Duration
 
-	// EmptyBodyTitleMin / EmptyBodyContentMin: 빈본문 판정 임계값 (이슈 #220 단계 2 확장 신호).
+	// EmptyBodyTitleMin / EmptyBodyContentMin: 빈본문 판정 임계값.
 	// parse 자체는 성공했지만 결과 텍스트가 너무 짧은 경우도 실패 신호로 카운팅.
 	// 환경변수 FETCHER_EMPTY_BODY_TITLE_MIN (default 5), FETCHER_EMPTY_BODY_CONTENT_MIN (default 100).
 	EmptyBodyTitleMin   int
@@ -668,7 +668,7 @@ func LoadFetcherAutoUpgrade(envFiles ...string) (FetcherAutoUpgradeConfig, error
 	return cfg, nil
 }
 
-// StaleRelearnConfig 는 stale rule (parse_failure / empty_selector) 누적 → LLM 자동 재학습 정책 설정입니다 (이슈 #282).
+// StaleRelearnConfig 는 stale rule (parse_failure / empty_selector) 누적 → LLM 자동 재학습 정책 설정입니다.
 //
 // FetcherAutoUpgrade 와 별개의 keyspace + 더 긴 윈도우 / 더 높은 임계값 — chromedp 자동 전환을
 // 먼저 시도한 후, 그래도 실패가 지속되면 LLM 재학습 트리거. 임계 도달 시 Generator.EnqueueStale
@@ -743,7 +743,7 @@ func LoadStaleRelearn(envFiles ...string) (StaleRelearnConfig, error) {
 	return cfg, nil
 }
 
-// BlacklistConfig 는 page-parse 블랙리스트 wiring 설정입니다 (이슈 #295).
+// BlacklistConfig 는 page-parse 블랙리스트 wiring 설정입니다.
 //
 // Enabled=false 면 BlacklistMatcher 미주입 — parser_worker.processCategoryPage 가 모든 카테고리
 // 링크를 그대로 article job 으로 발행 (기능 OFF). 운영 toggle 용도.
@@ -780,12 +780,12 @@ func LoadBlacklist(envFiles ...string) (BlacklistConfig, error) {
 	return cfg, nil
 }
 
-// LLMConfig 는 LLM rule generator (이슈 #149) wiring 설정입니다.
+// LLMConfig 는 LLM rule generator wiring 설정입니다.
 //
 // LLMConfig drives the LLM provider used for auto-generating parsing rules when
 // a host has no rule registered (rule.ErrNoRule fallback).
 //
-// 본 PR scope: Gemini 만 사용 (1000회/일 무료 한도) + FixedOrder("gemini") 정책.
+// Gemini 만 사용 (1000회/일 무료 한도) + FixedOrder("gemini") 정책.
 // 후속 PR (이슈 TBD) 에서 chain (gemini → openai → anthropic) 으로 확장.
 type LLMConfig struct {
 	// Enabled: false 면 rule generator wiring 자체 skip (ErrNoRule 잔존 동작 유지).
@@ -881,7 +881,7 @@ func lookupLLMAPIKey(provider string) string {
 	return os.Getenv("LLM_API_KEY")
 }
 
-// RefinementConfig 는 점진적 정밀화 워크플로의 설정입니다 (이슈 #173 단계 4-2).
+// RefinementConfig 는 점진적 정밀화 워크플로의 설정입니다.
 //
 // catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 을 추론하여 자동 갱신.
 //
@@ -995,12 +995,12 @@ type RedisConfig struct {
 	ReadTimeout  time.Duration // REDIS_READ_TIMEOUT (default: 3s)
 	WriteTimeout time.Duration // REDIS_WRITE_TIMEOUT (default: 3s)
 	PoolSize     int           // REDIS_POOL_SIZE (default: 10)
-	// IngestionLockTTL: 파이프라인 진입 marker 의 TTL (이슈 #178).
+	// IngestionLockTTL: 파이프라인 진입 marker 의 TTL.
 	// publisher 가 atomic SETNX 로 marker 를 잡고, 본 TTL 만료 시 자연스럽게 재크롤 가능.
 	// 환경변수: REDIS_INGESTION_LOCK_TTL (default 24h).
 	IngestionLockTTL time.Duration
 
-	// PipelineGuardCategoryTTL: PipelineGuard 의 Category target 전용 단명 TTL (이슈 #285).
+	// PipelineGuardCategoryTTL: PipelineGuard 의 Category target 전용 단명 TTL.
 	// fetch + ParseLinks 한 cycle 진행 중에만 marker 유지 — 정상 흐름은 명시적 Release,
 	// 본 TTL 은 fallback (worker 가 release 호출 못 하고 죽은 경우 자동 회수).
 	// 환경변수: PIPELINE_GUARD_CATEGORY_TTL (default 60s).
@@ -1193,7 +1193,7 @@ type SchedulerConfig struct {
 	JobTimeout       time.Duration // 개별 Job 최대 실행 시간 — SCHEDULER_JOB_TIMEOUT (default: 30s)
 	MaxRetries       int           // Job 최대 재시도 횟수 — SCHEDULER_MAX_RETRIES (default: 3)
 
-	// Backlog throttle (이슈 #124): publish 직전 Kafka crawl 토픽의
+	// Backlog throttle: publish 직전 Kafka crawl 토픽의
 	// consumer-group lag 가 임계값 초과 시 발행 차단.
 	// MaxBacklog <= 0 → throttle 비활성 (기본).
 	MaxBacklog          int64         // SCHEDULER_MAX_BACKLOG (default: 0 — disabled)

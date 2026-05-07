@@ -1,4 +1,4 @@
-// Package stage 는 parser 단계의 processor.Stage 래퍼를 제공합니다 (이슈 #206).
+// Package stage 는 parser 단계의 processor.Stage 래퍼를 제공합니다.
 //
 // 본 wrapper 는 별도 sub-package 에 위치 — internal/processor/parser/parser.go 의 Page 타입을
 // rule/* 가 import 하므로, parser 부모 패키지가 rule/* 를 import 하면 import cycle 발생.
@@ -45,7 +45,7 @@ type Stage struct {
 }
 
 // NewStage 는 component 들을 받아 parser.Stage 를 반환합니다.
-// worker / cleaner / log 는 필수 (nil 이면 error), llmGen / refiner 는 nil 허용 (이슈 #208).
+// worker / cleaner / log 는 필수 (nil 이면 error), llmGen / refiner 는 nil 허용.
 func NewStage(
 	pw *worker.ParserWorker,
 	cleaner *worker.RawContentCleaner,
@@ -102,7 +102,7 @@ func (s *Stage) Stop(ctx context.Context) error {
 	var firstErr error
 
 	// 1. ParserWorker — Enqueue source 차단. 에러는 호출자 (main) 에서 stage 별로 일괄 로깅하므로
-	// 본 위치에서는 중복 로그 회피 — 단순 first-error 보존만 (PR #207 gemini 피드백).
+	// 본 위치에서는 중복 로그 회피 — 단순 first-error 보존만.
 	if err := s.worker.Stop(ctx); err != nil {
 		firstErr = err
 	}
@@ -118,7 +118,7 @@ func (s *Stage) Stop(ctx context.Context) error {
 	}
 
 	// 4. RawContentCleaner — 시그니처가 ctx 를 받지 않아 별도 goroutine + select 로 caller 의
-	// timeout 을 honor (PR #207 CodeRabbit 피드백). janitor 라 ctx cancel 시 firstErr 만 기록하고
+	// timeout 을 honor. janitor 라 ctx cancel 시 firstErr 만 기록하고
 	// 강제 반환 — 본 stop 은 best-effort.
 	cleanerStopped := make(chan struct{})
 	go func() {

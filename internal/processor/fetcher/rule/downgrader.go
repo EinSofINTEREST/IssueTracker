@@ -23,7 +23,7 @@ const downgraderStageName = "fetcher-downgrader"
 //	부팅 wiring 충돌 회피 + 운영자 reaction time 모두 충족.
 const downgraderInitialGrace = 1 * time.Minute
 
-// Downgrader 는 자동 upgrade 된 chromedp host 를 주기적으로 goquery 로 reset 하는 cron 입니다 (이슈 #175 후속, sub-issue #224).
+// Downgrader 는 자동 upgrade 된 chromedp host 를 주기적으로 goquery 로 reset 하는 cron 입니다.
 //
 // 동기:
 //
@@ -51,7 +51,7 @@ type Downgrader struct {
 
 // NewDowngrader 는 Downgrader 를 생성합니다.
 //
-// repo / resolver 는 nil 허용 안 함 (이슈 #208 정책).
+// repo / resolver 는 nil 허용 안 함.
 // interval 은 0 또는 음수 시 error — 호출자가 ENABLED=false 분기로 처리해야 함.
 func NewDowngrader(
 	repo storage.FetcherRuleRepository,

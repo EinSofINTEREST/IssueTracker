@@ -10,6 +10,6 @@ var ErrNotFound = errors.New("record not found")
 // ErrDuplicate는 유일성 제약 위반(예: URL 중복) 시 반환됩니다.
 var ErrDuplicate = errors.New("duplicate record")
 
-// ErrInvalid 는 record 의 형식이 유효하지 않을 때 반환됩니다 (이슈 #173).
+// ErrInvalid 는 record 의 형식이 유효하지 않을 때 반환됩니다.
 // 예: parsing_rules.path_pattern 이 RE2 컴파일 실패 — Repository 가 DB write 전 거부.
 var ErrInvalid = errors.New("invalid record")

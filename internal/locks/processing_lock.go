@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	// processingLockKeyPrefix 는 단계별 URL 단위 처리 lock 의 키 접두사입니다 (이슈 #178).
+	// processingLockKeyPrefix 는 단계별 URL 단위 처리 lock 의 키 접두사입니다.
 	// 형식: "processing:<stage>:url:<sha256(normalized_url)>" — Redis 운영자가 grep / SCAN 으로
 	// 다른 namespace (ingestion:url:..., lock:job:... 등) 와 구분 가능.
 	processingLockKeyPrefix = "processing:"
@@ -20,7 +20,7 @@ const (
 	DefaultProcessingLockTTL = 10 * time.Minute
 )
 
-// ProcessingLock 은 파이프라인 단계별 URL 중복 처리를 방지하는 분산 락 인터페이스입니다 (이슈 #178).
+// ProcessingLock 은 파이프라인 단계별 URL 중복 처리를 방지하는 분산 락 인터페이스입니다.
 //
 // \"각 프로세스마다 작업 중인 URL 을 다른 동일 프로세스 단계의 워커가 건들지 못하도록 막는 dedup.\"
 //
@@ -49,7 +49,7 @@ const (
 	StageValidator = "validator"
 )
 
-// ProcessingKey 는 (stage, normalized_url) 페어로 ProcessingLock 의 Redis 키를 생성합니다 (이슈 #178).
+// ProcessingKey 는 (stage, normalized_url) 페어로 ProcessingLock 의 Redis 키를 생성합니다.
 //
 // 호출자 책임: url 은 pkg/links.Normalizer 로 정규화된 상태로 전달 — 동일 컨텐츠를 가리키는
 // 두 URL 이 다른 키를 갖지 않도록.

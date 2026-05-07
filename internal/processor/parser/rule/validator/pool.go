@@ -9,12 +9,12 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// Pool 은 여러 Validator 를 순서대로 시도하는 복합 검증기입니다 (이슈 #257).
+// Pool 은 여러 Validator 를 순서대로 시도하는 복합 검증기입니다.
 //
 // 정책: 첫 번째로 응답한 validator 의 결과(valid/invalid)를 반환합니다.
 // API 오류가 발생한 validator 는 건너뛰고 다음을 시도합니다.
 // 모든 validator 가 API 오류를 반환하면 best-effort 통과 (룰 INSERT 차단 안 함) — 검증 인프라 장애가
-// rule 생성 자체를 막지 않도록 설계 (이슈 #257 요구사항: 운영 안정성 우선).
+// rule 생성 자체를 막지 않도록 설계.
 type Pool struct {
 	validators []Validator
 	log        *logger.Logger

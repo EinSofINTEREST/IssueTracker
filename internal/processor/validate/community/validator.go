@@ -39,7 +39,7 @@ func (v *Validator) Validate(_ context.Context, content *core.Content) types.Val
 	score := v.qualityScore(content)
 	threshold := float32(v.cfg.CommunityQualityThreshold)
 
-	// 이슈 #135 — 품질 점수 임계 미달이고 다른 reject 사유 없는 경우, quality_low 에러를
+	// 품질 점수 임계 미달이고 다른 reject 사유 없는 경우, quality_low 에러를
 	// breakdown 과 함께 명시적으로 추가하여 reject 사유의 사후 추적을 가능하게 한다.
 	if score < threshold && len(errs) == 0 {
 		bodyScore := v.scoreBody(content.Body)

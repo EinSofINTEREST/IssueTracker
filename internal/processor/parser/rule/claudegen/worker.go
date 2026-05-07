@@ -1,11 +1,11 @@
 // Package claudegen 은 상시 기동된 Claude Code Docker 컨테이너에 세션을 생성하여
-// HTML 에서 CSS 셀렉터를 추출하는 컴포넌트입니다 (이슈 #256, #266).
+// HTML 에서 CSS 셀렉터를 추출하는 컴포넌트입니다.
 //
 // 기존 콜드스타트 방식(docker run --rm)과 달리, 컨테이너를 서비스 기동 시 한 번만 띄우고
 // (Start) 요청마다 docker exec 으로 새 세션을 생성합니다. 컨테이너 초기화 비용을 최초 1회로
 // 상각하여 이후 요청의 레이턴시를 줄입니다.
 //
-// 인증 방식 (이슈 #266):
+// 인증 방식:
 //
 //	호스트에서 `claude` CLI 로 사전 로그인하여 발급된 OAuth auth_token 을 사용합니다.
 //	Claude 의 인증 상태는 두 위치에 분산되어 있어 둘 다 컨테이너에 마운트합니다:
@@ -39,12 +39,12 @@ import (
 )
 
 const (
-	// defaultImage 는 deployments/docker/claudegen/Dockerfile 로 빌드한 자체 이미지 (이슈 #269).
+	// defaultImage 는 deployments/docker/claudegen/Dockerfile 로 빌드한 자체 이미지.
 	// Anthropic 공식 ghcr.io/anthropics/claude-code 는 비공개 상태이므로 `make claudegen-build` 로 사전 빌드 필요.
 	defaultImage             = "issuetracker-claudegen:local"
 	defaultModel             = "claude-sonnet-4-6"
 	defaultSessionTimeout    = 120 * time.Second
-	defaultContainerAuthPath = "/root/.claude" // 컨테이너 내 인증 마운트 경로 (이슈 #266)
+	defaultContainerAuthPath = "/root/.claude" // 컨테이너 내 인증 마운트 경로
 
 	truncateStderrLen = 512 // exec 실패 시 stderr 미리보기 최대 길이
 	truncateStdoutLen = 256 // 파싱 실패 시 stdout 미리보기 최대 길이
@@ -77,8 +77,8 @@ type ContainerRunner interface {
 type ClaudeWorker struct {
 	image             string
 	model             string
-	authDir           string // 호스트 인증 디렉토리 (이슈 #266)
-	containerAuthPath string // 컨테이너 내 마운트 경로 (이슈 #266)
+	authDir           string // 호스트 인증 디렉토리
+	containerAuthPath string // 컨테이너 내 마운트 경로
 	sessionTimeout    time.Duration
 	runner            ContainerRunner
 	log               *logger.Logger
@@ -90,13 +90,13 @@ type ClaudeWorker struct {
 }
 
 // ModelName 은 이 Worker 가 사용하는 모델 ID 를 반환합니다.
-// llmgen.Generator 가 DB description 에 기록할 때 사용합니다 (이슈 #256).
+// llmgen.Generator 가 DB description 에 기록할 때 사용합니다.
 func (w *ClaudeWorker) ModelName() string { return w.model }
 
 // NewFromEnv 는 환경변수 기반 ClaudeWorker 를 생성합니다.
 // Start() 를 호출하기 전까지는 컨테이너가 기동되지 않습니다.
 //
-// CLAUDE_CODE_AUTH_DIR 미지정 시 $HOME/.claude 를 사용합니다 (이슈 #266).
+// CLAUDE_CODE_AUTH_DIR 미지정 시 $HOME/.claude 를 사용합니다.
 // 인증 디렉토리가 없거나 접근 불가하면 fail-fast — 호스트 `claude` CLI 사전 로그인 필요.
 func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
@@ -132,9 +132,9 @@ func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
 
 // New 는 명시적 파라미터로 ClaudeWorker 를 생성합니다 (DI 용).
 //
-// authDir 은 호스트의 Claude 인증 디렉토리, containerAuthPath 는 컨테이너 내 마운트 대상 경로 (이슈 #266).
+// authDir 은 호스트의 Claude 인증 디렉토리, containerAuthPath 는 컨테이너 내 마운트 대상 경로.
 // containerAuthPath 가 빈 문자열이면 defaultContainerAuthPath 사용.
-// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증 (PR #268 리뷰).
+// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증.
 func New(image, model, authDir, containerAuthPath string, timeout time.Duration, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: New requires non-nil logger")
@@ -154,7 +154,7 @@ func New(image, model, authDir, containerAuthPath string, timeout time.Duration,
 }
 
 // NewWithRunner 는 ContainerRunner 를 주입하는 생성자입니다 (테스트/DI 용).
-// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증 (PR #268 리뷰).
+// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증.
 func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time.Duration, runner ContainerRunner, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil logger")
@@ -190,7 +190,7 @@ func resolveAuthDir(envValue string) (string, error) {
 	return validateAuthDir(authDir)
 }
 
-// validateAuthDir 은 인증 디렉토리의 절대 경로를 산출하고 접근성을 검증합니다 (PR #268 리뷰).
+// validateAuthDir 은 인증 디렉토리의 절대 경로를 산출하고 접근성을 검증합니다.
 //
 //   - 빈 문자열 거부 (호출자가 빈 값 처리 후 호출)
 //   - filepath.Abs 로 절대 경로 변환 — Docker 마운트 시 상대 경로 모호성 제거
@@ -240,7 +240,7 @@ func (w *ClaudeWorker) Start(ctx context.Context) error {
 
 	w.containerID = containerID
 	w.workDir = workDir
-	// INFO 로그는 운영자가 외부 수집 시스템에서 보는 항목 — 호스트 사용자명/홈 구조 노출 회피 (PR #268 리뷰).
+	// INFO 로그는 운영자가 외부 수집 시스템에서 보는 항목 — 호스트 사용자명/홈 구조 노출 회피.
 	// auth_dir 같은 절대 경로는 DEBUG 레벨로 격리.
 	w.log.WithFields(map[string]interface{}{
 		"container_id": containerID,
@@ -340,7 +340,7 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 		"claude",
 		"--model", w.model,
 		// --dangerously-skip-permissions 는 root user 환경에서 동작하지 않고, OAuth 인증 + -p 모드는
-		// 본 플래그 없이 정상 동작 — 라이브 검증 시 발견 (이슈 #266).
+		// 본 플래그 없이 정상 동작 — 라이브 검증 시 발견.
 		"-p", buildPrompt(host, targetType, sessionContainerPath),
 	}
 

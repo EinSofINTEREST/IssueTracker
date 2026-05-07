@@ -8,7 +8,7 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 )
 
-// DefaultCategoryTTL 은 Category target 의 pipeline guard TTL default 입니다 (이슈 #285).
+// DefaultCategoryTTL 은 Category target 의 pipeline guard TTL default 입니다.
 //
 // Category 는 정기 갱신이 본질이므로 Article (24h) 보다 훨씬 짧은 TTL.
 // fetch + ParseLinks 한 사이클이 완료될 때까지만 marker 가 유지되도록 — 운영 환경의
@@ -17,7 +17,7 @@ import (
 const DefaultCategoryTTL = 60 * time.Second
 
 // PipelineGuard 는 publish 진입점에서 \"이 URL 이 현재 파이프라인에 있는가\" 를 체크하는 통합
-// 게이트입니다 (이슈 #285).
+// 게이트입니다.
 //
 // 의도:
 //
@@ -55,7 +55,7 @@ func NewPipelineGuard(lock IngestionLock, categoryTTL time.Duration) *PipelineGu
 //   - acquired=false : 이미 pipeline 안 (다른 publish 가 marker 점유) — 호출자가 skip
 //   - err != nil     : Redis 일시 장애 등 — 호출자 정책 (보통 fail-open) 으로 처리
 //
-// targetType 별 TTL (PR #286 gemini 리뷰 — 명시적 switch 로 안전성 강화):
+// targetType 별 TTL:
 //   - core.TargetTypeCategory : categoryTTL (단명, default 60s)
 //   - core.TargetTypeArticle  : IngestionLock 의 default TTL (24h)
 //   - 그 외 (Sitemap 등 미래 target type) : IngestionLock default TTL fallback

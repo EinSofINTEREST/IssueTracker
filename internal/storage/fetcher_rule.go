@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// FetcherKind 는 fetch 단계에서 사용할 도구 식별자입니다 (이슈 #175 단계 1, sub-issue #219).
+// FetcherKind 는 fetch 단계에서 사용할 도구 식별자입니다.
 //
 // FetcherKind discriminates between the static-HTML fetcher (goquery) and the headless
 // browser fetcher (chromedp). host 단위로 어느 fetcher 가 우선인지 결정하는 단일 키.
@@ -32,7 +32,7 @@ type FetcherRuleRecord struct {
 	Fetcher     FetcherKind // "goquery" | "chromedp"
 	Reason      string      // "manual" | "auto_upgrade_validation" | ...
 
-	// SourceInfo 필드 — migration 014 추가 (이슈 #245).
+	// SourceInfo 필드 — migration 014 추가.
 	// source_name~base_url 은 DB 상 NULL 허용 (레거시 row 호환); 빈 문자열로 반환됨.
 	// requests_per_hour 는 DB 상 NOT NULL DEFAULT 0; 0 = 제한 없음.
 	SourceName      string // 소스 식별자 (예: "naver", "cnn")
@@ -66,7 +66,7 @@ type FetcherRuleRepository interface {
 	Delete(ctx context.Context, host string) error
 
 	// BulkDowngradeAutoUpgraded 는 자동 upgrade (reason='auto_upgrade_validation') 로 chromedp 가
-	// 된 모든 host 를 goquery 로 일괄 다운그레이드합니다 (이슈 #224, sub of #175).
+	// 된 모든 host 를 goquery 로 일괄 다운그레이드합니다.
 	//
 	// 정책:
 	//   - WHERE 조건: reason='auto_upgrade_validation' AND fetcher='chromedp'

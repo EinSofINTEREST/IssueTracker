@@ -19,7 +19,7 @@ import (
 )
 
 // MetadataKeyForceFetcher 는 단계 3 의 republish CrawlJob 이 ChainHandler 에 chromedp 강제
-// 사용을 지시할 때 Target.Metadata 에 사용하는 키 (이슈 #221).
+// 사용을 지시할 때 Target.Metadata 에 사용하는 키.
 //
 // ChainHandler (general 패키지) 도 본 const 를 참조 — 단일 정의로 정합성 보장.
 const MetadataKeyForceFetcher = "force_fetcher"
@@ -39,7 +39,7 @@ const (
 	republishedJobTimeout = 30 * time.Second
 )
 
-// Upgrader 는 임계값 도달 host 를 chromedp 로 자동 전환하고 실패 raw 를 republish 합니다 (이슈 #175 단계 3).
+// Upgrader 는 임계값 도달 host 를 chromedp 로 자동 전환하고 실패 raw 를 republish 합니다.
 //
 // 호출 흐름 (parser_worker 가 thresholdReached=true 받으면 Trigger 호출):
 //
@@ -69,7 +69,7 @@ type Upgrader struct {
 // NewUpgrader 는 Upgrader 를 생성합니다.
 //
 // 모든 인자는 nil 허용 안 함 (redis 만 nil 허용 — 단일 인스턴스 환경에서 lock 비활성).
-// nil 인자 발견 시 error (이슈 #208 정책).
+// nil 인자 발견 시 error.
 func NewUpgrader(
 	repo storage.FetcherRuleRepository,
 	resolver Resolver,
@@ -181,7 +181,7 @@ func (u *Upgrader) Trigger(ctx context.Context, host string) {
 //   - 성공: republished + stale 모두 RemoveByHost 로 정리
 //   - 실패: RemoveByHost 호출 안 함 — 모든 ID 잔존, 다음 trigger 가 자연 retry (CodeRabbit 피드백)
 //
-// force_fetcher 는 process-local secret token 과 함께 부착 — 외부 source 의 임의 force 차단 (이슈 #221 안전망).
+// force_fetcher 는 process-local secret token 과 함께 부착 — 외부 source 의 임의 force 차단.
 func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []string) {
 	msgs := make([]queue.Message, 0, len(rawIDs))
 	republishedIDs := make([]string, 0, len(rawIDs))
@@ -288,9 +288,8 @@ func (u *Upgrader) logFields(msg string, fields map[string]interface{}) {
 	u.log.WithFields(fields).Info(msg)
 }
 
-// newRepublishJobID 는 republish CrawlJob 의 고유 ID 를 생성합니다 (publisher.newJobID 와 동일 패턴 — 32자 hex).
 // hostnameOf 는 rawURL 에서 hostname 을 추출합니다.
-// 파싱 실패 또는 hostname 이 비어있으면 fallback 을 반환합니다 (이슈 #248).
+// 파싱 실패 또는 hostname 이 비어있으면 fallback 을 반환합니다.
 func hostnameOf(rawURL, fallback string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Hostname() == "" {

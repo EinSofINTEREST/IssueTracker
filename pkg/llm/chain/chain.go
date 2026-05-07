@@ -1,4 +1,4 @@
-// Package chain 은 여러 llm.Provider 를 Chain-of-Responsibility 패턴으로 합성합니다 (이슈 #142).
+// Package chain 은 여러 llm.Provider 를 Chain-of-Responsibility 패턴으로 합성합니다.
 //
 // Package chain composes multiple llm.Provider instances into a single fallback chain
 // where the next handler is invoked when the current one fails with a delegatable error.

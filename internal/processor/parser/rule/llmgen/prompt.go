@@ -12,7 +12,7 @@ import (
 // LLM context window 와 비용을 절약하기 위해 큰 페이지는 앞부분만 첨부합니다.
 // HTML 의 핵심 구조 (<head>, <article>, <main>, top-level container) 는 보통 앞쪽에
 // 위치하므로 selector 추출에는 충분. 너무 짧으면 동적 로드되는 본문 부분을 놓치므로
-// 32KB 가 합리적 baseline (이슈 #149).
+// 32KB 가 합리적 baseline.
 const promptMaxHTMLBytes = 32 * 1024
 
 // BuildPrompt 는 host + target_type + 샘플 HTML 로 LLM 시스템/사용자 프롬프트를 생성합니다.

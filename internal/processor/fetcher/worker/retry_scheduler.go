@@ -21,7 +21,6 @@ type retrySchedulerHolder struct {
 }
 
 // RetryScheduler 는 처리 실패한 CrawlJob 의 재시도 발행 시점을 관리하는 인터페이스입니다
-// (이슈 #82).
 //
 // 두 가지 구현 전략을 추상화합니다:
 //   - KafkaImmediateRetryScheduler: 즉시 Kafka 에 재발행하고 worker 가 ScheduledAt 까지
@@ -43,7 +42,7 @@ type RetryScheduler interface {
 //  2. priority 토픽으로 즉시 publish (ScheduledAt 은 미래 시각으로 셋팅된 상태)
 //  3. worker 가 메시지 fetch 후 processJob 진입 시 ScheduledAt 까지 sleep — 워커 슬롯 점유
 //
-// 본 구현은 이슈 #82 가 지적한 처리량 급감을 그대로 갖지만, Redis 미설정 환경 (단일 인스턴스
+// 본 구현은 지적한 처리량 급감을 그대로 갖지만, Redis 미설정 환경 (단일 인스턴스
 // 개발/테스트, 통합 redis 장애) 에서 retry 자체는 동작하도록 보존합니다.
 type KafkaImmediateRetryScheduler struct {
 	producer queue.Producer
@@ -86,13 +85,13 @@ func retryHeaders(job *core.CrawlJob, lastErr error) map[string]string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Redis-backed delayed retry scheduler (이슈 #82 본 PR 의 핵심)
+// Redis-backed delayed retry scheduler
 // ─────────────────────────────────────────────────────────────────────────────
 
 // retryQueueClient 는 RedisDelayedRetryScheduler 가 사용하는 Redis 연산을 추상화합니다.
 // pkg/redis.Client 가 구조적으로 만족하며, 테스트는 mock 으로 교체합니다.
 //
-// peek-publish-ack 패턴 (이슈 #82, PR #128 피드백):
+// peek-publish-ack 패턴:
 //   - PeekDueRetries 는 due 항목을 조회만 하고 ZSET 에서 제거하지 않음
 //   - publish 성공 후 AckRetry 로 명시적 제거 → at-least-once 보장
 //   - publish 실패 시 backoff 적용한 재 EnqueueRetry (또는 무처리 후 다음 polling)
@@ -125,7 +124,7 @@ func DefaultRedisRetrySchedulerConfig() RedisRetrySchedulerConfig {
 }
 
 // RedisDelayedRetryScheduler 는 Redis ZSET 에 retry 를 보관하고 별도 goroutine 이
-// ScheduledAt 도달 항목을 Kafka 에 발행하는 구현체입니다 (이슈 #82).
+// ScheduledAt 도달 항목을 Kafka 에 발행하는 구현체입니다.
 //
 // 핵심 효과: requeue 는 Redis 에만 저장되므로 worker 가 메시지를 소비한 뒤 sleep 하지
 // 않고 즉시 다음 정상 job 처리로 넘어갑니다. 워커 슬롯 점유 문제 해소.
@@ -235,7 +234,7 @@ func (s *RedisDelayedRetryScheduler) Stop() {
 
 // pollOnce 는 due 항목을 한 batch 만큼 peek 하여 Kafka 에 발행합니다.
 // peek 단계에서는 ZSET 에서 제거하지 않으며, publish 성공 후에만 AckRetry 로 제거 —
-// at-least-once 보장 (peek-publish-ack 패턴, PR #128 피드백).
+// at-least-once 보장 (peek-publish-ack 패턴).
 func (s *RedisDelayedRetryScheduler) pollOnce(ctx context.Context) {
 	peekStart := time.Now()
 	due, err := s.client.PeekDueRetries(ctx, time.Now(), s.cfg.BatchSize)
@@ -249,7 +248,7 @@ func (s *RedisDelayedRetryScheduler) pollOnce(ctx context.Context) {
 		return
 	}
 
-	// 이슈 #137 — peek 결과를 항상 DEBUG 로 노출 (count=0 이어도 한 줄).
+	// peek 결과를 항상 DEBUG 로 노출 (count=0 이어도 한 줄).
 	// 운영자가 retry pipeline 이 살아있고 polling 중인지 즉답 가능.
 	if len(due) > 0 {
 		s.log.WithFields(map[string]interface{}{

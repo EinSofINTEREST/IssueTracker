@@ -11,7 +11,7 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// ChromedpJobHandler 는 TopicCrawlChromedp 의 CrawlJob 을 처리하는 JobHandler 입니다 (이슈 #218).
+// ChromedpJobHandler 는 TopicCrawlChromedp 의 CrawlJob 을 처리하는 JobHandler 입니다.
 //
 // 책임:
 //
@@ -20,8 +20,8 @@ import (
 //  3. ChainHandler.HandleChromedpOnly 호출 — ChromedpChain 으로 raw fetch + 저장 + RawContentRef publish
 //  4. Semaphore.Release (defer)
 //
-// 이슈 #229 — per-worker Semaphore 모델 + 실효 동시성 정정 (gemini 피드백):
-// 글로벌 Semaphore 1 개를 모든 worker 가 공유하던 PR #227 의 모델을, worker_id 별 Semaphore
+// per-worker Semaphore 모델 + 실효 동시성 정정 (gemini 피드백):
+// 글로벌 Semaphore 1 개를 모든 worker 가 공유하던 모델을, worker_id 별 Semaphore
 // 1 개로 분리. **단, KafkaConsumerPool 의 worker goroutine 은 메시지를 순차 처리** 하므로 같은
 // worker 가 동시 2 개 이상의 Handle 을 호출할 수 없음 → per-worker Semaphore 의 capacity > 1 은
 // 현 모델에서 추가 동시성 이득 없음 (default 1 권장).
@@ -40,12 +40,12 @@ type ChromedpJobHandler struct {
 	log  *logger.Logger
 }
 
-// NewChromedpJobHandler 는 새 ChromedpJobHandler 를 생성합니다 (이슈 #229).
+// NewChromedpJobHandler 는 새 ChromedpJobHandler 를 생성합니다.
 //
 // sems 는 worker_id 인덱스의 Semaphore slice — 길이는 chromedp pool 의 worker 수와 동일해야
 // 합니다. 호출자(main.go) 가 cfg.WorkerCount 만큼 NewSemaphore 를 만들어 전달합니다.
 //
-// registry / sems 는 nil/empty 허용 안 함 (이슈 #208 정책).
+// registry / sems 는 nil/empty 허용 안 함.
 func NewChromedpJobHandler(registry *handler.Registry, sems []Semaphore, log *logger.Logger) (*ChromedpJobHandler, error) {
 	if registry == nil {
 		return nil, errors.New("worker: NewChromedpJobHandler requires non-nil handler Registry")

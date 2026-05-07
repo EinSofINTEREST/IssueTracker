@@ -10,7 +10,7 @@ import (
 
 // PolicyProvider composes a Policy with a chain — order is decided per-request by Policy.Select.
 //
-// PolicyProvider 는 매 호출마다 policy.Select 가 결정한 순서로 chain 동작을 수행합니다 (이슈 #144 Phase 3).
+// PolicyProvider 는 매 호출마다 policy.Select 가 결정한 순서로 chain 동작을 수행합니다.
 // 정적 chain.Provider 와 달리 호출별 dynamic ordering 이 가능하여 비용 / latency / 작업 특성에 따라
 // 다른 provider 가 우선 시도됩니다.
 //

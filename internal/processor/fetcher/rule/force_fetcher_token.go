@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// MetadataKeyForceFetcherToken 은 force_fetcher metadata 의 provenance 검증용 보조 키 (이슈 #221).
+// MetadataKeyForceFetcherToken 은 force_fetcher metadata 의 provenance 검증용 보조 키.
 //
 // Upgrader 가 process-local secret token 을 함께 부착, ChainHandler 가 검증 후에만 force_fetcher
 // 를 honor. 외부 publisher (현재는 없으나 미래 확장 시) 가 force_fetcher 임의 지정으로 chromedp

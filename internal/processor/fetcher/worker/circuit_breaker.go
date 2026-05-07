@@ -63,7 +63,7 @@ var DefaultCircuitBreakerConfig = CircuitBreakerConfig{
 type CircuitBreaker struct {
 	config CircuitBreakerConfig
 	source string
-	log    *logger.Logger // 이슈 #137 — state 전이 가시성용 (nil 허용 — 미주입 시 로그 skip)
+	log    *logger.Logger // state 전이 가시성용 (nil 허용 — 미주입 시 로그 skip)
 
 	mu          sync.Mutex
 	state       cbState
@@ -159,7 +159,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 	}
 }
 
-// logTransition 은 state 전이를 구조화 로그로 출력합니다 (이슈 #137).
+// logTransition 은 state 전이를 구조화 로그로 출력합니다.
 //
 // asWarn=true 면 WARN, false 면 INFO 레벨로 출력합니다 — open 으로 들어가는 전이는
 // 운영 알림 가치가 있어 WARN, 그 외 (probing/recovered) 는 INFO. logger 미주입 시 no-op.
@@ -203,13 +203,13 @@ func (cb *CircuitBreaker) Failures() int {
 // goroutine-safe합니다.
 type CircuitBreakerRegistry struct {
 	config CircuitBreakerConfig
-	log    *logger.Logger // 이슈 #137 — 신규 CB 생성 시 주입 (nil 허용)
+	log    *logger.Logger // 신규 CB 생성 시 주입 (nil 허용)
 	mu     sync.RWMutex
 	cbs    map[string]*CircuitBreaker
 }
 
 // NewCircuitBreakerRegistry는 CircuitBreakerRegistry를 생성합니다.
-// log 가 nil 이 아니면 각 CB 의 state 전이 로그가 출력됩니다 (이슈 #137).
+// log 가 nil 이 아니면 각 CB 의 state 전이 로그가 출력됩니다.
 func NewCircuitBreakerRegistry(config CircuitBreakerConfig, log *logger.Logger) *CircuitBreakerRegistry {
 	return &CircuitBreakerRegistry{
 		config: config,

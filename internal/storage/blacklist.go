@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-// BlacklistSource 는 블랙리스트 row 의 등록 출처입니다 (이슈 #295).
+// BlacklistSource 는 블랙리스트 row 의 등록 출처입니다.
 //
 //   - BlacklistSourceManual : 운영자가 명시적으로 등록 (광고 / sponsored / redirect 등 도메인 지식 기반)
-//   - BlacklistSourceAuto   : 시스템이 시그널 누적으로 자동 등록 (후속 이슈 — 본 PR scope 외)
+//   - BlacklistSourceAuto   : 시스템이 시그널 누적으로 자동 등록 (후속 이슈에서 도입)
 //
 // CHECK 제약으로 DB 레벨에서 두 값만 허용. 운영 가시성 + 자동 vs 수동 분리 정책 (예: auto 만
 // 일괄 disable, manual 은 보존) 을 위해 컬럼화.
@@ -19,7 +19,7 @@ const (
 	BlacklistSourceAuto   BlacklistSource = "auto"
 )
 
-// BlacklistMode 는 매칭된 URL 에 적용할 차단 정책입니다 (이슈 #297).
+// BlacklistMode 는 매칭된 URL 에 적용할 차단 정책입니다.
 //
 //   - BlacklistModeDrop             : URL 자체 drop — fetch / parse / 링크추출 모두 안 함 (default).
 //     광고 / sponsored / redirect 처럼 그 안의 링크도 가치 없는 케이스.
@@ -35,7 +35,7 @@ const (
 	BlacklistModeExtractLinksOnly BlacklistMode = "extract_links_only"
 )
 
-// BlacklistRecord 는 parsing_blacklist 테이블의 단일 행입니다 (이슈 #295).
+// BlacklistRecord 는 parsing_blacklist 테이블의 단일 행입니다.
 //
 // page-parse 차단 정책 — 매칭 URL 은 article job 발행 단계에서 drop:
 //   - HostPattern : URL host 매칭 (정확 일치, 호출자가 normalize)
@@ -50,7 +50,7 @@ type BlacklistRecord struct {
 	PathPattern string
 	Reason      string
 	Source      BlacklistSource
-	Mode        BlacklistMode // 'drop' (default) | 'extract_links_only' (이슈 #297)
+	Mode        BlacklistMode // 'drop' (default) | 'extract_links_only'
 	Enabled     bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -65,7 +65,7 @@ type BlacklistFilter struct {
 	Offset      int
 }
 
-// BlacklistRepository 는 parsing_blacklist 테이블에 대한 데이터 접근 인터페이스입니다 (이슈 #295).
+// BlacklistRepository 는 parsing_blacklist 테이블에 대한 데이터 접근 인터페이스입니다.
 //
 // goroutine-safe: 모든 구현은 동시 호출 안전해야 함.
 type BlacklistRepository interface {

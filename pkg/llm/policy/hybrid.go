@@ -9,7 +9,7 @@ import (
 
 // HybridWeights controls the relative importance of cost / latency / failure rate signals.
 //
-// HybridWeights 는 비용 / latency / 실패율 시그널의 상대 가중치입니다 (이슈 #144 Phase 2.C).
+// HybridWeights 는 비용 / latency / 실패율 시그널의 상대 가중치입니다.
 // 합이 1.0 일 필요는 없음 — 각 시그널을 normalize 후 가중 합산하므로 절대값보다 비율이 의미.
 //
 // 모두 0 이면 입력 순서가 보존됩니다 (panic 없이 graceful no-op).

@@ -29,12 +29,12 @@ type PoolConfig struct {
 // ManagerConfig aggregates the three per-priority pool configs.
 // ProcessingLock 이 nil 이면 NoopProcessingLock 이 사용되어 중복 처리 방지가 비활성화됩니다.
 // RetryScheduler가 nil이면 각 Pool 이 lazy 로 KafkaImmediateRetryScheduler 를 생성하여
-// 기존 동작 (즉시 Kafka publish + worker sleep) 을 유지합니다 (이슈 #82).
+// 기존 동작 (즉시 Kafka publish + worker sleep) 을 유지합니다.
 //
-// URL dedup 은 이슈 #178 의 Ingestion Lock (Publisher 단) 으로 단일화 — worker 측 별도 cache 없음.
+// URL dedup 은 Ingestion Lock (Publisher 단) 으로 단일화 — worker 측 별도 cache 없음.
 // 단계별 worker 간 동시처리 차단은 ProcessingLock 으로 일원화 (구 JobLocker 의 명칭 변경).
 //
-// 이슈 #218: Chromedp 필드는 chromedp 전용 worker pool 의 PoolConfig + ChromedpHandler.
+// Chromedp 필드는 chromedp 전용 worker pool 의 PoolConfig + ChromedpHandler.
 // nil 이면 chromedp pool 미기동 (fetcher pool split 비활성 — 기존 동작 유지). Consumer 와
 // Handler 둘 다 non-nil 이어야 wiring 됨.
 type ManagerConfig struct {
@@ -72,7 +72,7 @@ type PoolManager struct {
 	resolver PriorityResolver
 	log      *logger.Logger
 
-	// chromedpPool 은 chromedp 전용 worker pool (이슈 #218). nil 이면 비활성.
+	// chromedpPool 은 chromedp 전용 worker pool. nil 이면 비활성.
 	chromedpPool *KafkaConsumerPool
 }
 
@@ -94,7 +94,7 @@ func NewPoolManager(
 
 	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여
 	// 소스별 실패 카운팅이 우선순위 경계 없이 누적됩니다.
-	// log 주입 (이슈 #137) — CB state 전이마다 INFO/WARN 로그.
+	// log 주입 — CB state 전이마다 INFO/WARN 로그.
 	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, log)
 
 	newPool := func(pc PoolConfig, priorityName string) *KafkaConsumerPool {
@@ -102,9 +102,9 @@ func NewPoolManager(
 			pc.Consumer, producer, handler, contentSvc, pc.WorkerCount,
 			cbRegistry, procLock,
 		)
-		// 이슈 #137 — heartbeat 식별자 주입 (DEBUG 레벨에서 worker pool status 출력 활성)
+		// heartbeat 식별자 주입 (DEBUG 레벨에서 worker pool status 출력 활성)
 		pool.SetPriority(priorityName)
-		// 단일 RetryScheduler 인스턴스를 세 우선순위 Pool 이 공유합니다 (이슈 #82) —
+		// 단일 RetryScheduler 인스턴스를 세 우선순위 Pool 이 공유합니다 —
 		// Redis 기반 구현에서 ZSET/연결 풀이 통일되도록.
 		if cfg.RetryScheduler != nil {
 			pool.SetRetryScheduler(cfg.RetryScheduler)
@@ -123,7 +123,7 @@ func NewPoolManager(
 		log:      log,
 	}
 
-	// 이슈 #218: chromedp 전용 pool wiring (Consumer + Handler 둘 다 있을 때만 활성).
+	// chromedp 전용 pool wiring (Consumer + Handler 둘 다 있을 때만 활성).
 	if cfg.Chromedp.Consumer != nil && cfg.ChromedpHandler != nil {
 		chromedpPool := NewKafkaConsumerPoolWithOptions(
 			cfg.Chromedp.Consumer, producer, cfg.ChromedpHandler, contentSvc, cfg.Chromedp.WorkerCount,
@@ -176,7 +176,7 @@ func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 }
 
 // Start는 high/normal/low 모든 Pool의 goroutine을 시작합니다.
-// chromedp pool 이 wiring 되어 있으면 함께 시작 (이슈 #218).
+// chromedp pool 이 wiring 되어 있으면 함께 시작.
 func (m *PoolManager) Start(ctx context.Context) {
 	// 우선순위 순서대로 시작 (로그 가독성)
 	for _, p := range []core.Priority{core.PriorityHigh, core.PriorityNormal, core.PriorityLow} {
@@ -199,7 +199,7 @@ func (m *PoolManager) Start(ctx context.Context) {
 //
 // Stop stops all pools concurrently so they drain in parallel within the
 // shared context timeout. 첫 번째로 발생한 에러를 반환하며 나머지 Pool 종료도 계속 시도합니다.
-// chromedp pool 이 wiring 되어 있으면 함께 종료 (이슈 #218).
+// chromedp pool 이 wiring 되어 있으면 함께 종료.
 func (m *PoolManager) Stop(ctx context.Context) error {
 	var (
 		mu       sync.Mutex

@@ -33,7 +33,7 @@ const drainTimeout = 5 * time.Second
 // JobHandler는 CrawlJob을 처리하는 인터페이스입니다.
 // 구현체는 여러 goroutine에서 동시에 호출되므로 goroutine-safe해야 합니다.
 // Handle은 크롤링 및 파싱 결과를 []*core.Content로 반환합니다.
-// 처리할 내용이 없으면 nil, nil을 반환합니다 — 이슈 #134 분리 후 fetcher 측
+// 처리할 내용이 없으면 nil, nil을 반환합니다 — fetcher 측
 // ChainHandler 는 raw_contents 저장 + RawContentRef 발행 만 수행하므로 항상 nil 반환.
 type JobHandler interface {
 	Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error)
@@ -75,12 +75,12 @@ type KafkaConsumerPool struct {
 	// atomic.Pointer 를 사용하여 polling/worker goroutine 의 동시 Load 와
 	// SetNormalizer 의 Store 사이에 race 가 발생하지 않도록 보장합니다.
 	normalizer atomic.Pointer[links.Normalizer]
-	// gate 는 URL 가드 (이슈 #119) 입니다.
+	// gate 는 URL 가드 입니다.
 	// 미설정(nil) 이면 가드 비활성 — 모든 job 이 처리됩니다.
 	// processJob 진입 직후 검사하여 차단된 URL 의 처리를 skip 하고 message 만 commit.
 	// atomic.Pointer 로 race-safe 한 lock-free 설정/조회.
 	gate atomic.Pointer[urlguard.Gate]
-	// retryScheduler 는 재시도 발행 시점을 관리하는 RetryScheduler 입니다 (이슈 #82).
+	// retryScheduler 는 재시도 발행 시점을 관리하는 RetryScheduler 입니다.
 	// 미설정(nil) 이면 lazy 로 KafkaImmediateRetryScheduler 가 사용되어 기존 동작 유지 —
 	// 즉시 priority 토픽에 publish + worker 가 ScheduledAt 까지 sleep.
 	// atomic.Pointer 로 race-safe 설정 — Start 이후 SetRetryScheduler 호출에도 안전.
@@ -89,7 +89,7 @@ type KafkaConsumerPool struct {
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
 
-	// 이슈 #137 — heartbeat 가시성. processJob 진입 시 inc, defer 시 dec.
+	// heartbeat 가시성. processJob 진입 시 inc, defer 시 dec.
 	// 운영자가 "silent vs hang" 을 즉답하기 위한 단일 source of truth.
 	busyCount atomic.Int32
 	// priority 는 heartbeat 로그에 포함될 pool 식별자 ("high"/"normal"/"low").
@@ -171,7 +171,7 @@ func NewKafkaConsumerPoolWithOptions(
 	}
 }
 
-// SetRetryScheduler 는 requeueWithRetry 시 사용할 RetryScheduler 를 설정합니다 (이슈 #82).
+// SetRetryScheduler 는 requeueWithRetry 시 사용할 RetryScheduler 를 설정합니다.
 // nil 전달 시 fallback 인 KafkaImmediateRetryScheduler (lazy 생성) 가 사용됩니다 —
 // 기존 동작 보존. atomic 교체로 Start 이후에도 race-safe.
 func (p *KafkaConsumerPool) SetRetryScheduler(rs RetryScheduler) {
@@ -182,7 +182,7 @@ func (p *KafkaConsumerPool) SetRetryScheduler(rs RetryScheduler) {
 	p.retryScheduler.Store(&retrySchedulerHolder{s: rs})
 }
 
-// SetGate 는 processJob 진입 시 URL 검사에 사용할 urlguard.Gate 를 설정합니다 (이슈 #119).
+// SetGate 는 processJob 진입 시 URL 검사에 사용할 urlguard.Gate 를 설정합니다.
 // 미설정(nil) 시 가드 비활성 — 모든 job 이 정상 처리됩니다.
 //
 // 차단 시 동작: handler.Handle 호출 없이 메시지만 commit (큐에서 제거).
@@ -222,7 +222,7 @@ func (p *KafkaConsumerPool) normalizeURL(rawURL string) string {
 	return normalized
 }
 
-// SetPriority 는 heartbeat 로그에 사용할 pool 식별자를 설정합니다 (이슈 #137).
+// SetPriority 는 heartbeat 로그에 사용할 pool 식별자를 설정합니다.
 // 빈 문자열이면 heartbeat goroutine 이 시작되지 않아 기존 동작이 유지됩니다.
 // Start 호출 전에 설정해야 효과가 있습니다.
 func (p *KafkaConsumerPool) SetPriority(name string) {
@@ -233,7 +233,7 @@ func (p *KafkaConsumerPool) SetPriority(name string) {
 // context가 cancel되면 polling이 중단되고 진행 중인 작업이 완료됩니다.
 //
 // 각 worker goroutine 은 0..workerCount-1 의 worker_id 를 부여받아 ctx 에 실어 전달합니다
-// (이슈 #229). 다운스트림 JobHandler — 특히 ChromedpJobHandler — 는 worker_id 로 per-worker
+// 다운스트림 JobHandler — 특히 ChromedpJobHandler — 는 worker_id 로 per-worker
 // 자원 (Semaphore, 추후 RemoteURL) 을 lookup 합니다. priority pool (high/normal/low) 의 worker_id
 // 는 의미가 없지만 (handler 가 무시) 모든 pool 이 동일 wiring 을 갖도록 일관성 보장.
 func (p *KafkaConsumerPool) Start(ctx context.Context) {
@@ -250,7 +250,7 @@ func (p *KafkaConsumerPool) Start(ctx context.Context) {
 		p.pollMessages(ctx)
 	}()
 
-	// 이슈 #137 — heartbeat goroutine. priority 가 설정된 경우만 시작 (테스트 호환).
+	// heartbeat goroutine. priority 가 설정된 경우만 시작 (테스트 호환).
 	// silent vs hang 즉답을 위해 30초마다 worker pool status 를 DEBUG 로 출력.
 	// ctx cancel 시 자체 종료 — wg 등록 안 함 (관찰용 goroutine).
 	if p.priority != "" {
@@ -259,7 +259,7 @@ func (p *KafkaConsumerPool) Start(ctx context.Context) {
 }
 
 // heartbeatLoop 는 30초마다 worker pool 의 현재 상태 (busy/total/buffered) 를 DEBUG 로
-// 출력합니다 (이슈 #137). 운영자가 LOG_LEVEL=debug 로 토글 시 silent 구간이 정상 idle
+// 출력합니다. 운영자가 LOG_LEVEL=debug 로 토글 시 silent 구간이 정상 idle
 // 인지 (busy=0, buffer=0) 또는 long-running 처리 중인지 (busy>0) 즉답할 수 있습니다.
 //
 // ctx cancel 시 자체 종료 — wg 미등록 (관찰용이라 셧다운을 차단할 책임 없음).
@@ -373,9 +373,9 @@ func (p *KafkaConsumerPool) pollMessages(ctx context.Context) {
 func (p *KafkaConsumerPool) worker(ctx context.Context, workerID int) {
 	defer p.wg.Done()
 
-	// 이슈 #229 — worker_id 를 ctx 에 첨부. ChromedpJobHandler 가 per-worker Semaphore
+	// worker_id 를 ctx 에 첨부. ChromedpJobHandler 가 per-worker Semaphore
 	// 슬롯을 선택하는 데 사용. priority pool 에서는 handler 가 ID 를 무시.
-	// 이슈 #230 — general.ChainHandler 의 chromedpChains slice lookup 에도 동일 키 재사용.
+	// general.ChainHandler 의 chromedpChains slice lookup 에도 동일 키 재사용.
 	ctx = core.WithWorkerID(ctx, workerID)
 
 	log := logger.FromContext(ctx)
@@ -396,7 +396,7 @@ func (p *KafkaConsumerPool) worker(ctx context.Context, workerID int) {
 func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err error) {
 	log := logger.FromContext(ctx)
 
-	// 이슈 #137 — processJob 의 모든 return path 를 defer 로 wrap 하여 duration 측정 +
+	// processJob 의 모든 return path 를 defer 로 wrap 하여 duration 측정 +
 	// busyCount 증감 (heartbeat 가시성). outcome 은 err 여부로 분기.
 	p.busyCount.Add(1)
 	start := time.Now()
@@ -415,7 +415,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		log.WithFields(fields).Debug("job processed")
 	}()
 
-	// URL 가드 (이슈 #119): processJob 진입 직후 차단 URL 을 즉시 거르고 commit
+	// URL 가드: processJob 진입 직후 차단 URL 을 즉시 거르고 commit
 	// → handler 호출·lock 획득·backoff 대기 등 모든 비용 회피
 	// → stale URL 메시지가 큐에서 즉시 제거되어 retry 사이클 차단
 	//
@@ -452,7 +452,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		}
 	}
 
-	// 이슈 #178: 동일 URL 이 여러 worker 에서 동시 처리되는 것을 ProcessingLock (stage=fetcher) 로 차단.
+	// 동일 URL 이 여러 worker 에서 동시 처리되는 것을 ProcessingLock (stage=fetcher) 로 차단.
 	// Kafka rebalance/재시작으로 동일 메시지가 중복 소비될 때 + 같은 URL 의 다른 jobID 가 동시 처리될 때
 	// 모두 흡수. backoff 대기 이후에 Acquire 하여 락 점유 시간을 실제 처리 구간으로 최소화합니다.
 	procKey := locks.ProcessingKey(locks.StageFetcher, item.job.Target.URL)
@@ -475,9 +475,9 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		// 처리 담당 워커의 commit 에 의존하여, 해당 워커 장애 시 재처리가 보장되도록 합니다.
 		return nil
 	} else {
-		// 이슈 #137 — 운영자가 lock 획득 흐름을 추적할 수 있도록 DEBUG 로 success 기록.
+		// 운영자가 lock 획득 흐름을 추적할 수 있도록 DEBUG 로 success 기록.
 		// ttl_ms 는 ProcessingLock 인스턴스가 custom TTL 로 생성될 수 있어 인터페이스로 노출하지 않으면
-		// 정확치 않으므로 로그에서 제외 (PR #180 gemini 피드백).
+		// 정확치 않으므로 로그에서 제외.
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
@@ -497,7 +497,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 				}).WithError(releaseErr).Warn("failed to release processing lock")
 				return
 			}
-			// 이슈 #137 — release 성공도 DEBUG 로 짝을 맞춰 lifecycle 완성.
+			// release 성공도 DEBUG 로 짝을 맞춰 lifecycle 완성.
 			log.WithFields(map[string]interface{}{
 				"job_id":  item.job.ID,
 				"crawler": item.job.CrawlerName,
@@ -506,7 +506,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		}()
 	}
 
-	// 이슈 #178: URL 단위 dedup 은 위 ProcessingLock + Publisher 단의 Ingestion Lock 두 층으로 보장.
+	// URL 단위 dedup 은 위 ProcessingLock + Publisher 단의 Ingestion Lock 두 층으로 보장.
 
 	log.WithFields(map[string]interface{}{
 		"job_id":  item.job.ID,
@@ -570,7 +570,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 	}
 
 	if len(contents) == 0 {
-		// 이슈 #178: URL dedup 은 Publisher 의 Ingestion Lock (TTL 24h) 으로 보장 — fetch 성공 후
+		// URL dedup 은 Publisher 의 Ingestion Lock (TTL 24h) 으로 보장 — fetch 성공 후
 		// 별도 캐시 등록 불필요. lock TTL 만료 시점에 자연스럽게 재크롤 가능.
 		cb.RecordSuccess()
 		return p.commitMessage(ctx, item.msg)
@@ -758,7 +758,7 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 	job.RetryCount++
 
 	// RetryCount 기반 exponential backoff 계산 후 ScheduledAt에 저장합니다.
-	// 실제 지연 적용은 RetryScheduler 구현체가 책임집니다 (이슈 #82):
+	// 실제 지연 적용은 RetryScheduler 구현체가 책임집니다:
 	//   - KafkaImmediateRetryScheduler (fallback): 즉시 publish — worker 가 sleep
 	//   - RedisDelayedRetryScheduler: Redis ZSET 보관 — worker 슬롯 점유 없음
 	backoffDelay := core.CalculateBackoff(kafkaRequeuePolicy, job.RetryCount)

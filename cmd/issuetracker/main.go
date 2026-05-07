@@ -41,7 +41,7 @@ import (
 const (
 	validateWorkerCount = 8
 	// parserWorkerCount: TopicFetched consumer group (issuetracker-parsers) 의 worker 수.
-	// fetcher worker 와 독립 — chromedp/LLM 등으로 parser 가 무거워질 때 별도 스케일 (이슈 #134).
+	// fetcher worker 와 독립 — chromedp/LLM 등으로 parser 가 무거워질 때 별도 스케일.
 	parserWorkerCount = 6
 )
 
@@ -73,7 +73,7 @@ func main() {
 
 	ctx = log.ToContext(ctx)
 
-	// ── Metrics endpoint (이슈 #165) ──────────────────────────────────────────
+	// ── Metrics endpoint ──────────────────────────────────────────
 	// METRICS_ADDR 빈 값이면 endpoint 비활성화. default ":9090".
 	metricsCfg, err := config.LoadMetrics()
 	if err != nil {
@@ -120,14 +120,14 @@ func main() {
 
 	jobPublisher := publisher.New(crawlerProducer, resolver, log)
 
-	// rule.Parser: parsing_rules 테이블 기반 단일 파서 엔진 (이슈 #100 / #139).
+	// rule.Parser: parsing_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
 	parsingRuleRepo := pgstore.NewParsingRuleRepository(pool, log)
 	ruleResolver, err := rule.NewResolver(parsingRuleRepo)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")
 	}
-	// 이슈 #288: parsing_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
+	// parsing_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
 	// 호출처가 명시적 Invalidate 를 까먹어도 stale cache 발생 X — single source of truth.
 	parsingRuleRepo = rule.WrapWithInvalidator(parsingRuleRepo, ruleResolver)
 	ruleParser, err := rule.NewParser(ruleResolver)
@@ -135,7 +135,7 @@ func main() {
 		log.WithError(err).Fatal("failed to construct rule parser")
 	}
 
-	// 이슈 #295: page-parse 블랙리스트 — 카테고리 → article job 발행 단계에서 매칭 URL 차단.
+	// page-parse 블랙리스트 — 카테고리 → article job 발행 단계에서 매칭 URL 차단.
 	// Enabled=false 시 Matcher 미주입 → parser_worker 가 모든 링크 그대로 발행 (기능 OFF).
 	blacklistCfg, err := config.LoadBlacklist()
 	if err != nil {
@@ -148,8 +148,8 @@ func main() {
 		if bmErr != nil {
 			log.WithError(bmErr).Fatal("failed to construct blacklist matcher")
 		}
-		// invalidatingBlacklistRepo decorator 는 본 PR scope 에서 wiring 하지 않음 (PR #296 gemini).
-		// 본 PR 은 read-only 경로 (Matcher.Filter) 만 사용 — application 측 mutation 경로 부재.
+		// invalidatingBlacklistRepo decorator 는 현재 wiring 하지 않음.
+		// read-only 경로 (Matcher.Filter) 만 사용 — application 측 mutation 경로 부재.
 		// 운영 CLI / 자동 색출 후속 이슈에서 decorator 도입 + 변수 재할당으로 invalidate 결합.
 		// (decorator 코드 자체는 blacklist_matcher.go 에 보존, unit test 로 검증.)
 		blacklistMatcher = bm
@@ -165,14 +165,14 @@ func main() {
 		log.WithError(err).Fatal("parsing_rules seed missing — apply migration 007 before deploy")
 	}
 
-	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제 (이슈 #134).
+	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제.
 	rawRepo := pgstore.NewRawContentRepository(pool, log)
 	rawSvc := service.NewRawContentService(rawRepo, log)
 
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
 
-	// host 단위 fetcher 룰 (이슈 #175 단계 1) — fetcher_rules 테이블 + Resolver wiring.
+	// host 단위 fetcher 룰 — fetcher_rules 테이블 + Resolver wiring.
 	// 룰 부재 host 는 default chain (현재 동작 100% 보존).
 	fetcherRuleRepo, err := pgstore.NewFetcherRuleRepository(pool, log)
 	if err != nil {
@@ -183,13 +183,13 @@ func main() {
 		log.WithError(err).Fatal("failed to construct fetcher rule resolver")
 	}
 
-	// 이슈 #221: process-local secret token — Upgrader 의 force_fetcher 부착과 ChainHandler 의
+	// process-local secret token — Upgrader 의 force_fetcher 부착과 ChainHandler 의
 	// 검증이 같은 token 공유. 외부 source 의 임의 force 차단.
 	if err := fetcherRule.InitForceFetcherToken(); err != nil {
 		log.WithError(err).Fatal("failed to init force_fetcher token")
 	}
 
-	// 이슈 #230: chromedp pool config 를 사이트 등록 전에 로드 — 사이트별 chromedp chain 이
+	// chromedp pool config 를 사이트 등록 전에 로드 — 사이트별 chromedp chain 이
 	// worker_id 별 RemoteURL 로 N 개 build 되어야 ChainHandler 가 worker:Chrome 1:1 매핑 활성화.
 	chromedpPoolCfg, err := config.LoadFetcherChromedpPool()
 	if err != nil {
@@ -202,7 +202,7 @@ func main() {
 	}
 
 	// chromedp pool 이 활성화된 경우 remoteURLs 수 == WorkerCount 를 사전 검증합니다 (CodeRabbit Major 반영).
-	// RegisterAll 이 URL 당 1 개 chain 을 생성하므로, 불일치 시 worker:chain 매핑이 어긋납니다 (이슈 #230).
+	// RegisterAll 이 URL 당 1 개 chain 을 생성하므로, 불일치 시 worker:chain 매핑이 어긋납니다.
 	if chromedpPoolCfg.Enabled && len(chromedpRemoteURLs) != chromedpPoolCfg.WorkerCount {
 		log.WithFields(map[string]interface{}{
 			"worker_count":     chromedpPoolCfg.WorkerCount,
@@ -210,13 +210,13 @@ func main() {
 		}).Fatal("chromedp pool config mismatch: remote_urls count must equal worker_count")
 	}
 
-	// fetcher 측 등록 (이슈 #246): fetcher_rules DB 에서 모든 source 를 읽어 일괄 등록.
+	// fetcher 측 등록: fetcher_rules DB 에서 모든 source 를 읽어 일괄 등록.
 	if err := sources.RegisterAll(ctx, registry, fetcherRuleRepo, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
 		log.WithError(err).Fatal("failed to register crawlers from db")
 	}
 
 	// Redis 기반 ProcessingLock: 동일 URL 이 여러 worker/인스턴스에서 단계별 (fetcher/parser/validator)
-	// 중복 처리되는 것을 방지합니다 (이슈 #178). 단일 인스턴스를 fetcher / parser / validator 가 공유 —
+	// 중복 처리되는 것을 방지합니다. 단일 인스턴스를 fetcher / parser / validator 가 공유 —
 	// 단계 구분은 ProcessingKey(stage, url) 의 stage prefix 로 처리.
 	// worker/manager 가 nil 을 NoopProcessingLock 로 fallback 처리하는 설계와 일관되게,
 	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade 합니다.
@@ -224,7 +224,7 @@ func main() {
 	var ingestionLock locks.IngestionLock
 	var retryScheduler crawlerWorker.RetryScheduler
 	var retrySchedulerStop func()
-	var redisClientShared *redis.Client // 이슈 #220: failure counter wiring 에서 재사용
+	var redisClientShared *redis.Client // failure counter wiring 에서 재사용
 	redisCfg, err := config.LoadRedis()
 	if err != nil {
 		log.WithError(err).Warn("failed to load redis config, falling back to noop processing lock and ingestion lock")
@@ -242,7 +242,7 @@ func main() {
 			procLock = locks.NewRedisProcessingLock(redisClient, locks.DefaultProcessingLockTTL)
 			ingestionLock = locks.NewRedisIngestionLock(redisClient, redisCfg.IngestionLockTTL)
 
-			// Delayed retry queue (이슈 #82): retry 를 Redis ZSET 에 보관하고 별도
+			// Delayed retry queue: retry 를 Redis ZSET 에 보관하고 별도
 			// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
 			// Redis 부재 시 worker 가 lazy 로 KafkaImmediateRetryScheduler 를 사용 (기존 동작).
 			redisRetry := crawlerWorker.NewRedisDelayedRetryScheduler(
@@ -264,7 +264,7 @@ func main() {
 		defer retrySchedulerStop()
 	}
 
-	// URL dedup — Ingestion Lock (이슈 #178) → Pipeline Guard (이슈 #285) 통합:
+	// URL dedup — Ingestion Lock → Pipeline Guard 통합:
 	// Publisher / Scheduler / ParserWorker 가 동일 guard 를 공유하여 target type 별 정책 적용:
 	//   - Article: 24h TTL (기존 IngestionLock 정책 유지)
 	//   - Category: 단명 TTL (default 60s) — cycle 종료 시 명시적 release + TTL fallback
@@ -287,8 +287,8 @@ func main() {
 		RetryScheduler: retryScheduler,
 	}
 
-	// 이슈 #218: chromedp 전용 worker pool — semaphore 로 Chrome 동시 호출 제한.
-	// chromedpPoolCfg 는 사이트 등록 단계에서 미리 로드됨 (이슈 #230 — RemoteURLs 가 사이트
+	// chromedp 전용 worker pool — semaphore 로 Chrome 동시 호출 제한.
+	// chromedpPoolCfg 는 사이트 등록 단계에서 미리 로드됨 (RemoteURLs 가 사이트
 	// chromedp chain build 에 필요).
 	if chromedpPoolCfg.Enabled {
 		chromedpKafkaCfg := queue.DefaultConfig()
@@ -296,7 +296,7 @@ func main() {
 		chromedpConsumer := queue.NewConsumer(chromedpKafkaCfg, queue.TopicCrawlChromedp)
 		defer chromedpConsumer.Close()
 
-		// 이슈 #229: per-worker Semaphore 모델 — worker_id 별 1 개씩, 길이 = WorkerCount.
+		// per-worker Semaphore 모델 — worker_id 별 1 개씩, 길이 = WorkerCount.
 		// 본 Semaphore 는 worker 자원 격리 guard 역할 — KafkaConsumerPool 의 worker 는 메시지를
 		// 순차 처리하므로 capacity > 1 은 현 모델에서 추가 동시성 이득 없음 (gemini 피드백).
 		// 실질 전체 동시 navigate 수 = WorkerCount. 다음 sub-issue (#230) 에서 worker_id 별
@@ -323,7 +323,7 @@ func main() {
 			"effective_concurrency":         chromedpPoolCfg.WorkerCount,
 		}).Info("chromedp pool wiring enabled (per-worker semaphores; effective concurrency = worker_count)")
 	} else {
-		// 이슈 #218 (CodeRabbit 피드백): goquery worker 의 ChainHandler 가 lazy detect / chromedp
+		// goquery worker 의 ChainHandler 가 lazy detect / chromedp
 		// 룰 / force_fetcher 분기에서 항상 TopicCrawlChromedp 로 republish 함. consumer 가 없으면
 		// 메시지가 영구 누적되어 운영 장애로 이어짐 — fail-fast 로 운영자가 명시적 의사결정 강제.
 		log.Fatal("chromedp pool disabled (FETCHER_CHROMEDP_POOL_ENABLED=false) but goquery republish path is unconditional — enable pool or fork republish behavior in chain_handler")
@@ -337,21 +337,21 @@ func main() {
 		"low_workers":    managerCfg.Low.WorkerCount,
 	}).Info("fetcher pool manager constructed")
 
-	// ── LLM rule generator (이슈 #149) ──────────────────────────────────────────
+	// ── LLM rule generator ──────────────────────────────────────────
 	// rule.ErrNoRule (host 매칭 활성 규칙 없음) fallback 으로 LLM 이 selector 를 자동 생성합니다.
 	// LLM_ENABLED=false 또는 API key 누락 시 nil — parser worker 는 ErrNoRule 시 raw 만 잔존.
 	//
-	// **본 PR scope**: FixedOrder("gemini") 정책으로 Gemini 단일 provider 사용 (1000회/일 무료 한도 내 검증).
+	// **현재 정책**: FixedOrder("gemini") 정책으로 Gemini 단일 provider 사용 (1000회/일 무료 한도 내 검증).
 	// 후속 PR (이슈 TBD) 에서 chain (gemini → openai → anthropic) 으로 정책 확장.
 	//
-	// 이슈 #173 단계 4-2: 동일 provider 를 refiner 와 공유 — 환경변수 1세트로 동시 제어.
+	// 동일 provider 를 refiner 와 공유 — 환경변수 1세트로 동시 제어.
 	llmProvider := llmwiring.BuildProvider(log)
 	llmGen, err := llmgenwiring.Build(llmProvider, parsingRuleRepo, ruleResolver, redisClientShared, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build llmgen generator")
 	}
 
-	// ── Fetcher 실패 카운터 (이슈 #220) ────────────────────────────────────────
+	// ── Fetcher 실패 카운터 ────────────────────────────────────────
 	// host 단위 fetcher 실패를 sliding window 로 누적 — 단계 3 (#221) 의 chromedp 자동 전환
 	// 트리거 입력. ENABLED=false 또는 Redis 미연결 시 Noop (성능 저하 0).
 	fetcherUpgradeCfg, err := config.LoadFetcherAutoUpgrade()
@@ -384,7 +384,7 @@ func main() {
 		log.Warn("redis unavailable, fetcher failure counter falls back to noop")
 	}
 
-	// 이슈 #221: host 단위 실패 raw_id 추적기 — 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상 수집에 사용.
+	// host 단위 실패 raw_id 추적기 — 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상 수집에 사용.
 	// 카운터와 같은 lifecycle (window TTL 동기화) — Redis 미연결 시 Noop.
 	var rawIDTracker fetcherRule.RawIDTracker = fetcherRule.NewNoopRawIDTracker()
 	if fetcherUpgradeCfg.Enabled && redisClientShared != nil {
@@ -402,7 +402,7 @@ func main() {
 		}
 	}
 
-	// 이슈 #221: 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish trigger.
+	// 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish trigger.
 	// ENABLED=false 또는 의존성 부재 시 nil — parser_worker 가 thresholdReached 신호만 받고 실제 전환 발생 안 함.
 	var fetcherUpgrader *fetcherRule.Upgrader
 	if fetcherUpgradeCfg.Enabled {
@@ -427,14 +427,14 @@ func main() {
 		}
 	}
 
-	// ── Parser worker (이슈 #134) ──────────────────────────────────────────────
+	// ── Parser worker ──────────────────────────────────────────────
 	// fetcher 와 분리된 별도 consumer group (issuetracker-parsers) 으로 동작 — 인스턴스 수 독립 스케일.
 	// TopicFetched 의 RawContentRef 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제.
-	// 파싱 실패 (rule.Error) 시 raw 잔존 → LLM 재처리 윈도우 (이슈 #149).
+	// 파싱 실패 (rule.Error) 시 raw 잔존 → LLM 재처리 윈도우.
 	parserKafkaCfg := queue.DefaultConfig()
 	parserKafkaCfg.GroupID = queue.GroupParsers
 	parserConsumer := queue.NewConsumer(parserKafkaCfg, queue.TopicFetched)
-	// 이슈 #173 단계 4-1: sample URL 누적 — parser_worker 가 정상 파싱 후 누적, 단계 4-2 의 정밀화 트리거 입력.
+	// sample URL 누적 — parser_worker 가 정상 파싱 후 누적, 단계 4-2 의 정밀화 트리거 입력.
 	sampleRepo := pgstore.NewSampleURLRepository(pool, log)
 
 	pw := parserWorker.NewParserWorker(
@@ -444,33 +444,33 @@ func main() {
 		contentSvc,
 		jobPublisher,
 		ruleParser,
-		ruleResolver, // 이슈 #173 단계 4-1: sample 누적 시 매칭 rule lookup
-		sampleRepo,   // 이슈 #173 단계 4-1
-		procLock,     // 이슈 #178: fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
+		ruleResolver, // sample 누적 시 매칭 rule lookup
+		sampleRepo,
+		procLock, // fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
 		llmGen,
-		failureCounter,  // 이슈 #220: host 단위 fetcher 실패 카운터
-		rawIDTracker,    // 이슈 #221: host 별 실패 raw_id 추적기
-		fetcherUpgrader, // 이슈 #221: 임계값 도달 시 chromedp 자동 전환 + republish
+		failureCounter,  // host 단위 fetcher 실패 카운터
+		rawIDTracker,    // host 별 실패 raw_id 추적기
+		fetcherUpgrader, // 임계값 도달 시 chromedp 자동 전환 + republish
 		fetcherUpgradeCfg.EmptyBodyTitleMin,
 		fetcherUpgradeCfg.EmptyBodyContentMin,
 		parserWorkerCount,
 		log,
 	)
 
-	// ── Pipeline Guard release (이슈 #285) ─────────────────────────────────────
+	// ── Pipeline Guard release ─────────────────────────────────────
 	// Category cycle 종료 시 marker release — scheduler 다음 주기에 즉시 진입 가능.
 	if pipelineGuard != nil {
 		pw.SetPipelineGuard(pipelineGuard)
 	}
 
-	// ── Page-parse 블랙리스트 (이슈 #295) ───────────────────────────────────────
+	// ── Page-parse 블랙리스트 ───────────────────────────────────────
 	// 카테고리에서 추출된 article URL 중 blacklist 매칭은 publisher.Publish 직전 drop.
 	// Matcher 가 nil (BLACKLIST_ENABLED=false) 이면 setter noop — 모든 링크 그대로 발행.
 	if blacklistMatcher != nil {
 		pw.SetBlacklist(blacklistMatcher)
 	}
 
-	// ── Stale rule 재학습 카운터 (이슈 #282) ───────────────────────────────────
+	// ── Stale rule 재학습 카운터 ───────────────────────────────────
 	// host 단위 stale parse failure 누적 — 임계 도달 시 Generator.EnqueueStale 트리거.
 	// FetcherAutoUpgrade 와 별개 keyspace + 더 긴 윈도우 / 더 높은 임계값 — chromedp 전환이
 	// 먼저 시도되고, 그래도 실패 지속 시 LLM 재학습 (InsertNextVersion 으로 v+1 추가).
@@ -503,14 +503,14 @@ func main() {
 		log.Info("llmgen disabled — stale rule relearn skipped (no enqueue target)")
 	}
 
-	// ── LLM validate 실패 재큐 (이슈 #237) ───────────────────────────────────
+	// ── LLM validate 실패 재큐 ───────────────────────────────────
 	// selector 검증 실패 시 raw 를 issuetracker.fetched 에 재발행 — 룰 생성 성공 후 재파싱 기회 부여.
 	// llmGen 이 nil(LLM 비활성) 이면 wiring 불필요.
 	if llmGen != nil {
 		llmGen.SetValidateFailureHandler(pw.RequeueForLLMRetry)
 	}
 
-	// ── Pending URL 큐 (이슈 #262) ────────────────────────────────────────────
+	// ── Pending URL 큐 ────────────────────────────────────────────
 	// in-flight 중 동일 도메인으로 유입된 URL 을 Redis LIST 에 보존.
 	// 룰 생성 완료 시 대기 URL 을 issuetracker.fetched 에 재발행 — 새 룰로 재파싱.
 	// Redis 미설정 시 graceful degrade (pending URL 보존 없이 기존 skip 동작 유지).
@@ -522,7 +522,7 @@ func main() {
 		log.Info("llmgen: Redis 기반 pending URL 큐 활성화")
 	}
 
-	// ── 의미 검증 ValidatorPool (이슈 #257) ──────────────────────────────────
+	// ── 의미 검증 ValidatorPool ──────────────────────────────────
 	// DOM 매칭 검증 통과 후 추출 내용이 실제 뉴스 제목/본문인지 LLM 으로 의미 검증.
 	// llmProvider 가 nil(LLM 비활성) 이면 의미 검증 건너뜀 — DOM 검증만 수행.
 	if llmGen != nil && llmProvider != nil {
@@ -533,7 +533,7 @@ func main() {
 		log.Info("llmgen: 의미 검증 ValidatorPool 활성화")
 	}
 
-	// ── Claude Code 추출기 (이슈 #267) ──────────────────────────────────────
+	// ── Claude Code 추출기 ──────────────────────────────────────
 	// LLM_EXTRACTOR=claude-code 일 때 활성화 — Claude 구독 환경의 sonnet 으로 셀렉터 추출.
 	// 미지정 / gemini (기본) 일 때는 buildLLMGenerator 가 설정한 기본 LLM provider 추출.
 	// Start 실패 시 Gemini 경로로 graceful fallback (fatal 아님).
@@ -544,7 +544,7 @@ func main() {
 	case llmExtractor != "claude-code":
 		// 기본 경로 — 분기 미발생 (Gemini 등 buildLLMGenerator 의 provider 사용).
 	case llmGen == nil:
-		// LLM_ENABLED=false / API key 부재 등으로 llmGen 비활성 — silent skip 회피 (PR #271 리뷰).
+		// LLM_ENABLED=false / API key 부재 등으로 llmGen 비활성 — silent skip 회피.
 		log.Warn("LLM_EXTRACTOR=claude-code requested but LLM generator is disabled (check LLM_ENABLED / API key); claudegen extractor not registered")
 	default:
 		worker, werr := claudegen.NewFromEnv(log)
@@ -559,10 +559,10 @@ func main() {
 		}
 	}
 
-	// ── Refiner (이슈 #173 단계 4-2) ──────────────────────────────────────────
+	// ── Refiner ──────────────────────────────────────────
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
-	// metricsRegistry 는 nil 허용 — Record* 호출이 noop (PR #191 피드백).
+	// metricsRegistry 는 nil 허용 — Record* 호출이 noop.
 	pathRefiner, err := refinerwiring.Build(llmProvider, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build refiner")
@@ -581,14 +581,14 @@ func main() {
 	emitter := scheduler.NewJobEmitter(crawlerProducer, log)
 	if pipelineGuard != nil {
 		emitter.SetGuard(pipelineGuard)
-		// publisher 와 동일 normalizer 공유 — marker 키 일관성 (PR #286 gemini 리뷰).
+		// publisher 와 동일 normalizer 공유 — marker 키 일관성.
 		emitter.SetNormalizer(links.NewNormalizer())
-		log.Info("scheduler emitter pipeline guard enabled (이슈 #285)")
+		log.Info("scheduler emitter pipeline guard enabled")
 	}
 	entries := scheduler.DefaultEntries(schedulerCfg)
 	sched := scheduler.New(entries, emitter, log, schedulerCfg.MaxRetries)
 
-	// Backlog throttle (이슈 #124): SCHEDULER_MAX_BACKLOG > 0 일 때만 활성.
+	// Backlog throttle: SCHEDULER_MAX_BACKLOG > 0 일 때만 활성.
 	// crawl 토픽의 consumer-group lag 가 임계값 초과 시 publish 차단.
 	if schedulerCfg.MaxBacklog > 0 {
 		backlogChecker := queue.NewBacklogChecker(crawlerKafkaCfg.Brokers, schedulerCfg.BacklogCheckTimeout)
@@ -638,7 +638,7 @@ func main() {
 	}).Info("validate worker constructed")
 
 	// ══════════════════════════════════════════════════════════════════════════
-	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리 (이슈 #206 / #208)
+	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리
 	// ══════════════════════════════════════════════════════════════════════════
 
 	fetcherStage, err := fetcher.NewStage(manager)
@@ -654,7 +654,7 @@ func main() {
 		log.WithError(err).Fatal("failed to construct validate stage")
 	}
 
-	// 이슈 #224: chromedp 자동 upgrade 의 자가 회복 안전장치 — interval 마다 reason='auto_upgrade_validation'
+	// chromedp 자동 upgrade 의 자가 회복 안전장치 — interval 마다 reason='auto_upgrade_validation'
 	// row 를 goquery 로 reset. ENABLED=false 시 stage 미등록 (단계 3 의 upgrade-only 동작 유지).
 	stages := []processor.Stage{fetcherStage, parserStg, validateStage}
 	downgradeCfg, err := config.LoadFetcherAutoDowngrade()
@@ -684,7 +684,7 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	<-sigChan
-	// 셧다운 시작 시점부터 logger 에 shutting_down=true 를 부여합니다 (이슈 #72 TODO #4).
+	// 셧다운 시작 시점부터 logger 에 shutting_down=true 를 부여합니다.
 	//
 	// 적용 범위 (중요):
 	//   - 본 변수 'log' 와 shutdownCtx 를 통해 전달되는 모든 로그에만 부착됩니다.
@@ -701,7 +701,7 @@ func main() {
 	// shutdownCtx 에 logger 를 주입하여 Stop 내부에서 logger.FromContext 가
 	// shutting_down 필드를 자동으로 상속받도록 합니다.
 	// context.WithoutCancel(ctx) 사용 — parent ctx 의 cancellation (방금 호출한 cancel())
-	// 은 분리하되 ctx values (logger / 향후 trace ID 등) 는 상속 보존 (PR #273 리뷰).
+	// 은 분리하되 ctx values (logger / 향후 trace ID 등) 는 상속 보존.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownCfg.Timeout)
 	defer shutdownCancel()
 	shutdownCtx = log.ToContext(shutdownCtx)
@@ -720,12 +720,12 @@ func main() {
 		}
 	}
 
-	// Claude Code 컨테이너 종료 (이슈 #267) — stages.Stop 으로 llmGen 의 모든 in-flight Extract 가
+	// Claude Code 컨테이너 종료 — stages.Stop 으로 llmGen 의 모든 in-flight Extract 가
 	// 완료된 이후 호출. Worker.Stop 이 실행 중인 docker exec 세션 완료 대기 + 컨테이너 정리.
 	//
 	// shutdownCtx 가 stages.Stop 에서 timeout 으로 cancel 되더라도 docker rm -f 자체는 반드시 시도되어야
-	// 컨테이너 누수가 발생하지 않으므로, 별도의 cleanupCtx 를 사용 (PR #271 리뷰).
-	// WithoutCancel(ctx) 로 ctx values 보존 (PR #273 리뷰).
+	// 컨테이너 누수가 발생하지 않으므로, 별도의 cleanupCtx 를 사용.
+	// WithoutCancel(ctx) 로 ctx values 보존.
 	if claudegenWorker != nil {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownCfg.ClaudegenTimeout)
 		cleanupCtx = log.ToContext(cleanupCtx)

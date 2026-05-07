@@ -16,7 +16,7 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// pgBlacklistRepository 는 pgx/v5 기반 BlacklistRepository 구현체입니다 (이슈 #295).
+// pgBlacklistRepository 는 pgx/v5 기반 BlacklistRepository 구현체입니다.
 type pgBlacklistRepository struct {
 	pool *pgxpool.Pool
 }
@@ -39,7 +39,7 @@ RETURNING id, created_at, updated_at
 // path_pattern 이 비어있지 않으면 RE2 컴파일 검증 — parsing_rules.Insert 와 동일 정책 (DB write
 // 전 잘못된 regex 거부, 운영 가시성 ↑ + Matcher 가 매 호출마다 negative cache 로 흡수하지 않도록).
 //
-// PR #296 gemini 피드백: HostPattern 을 lowercase 로 정규화 — BlacklistMatcher 가 host 를
+// HostPattern 을 lowercase 로 정규화 — BlacklistMatcher 가 host 를
 // lowercase 로 lookup 하므로 저장 시점에도 동일 정규화 필수 (대소문자 섞인 등록 시 미스매치 회피).
 func (r *pgBlacklistRepository) Insert(ctx context.Context, rec *storage.BlacklistRecord) error {
 	if rec.PathPattern != "" {
@@ -134,7 +134,7 @@ ORDER BY LENGTH(path_pattern) DESC, id DESC
 // 이 가장 마지막. tie-break 로 id DESC (최근 등록 우선) 사용.
 //
 // host 는 lowercase 로 정규화된 상태 가정 (Matcher 가 lowercase 로 호출). DB 에 저장된 host_pattern
-// 도 Insert 시 lowercase 정규화 (PR #296 gemini 피드백) — 양쪽 일치 보장.
+// 도 Insert 시 lowercase 정규화 — 양쪽 일치 보장.
 func (r *pgBlacklistRepository) FindEnabledByHost(ctx context.Context, host string) ([]*storage.BlacklistRecord, error) {
 	rows, err := r.pool.Query(ctx, sqlFindEnabledBlacklistByHost, strings.ToLower(host))
 	if err != nil {
@@ -171,7 +171,7 @@ WHERE ($1 = '' OR host_pattern = $1)
 ORDER BY id DESC
 LIMIT $4 OFFSET $5
 `
-	// HostPattern 을 lowercase 로 정규화 — Insert 와 동일 정책 (PR #296 gemini 피드백).
+	// HostPattern 을 lowercase 로 정규화 — Insert 와 동일 정책.
 	// 저장은 lowercase 이므로 검색 조건도 lowercase 여야 일치.
 	rows, err := r.pool.Query(ctx, q,
 		strings.ToLower(f.HostPattern), string(f.Source), f.OnlyEnabled, limit, f.Offset,

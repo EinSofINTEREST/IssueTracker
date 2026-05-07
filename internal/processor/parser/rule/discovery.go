@@ -13,7 +13,7 @@ import (
 )
 
 // PageLinkDiscovery 는 페이지 전체 <a href> 를 스캔한 뒤 LinkDiscoveryConfig 의
-// ArticleURLPattern (RE2 regex) 로 article URL 만 통과시키는 generic discovery 입니다 (이슈 #139).
+// ArticleURLPattern (RE2 regex) 로 article URL 만 통과시키는 generic discovery 입니다.
 //
 // PageLinkDiscovery scans every <a href> on a page, then filters by the rule's
 // ArticleURLPattern regex. Replaces site-specific ItemContainer extraction when
@@ -25,7 +25,7 @@ import (
 //
 // stateless / goroutine-safe — 호출 시마다 regex 컴파일을 회피하기 위해
 // Resolver 가 cache 한 ParsingRuleRecord 를 재사용하는 호출자 측에서 컴파일 결과를
-// 메모이즈하는 것이 이상적이나, 본 PR 범위에서는 호출 시 한 번만 컴파일.
+// 메모이즈하는 것이 이상적이나, 현재 구현에서는 호출 시 한 번만 컴파일.
 type PageLinkDiscovery struct{}
 
 // NewPageLinkDiscovery 는 stateless discovery 컴포넌트를 생성합니다.
@@ -34,13 +34,13 @@ func NewPageLinkDiscovery() *PageLinkDiscovery { return &PageLinkDiscovery{} }
 // Discover 는 raw 의 HTML 에서 cfg 정책에 부합하는 링크들을 LinkItem 으로 반환합니다.
 //
 // 흐름:
-//  1. cfg.ArticleURLPattern 이 비어있지 않으면 compile (빈 문자열이면 all-pass 모드 — 이슈 #148)
+//  1. cfg.ArticleURLPattern 이 비어있지 않으면 compile (빈 문자열이면 all-pass 모드)
 //  2. pkg/links.Extractor 로 raw.HTML 의 모든 <a href> 추출
 //     (SameOriginOnly / PathPrefixes / ExcludePatterns / MaxLinksPerPage 적용)
 //  3. pattern 이 있으면 추가 regex 필터링, 없으면 extractor 결과 그대로
 //
-// All-pass 모드 (이슈 #148):
-//   - 본 시스템의 타겟은 \"뉴스 기사\" 만이 아닌 페이지 내 모든 의미 있는 글 (이슈 #100 도메인 일반화)
+// All-pass 모드:
+//   - 본 시스템의 타겟은 \"뉴스 기사\" 만이 아닌 페이지 내 모든 의미 있는 글
 //   - ArticleURLPattern 을 강제하면 사이트별 article URL regex 외 모든 컨텐츠가 누락됨
 //   - 빈 pattern 은 \"ExcludePatterns + SameOriginOnly + MaxLinksPerPage 만으로 필터\" 의도
 //
@@ -60,7 +60,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 		}
 	}
 
-	// pattern 이 비어있으면 all-pass — 이슈 #148. Extractor 의 다른 옵션만으로 필터링.
+	// pattern 이 비어있으면 all-pass. Extractor 의 다른 옵션만으로 필터링.
 	var pattern *regexp.Regexp
 	if cfg.ArticleURLPattern != "" {
 		compiled, err := regexp.Compile(cfg.ArticleURLPattern)
@@ -102,7 +102,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 		}
 	}
 
-	// MaxLinksPerPage 우선순위 정책 (이슈 #148 후속):
+	// MaxLinksPerPage 우선순위 정책:
 	//   1. same-origin (raw.URL 의 host 와 동일) 링크는 maxOut 무시하고 모두 통과
 	//   2. cross-origin 링크는 잔여 슬롯 (maxOut - len(same)) 만큼 무작위 sample
 	//   3. maxOut == 0 (무제한) 이면 cross 도 모두 통과

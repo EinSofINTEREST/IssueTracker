@@ -7,7 +7,7 @@ import (
 	"issuetracker/pkg/config"
 )
 
-// sourceCategoryURLs 는 각 소스의 카테고리 URL 목록입니다 (이슈 #247).
+// sourceCategoryURLs 는 각 소스의 카테고리 URL 목록입니다.
 //
 // 기존 sources/{kr,us}/*/config.go 에 하드코딩된 CategoryURLs 를 이 맵으로 통합.
 // DefaultEntries 가 이 목록에서 ScheduleEntry 를 생성합니다.

@@ -1,4 +1,4 @@
-// Package sources 는 fetcher_rules DB 에서 모든 사이트 크롤러를 읽어 Registry 에 등록합니다 (이슈 #246).
+// Package sources 는 fetcher_rules DB 에서 모든 사이트 크롤러를 읽어 Registry 에 등록합니다.
 //
 // 기존 사이트별 kr.Register / us.Register 를 RegisterAll 하나로 통합.
 // SourceInfo·RequestsPerHour 는 fetcher_rules 테이블 (migration 014) 에서 조회.
@@ -25,11 +25,11 @@ import (
 // defaultLazyKeywords 는 대부분 뉴스 사이트가 사용하는 lazy-load 감지 attr 목록입니다.
 // chromedp 가 활성화된 경우에만 BuildChain 에 전달합니다 — pool 이 꺼진 환경에서
 // lazy sentinel 이 발생하면 TopicCrawlChromedp 로 republish 되지만 consumer 가 없어
-// 메시지가 유실됩니다 (이슈 #218, Copilot 피드백 반영).
+// 메시지가 유실됩니다 .
 var defaultLazyKeywords = []string{"data-lazy-src", "lazyload", "data-lazy"}
 
 // RegisterAll 은 fetcher_rules 테이블에서 source_name 이 채워진 모든 source 를 읽어
-// Registry 에 등록합니다 (이슈 #246).
+// Registry 에 등록합니다.
 //
 // 각 source_name 별로 goquery + (optional) chromedp ChainHandler 를 생성.
 // chromedpRemoteURLs 가 empty 이면 chromedp chain 없이 goquery-only 로 등록.

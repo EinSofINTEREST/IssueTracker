@@ -8,7 +8,7 @@ import (
 	"issuetracker/pkg/llm"
 )
 
-// providerAdapter 는 pkg/llm.Provider 를 pathinfer.LLMClient 로 wrapping 하는 어댑터입니다 (이슈 #173 단계 4-2).
+// providerAdapter 는 pkg/llm.Provider 를 pathinfer.LLMClient 로 wrapping 하는 어댑터입니다.
 //
 // pathinfer 패키지의 LLMClient 인터페이스는 system + user 두 string 만 받음 — 호출자가 pkg/llm 의
 // Request / Response 타입을 직접 다루지 않도록 분리됨. 본 adapter 가 두 string 을 llm.Request 로
@@ -19,7 +19,7 @@ type providerAdapter struct {
 
 // NewLLMAdapter 는 pkg/llm.Provider 를 pathinfer.LLMClient 로 변환하는 어댑터를 반환합니다.
 //
-// provider 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리 (이슈 #208).
+// provider 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
 func NewLLMAdapter(provider llm.Provider) (pathinfer.LLMClient, error) {
 	if provider == nil {
 		return nil, errors.New("refiner: NewLLMAdapter requires non-nil provider")

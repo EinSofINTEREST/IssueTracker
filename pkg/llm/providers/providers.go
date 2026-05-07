@@ -1,4 +1,4 @@
-// Package providers 는 모든 내장 provider 를 사이드 이펙트로 등록하는 편의 패키지입니다 (이슈 #140).
+// Package providers 는 모든 내장 provider 를 사이드 이펙트로 등록하는 편의 패키지입니다.
 //
 // 사용자는 호출처에서 다음 한 줄만 import 하면 모든 provider (gemini / openai / anthropic / claude) 가
 // llm.New 에 자동 등록됩니다:

@@ -11,10 +11,10 @@ import (
 
 // MeasuredProvider wraps a Provider, recording per-call latency and success/failure metrics.
 //
-// MeasuredProvider 는 다른 Provider 를 wrap 하여 호출 시 latency / 성공·실패 metric 을 기록합니다 (이슈 #144).
+// MeasuredProvider 는 다른 Provider 를 wrap 하여 호출 시 latency / 성공·실패 metric 을 기록합니다.
 //
 //   - in-memory EMA (LatencyMs) — routing policy 가 dynamic 가중치로 활용
-//   - Prometheus metric (히스토그램 / counter) — /metrics endpoint 로 export (이슈 #165 의존)
+//   - Prometheus metric (히스토그램 / counter) — /metrics endpoint 로 export
 //
 // Prometheus registry 는 호출자가 주입 — nil 이면 metric 등록 skip (in-memory EMA 만 동작).
 type MeasuredProvider struct {
@@ -30,7 +30,7 @@ type MeasuredProvider struct {
 // Stats holds in-memory rolling metrics for a wrapped provider.
 //
 // Stats 는 wrap 된 provider 의 in-memory rolling metric 입니다.
-// 모든 필드는 단일 mu 보호 — calls/failures/latency 의 일관된 snapshot 보장 (PR #167 gemini 피드백).
+// 모든 필드는 단일 mu 보호 — calls/failures/latency 의 일관된 snapshot 보장.
 type Stats struct {
 	mu        sync.RWMutex
 	calls     uint64
@@ -92,7 +92,7 @@ func (s *Stats) record(latencyMs float64, failed bool) {
 // MeasuredFactory creates MeasuredProvider instances that share a single set of Prometheus collectors.
 //
 // MeasuredFactory 는 동일 registry / labelPrefix 에 대해 collector 를 1회만 생성·등록하고,
-// 여러 provider 를 wrap 할 수 있는 factory 입니다 (PR #167 gemini 피드백 — collector 중복 등록 panic 해결).
+// 여러 provider 를 wrap 할 수 있는 factory 입니다 (collector 중복 등록 panic 해결).
 //
 // collector 는 (provider, status) label 로 구분하므로 단일 collector 인스턴스가 모든 wrapped
 // provider 의 metric 을 처리할 수 있습니다.

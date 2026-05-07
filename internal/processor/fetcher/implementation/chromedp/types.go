@@ -54,14 +54,14 @@ type ChromedpOptions struct {
 	RemoteURL string
 
 	// GracefulCaptureTimeout: navigation timeout 발생 후 별도 context 로 OuterHTML 을
-	// 재캡처할 때 허용하는 최대 시간 (이슈 #146).
+	// 재캡처할 때 허용하는 최대 시간.
 	// 0 또는 음수면 DefaultGracefulCaptureTimeout (10s) 사용.
 	// 부하 상태의 CDP 응답 + page.StopLoading() 후 OuterHTML 회수까지 시간이 필요해
 	// 기존 3s 는 너무 짧았음. 운영 튜닝 가능하도록 옵션화.
 	GracefulCaptureTimeout time.Duration
 }
 
-// DefaultGracefulCaptureTimeout: GracefulCaptureTimeout 미지정 시 기본값 (이슈 #146).
+// DefaultGracefulCaptureTimeout: GracefulCaptureTimeout 미지정 시 기본값.
 const DefaultGracefulCaptureTimeout = 10 * time.Second
 
 // DefaultOptions: 로컬 Chrome 실행 기본 옵션
