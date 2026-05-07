@@ -19,6 +19,22 @@ const (
 	BlacklistSourceAuto   BlacklistSource = "auto"
 )
 
+// BlacklistMode 는 매칭된 URL 에 적용할 차단 정책입니다 (이슈 #297).
+//
+//   - BlacklistModeDrop             : URL 자체 drop — fetch / parse / 링크추출 모두 안 함 (default).
+//                                      광고 / sponsored / redirect 처럼 그 안의 링크도 가치 없는 케이스.
+//   - BlacklistModeExtractLinksOnly : list 로 강제 발행 — fetch + ParseLinks 만, ParsePage skip.
+//                                      비-article 영역 (about / login / sitemap / menu) 처럼 그 안에
+//                                      정상 article 링크가 있어 cascade 보존이 필요한 케이스.
+//
+// CHECK 제약으로 DB 레벨에서 두 값만 허용. 기존 row 는 default 'drop' (migration 017 후방 호환).
+type BlacklistMode string
+
+const (
+	BlacklistModeDrop             BlacklistMode = "drop"
+	BlacklistModeExtractLinksOnly BlacklistMode = "extract_links_only"
+)
+
 // BlacklistRecord 는 parsing_blacklist 테이블의 단일 행입니다 (이슈 #295).
 //
 // page-parse 차단 정책 — 매칭 URL 은 article job 발행 단계에서 drop:
@@ -34,6 +50,7 @@ type BlacklistRecord struct {
 	PathPattern string
 	Reason      string
 	Source      BlacklistSource
+	Mode        BlacklistMode // 'drop' (default) | 'extract_links_only' (이슈 #297)
 	Enabled     bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
