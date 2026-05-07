@@ -459,7 +459,7 @@ func main() {
 		if scErr != nil {
 			log.WithError(scErr).Warn("failed to construct redis stale counter, stale relearn disabled at runtime")
 		} else {
-			pw.SetStaleCounter(sc)
+			pw.SetStaleCounter(sc, staleRelearnCfg.Threshold)
 			log.WithFields(map[string]interface{}{
 				"threshold": staleRelearnCfg.Threshold,
 				"window":    staleRelearnCfg.Window.String(),

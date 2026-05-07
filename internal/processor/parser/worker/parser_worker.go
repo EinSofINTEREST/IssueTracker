@@ -87,6 +87,10 @@ type ParserWorker struct {
 	// ErrParseFailure / ErrEmptySelector 발생 시 Record 호출, threshold 도달 시
 	// llmGen.EnqueueStale 트리거.
 	staleCounter llmgen.StaleCounter
+	// staleThreshold: window 내 stale failure 임계값 (이슈 #282, PR #294 CodeRabbit 피드백).
+	// 임계 도달 첫 회 (count == staleThreshold) 만 enqueue — count > threshold 인 후속 호출은
+	// 카운트만 누적하고 enqueue 회피 (window 내 동일 host 의 version churn / 비용 spike 방지).
+	staleThreshold int
 
 	workerCount int
 	log         *logger.Logger
@@ -174,11 +178,15 @@ func (w *ParserWorker) SetPipelineGuard(g PipelineGuard) {
 	w.guard = g
 }
 
-// SetStaleCounter 는 stale rule 재학습 트리거 카운터를 주입합니다 (이슈 #282).
-// nil 주입 시 stale 재학습 비활성 (기존 chromedp 자동 전환만 동작).
+// SetStaleCounter 는 stale rule 재학습 트리거 카운터 + 임계값을 주입합니다 (이슈 #282).
+//
+// nil counter 주입 시 stale 재학습 비활성 (기존 chromedp 자동 전환만 동작).
+// threshold <= 0 이면 threshold-crossing gate 비활성 — counter.Record 의 thresholdReached 만으로 트리거
+// (window 내 매 후속 호출마다 enqueue 가능, 호환 fallback).
 // Start 호출 전 wiring 단계에서 1회 설정.
-func (w *ParserWorker) SetStaleCounter(c llmgen.StaleCounter) {
+func (w *ParserWorker) SetStaleCounter(c llmgen.StaleCounter, threshold int) {
 	w.staleCounter = c
+	w.staleThreshold = threshold
 }
 
 // Start 는 worker goroutines 를 기동합니다 (non-blocking).
@@ -543,6 +551,18 @@ func (w *ParserWorker) recordStaleAndMaybeRelearn(ctx context.Context, host stri
 		return
 	}
 	if !thresholdReached {
+		return
+	}
+	// 이슈 #282 PR #294 CodeRabbit 피드백: thresholdReached 는 window 내 count >= threshold 일 때
+	// 매번 true 이므로, 첫 crossing (count == threshold) 만 enqueue 하여 동일 window 안의 중복
+	// version 생성 / 비용 spike 회피. staleThreshold == 0 이면 호환 모드 (gate 비활성).
+	if w.staleThreshold > 0 && count != w.staleThreshold {
+		mlog.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+			"count":       count,
+			"threshold":   w.staleThreshold,
+		}).Debug("stale threshold already crossed in current window — skipping duplicate enqueue")
 		return
 	}
 

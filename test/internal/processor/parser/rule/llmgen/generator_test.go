@@ -60,6 +60,11 @@ type recordingRepo struct {
 	// findByNaturalKeyErr: 설정 시 result 무시하고 본 에러 반환 (PR #275 리뷰 — DB 장애 시뮬레이션).
 	findByNaturalKeyErr   error
 	findByNaturalKeyCalls int
+
+	// insertCalls / insertNextVersionCalls: stale 경로가 InsertNextVersion (version bump) 만 사용하고
+	// 일반 경로가 Insert (v=1 신규) 만 사용하는지 명시 검증 (이슈 #282, PR #294 CodeRabbit 피드백).
+	insertCalls            int
+	insertNextVersionCalls int
 }
 
 func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParsingRuleRecord) error {
@@ -68,6 +73,7 @@ func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParsingRuleRecord
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.insertCalls++
 	rec.ID = int64(len(r.inserted) + 1)
 	clone := *rec
 	r.inserted = append(r.inserted, &clone)
@@ -87,9 +93,22 @@ func (r *recordingRepo) HasAnyRule(_ context.Context, _ string, _ storage.Target
 	return false, false, nil
 }
 func (r *recordingRepo) InsertNextVersion(ctx context.Context, rec *storage.ParsingRuleRecord) error {
-	if rec.Version == 0 {
-		rec.Version = 1
+	r.mu.Lock()
+	r.insertNextVersionCalls++
+	// 자연키 (source, host, path, type) 동일 row 의 MAX(version)+1 시뮬레이션 — postgres 구현과 일치.
+	maxVer := 0
+	for _, existing := range r.inserted {
+		if existing.SourceName == rec.SourceName &&
+			existing.HostPattern == rec.HostPattern &&
+			existing.PathPattern == rec.PathPattern &&
+			existing.TargetType == rec.TargetType {
+			if existing.Version > maxVer {
+				maxVer = existing.Version
+			}
+		}
 	}
+	rec.Version = maxVer + 1
+	r.mu.Unlock()
 	return r.Insert(ctx, rec)
 }
 func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
@@ -789,10 +808,10 @@ func TestGenerator_EnqueueStale_InsertNextVersion(t *testing.T) {
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
-	// recordingRepo.Insert 의 호출이 Insert 또는 InsertNextVersion 중 어느 것으로 들어가도
-	// inserted 슬라이스에는 1건 추가됨 (Insert 가 공통 경로). 핵심 검증은 LLM provider 가 호출됐고
-	// inserted 가 1건임 — Stale 분기가 정상 통과한 증거.
+	// PR #294 CodeRabbit 피드백: InsertNextVersion 호출 자체를 명시 검증 — 일반 Insert 로 우회되는
+	// regression 차단. 두 카운터는 상호 배타적으로 1/0 이어야 함 (stale 경로는 항상 InsertNextVersion).
 	assert.Equal(t, 1, provider.callCount(), "EnqueueStale 도 LLM 호출은 발생")
+	assert.Equal(t, 1, repo.insertNextVersionCalls, "EnqueueStale must use InsertNextVersion (not plain Insert)")
 	assert.Len(t, repo.inserted, 1, "InsertNextVersion 경유로 inserted 누적")
 }
 
@@ -806,11 +825,20 @@ func TestGenerator_EnqueueStale_BypassesEnabledPreCheck(t *testing.T) {
 		}`,
 	}
 	// 사전 lookup 결과 — enabled=true 룰 잔존 (정상적으로 fresh Enqueue 면 skip 대상).
+	// 동일 자연키 row 를 inserted 에 미리 시딩하여 InsertNextVersion 의 MAX(version)+1 동작이
+	// v=2 를 산출하도록 — postgres 의 실제 자연키 충돌 회피 동작과 일치.
+	existingV1 := &storage.ParsingRuleRecord{
+		ID:          1,
+		SourceName:  llmgen.LLMAutoSourceName,
+		HostPattern: "stale.example.com",
+		PathPattern: "",
+		TargetType:  storage.TargetTypePage,
+		Version:     1,
+		Enabled:     true,
+	}
 	repo := &recordingRepo{
-		findByNaturalKeyResult: &storage.ParsingRuleRecord{
-			ID: 1, HostPattern: "stale.example.com", TargetType: storage.TargetTypePage,
-			Version: 1, Enabled: true,
-		},
+		inserted:               []*storage.ParsingRuleRecord{existingV1},
+		findByNaturalKeyResult: existingV1,
 	}
 	g, _ := newGenerator(t, provider, repo)
 
@@ -825,5 +853,11 @@ func TestGenerator_EnqueueStale_BypassesEnabledPreCheck(t *testing.T) {
 	assert.Equal(t, 1, provider.callCount(), "EnqueueStale 는 enabled 룰 적중해도 LLM 호출 진행 (v2 학습)")
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
-	assert.Len(t, repo.inserted, 1, "v2 INSERT 발생")
+	// PR #294 CodeRabbit 피드백: InsertNextVersion 사용 여부를 직접 검증 — 일반 Insert 로 v=1 row 생성
+	// 시 자연키 충돌 (이미 enabled v=1 row 존재) 로 stale 경로가 망가짐을 사전 차단.
+	assert.Equal(t, 1, repo.insertNextVersionCalls, "stale path must call InsertNextVersion")
+	assert.Equal(t, 0, repo.insertCalls-repo.insertNextVersionCalls, "no plain Insert (only InsertNextVersion → Insert)")
+	require.Len(t, repo.inserted, 2, "기존 v=1 + 신규 v=2")
+	assert.Equal(t, 1, repo.inserted[0].Version, "기존 v=1 보존")
+	assert.Equal(t, 2, repo.inserted[1].Version, "InsertNextVersion bumps to v=2 (existing enabled v=1 detected)")
 }
