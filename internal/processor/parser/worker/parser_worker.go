@@ -82,6 +82,11 @@ type ParserWorker struct {
 	// nil 허용 — nil 이면 release skip (TTL fallback 으로 자동 회수).
 	guard PipelineGuard
 
+	// blacklist: page-parse 블랙리스트 Matcher (이슈 #295).
+	// nil 허용 — nil 이면 차단 비활성 (모든 카테고리 링크가 그대로 발행).
+	// processCategoryPage 의 publisher.Publish 직전에 Filter 호출.
+	blacklist *rule.BlacklistMatcher
+
 	// staleCounter: stale rule 재학습 트리거 카운터 (이슈 #282).
 	// nil 허용 — nil 이면 stale 재학습 비활성 (chromedp 자동 전환만 동작).
 	// ErrParseFailure / ErrEmptySelector 발생 시 Record 호출, threshold 도달 시
@@ -176,6 +181,14 @@ func NewParserWorker(
 // nil 주입 시 release 비활성 (TTL fallback). Start 호출 전 wiring 단계에서 1회 설정.
 func (w *ParserWorker) SetPipelineGuard(g PipelineGuard) {
 	w.guard = g
+}
+
+// SetBlacklist 는 page-parse 블랙리스트 Matcher 를 주입합니다 (이슈 #295).
+//
+// nil 주입 시 차단 비활성 (모든 카테고리 링크가 그대로 article job 으로 발행).
+// Start 호출 전 wiring 단계에서 1회 설정.
+func (w *ParserWorker) SetBlacklist(b *rule.BlacklistMatcher) {
+	w.blacklist = b
 }
 
 // SetStaleCounter 는 stale rule 재학습 트리거 카운터 + 임계값을 주입합니다 (이슈 #282).
@@ -346,13 +359,32 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 	}
 
 	urls := uniqueURLs(items, maxChainedURLs)
+
+	// 이슈 #295: page-parse 블랙리스트 적용 — 매칭 URL 은 article job 발행 단계에서 drop.
+	// fetch / parse 자체가 발생 안 함. Matcher 미설정 (nil) 이면 모든 URL 통과.
+	blockedCount := 0
+	if w.blacklist != nil && len(urls) > 0 {
+		filtered := w.blacklist.Filter(ctx, urls)
+		blockedCount = len(urls) - len(filtered)
+		urls = filtered
+		if len(urls) == 0 {
+			mlog.WithFields(map[string]interface{}{
+				"crawler":       crawlerName,
+				"blocked_count": blockedCount,
+			}).Info("all category links blocked by blacklist — no chained jobs published")
+			w.deleteRaw(ctx, rawID, mlog)
+			return nil
+		}
+	}
+
 	if err := w.publisher.Publish(ctx, crawlerName, urls, core.TargetTypeArticle, jobTimeout); err != nil {
 		return fmt.Errorf("publish chained article jobs: %w", err)
 	}
 
 	mlog.WithFields(map[string]interface{}{
-		"crawler":   crawlerName,
-		"url_count": len(urls),
+		"crawler":       crawlerName,
+		"url_count":     len(urls),
+		"blocked_count": blockedCount,
 	}).Info("chained article jobs published from category page")
 
 	// 카테고리 페이지는 contents/news_articles 에 저장하지 않음 — raw 즉시 정리
