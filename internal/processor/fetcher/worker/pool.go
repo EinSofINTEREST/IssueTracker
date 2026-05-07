@@ -233,7 +233,7 @@ func (p *KafkaConsumerPool) SetPriority(name string) {
 // context가 cancel되면 polling이 중단되고 진행 중인 작업이 완료됩니다.
 //
 // 각 worker goroutine 은 0..workerCount-1 의 worker_id 를 부여받아 ctx 에 실어 전달합니다
-// . 다운스트림 JobHandler — 특히 ChromedpJobHandler — 는 worker_id 로 per-worker
+// 다운스트림 JobHandler — 특히 ChromedpJobHandler — 는 worker_id 로 per-worker
 // 자원 (Semaphore, 추후 RemoteURL) 을 lookup 합니다. priority pool (high/normal/low) 의 worker_id
 // 는 의미가 없지만 (handler 가 무시) 모든 pool 이 동일 wiring 을 갖도록 일관성 보장.
 func (p *KafkaConsumerPool) Start(ctx context.Context) {

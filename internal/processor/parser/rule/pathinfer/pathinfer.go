@@ -132,7 +132,6 @@ func InferHeuristic(samples PathSamples, opts ...Option) (string, bool) {
 	// 검증: 입력 samples 전체가 결과 regex 에 매칭되는지 확인 — hallucination 방어.
 	// splitSegments 가 leading/trailing slash 를 trim 후 분리했으므로, 검증도 정규화된
 	// 형태 ("/" + trimmed) 로 매칭 — 그렇지 않으면 trailing slash 있는 path 는 자체 거부됨
-	//.
 	re, err := regexp.Compile(result)
 	if err != nil {
 		return "", false

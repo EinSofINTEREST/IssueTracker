@@ -829,7 +829,6 @@ func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.Pendin
 	baseCtx := context.WithoutCancel(ctx)
 	for _, item := range items {
 		// LLMRetryCount 를 ref 에 반영하여 직렬화 — item.RawRef 는 원본(0)이므로 별도 세팅 필요
-		//.
 		ref := item.RawRef
 		ref.LLMRetryCount = item.LLMRetryCount
 		payload, err := json.Marshal(ref)

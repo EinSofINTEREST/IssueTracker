@@ -116,7 +116,6 @@ func (e *JobEmitter) Emit(ctx context.Context, job *core.CrawlJob) error {
 
 	if err := e.producer.Publish(ctx, msg); err != nil {
 		// publish 실패 시 marker 즉시 해제 — 다음 retry 가 false acquired 로 silent skip 되지 않도록
-		//.
 		e.releaseGuardOnFailure(ctx, guardURL, guardAcquired, job)
 		return fmt.Errorf("emit job %s to %s: %w", job.ID, topic, err)
 	}

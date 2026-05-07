@@ -21,7 +21,6 @@ type retrySchedulerHolder struct {
 }
 
 // RetryScheduler 는 처리 실패한 CrawlJob 의 재시도 발행 시점을 관리하는 인터페이스입니다
-// .
 //
 // 두 가지 구현 전략을 추상화합니다:
 //   - KafkaImmediateRetryScheduler: 즉시 Kafka 에 재발행하고 worker 가 ScheduledAt 까지
