@@ -277,11 +277,21 @@ func (r *invalidatingBlacklistRepo) Insert(ctx context.Context, rec *storage.Bla
 }
 
 func (r *invalidatingBlacklistRepo) Update(ctx context.Context, rec *storage.BlacklistRecord) error {
-	err := r.inner.Update(ctx, rec)
-	if err == nil {
+	// PR #296 CodeRabbit 피드백: Update 는 host 변경 안 하므로 호출자가 rec.HostPattern 을 비워
+	// 보내도 정당. 사전 GetByID 로 authoritative host 를 얻어 invalidate — Delete 와 동일 패턴.
+	// pre-fetch 실패 시 fallback 으로 rec.HostPattern (비어있지 않을 때만) 사용.
+	before, lookupErr := r.inner.GetByID(ctx, rec.ID)
+	if err := r.inner.Update(ctx, rec); err != nil {
+		return err
+	}
+	if lookupErr == nil && before != nil {
+		r.invalidate(before.HostPattern)
+		return nil
+	}
+	if rec.HostPattern != "" {
 		r.invalidate(rec.HostPattern)
 	}
-	return err
+	return nil
 }
 
 func (r *invalidatingBlacklistRepo) Delete(ctx context.Context, id int64) error {

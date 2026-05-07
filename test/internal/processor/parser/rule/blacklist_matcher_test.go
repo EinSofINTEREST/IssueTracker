@@ -349,6 +349,24 @@ func TestInvalidatingBlacklistRepo_Update_Success_Invalidates(t *testing.T) {
 	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot())
 }
 
+// PR #296 CodeRabbit Major: Update 는 host 변경 안 하므로 호출자가 rec.HostPattern 을 비워
+// 보낼 수 있음. 사전 GetByID 로 authoritative host 를 얻어 invalidate 해야 cache 누락 0.
+func TestInvalidatingBlacklistRepo_Update_EmptyHostInArg_StillInvalidatesActualHost(t *testing.T) {
+	inner := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", Enabled: true},
+	}}
+	inv := &recordingBlacklistInvalidator{}
+	repo := rule.WrapBlacklistWithInvalidator(inner, inv)
+
+	// 호출자가 host 비워 보내도 (Update 는 host 변경 안 함이라 정당) DB 의 실제 host 로 invalidate.
+	err := repo.Update(context.Background(), &storage.BlacklistRecord{
+		ID: 1, Reason: "updated", Enabled: false,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot(),
+		"empty HostPattern arg 여도 사전 GetByID 로 실제 host 발견 후 invalidate")
+}
+
 func TestInvalidatingBlacklistRepo_Delete_PrefetchesAndInvalidates(t *testing.T) {
 	inner := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
 		{ID: 1, HostPattern: "ads.example.com", Enabled: true},
