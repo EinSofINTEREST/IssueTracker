@@ -288,7 +288,6 @@ func (u *Upgrader) logFields(msg string, fields map[string]interface{}) {
 	u.log.WithFields(fields).Info(msg)
 }
 
-// newRepublishJobID 는 republish CrawlJob 의 고유 ID 를 생성합니다 (publisher.newJobID 와 동일 패턴 — 32자 hex).
 // hostnameOf 는 rawURL 에서 hostname 을 추출합니다.
 // 파싱 실패 또는 hostname 이 비어있으면 fallback 을 반환합니다.
 func hostnameOf(rawURL, fallback string) string {
