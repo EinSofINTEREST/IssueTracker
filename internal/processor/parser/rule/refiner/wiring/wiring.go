@@ -15,6 +15,7 @@ import (
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/llm"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
 
@@ -28,6 +29,7 @@ import (
 // 에러 반환 정책: 도메인 wiring 실패는 main 이 Fatal 결정 — 본 함수는 wrap 후 return.
 func Build(
 	provider llm.Provider,
+	promptLoader prompt.Loader,
 	rules storage.ParsingRuleRepository,
 	samples storage.SampleURLRepository,
 	resolver *rule.Resolver,
@@ -51,11 +53,14 @@ func Build(
 		refiner.WithMetrics(refiner.NewMetrics(metricsRegistry)),
 	}
 	if provider != nil {
+		if promptLoader == nil {
+			return nil, fmt.Errorf("refiner wiring: LLM provider 제공 시 promptLoader 필수")
+		}
 		adapter, err := refiner.NewLLMAdapter(provider)
 		if err != nil {
 			return nil, fmt.Errorf("construct refiner LLM adapter: %w", err)
 		}
-		opts = append(opts, refiner.WithLLMClient(adapter))
+		opts = append(opts, refiner.WithLLMClient(adapter), refiner.WithPromptLoader(promptLoader))
 	}
 	r, err := refiner.New(rules, samples, resolver, log, opts...)
 	if err != nil {

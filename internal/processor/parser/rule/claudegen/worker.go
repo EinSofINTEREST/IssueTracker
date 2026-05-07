@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"issuetracker/internal/storage"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
 
@@ -81,6 +82,7 @@ type ClaudeWorker struct {
 	containerAuthPath string // 컨테이너 내 마운트 경로
 	sessionTimeout    time.Duration
 	runner            ContainerRunner
+	loader            prompt.Loader
 	log               *logger.Logger
 
 	mu          sync.RWMutex
@@ -98,9 +100,12 @@ func (w *ClaudeWorker) ModelName() string { return w.model }
 //
 // CLAUDE_CODE_AUTH_DIR 미지정 시 $HOME/.claude 를 사용합니다.
 // 인증 디렉토리가 없거나 접근 불가하면 fail-fast — 호스트 `claude` CLI 사전 로그인 필요.
-func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
+func NewFromEnv(loader prompt.Loader, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewFromEnv requires non-nil logger")
+	}
+	if loader == nil {
+		return nil, errors.New("claudegen: NewFromEnv requires non-nil prompt loader")
 	}
 	authDir, err := resolveAuthDir(os.Getenv("CLAUDE_CODE_AUTH_DIR"))
 	if err != nil {
@@ -126,6 +131,7 @@ func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
 		containerAuthPath: envOr("CLAUDE_CODE_CONTAINER_AUTH_PATH", defaultContainerAuthPath),
 		sessionTimeout:    timeout,
 		runner:            &execContainerRunner{},
+		loader:            loader,
 		log:               log,
 	}, nil
 }
@@ -135,9 +141,12 @@ func NewFromEnv(log *logger.Logger) (*ClaudeWorker, error) {
 // authDir 은 호스트의 Claude 인증 디렉토리, containerAuthPath 는 컨테이너 내 마운트 대상 경로.
 // containerAuthPath 가 빈 문자열이면 defaultContainerAuthPath 사용.
 // authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증.
-func New(image, model, authDir, containerAuthPath string, timeout time.Duration, log *logger.Logger) (*ClaudeWorker, error) {
+func New(image, model, authDir, containerAuthPath string, timeout time.Duration, loader prompt.Loader, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: New requires non-nil logger")
+	}
+	if loader == nil {
+		return nil, errors.New("claudegen: New requires non-nil prompt loader")
 	}
 	resolved, err := validateAuthDir(authDir)
 	if err != nil {
@@ -149,19 +158,22 @@ func New(image, model, authDir, containerAuthPath string, timeout time.Duration,
 	return &ClaudeWorker{
 		image: image, model: model,
 		authDir: resolved, containerAuthPath: containerAuthPath,
-		sessionTimeout: timeout, runner: &execContainerRunner{}, log: log,
+		sessionTimeout: timeout, runner: &execContainerRunner{}, loader: loader, log: log,
 	}, nil
 }
 
 // NewWithRunner 는 ContainerRunner 를 주입하는 생성자입니다 (테스트/DI 용).
 // authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증.
-func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time.Duration, runner ContainerRunner, log *logger.Logger) (*ClaudeWorker, error) {
+func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time.Duration, runner ContainerRunner, loader prompt.Loader, log *logger.Logger) (*ClaudeWorker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil logger")
 	}
 	if runner == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil runner")
 	}
+	if loader == nil {
+		return nil, errors.New("claudegen: NewWithRunner requires non-nil prompt loader")
+	}
 	resolved, err := validateAuthDir(authDir)
 	if err != nil {
 		return nil, err
@@ -172,7 +184,7 @@ func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time
 	return &ClaudeWorker{
 		image: image, model: model,
 		authDir: resolved, containerAuthPath: containerAuthPath,
-		sessionTimeout: timeout, runner: runner, log: log,
+		sessionTimeout: timeout, runner: runner, loader: loader, log: log,
 	}, nil
 }
 
@@ -336,12 +348,16 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 	runCtx, cancel := context.WithTimeout(ctx, w.sessionTimeout)
 	defer cancel()
 
+	promptText, err := buildPrompt(w.loader, host, targetType, sessionContainerPath)
+	if err != nil {
+		return storage.SelectorMap{}, fmt.Errorf("build claudegen prompt: %w", err)
+	}
 	args := []string{
 		"claude",
 		"--model", w.model,
 		// --dangerously-skip-permissions 는 root user 환경에서 동작하지 않고, OAuth 인증 + -p 모드는
 		// 본 플래그 없이 정상 동작 — 라이브 검증 시 발견.
-		"-p", buildPrompt(host, targetType, sessionContainerPath),
+		"-p", promptText,
 	}
 
 	w.log.WithFields(map[string]interface{}{

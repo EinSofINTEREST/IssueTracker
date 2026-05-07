@@ -14,8 +14,16 @@ import (
 
 	"issuetracker/internal/processor/parser/rule/claudegen"
 	"issuetracker/internal/storage"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
+
+// claudegenLoader 는 claudegen worker 가 요구하는 prompt asset 을 in-memory 로 제공합니다.
+// 운영의 scripts/prompts/claudegen/{page,list}.user.txt 와 동일한 placeholder 사용.
+var claudegenLoader = prompt.MapLoader{
+	"claudegen/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.",
+	"claudegen/list.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.",
+}
 
 // mockContainerRunner 는 docker 를 실행하지 않는 테스트용 ContainerRunner 입니다.
 type mockContainerRunner struct {
@@ -83,6 +91,7 @@ func newTestWorker(t *testing.T, runner *mockContainerRunner) *claudegen.ClaudeW
 		"/root/.claude",
 		10*time.Second,
 		runner,
+		claudegenLoader,
 		log,
 	)
 	require.NoError(t, err)
@@ -278,7 +287,7 @@ func TestClaudeWorker_ModelName(t *testing.T) {
 func TestNewFromEnv_MissingAuthDir(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_AUTH_DIR", "/nonexistent/path/to/claude/auth")
 	log := logger.New(logger.DefaultConfig())
-	_, err := claudegen.NewFromEnv(log)
+	_, err := claudegen.NewFromEnv(claudegenLoader, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auth dir")
 }
@@ -289,7 +298,7 @@ func TestNewFromEnv_AuthDirIsFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o644))
 	t.Setenv("CLAUDE_CODE_AUTH_DIR", tmpFile)
 	log := logger.New(logger.DefaultConfig())
-	_, err := claudegen.NewFromEnv(log)
+	_, err := claudegen.NewFromEnv(claudegenLoader, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a directory")
 }
@@ -299,7 +308,7 @@ func TestNewFromEnv_ValidAuthDir(t *testing.T) {
 	authDir := makeAuthDir(t)
 	t.Setenv("CLAUDE_CODE_AUTH_DIR", authDir)
 	log := logger.New(logger.DefaultConfig())
-	w, err := claudegen.NewFromEnv(log)
+	w, err := claudegen.NewFromEnv(claudegenLoader, log)
 	require.NoError(t, err)
 	assert.NotNil(t, w)
 }
@@ -307,7 +316,7 @@ func TestNewFromEnv_ValidAuthDir(t *testing.T) {
 // TestNew_EmptyAuthDir 는 New() 에 빈 authDir 전달 시 에러를 반환하는지 검증합니다.
 func TestNew_EmptyAuthDir(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
-	_, err := claudegen.New("image", "model", "", "/root/.claude", 10*time.Second, log)
+	_, err := claudegen.New("image", "model", "", "/root/.claude", 10*time.Second, claudegenLoader, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "authDir")
 }
@@ -316,7 +325,7 @@ func TestNew_EmptyAuthDir(t *testing.T) {
 func TestNewWithRunner_EmptyAuthDir(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	runner := &mockContainerRunner{}
-	_, err := claudegen.NewWithRunner("image", "model", "", "/root/.claude", 10*time.Second, runner, log)
+	_, err := claudegen.NewWithRunner("image", "model", "", "/root/.claude", 10*time.Second, runner, claudegenLoader, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "authDir")
 }
@@ -325,7 +334,7 @@ func TestNewWithRunner_EmptyAuthDir(t *testing.T) {
 func TestNewWithRunner_NilRunner(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	authDir := makeAuthDir(t)
-	_, err := claudegen.NewWithRunner("image", "model", authDir, "/root/.claude", 10*time.Second, nil, log)
+	_, err := claudegen.NewWithRunner("image", "model", authDir, "/root/.claude", 10*time.Second, nil, claudegenLoader, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "runner")
 }
@@ -335,7 +344,7 @@ func TestNewWithRunner_DefaultContainerAuthPath(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	authDir := makeAuthDir(t)
 	runner := &mockContainerRunner{}
-	w, err := claudegen.NewWithRunner("image", "model", authDir, "", 10*time.Second, runner, log)
+	w, err := claudegen.NewWithRunner("image", "model", authDir, "", 10*time.Second, runner, claudegenLoader, log)
 	require.NoError(t, err)
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })

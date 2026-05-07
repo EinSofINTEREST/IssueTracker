@@ -1,0 +1,9 @@
+Given these URL paths from the same site, generate a single RE2 regex that matches the article URLs but not the non-article URLs.
+
+Article URLs (positive — must match):
+{{ARTICLES}}
+
+Non-article URLs (negative — must NOT match):
+{{NON_ARTICLES}}
+
+Respond with ONLY the regex pattern.

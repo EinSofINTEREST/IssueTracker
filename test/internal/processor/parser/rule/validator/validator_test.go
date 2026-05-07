@@ -11,8 +11,24 @@ import (
 	"issuetracker/internal/processor/parser/rule/validator"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/llm"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
+
+// validatorLoader 는 LLMValidator 가 요구하는 prompt asset 을 in-memory 로 제공합니다.
+// 운영의 scripts/prompts/validator/{system,page.user,list.user}.txt 와 동일한 placeholder 사용.
+var validatorLoader = prompt.MapLoader{
+	"validator/system":    "You are a CSS selector validator. Respond with JSON.",
+	"validator/page.user": "Article page\ntitle: {{TITLE}}\nbody: {{BODY}}\n{{PUBLISHED_AT_LINE}}criteria\n{{PUBLISHED_AT_CRITERIA}}",
+	"validator/list.user": "List page\ncontainer: {{ITEM_CONTAINER}}\n{{ITEM_LINKS_LINE}}criteria",
+}
+
+func newTestLLMValidator(t *testing.T, provider llm.Provider) *validator.LLMValidator {
+	t.Helper()
+	v, err := validator.NewLLMValidator(provider, validatorLoader)
+	require.NoError(t, err)
+	return v
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 테스트용 fakes
@@ -70,7 +86,7 @@ var listSelectors = storage.SelectorMap{
 
 func TestLLMValidator_PageValid(t *testing.T) {
 	provider := &fakeProvider{response: `{"valid": true, "reason": "title and body look like a news article"}`}
-	v := validator.NewLLMValidator(provider)
+	v := newTestLLMValidator(t, provider)
 
 	res, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
 	require.NoError(t, err)
@@ -81,7 +97,7 @@ func TestLLMValidator_PageValid(t *testing.T) {
 
 func TestLLMValidator_PageInvalid(t *testing.T) {
 	provider := &fakeProvider{response: `{"valid": false, "reason": "title selector extracts navigation menu, not a headline"}`}
-	v := validator.NewLLMValidator(provider)
+	v := newTestLLMValidator(t, provider)
 
 	res, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
 	require.NoError(t, err)
@@ -91,7 +107,7 @@ func TestLLMValidator_PageInvalid(t *testing.T) {
 
 func TestLLMValidator_ListValid(t *testing.T) {
 	provider := &fakeProvider{response: `{"valid": true, "reason": "item_links are article URLs"}`}
-	v := validator.NewLLMValidator(provider)
+	v := newTestLLMValidator(t, provider)
 
 	res, err := v.Validate(context.Background(), sampleListHTML, listSelectors, storage.TargetTypeList)
 	require.NoError(t, err)
@@ -100,7 +116,7 @@ func TestLLMValidator_ListValid(t *testing.T) {
 
 func TestLLMValidator_APIError_ReturnsError(t *testing.T) {
 	provider := &fakeProvider{err: errors.New("rate limit")}
-	v := validator.NewLLMValidator(provider)
+	v := newTestLLMValidator(t, provider)
 
 	_, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
 	assert.Error(t, err)
@@ -108,7 +124,7 @@ func TestLLMValidator_APIError_ReturnsError(t *testing.T) {
 
 func TestLLMValidator_MalformedResponse_ReturnsError(t *testing.T) {
 	provider := &fakeProvider{response: "not json at all"}
-	v := validator.NewLLMValidator(provider)
+	v := newTestLLMValidator(t, provider)
 
 	_, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
 	assert.Error(t, err)
@@ -117,7 +133,7 @@ func TestLLMValidator_MalformedResponse_ReturnsError(t *testing.T) {
 func TestLLMValidator_ResponseWrappedInMarkdown(t *testing.T) {
 	// LLM 이 ```json ... ``` 으로 감싼 응답도 파싱 가능해야 함
 	provider := &fakeProvider{response: "```json\n{\"valid\": true, \"reason\": \"ok\"}\n```"}
-	v := validator.NewLLMValidator(provider)
+	v := newTestLLMValidator(t, provider)
 
 	res, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
 	require.NoError(t, err)
@@ -142,8 +158,8 @@ func TestPool_FirstValidatorPasses_ReturnsImmediately(t *testing.T) {
 	p1 := &fakeProvider{response: `{"valid": true, "reason": "ok"}`}
 	p2 := &fakeProvider{response: `{"valid": false, "reason": "bad"}`}
 	pool := validator.NewPool(log,
-		validator.NewLLMValidator(p1),
-		validator.NewLLMValidator(p2),
+		newTestLLMValidator(t, p1),
+		newTestLLMValidator(t, p2),
 	)
 
 	res, err := pool.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
@@ -156,7 +172,7 @@ func TestPool_FirstValidatorPasses_ReturnsImmediately(t *testing.T) {
 func TestPool_FirstValidatorRejects_ReturnsInvalid(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	p1 := &fakeProvider{response: `{"valid": false, "reason": "selector extracts ads"}`}
-	pool := validator.NewPool(log, validator.NewLLMValidator(p1))
+	pool := validator.NewPool(log, newTestLLMValidator(t, p1))
 
 	res, err := pool.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
 	require.NoError(t, err)
@@ -170,8 +186,8 @@ func TestPool_AllAPIErrors_BestEffortPass(t *testing.T) {
 	p1 := &fakeProvider{err: errors.New("timeout")}
 	p2 := &fakeProvider{err: errors.New("rate limit")}
 	pool := validator.NewPool(log,
-		validator.NewLLMValidator(p1),
-		validator.NewLLMValidator(p2),
+		newTestLLMValidator(t, p1),
+		newTestLLMValidator(t, p2),
 	)
 
 	res, err := pool.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
@@ -185,8 +201,8 @@ func TestPool_FirstAPIError_SecondPasses(t *testing.T) {
 	p1 := &fakeProvider{err: errors.New("timeout")}
 	p2 := &fakeProvider{response: `{"valid": true, "reason": "ok"}`}
 	pool := validator.NewPool(log,
-		validator.NewLLMValidator(p1),
-		validator.NewLLMValidator(p2),
+		newTestLLMValidator(t, p1),
+		newTestLLMValidator(t, p2),
 	)
 
 	res, err := pool.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
@@ -202,7 +218,7 @@ func TestPool_FirstAPIError_SecondPasses(t *testing.T) {
 func TestLLMGenAdapter_ConvertsResult(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	p := &fakeProvider{response: `{"valid": true, "reason": "looks good"}`}
-	pool := validator.NewPool(log, validator.NewLLMValidator(p))
+	pool := validator.NewPool(log, newTestLLMValidator(t, p))
 	adapter := validator.NewLLMGenAdapter(pool)
 
 	res, err := adapter.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)

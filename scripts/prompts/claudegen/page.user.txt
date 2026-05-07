@@ -1,0 +1,26 @@
+Read the HTML file at {{SESSION_PATH}}/page.html from the {{HOST}} website.
+
+Your task: extract CSS selectors for the fields below and return them as a single JSON object only — no explanation, no markdown, no code blocks.
+
+Target page type: {{TARGET_TYPE}}
+
+Required fields:
+{
+  "title":        {"css": "<selector for page title>"},
+  "main_content": {"css": "<selector for primary article body>", "multi": true},
+  "summary":      {"css": "<selector for description/summary, often meta>", "attribute": "content"},
+  "author":       {"css": "<selector for author name>"},
+  "published_at": {"css": "<selector for publish datetime>", "attribute": "datetime"},
+  "category":     {"css": "<selector for section/category>"},
+  "tags":         {"css": "<selector for tag links>", "multi": true},
+  "images":       {"css": "<selector for content images>", "attribute": "src", "multi": true}
+}
+
+Rules:
+1. Use only selectors that actually appear in the HTML — do not invent.
+2. Prefer stable selectors (semantic tags, ARIA roles, id/class with meaningful names) over brittle ones (auto-generated hashes, nth-child indices).
+3. "css" must be a valid goquery/CSS selector. "attribute" must be empty for text content, or the HTML attribute name (e.g. "href", "datetime", "content").
+4. "multi": true when the selector matches multiple elements (lists, paragraphs).
+5. Omit fields you cannot find a reliable selector for.
+
+Return ONLY the JSON object.

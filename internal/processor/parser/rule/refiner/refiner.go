@@ -36,6 +36,7 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/rule/pathinfer"
 	"issuetracker/internal/storage"
+	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
 
@@ -62,6 +63,7 @@ type Refiner struct {
 	samples  storage.SampleURLRepository
 	resolver *rule.Resolver
 	llm      pathinfer.LLMClient // nil 허용
+	loader   prompt.Loader       // LLM fallback 활성 시 (llm != nil) 필수
 	metrics  *Metrics            // nil 허용 (Record* 메소드가 noop)
 	log      *logger.Logger
 
@@ -98,6 +100,13 @@ func WithMinSamples(n int) Option {
 // nil 이면 algorithm-only 동작 (InferLLM 단계 skip).
 func WithLLMClient(c pathinfer.LLMClient) Option {
 	return func(r *Refiner) { r.llm = c }
+}
+
+// WithPromptLoader 는 pathinfer.InferLLM 이 사용할 prompt loader 를 주입합니다.
+// LLMClient 가 활성된 환경 (llm != nil) 에서는 필수 — 미주입 시 LLM 단계가 항상 에러로
+// 폴백되어 algorithm-only 와 동일 결과. nil 허용 (algorithm-only 환경).
+func WithPromptLoader(l prompt.Loader) Option {
+	return func(r *Refiner) { r.loader = l }
 }
 
 // WithMetrics 는 Prometheus collector 를 주입합니다.
@@ -292,7 +301,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 	}
 
 	// 1) algorithm 우선 시도 → 실패 시 LLM fallback. LLM 호출 에러는 별도 분기.
-	pattern, method, inferErr := inferPattern(ctx, paths, r.llm, r.minSamples, r.metrics)
+	pattern, method, inferErr := inferPattern(ctx, paths, r.llm, r.loader, r.minSamples, r.metrics)
 	if inferErr != nil {
 		rlog.WithFields(map[string]interface{}{
 			"sample_count": len(paths),
@@ -384,7 +393,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 //
 // LLM Generate 호출 1건이 발생할 때 metrics.RecordLLMCall 호출 —
 // success / error 라벨로 운영자가 호출 빈도 + 실패율 추적 가능. metrics nil 허용.
-func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, minSamples int, metrics *Metrics) (string, string, error) {
+func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, loader prompt.Loader, minSamples int, metrics *Metrics) (string, string, error) {
 	opt := pathinfer.WithMinSamples(minSamples)
 
 	if pattern, ok := pathinfer.InferHeuristic(pathinfer.PathSamples{Articles: paths}, opt); ok {
@@ -395,7 +404,7 @@ func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, 
 		return "", "", nil
 	}
 
-	pattern, ok, err := pathinfer.InferLLM(ctx, pathinfer.LLMSamples{Articles: paths}, llm, opt)
+	pattern, ok, err := pathinfer.InferLLM(ctx, pathinfer.LLMSamples{Articles: paths}, llm, loader, opt)
 	if err != nil {
 		metrics.RecordLLMCall(LLMStatusError)
 		return "", "", err

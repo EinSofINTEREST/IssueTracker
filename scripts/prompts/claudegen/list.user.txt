@@ -1,0 +1,22 @@
+Read the HTML file at {{SESSION_PATH}}/page.html from the {{HOST}} website.
+
+Your task: extract CSS selectors for the fields below and return them as a single JSON object only — no explanation, no markdown, no code blocks.
+
+Target page type: {{TARGET_TYPE}}
+
+Required fields:
+{
+  "item_container": {"css": "<selector for each list item root>"},
+  "item_link":      {"css": "<selector inside item for the article link>", "attribute": "href"},
+  "item_title":     {"css": "<selector inside item for the title text>"},
+  "item_snippet":   {"css": "<selector inside item for the short summary>"}
+}
+
+Rules:
+1. Use only selectors that actually appear in the HTML — do not invent.
+2. Prefer stable selectors (semantic tags, ARIA roles, id/class with meaningful names) over brittle ones (auto-generated hashes, nth-child indices).
+3. "css" must be a valid goquery/CSS selector. "attribute" must be empty for text content, or the HTML attribute name (e.g. "href", "datetime", "content").
+4. "multi": true when the selector matches multiple elements (lists, paragraphs).
+5. Omit fields you cannot find a reliable selector for.
+
+Return ONLY the JSON object.

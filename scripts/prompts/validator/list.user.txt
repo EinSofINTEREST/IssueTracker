@@ -1,0 +1,10 @@
+Target type: list page (category/index page)
+
+Extracted content:
+- item_container (first element text): {{ITEM_CONTAINER}}
+{{ITEM_LINKS_LINE}}
+Validation criteria:
+- item_links should look like URLs or article titles (not empty, not boilerplate navigation)
+- item_container should contain multiple article entries
+
+Is this extraction semantically valid for a news article scraper?
