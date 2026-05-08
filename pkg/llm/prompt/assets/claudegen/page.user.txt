@@ -1,26 +1,61 @@
 Read the HTML file at {{SESSION_PATH}}/page.html from the {{HOST}} website.
 
-Your task: extract CSS selectors for the fields below and return them as a single JSON object only — no explanation, no markdown, no code blocks.
+Your task: analyze the page and return a single JSON object with the following structure — no explanation, no markdown, no code blocks.
 
 Target page type: {{TARGET_TYPE}}
 
-Required fields:
+Output schema:
 {
-  "title":        {"css": "<selector for page title>"},
-  "main_content": {"css": "<selector for primary article body>", "multi": true},
-  "summary":      {"css": "<selector for description/summary, often meta>", "attribute": "content"},
-  "author":       {"css": "<selector for author name>"},
-  "published_at": {"css": "<selector for publish datetime>", "attribute": "datetime"},
-  "category":     {"css": "<selector for section/category>"},
-  "tags":         {"css": "<selector for tag links>", "multi": true},
-  "images":       {"css": "<selector for content images>", "attribute": "src", "multi": true}
+  "validity": "ok" or "blacklist",
+  "blacklist_reason": "<korean reason if validity=blacklist, else null>",
+  "page_type": "news" | "community" | "info" | "commercial" | "paper" | "other",
+  "page_type_confidence": <float 0.0 to 1.0>,
+  "selectors": {
+    "title":        {"css": "<selector for page title>"},
+    "main_content": {"css": "<selector for primary article body>", "multi": true},
+    "summary":      {"css": "<selector for description/summary, often meta>", "attribute": "content"},
+    "author":       {"css": "<selector for author name>"},
+    "published_at": {"css": "<selector for publish datetime>", "attribute": "datetime"},
+    "category":     {"css": "<selector for section/category>"},
+    "tags":         {"css": "<selector for tag links>", "multi": true},
+    "images":       {"css": "<selector for content images>", "attribute": "src", "multi": true}
+  },
+  "self_check": {
+    "title_sample": "<actual text the title selector would extract>",
+    "body_word_count_estimate": <integer>,
+    "warnings": ["<short korean warning if any>", ...]
+  }
 }
 
-Rules:
+Validity decision rules:
+- "blacklist" if the page is one of:
+  * Advertisement / interstitial / paywall / login wall (no real content visible)
+  * Empty page or "page not found" / "service unavailable" message
+  * Pure navigation page with no article-like content
+  * Captcha / bot-detection page
+  * URL shortener / redirect landing
+- "ok" otherwise. If "ok", you MUST fill `selectors` and `self_check` based on the actual HTML.
+- If "blacklist", `selectors` and `self_check` may be empty objects (`{}`), and `blacklist_reason` MUST be a short Korean explanation (e.g., "광고 페이지", "로그인 요구", "빈 페이지").
+
+Page type classification:
+- "news"       — journalistic article (newspaper, broadcaster, news aggregator with editorial content)
+- "community"  — forum / bulletin board / user-posted content (Reddit-like, cafe, gallery)
+- "info"       — wiki / official documentation / how-to guide / reference page
+- "commercial" — product listing / shopping / promotional landing page
+- "paper"      — academic article / research paper / preprint
+- "other"      — anything not fitting above (catch-all)
+- `page_type_confidence` is your self-assessed certainty (0.0 ~ 1.0). Lower it for ambiguous cases.
+
+Selector rules (when validity="ok"):
 1. Use only selectors that actually appear in the HTML — do not invent.
 2. Prefer stable selectors (semantic tags, ARIA roles, id/class with meaningful names) over brittle ones (auto-generated hashes, nth-child indices).
 3. "css" must be a valid goquery/CSS selector. "attribute" must be empty for text content, or the HTML attribute name (e.g. "href", "datetime", "content").
 4. "multi": true when the selector matches multiple elements (lists, paragraphs).
 5. Omit fields you cannot find a reliable selector for.
+
+Self-check rules:
+- `title_sample`: extract the actual text your title selector would return (truncate to 200 chars if longer)
+- `body_word_count_estimate`: rough word count of what your main_content selector would extract
+- `warnings`: list any concerns (e.g., "셀렉터 매칭 0건", "본문이 너무 짧음", "광고로 보이는 부분 다수")
 
 Return ONLY the JSON object.
