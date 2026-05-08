@@ -97,6 +97,17 @@ func (e *selectorValidationError) Error() string {
 }
 func (e *selectorValidationError) Unwrap() error { return e.cause }
 
+// errBlacklistedNoRule 는 EnrichedExtractor 가 페이지를 blacklist 로 판정해 셀렉터 INSERT 를
+// skip 한 경우 runOnce 가 반환하는 sentinel error 입니다 (CodeRabbit Major 반영).
+//
+// 본 에러는 Enqueue goroutine 에서 정상 분기 (룰 생성 성공 → pendingQueue.Flush) 와 구분
+// 하기 위한 전용 신호. blacklist 로 판정된 host 는 새 룰이 없으므로 pending 큐에 쌓인 URL
+// 들도 fetch 시 ErrNoRule 로 다시 LLM 호출 → 또 blacklist → 무한 루프 발생을 방지하기 위해
+// pendingQueue flush 를 skip.
+//
+// 호출자는 errors.Is 로 식별 — 다른 에러 (LLM API 실패, JSON 파싱 등) 와 분리.
+var errBlacklistedNoRule = errors.New("llmgen: page blacklisted, no rule generated")
+
 // Generator 는 host 별 parsing rule 을 LLM 으로 자동 생성합니다.
 //
 // goroutine-safe — provider / repo / resolver 가 자체 thread-safety 를 가짐.
@@ -338,6 +349,16 @@ func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType sto
 
 		err := g.runOnce(bgCtx, host, targetType, urlSnapshot, htmlSnapshot, stale)
 		if err != nil {
+			// blacklist sentinel 은 normal completion — pending flush skip 만 하고 logging 도 별도.
+			if errors.Is(err, errBlacklistedNoRule) {
+				logger.FromContext(bgCtx).WithFields(map[string]interface{}{
+					"host":        host,
+					"target_type": string(targetType),
+					"url":         urlSnapshot,
+				}).Info("llmgen page blacklisted, pending flush skipped")
+				return
+			}
+
 			logger.FromContext(bgCtx).WithFields(map[string]interface{}{
 				"host":        host,
 				"target_type": string(targetType),
@@ -500,9 +521,11 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 				return fmt.Errorf("claude code extractor: %w", err)
 			}
 			// validity == "blacklist" 분기 — 셀렉터 INSERT skip + 자동 blacklist 등록.
+			// errBlacklistedNoRule sentinel 반환 — 정상 룰 생성 분기와 구분되어 호출자가
+			// pendingQueue flush 를 skip (무한 루프 방지).
 			if res.Blacklist != nil {
 				g.handleBlacklistDecision(ctx, host, sampleURL, targetType, res.Blacklist)
-				return nil
+				return errBlacklistedNoRule
 			}
 			selectors = res.Selectors
 			pageType = string(res.PageType)
@@ -711,6 +734,13 @@ func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL
 	}
 
 	pathPattern := pathPatternFromURL(sampleURL)
+	if pathPattern == "" {
+		// URL parse 실패 — host-wide catch-all 회피 (CodeRabbit Major 반영).
+		// 빈 path_pattern 은 host 전체 차단 효과인데, 단일 malformed URL 만 보고 host 전체를
+		// 차단하는 건 over-reach. 운영자 manual 등록 경로로 위임.
+		g.log.WithFields(logFields).Warn("blacklist insert skipped — sample URL parse failed (host-wide catch-all 회피)")
+		return
+	}
 	rec := &storage.BlacklistRecord{
 		HostPattern: host,
 		PathPattern: pathPattern,
@@ -735,12 +765,20 @@ func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL
 // pathPatternFromURL 은 sampleURL 의 path 부분을 RE2 regex 로 escape 한 anchor pattern 을
 // 반환합니다. parsing_blacklist 의 path_pattern 컬럼에 사용 — 정확히 동일한 URL 만 매칭.
 //
-// URL parse 실패 시 빈 문자열 반환 — host-level catch-all 효과 (host 단위 차단). 보수적으로
-// 의도된 fallback (LLM 이 이 호스트의 페이지를 bad 로 판정했으므로 host 전체 차단도 합리).
+// 정책 (CodeRabbit Major 반영):
+//   - URL parse 실패 → "" 반환 (호출자가 insert skip)
+//   - 정상 parse + 빈 path (예: https://example.com) → "/" 로 normalize → "^/$" pattern
+//     (이전: "" 반환으로 host-wide catch-all 이 되어 단일 root URL blacklist 가 host 전체
+//     차단 — 의도되지 않은 over-reach)
+//   - 정상 parse + non-empty path → "^<escaped>$"
 func pathPatternFromURL(sampleURL string) string {
 	u, err := url.Parse(sampleURL)
-	if err != nil || u.Path == "" {
+	if err != nil {
 		return ""
 	}
-	return "^" + regexp.QuoteMeta(u.Path) + "$"
+	path := u.Path
+	if path == "" {
+		path = "/"
+	}
+	return "^" + regexp.QuoteMeta(path) + "$"
 }

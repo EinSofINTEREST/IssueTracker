@@ -466,7 +466,7 @@ func parseEnrichedOutput(output string) (*llmgen.ExtractResult, error) {
 	case "ok":
 		return &llmgen.ExtractResult{
 			Selectors:          eo.Selectors,
-			PageType:           llmgen.PageType(eo.PageType),
+			PageType:           normalizePageType(eo.PageType),
 			PageTypeConfidence: eo.PageTypeConfidence,
 		}, nil
 	case "":
@@ -551,4 +551,39 @@ func truncate(s string, n int) string {
 		count++
 	}
 	return s
+}
+
+// knownPageTypes 는 prompt schema 에 명시된 valid page_type 집합입니다 (CodeRabbit Major 반영).
+//
+// LLM 응답이 prompt 명세를 벗어나면 (예: "News" 대문자, "news_article" 등 변종) silent 하게
+// parsing_rules.page_type 에 들어가 분류 통계가 오염될 수 있어 정규화 + 허용 set 검증.
+//
+// 동의어 매핑: 잘 알려진 변종은 표준 PageType 으로 매핑. 모르는 값은 빈 문자열 (Unspecified)
+// 로 fall-back — rule INSERT 자체는 막지 않음 (selector 가 정상이면 분류만 미상태로 저장).
+var knownPageTypes = map[string]llmgen.PageType{
+	"news":         llmgen.PageTypeNews,
+	"news_article": llmgen.PageTypeNews,
+	"article":      llmgen.PageTypeNews,
+	"community":    llmgen.PageTypeCommunity,
+	"forum":        llmgen.PageTypeCommunity,
+	"info":         llmgen.PageTypeInfo,
+	"information":  llmgen.PageTypeInfo,
+	"wiki":         llmgen.PageTypeInfo,
+	"commercial":   llmgen.PageTypeCommercial,
+	"shopping":     llmgen.PageTypeCommercial,
+	"product":      llmgen.PageTypeCommercial,
+	"paper":        llmgen.PageTypePaper,
+	"academic":     llmgen.PageTypePaper,
+	"research":     llmgen.PageTypePaper,
+	"other":        llmgen.PageTypeOther,
+}
+
+// normalizePageType 은 LLM 응답의 page_type 문자열을 prompt schema 의 valid set 으로
+// 정규화합니다. 동의어 / 대소문자 변종 흡수, 미인식 값은 PageTypeUnspecified.
+func normalizePageType(raw string) llmgen.PageType {
+	key := strings.ToLower(strings.TrimSpace(raw))
+	if pt, ok := knownPageTypes[key]; ok {
+		return pt
+	}
+	return llmgen.PageTypeUnspecified
 }
