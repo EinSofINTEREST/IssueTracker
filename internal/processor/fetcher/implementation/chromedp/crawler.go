@@ -9,7 +9,10 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// NewChromedpCrawler: 새로운 ChromedpCrawler 인스턴스 생성
+// NewChromedpCrawler: 새로운 ChromedpCrawler 인스턴스 생성 (rate limiter 없음).
+//
+// production wiring 은 NewChromedpCrawlerWithRateLimiter 를 사용. 본 생성자는 example /
+// test 환경용.
 func NewChromedpCrawler(name string, source core.SourceInfo, config core.Config) *ChromedpCrawler {
 	return &ChromedpCrawler{
 		name:       name,
@@ -19,13 +22,22 @@ func NewChromedpCrawler(name string, source core.SourceInfo, config core.Config)
 	}
 }
 
-// NewChromedpCrawlerWithOptions: 옵션을 지정하여 인스턴스 생성
+// NewChromedpCrawlerWithOptions: 옵션을 지정하여 인스턴스 생성 (rate limiter 없음).
 func NewChromedpCrawlerWithOptions(name string, source core.SourceInfo, config core.Config, opts ChromedpOptions) *ChromedpCrawler {
+	return NewChromedpCrawlerWithRateLimiter(name, source, config, opts, nil)
+}
+
+// NewChromedpCrawlerWithRateLimiter: rate limiter 가 주입된 ChromedpCrawler 를 생성합니다.
+//
+// chromedp 는 raw http.Client 를 거치지 않으므로 Fetch entry 에서 직접 Wait 를 호출해
+// RPH 정책을 강제합니다. rateLimiter 가 nil 이면 NewChromedpCrawlerWithOptions 와 동일.
+func NewChromedpCrawlerWithRateLimiter(name string, source core.SourceInfo, config core.Config, opts ChromedpOptions, rateLimiter core.URLRateLimiter) *ChromedpCrawler {
 	return &ChromedpCrawler{
-		name:       name,
-		sourceInfo: source,
-		config:     config,
-		opts:       opts,
+		name:           name,
+		sourceInfo:     source,
+		config:         config,
+		opts:           opts,
+		urlRateLimiter: rateLimiter,
 	}
 }
 

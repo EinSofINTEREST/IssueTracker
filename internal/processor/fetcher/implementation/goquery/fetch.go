@@ -13,9 +13,28 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// Fetch: URL에서 컨텐츠 가져오기
+// Fetch: URL에서 컨텐츠 가져오기.
+//
+// 매 호출 직전 urlRateLimiter.Wait 호출 (limiter 가 주입된 경우) — 사이트별 RPH 정책 강제.
+// limiter 가 nil 이면 즉시 진행 (제한 없음).
 func (c *GoqueryCrawler) Fetch(ctx context.Context, target core.Target) (*core.RawContent, error) {
 	log := logger.FromContext(ctx)
+
+	// 사이트별 rate limiting: 비-nil limiter 만 강제. ctx cancel 시 즉시 에러 전파.
+	// limiter 가 IP 해석 실패 시 graceful degradation (limiter 자체 정책) — 본 호출자는 그냥 전달받음.
+	if c.urlRateLimiter != nil {
+		if err := c.urlRateLimiter.Wait(ctx, target.URL); err != nil {
+			return nil, &core.CrawlerError{
+				Category:  core.ErrCategoryRateLimit,
+				Code:      "RATE_001",
+				Message:   "rate limit wait failed",
+				Source:    c.name,
+				URL:       target.URL,
+				Retryable: true,
+				Err:       err,
+			}
+		}
+	}
 
 	// HTTP 요청
 	req, err := http.NewRequestWithContext(ctx, "GET", target.URL, nil)

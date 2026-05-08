@@ -9,6 +9,9 @@ import (
 
 // ChromedpCrawler: 헤드리스 브라우저 기반 동적 크롤러
 // JavaScript 렌더링이 필요한 SPA, 커뮤니티 등 동적 페이지 크롤링에 사용
+//
+// urlRateLimiter 가 nil 이 아니면 매 Fetch 진입 직전 Wait 를 호출해 RPH 정책 강제.
+// chromedp 는 raw http.Client 를 사용하지 않으므로 entry-level 에서 직접 limiter 호출.
 type ChromedpCrawler struct {
 	name       string
 	sourceInfo core.SourceInfo
@@ -20,6 +23,9 @@ type ChromedpCrawler struct {
 
 	// 옵션
 	opts ChromedpOptions
+
+	// rate limiter (nil 허용)
+	urlRateLimiter core.URLRateLimiter
 }
 
 // ChromedpOptions: chromedp 크롤러 추가 옵션
