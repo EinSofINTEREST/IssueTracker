@@ -30,14 +30,44 @@ import (
 //   - throttle 결정 시 emit 호출 없이 silent drop (구현체가 WARN 로그 책임)
 //   - 미설정 시 throttle 비활성 (기존 동작 유지)
 //   - URL 가드와 직렬 적용: gate(질적 차단) → throttle(양적 차단) → emit
+//
+// 동적 Refresh (이슈 #328):
+//   - SetEntryResolver + StartRefreshLoop 로 DB 기반 entries 운영 중 변경 반영
+//   - 각 entry 마다 per-entry context.CancelFunc 보관 — Refresh 시 diff 후 신규는 spawn,
+//     사라진 / 변경된 entry 는 cancel + (변경의 경우) respawn
+//   - SetEntryResolver 미사용 시 기존 정적 entries (생성자 인자) 가 유지되며 Refresh 비활성
 type Scheduler struct {
-	entries    []ScheduleEntry
 	emitter    Emitter
 	gate       atomic.Pointer[urlguard.Gate]
 	throttler  atomic.Pointer[throttlerRef]
 	log        *logger.Logger
 	wg         sync.WaitGroup
 	maxRetries int
+
+	// entries 관리 (정적 + 동적 모두 지원).
+	mu            sync.Mutex
+	running       map[string]*entryHandle // key = entryKey(crawler+url)
+	resolver      EntryResolver
+	staticEntries []ScheduleEntry // 생성자 인자 — resolver 가 nil 일 때 사용
+
+	stopRefreshCh chan struct{}
+	refreshOnce   sync.Once
+}
+
+// entryHandle 은 단일 entry goroutine 의 lifecycle 정보입니다.
+//
+// snapshot: 현재 적용 중인 entry 값 (interval 변경 감지용)
+// cancel: goroutine 종료 신호
+type entryHandle struct {
+	snapshot ScheduleEntry
+	cancel   context.CancelFunc
+}
+
+// entryKey 는 동일 entry 를 식별하는 키 (CrawlerName + URL).
+// scheduler_entries 의 자연키 (category, source_name, url) 와는 다름 — Scheduler 내부는
+// CrawlerName + URL 기반으로 dedup (같은 URL 의 중복 spawn 회피).
+func entryKey(e ScheduleEntry) string {
+	return e.CrawlerName + "|" + e.URL
 }
 
 // throttlerRef 는 atomic.Pointer 가 인터페이스 값을 직접 저장하지 못하므로
@@ -47,6 +77,9 @@ type throttlerRef struct {
 }
 
 // New는 새 Scheduler를 생성합니다.
+//
+// entries 는 정적 시드 — SetEntryResolver 로 동적 reload 활성화 시 무시됩니다 (resolver 가
+// 부팅 직후 ListEnabled 로 첫 snapshot 을 채워 동일 역할 수행).
 func New(
 	entries []ScheduleEntry,
 	emitter Emitter,
@@ -54,26 +87,59 @@ func New(
 	maxRetries int,
 ) *Scheduler {
 	return &Scheduler{
-		entries:    entries,
-		emitter:    emitter,
-		log:        log,
-		maxRetries: maxRetries,
+		emitter:       emitter,
+		log:           log,
+		maxRetries:    maxRetries,
+		running:       make(map[string]*entryHandle),
+		staticEntries: entries,
 	}
+}
+
+// SetEntryResolver 는 동적 reload 를 활성화합니다 (이슈 #328).
+//
+// 본 메소드 호출 후 Start 시점에 resolver.Resolve 로 entries 를 가져옵니다 (생성자 인자
+// 정적 entries 는 무시). StartRefreshLoop 호출 시 주기적으로 diff 갱신.
+//
+// Start 이전에 호출해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출.
+func (s *Scheduler) SetEntryResolver(r EntryResolver) {
+	s.resolver = r
 }
 
 // Start는 각 ScheduleEntry에 대한 goroutine을 시작합니다.
 // 각 goroutine은 즉시 1회 실행 후 Interval마다 반복합니다.
+//
+// resolver 가 등록되어 있으면 Resolve 결과로, 아니면 생성자 인자 정적 entries 로 구동.
 func (s *Scheduler) Start(ctx context.Context) {
-	s.log.WithField("entry_count", len(s.entries)).Info("scheduler starting")
+	entries := s.initialEntries(ctx)
+	s.log.WithField("entry_count", len(entries)).Info("scheduler starting")
 
-	for _, entry := range s.entries {
-		s.wg.Add(1)
-		go s.run(ctx, entry)
+	s.mu.Lock()
+	for _, entry := range entries {
+		s.spawnEntryLocked(ctx, entry)
 	}
+	s.mu.Unlock()
+}
+
+// initialEntries 는 Start 시점에 사용할 entries 를 반환합니다 — resolver 우선.
+func (s *Scheduler) initialEntries(ctx context.Context) []ScheduleEntry {
+	if s.resolver == nil {
+		return s.staticEntries
+	}
+	entries, err := s.resolver.Resolve(ctx)
+	if err != nil {
+		s.log.WithError(err).Warn("scheduler initial resolve failed, falling back to static entries")
+		return s.staticEntries
+	}
+	return entries
 }
 
 // Stop은 모든 goroutine이 종료될 때까지 대기합니다.
 func (s *Scheduler) Stop() {
+	s.refreshOnce.Do(func() {
+		if s.stopRefreshCh != nil {
+			close(s.stopRefreshCh)
+		}
+	})
 	s.wg.Wait()
 	s.log.Info("scheduler stopped")
 }
@@ -95,6 +161,131 @@ func (s *Scheduler) SetThrottler(t Throttler) {
 		return
 	}
 	s.throttler.Store(&throttlerRef{t: t})
+}
+
+// spawnEntryLocked 는 mu 보유 상태에서 호출 — 새 entry goroutine 을 시작하고 running map 에
+// 등록합니다. interval 이 0 이하인 entry 는 spawn 안 함 (run 내부에서 거부될 거지만 사전 차단).
+func (s *Scheduler) spawnEntryLocked(parent context.Context, entry ScheduleEntry) {
+	if entry.Interval <= 0 {
+		s.log.WithFields(map[string]interface{}{
+			"crawler":  entry.CrawlerName,
+			"url":      entry.URL,
+			"interval": entry.Interval,
+		}).Error("invalid schedule interval, skipping entry")
+		return
+	}
+	ctx, cancel := context.WithCancel(parent)
+	s.running[entryKey(entry)] = &entryHandle{snapshot: entry, cancel: cancel}
+	s.wg.Add(1)
+	go s.run(ctx, entry)
+}
+
+// StartRefreshLoop 는 주기적으로 resolver 를 호출해 entries 를 동적 갱신합니다.
+//
+// resolver 가 등록되지 않았으면 noop. 운영 중 scheduler_entries UPDATE 가 다음 refresh
+// (default 30s) 부터 반영. resolver 자체 cache (5분 TTL) 가 DB 부하를 흡수하므로 짧은
+// refresh 주기여도 DB hit 은 최대 5분에 1회.
+//
+// Stop 호출 시 본 loop 도 자동 종료.
+func (s *Scheduler) StartRefreshLoop(parent context.Context, interval time.Duration) {
+	if s.resolver == nil {
+		s.log.Info("scheduler refresh loop disabled (no entry resolver wired)")
+		return
+	}
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	s.stopRefreshCh = make(chan struct{})
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		s.log.WithField("interval", interval.String()).Info("scheduler refresh loop started")
+		for {
+			select {
+			case <-parent.Done():
+				return
+			case <-s.stopRefreshCh:
+				return
+			case <-ticker.C:
+				if err := s.Refresh(parent); err != nil {
+					s.log.WithError(err).Warn("scheduler refresh failed (non-fatal)")
+				}
+			}
+		}
+	}()
+}
+
+// Refresh 는 resolver 로 최신 entries 를 가져와 running goroutines 와 diff 후 동기화합니다.
+//
+// 정책:
+//   - 신규 entry → spawn
+//   - 사라진 entry → cancel
+//   - 기존 entry 의 interval / priority / target_type 변경 → cancel + respawn
+//
+// resolver 미등록 시 즉시 nil 반환 (정적 모드).
+func (s *Scheduler) Refresh(parent context.Context) error {
+	if s.resolver == nil {
+		return nil
+	}
+	entries, err := s.resolver.Resolve(parent)
+	if err != nil {
+		return err
+	}
+	desired := make(map[string]ScheduleEntry, len(entries))
+	for _, e := range entries {
+		desired[entryKey(e)] = e
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	added, removed, changed := 0, 0, 0
+
+	// 사라진 / 변경된 entry 제거.
+	for key, h := range s.running {
+		newE, ok := desired[key]
+		if !ok {
+			h.cancel()
+			delete(s.running, key)
+			removed++
+			continue
+		}
+		if !sameEntry(h.snapshot, newE) {
+			h.cancel()
+			delete(s.running, key)
+			s.spawnEntryLocked(parent, newE)
+			changed++
+		}
+	}
+
+	// 신규 entry 추가.
+	for key, e := range desired {
+		if _, ok := s.running[key]; !ok {
+			s.spawnEntryLocked(parent, e)
+			added++
+		}
+	}
+
+	if added > 0 || removed > 0 || changed > 0 {
+		s.log.WithFields(map[string]interface{}{
+			"added":   added,
+			"removed": removed,
+			"changed": changed,
+			"total":   len(s.running),
+		}).Info("scheduler entries refreshed")
+	}
+	return nil
+}
+
+// sameEntry 는 두 entry 가 lifecycle 영향이 있는 필드 (Interval / Priority / TargetType /
+// Timeout) 가 모두 동일한지 확인합니다. CrawlerName / URL 은 entryKey 로 이미 동등.
+func sameEntry(a, b ScheduleEntry) bool {
+	return a.Interval == b.Interval &&
+		a.Priority == b.Priority &&
+		a.TargetType == b.TargetType &&
+		a.Timeout == b.Timeout
 }
 
 // run은 단일 ScheduleEntry에 대한 스케줄 루프입니다.
