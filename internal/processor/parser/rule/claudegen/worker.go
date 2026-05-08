@@ -31,9 +31,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
@@ -308,13 +310,35 @@ func (w *ClaudeWorker) Stop(ctx context.Context) error {
 
 // Extract 는 실행 중인 컨테이너에 새 세션을 생성해 CSS 셀렉터를 추출합니다.
 //
+// 본 메소드는 SelectorExtractor 인터페이스 호환성을 위한 thin wrapper —
+// 내부적으로 ExtractEnriched 를 호출하고 Selectors 만 반환합니다.
+// Blacklist 결정은 무시 (호출자가 ExtractEnriched 직접 호출하도록 권장).
+//
+// llmgen.Generator 는 EnrichedExtractor 인터페이스 type assertion 으로 자동 분기 —
+// claudegen.ClaudeWorker 는 두 인터페이스 모두 구현.
+func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType storage.TargetType, html string) (storage.SelectorMap, error) {
+	res, err := w.ExtractEnriched(ctx, host, targetType, html)
+	if err != nil {
+		return storage.SelectorMap{}, err
+	}
+	if res.Blacklist != nil {
+		return storage.SelectorMap{}, fmt.Errorf("page blacklisted: %s", res.Blacklist.Reason)
+	}
+	return res.Selectors, nil
+}
+
+// ExtractEnriched 는 multi-step 추출을 수행합니다 — 페이지 유효성 / 타입 / 셀렉터 + 자가 검증.
+//
 // 실행 흐름:
 //  1. 세션 고유 디렉토리 생성 (workDir/<sessionID>/)
 //  2. page.html 기록
 //  3. docker exec <containerID> claude --model ... -p <prompt>
-//  4. stdout JSON 파싱 → SelectorMap 반환
+//  4. stdout JSON 파싱 → ExtractResult (validity / page_type / selectors / self_check)
 //  5. 세션 디렉토리 정리 (defer)
-func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType storage.TargetType, html string) (storage.SelectorMap, error) {
+//
+// validity == "blacklist" 면 ExtractResult.Blacklist 비-nil — 호출자가 셀렉터 INSERT skip
+// + parsing_blacklist Upsert 분기. Selectors / PageType 은 의미 없음.
+func (w *ClaudeWorker) ExtractEnriched(ctx context.Context, host string, targetType storage.TargetType, html string) (*llmgen.ExtractResult, error) {
 	// wg.Add 를 락 획득보다 먼저 수행 — Stop() 의 wg.Wait() 이 이 Extract 호출을 놓치지 않도록 함.
 	w.wg.Add(1)
 	defer w.wg.Done()
@@ -325,22 +349,22 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 	w.mu.RUnlock()
 
 	if containerID == "" {
-		return storage.SelectorMap{}, errors.New("claudegen: worker not started — call Start() first")
+		return nil, errors.New("claudegen: worker not started — call Start() first")
 	}
 
 	sessionID, err := newSessionID()
 	if err != nil {
-		return storage.SelectorMap{}, fmt.Errorf("generate session id: %w", err)
+		return nil, fmt.Errorf("generate session id: %w", err)
 	}
 
 	sessionHostDir := filepath.Join(workDir, sessionID)
 	if err := os.MkdirAll(sessionHostDir, 0o755); err != nil {
-		return storage.SelectorMap{}, fmt.Errorf("create session dir: %w", err)
+		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 	defer os.RemoveAll(sessionHostDir)
 
 	if err := os.WriteFile(filepath.Join(sessionHostDir, "page.html"), []byte(html), 0o644); err != nil {
-		return storage.SelectorMap{}, fmt.Errorf("write html: %w", err)
+		return nil, fmt.Errorf("write html: %w", err)
 	}
 
 	sessionContainerPath := "/workspace/" + sessionID
@@ -350,7 +374,7 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 
 	promptText, err := buildPrompt(w.loader, host, targetType, sessionContainerPath)
 	if err != nil {
-		return storage.SelectorMap{}, fmt.Errorf("build claudegen prompt: %w", err)
+		return nil, fmt.Errorf("build claudegen prompt: %w", err)
 	}
 	args := []string{
 		"claude",
@@ -369,29 +393,40 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 
 	stdout, stderr, err := w.runner.ExecSession(runCtx, containerID, args)
 	if err != nil {
-		return storage.SelectorMap{}, fmt.Errorf("claude code exec session: %w (stderr: %s)",
+		return nil, fmt.Errorf("claude code exec session: %w (stderr: %s)",
 			err, truncate(stderr, truncateStderrLen))
 	}
 
-	sm, err := parseSelectorOutput(stdout)
+	res, err := parseEnrichedOutput(stdout)
 	if err != nil {
 		w.log.WithFields(map[string]interface{}{
 			"host":        host,
 			"target_type": string(targetType),
 			"raw_output":  truncate(stdout, truncateStdoutLen),
 		}).Debug("claude code session output parse failed")
-		return storage.SelectorMap{}, fmt.Errorf("parse claude output: %w", err)
+		return nil, fmt.Errorf("parse claude output: %w", err)
 	}
 
-	w.log.WithFields(map[string]interface{}{
+	logFields := map[string]interface{}{
 		"host":        host,
 		"target_type": string(targetType),
-	}).Info("claude code session extraction succeeded")
+	}
+	if res.Blacklist != nil {
+		logFields["blacklist_reason"] = res.Blacklist.Reason
+		w.log.WithFields(logFields).Info("claude code session marked page as blacklist")
+	} else {
+		logFields["page_type"] = string(res.PageType)
+		logFields["page_type_confidence"] = res.PageTypeConfidence
+		w.log.WithFields(logFields).Info("claude code session extraction succeeded")
+	}
 
-	return sm, nil
+	return res, nil
 }
 
 // parseSelectorOutput 은 Claude Code 출력에서 JSON 블록을 추출하고 SelectorMap 으로 파싱합니다.
+//
+// Deprecated: 새 prompt schema 는 enriched output 을 사용합니다 — parseEnrichedOutput 사용.
+// 본 함수는 ExtractEnriched 가 unmarshal 실패 시 SelectorMap-only legacy fallback 으로 사용.
 func parseSelectorOutput(output string) (storage.SelectorMap, error) {
 	jsonStr := extractJSON(output)
 	if jsonStr == "" {
@@ -402,6 +437,65 @@ func parseSelectorOutput(output string) (storage.SelectorMap, error) {
 		return storage.SelectorMap{}, fmt.Errorf("unmarshal selector map: %w", err)
 	}
 	return sm, nil
+}
+
+// enrichedOutput 은 새 prompt schema 의 응답 구조 (claudegen multi-step extraction).
+//
+// validity == "blacklist" 일 때 selectors / self_check 는 비어있을 수 있음 — Generator 의
+// 호출자가 Blacklist 분기로 즉시 진입하므로 의미 없음.
+type enrichedOutput struct {
+	Validity           string              `json:"validity"`
+	BlacklistReason    string              `json:"blacklist_reason"`
+	PageType           string              `json:"page_type"`
+	PageTypeConfidence float64             `json:"page_type_confidence"`
+	Selectors          storage.SelectorMap `json:"selectors"`
+	// SelfCheck 는 운영 진단용 — 본 worker 는 currently 무시 (호출자가 metrics / 로그에 활용 가능).
+	// 향후 self_check.warnings 가 있으면 LLM 재시도 trigger 로 사용 가능.
+	SelfCheck json.RawMessage `json:"self_check,omitempty"`
+}
+
+// parseEnrichedOutput 은 새 schema 응답을 ExtractResult 로 변환합니다.
+//
+// validity == "blacklist" → ExtractResult.Blacklist 비-nil, 다른 필드는 의미 없음.
+// validity == "ok" → Selectors / PageType 정상 채움. Blacklist == nil.
+// validity 가 빈 문자열 / 미인식 값 → legacy SelectorMap-only output 으로 간주하고 재파싱.
+func parseEnrichedOutput(output string) (*llmgen.ExtractResult, error) {
+	jsonStr := extractJSON(output)
+	if jsonStr == "" {
+		return nil, fmt.Errorf("no JSON object found in output")
+	}
+
+	var eo enrichedOutput
+	if err := json.Unmarshal([]byte(jsonStr), &eo); err != nil {
+		return nil, fmt.Errorf("unmarshal enriched output: %w", err)
+	}
+
+	switch eo.Validity {
+	case "blacklist":
+		reason := strings.TrimSpace(eo.BlacklistReason)
+		if reason == "" {
+			reason = "(no reason provided)"
+		}
+		return &llmgen.ExtractResult{
+			Blacklist: &llmgen.BlacklistDecision{Reason: reason},
+		}, nil
+	case "ok":
+		return &llmgen.ExtractResult{
+			Selectors:          eo.Selectors,
+			PageType:           llmgen.PageType(eo.PageType),
+			PageTypeConfidence: eo.PageTypeConfidence,
+		}, nil
+	case "":
+		// Schema 가 채워지지 않았거나 LLM 이 여전히 legacy SelectorMap-only 를 반환한 경우.
+		// 같은 JSON 을 SelectorMap 으로 재파싱 시도 — backward compat fallback.
+		var sm storage.SelectorMap
+		if err := json.Unmarshal([]byte(jsonStr), &sm); err != nil {
+			return nil, fmt.Errorf("validity field missing and not a legacy selector map: %w", err)
+		}
+		return &llmgen.ExtractResult{Selectors: sm}, nil
+	default:
+		return nil, fmt.Errorf("unrecognized validity %q (expected ok|blacklist)", eo.Validity)
+	}
 }
 
 // extractJSON 은 출력 텍스트에서 첫 번째 유효한 {...} JSON 블록을 추출합니다.
