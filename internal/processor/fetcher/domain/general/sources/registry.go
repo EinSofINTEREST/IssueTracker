@@ -172,17 +172,15 @@ func buildHandler(
 	// 사이트별 IPRateLimiterRegistry — 동일 source 의 모든 host (goquery + chromedp) 가 공유.
 	// IP 단위 token bucket 이므로 host 가 같은 IP 면 limiter 도 공유.
 	//
-	// RPH=0 (제한 없음) 인 source 는 nil 주입 — IPRateLimiterRegistry.Wait 가 항상 DNS lookup 을
-	// 수행하므로 의미 없는 네트워크 비용 + 잠재 에러 포인트 회피. crawler 가 nil limiter 를 graceful
-	// bypass 하는 분기는 이미 구현되어 있어 동작 안전.
+	// 정책: rec.RequestsPerHour 값과 무관하게 항상 resolver 주입형 limiter 생성 — 0→N 동적
+	// 전환 (운영 중 fetcher_rules.requests_per_hour UPDATE) 을 지원하기 위한 trade-off.
+	// 0 (unlimited) source 도 limiter 객체는 유지하되 NewRateLimiter(0, _) 가 noopLimiter 를
+	// 반환해 Wait 가 즉시 통과 — DNS lookup 비용 (5min cache) 만 부담.
 	//
 	// configResolver 모드: 새 limiter 생성 시점에 sourceConfigResolver.Resolve(host).RPH 사용 →
-	// 운영 중 fetcher_rules.requests_per_hour UPDATE 가 다음 신규 IP limiter 부터 반영. 기존
-	// limiter 는 evict TTL (1h) 후 재생성될 때 새 RPH 적용.
-	var rateLimiter core.URLRateLimiter
-	if rec.RequestsPerHour > 0 {
-		rateLimiter = rate_limiter.NewIPRateLimiterRegistryWithResolver(dnsResolver, sourceConfigResolver, defaultRateLimitBurst)
-	}
+	// 운영 중 UPDATE 가 다음 신규 IP limiter 부터 반영. 기존 limiter 는 evict TTL (1h) 후 재생성
+	// 시 새 RPH 적용. 0→N 또는 N→0 양쪽 전환 모두 지원.
+	rateLimiter := rate_limiter.NewIPRateLimiterRegistryWithResolver(dnsResolver, sourceConfigResolver, defaultRateLimitBurst)
 
 	gqCrawler := goquery.NewGoqueryCrawlerWithRateLimiter(sourceName+"-goquery", sourceInfo, cfg, rateLimiter)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)

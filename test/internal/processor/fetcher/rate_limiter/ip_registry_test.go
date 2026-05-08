@@ -173,26 +173,28 @@ func (r *stubSourceConfigResolver) callCount() int {
 	return r.calls
 }
 
-func TestIPRateLimiterRegistryWithResolver_NewLimiter_LookupsHostRPH(t *testing.T) {
+func TestIPRateLimiterRegistryWithResolver_LookupsHostRPHEveryWait(t *testing.T) {
+	// resolver.Resolve 는 mutex 밖에서 호출 (gemini Major 반영) — DB I/O 가 임계 구역에 stall
+	// 되지 않도록. resolver 자체 cache (5min TTL) 가 가격을 흡수하므로 매 호출 = O(1).
+	// 본 테스트는 호출이 매번 일어남 + RPH 가 정상 적용됨을 검증.
 	resolver := &staticIPResolver{ip: "8.8.8.8"}
 	configResolver := &stubSourceConfigResolver{
 		cfgs: map[string]ratelimiter.SourceConfig{
-			"high.example.com": {RequestsPerHour: 3600}, // 1/sec — burst 1 이면 두번째도 즉시 통과 가능
+			"high.example.com": {RequestsPerHour: 3600},
 		},
 	}
 	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 1)
 
 	err := registry.Wait(context.Background(), "http://high.example.com/p1")
 	require.NoError(t, err)
-	assert.Equal(t, 1, configResolver.callCount(), "limiter 생성 시 resolver 1회 lookup")
+	assert.Equal(t, 1, configResolver.callCount(), "Wait 매 호출마다 resolver 1회 (cache 가 가격 흡수)")
 
-	// 같은 IP 의 두 번째 호출 — 기존 limiter 재사용, 추가 lookup 없음.
 	err = registry.Wait(context.Background(), "http://high.example.com/p2")
 	require.NoError(t, err)
-	assert.Equal(t, 1, configResolver.callCount(), "기존 limiter 재사용으로 lookup 추가 발생 X")
+	assert.Equal(t, 2, configResolver.callCount(), "두번째 Wait 도 resolver 호출 — limiter 객체는 재사용")
 }
 
-func TestIPRateLimiterRegistryWithResolver_DifferentIPs_LookupPerIP(t *testing.T) {
+func TestIPRateLimiterRegistryWithResolver_DifferentIPs_LookupPerWait(t *testing.T) {
 	resolver := &multiIPResolver{mapping: map[string]string{
 		"site-a.com": "1.1.1.1",
 		"site-b.com": "2.2.2.2",
@@ -208,8 +210,8 @@ func TestIPRateLimiterRegistryWithResolver_DifferentIPs_LookupPerIP(t *testing.T
 	require.NoError(t, registry.Wait(context.Background(), "http://site-a.com/p"))
 	require.NoError(t, registry.Wait(context.Background(), "http://site-b.com/p"))
 
-	// IP 별로 limiter 가 생성되며 각 host 의 RPH lookup 1회씩.
-	assert.Equal(t, 2, configResolver.callCount(), "IP 별 limiter 첫 생성 시 host 별 lookup")
+	// 매 Wait 마다 host 별 resolver 호출.
+	assert.Equal(t, 2, configResolver.callCount(), "Wait 마다 host 별 lookup")
 }
 
 func TestIPRateLimiterRegistryWithResolver_ZeroRPH_NoopBypass(t *testing.T) {

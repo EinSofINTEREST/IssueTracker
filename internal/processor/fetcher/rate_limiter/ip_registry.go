@@ -72,7 +72,8 @@ func NewIPRateLimiterRegistryWithResolver(resolver core.IPResolver, configResolv
 // IP 해석 실패 시 ctx.Err()가 존재하면 해당 에러를 반환하고,
 // 그 외의 경우 rate limiting 없이 진행합니다 (graceful degradation).
 //
-// configResolver 모드에서는 동시에 host 도 추출하여 limiter 생성 시 RPH 결정에 사용.
+// configResolver 모드: host 추출 후 lock 획득 전에 RPH 를 미리 resolve — DB I/O 가 mutex
+// 안에서 발생하지 않도록 (gemini Major 반영). lookup 결과를 getOrCreate 에 값으로 전달.
 func (r *IPRateLimiterRegistry) Wait(ctx context.Context, rawURL string) error {
 	ip, err := r.resolver.Resolve(ctx, rawURL)
 	if err != nil {
@@ -88,26 +89,30 @@ func (r *IPRateLimiterRegistry) Wait(ctx context.Context, rawURL string) error {
 		return nil
 	}
 
-	// host 추출은 configResolver 모드에서만 의미 있음 — 정적 모드는 host 무시.
-	var host string
+	// configResolver 모드에서만 host 추출 + 사전 lookup. 정적 모드는 host 무시 + 멤버 RPH 사용.
+	// resolver.Resolve 는 mutex 밖에서 호출 — DB I/O 가 임계 구역에 stall 되지 않도록.
+	rph := r.requestsPerHour
 	if r.configResolver != nil {
-		if h, herr := extractHost(rawURL); herr == nil {
-			host = h
+		host, herr := extractHost(rawURL)
+		if herr == nil {
+			cfg, rerr := r.configResolver.Resolve(ctx, host)
+			if rerr == nil {
+				rph = cfg.RequestsPerHour
+			}
+			// resolver 실패 / extractHost 실패 모두 fail-open — 멤버 RPH (0=unlimited) 사용.
 		}
 	}
 
-	limiter := r.getOrCreate(ctx, host, ip)
+	limiter := r.getOrCreate(ip, rph)
 	return limiter.Wait(ctx)
 }
 
 // getOrCreate는 IP에 대한 rate limiter를 반환하거나 새로 생성합니다.
 // 접근 시마다 lastUsed를 갱신하고, 만료된 항목을 정리합니다.
 //
-// configResolver 모드에서는 limiter 생성 시점에 host 단위 RPH 를 lookup — 다른 host 가
-// 같은 IP 를 공유해도 첫 entry 의 host 가 RPH 결정. 동일 IP 의 두 host 가 다른 RPH 라면
-// 운영 정책 불일치 사례 (rare) — 보수적으로 더 엄격한 (낮은) RPH 가 바람직하나 본 단계에서는
-// first-wins 단순 정책 채택.
-func (r *IPRateLimiterRegistry) getOrCreate(ctx context.Context, host, ip string) core.RateLimiter {
+// rph 인자는 호출자 (Wait) 가 lock 밖에서 미리 resolve 한 값. mutex 안에서는 lookup 없이
+// 즉시 limiter 생성 — DB I/O 가 임계 구역을 차단하지 않도록.
+func (r *IPRateLimiterRegistry) getOrCreate(ip string, rph int) core.RateLimiter {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -117,20 +122,6 @@ func (r *IPRateLimiterRegistry) getOrCreate(ctx context.Context, host, ip string
 		entry.lastUsed = now
 		r.limiters[ip] = entry
 		return entry.limiter
-	}
-
-	rph := r.requestsPerHour
-	if r.configResolver != nil {
-		// resolver 호출은 lock 안에서 수행 — host 별 cache hit 핫패스가 대부분이고 miss 시 DB
-		// 조회는 ttl 1회/host. lock contention 보다 lookup 단순성 우선.
-		cfg, err := r.configResolver.Resolve(ctx, host)
-		if err != nil {
-			// fail-open: resolver 실패는 정적 모드 fallback 또는 0 (unlimited).
-			// dbSourceConfigResolver 자체가 fail-open 구현이라 여기 도달 가능성은 낮으나 안전망.
-			rph = 0
-		} else {
-			rph = cfg.RequestsPerHour
-		}
 	}
 
 	limiter := NewRateLimiter(rph, r.burst)

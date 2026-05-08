@@ -98,7 +98,9 @@ func (r *dbSourceConfigResolver) Resolve(ctx context.Context, host string) (Sour
 		}
 	}
 
-	v, err, _ := r.flight.Do(host, func() (interface{}, error) {
+	// singleflight 의 모든 분기가 (cfg, nil) 반환 — fail-open 정책으로 외부 에러 전파 없음.
+	// 따라서 err 슬롯은 dead — `_` 로 명시 무시.
+	v, _, _ := r.flight.Do(host, func() (interface{}, error) {
 		// double-check: singleflight leader 진입 사이 다른 leader 가 cache 채웠을 수 있음.
 		if cached, ok := r.cache.Load(host); ok {
 			if e, ok := cached.(sourceConfigCacheEntry); ok && time.Since(e.cachedAt) < r.ttl {
@@ -125,9 +127,6 @@ func (r *dbSourceConfigResolver) Resolve(ctx context.Context, host string) (Sour
 		r.cache.Store(host, sourceConfigCacheEntry{cfg: cfg, cachedAt: time.Now()})
 		return cfg, nil
 	})
-	if err != nil {
-		return SourceConfig{}, err
-	}
 	return v.(SourceConfig), nil
 }
 
