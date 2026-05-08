@@ -423,22 +423,6 @@ func (w *ClaudeWorker) ExtractEnriched(ctx context.Context, host string, targetT
 	return res, nil
 }
 
-// parseSelectorOutput 은 Claude Code 출력에서 JSON 블록을 추출하고 SelectorMap 으로 파싱합니다.
-//
-// Deprecated: 새 prompt schema 는 enriched output 을 사용합니다 — parseEnrichedOutput 사용.
-// 본 함수는 ExtractEnriched 가 unmarshal 실패 시 SelectorMap-only legacy fallback 으로 사용.
-func parseSelectorOutput(output string) (storage.SelectorMap, error) {
-	jsonStr := extractJSON(output)
-	if jsonStr == "" {
-		return storage.SelectorMap{}, fmt.Errorf("no JSON object found in output")
-	}
-	var sm storage.SelectorMap
-	if err := json.Unmarshal([]byte(jsonStr), &sm); err != nil {
-		return storage.SelectorMap{}, fmt.Errorf("unmarshal selector map: %w", err)
-	}
-	return sm, nil
-}
-
 // enrichedOutput 은 새 prompt schema 의 응답 구조 (claudegen multi-step extraction).
 //
 // validity == "blacklist" 일 때 selectors / self_check 는 비어있을 수 있음 — Generator 의
