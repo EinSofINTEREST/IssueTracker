@@ -26,6 +26,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -120,12 +122,13 @@ type Generator struct {
 	// nil 이면 호출 안 함.
 	validateFailureHandler func(context.Context, core.RawContentRef, int, storage.TargetType, string)
 
-	locker       storage.InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
-	pendingQueue storage.PendingQueue   // nil 이면 pending URL 보존 비활성
-	requeueFn    RequeueFunc            // nil 이면 재투입 비활성
-	semValidator SelectorValidator      // nil 이면 의미 검증 건너뜀
-	wg           sync.WaitGroup
-	stopped      atomic.Bool
+	locker        storage.InflightLocker      // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
+	pendingQueue  storage.PendingQueue        // nil 이면 pending URL 보존 비활성
+	requeueFn     RequeueFunc                 // nil 이면 재투입 비활성
+	semValidator  SelectorValidator           // nil 이면 의미 검증 건너뜀
+	blacklistRepo storage.BlacklistRepository // nil 이면 자동 blacklist 등록 skip (#326)
+	wg            sync.WaitGroup
+	stopped       atomic.Bool
 }
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다.
@@ -165,6 +168,15 @@ func (g *Generator) SetSelectorValidator(v SelectorValidator) {
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
 func (g *Generator) SetExtractor(e SelectorExtractor) {
 	g.extractor = e
+}
+
+// SetBlacklistRepo 는 EnrichedExtractor 가 페이지를 blacklist 로 판정했을 때 등록할
+// repository 를 등록합니다 (#326). nil 이면 blacklist 자동 등록 skip — Generator 는 셀렉터
+// INSERT 만 skip 하고 다음 흐름 진행 (LLM retry 가능).
+//
+// Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
+func (g *Generator) SetBlacklistRepo(r storage.BlacklistRepository) {
+	g.blacklistRepo = r
 }
 
 // New 는 Generator 를 생성합니다.
@@ -477,20 +489,40 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 	var (
 		selectors storage.SelectorMap
 		modelName string
+		pageType  string // EnrichedExtractor 모드에서 채워짐. legacy 경로는 "" (미분류).
 	)
 
 	if g.extractor != nil {
-		// Claude Code 웜 컨테이너 추출 경로
-		sm, err := g.extractor.Extract(ctx, host, targetType, html)
-		if err != nil {
-			return fmt.Errorf("claude code extractor: %w", err)
-		}
-		selectors = sm
-		// 추출기가 ModelName() 을 구현하면 실제 모델 ID 를 사용, 없으면 fallback.
-		if mn, ok := g.extractor.(modelNamer); ok {
-			modelName = mn.ModelName()
+		// EnrichedExtractor (claudegen multi-step) 우선 — type assertion 으로 자동 분기.
+		if enriched, ok := g.extractor.(EnrichedExtractor); ok {
+			res, err := enriched.ExtractEnriched(ctx, host, targetType, html)
+			if err != nil {
+				return fmt.Errorf("claude code extractor: %w", err)
+			}
+			// validity == "blacklist" 분기 — 셀렉터 INSERT skip + 자동 blacklist 등록.
+			if res.Blacklist != nil {
+				g.handleBlacklistDecision(ctx, host, sampleURL, targetType, res.Blacklist)
+				return nil
+			}
+			selectors = res.Selectors
+			pageType = string(res.PageType)
+			if mn, ok := g.extractor.(modelNamer); ok {
+				modelName = mn.ModelName()
+			} else {
+				modelName = "claude-code"
+			}
 		} else {
-			modelName = "claude-code"
+			// legacy SelectorExtractor — Blacklist 분기 없음, page_type 도 빈 문자열.
+			sm, err := g.extractor.Extract(ctx, host, targetType, html)
+			if err != nil {
+				return fmt.Errorf("claude code extractor: %w", err)
+			}
+			selectors = sm
+			if mn, ok := g.extractor.(modelNamer); ok {
+				modelName = mn.ModelName()
+			} else {
+				modelName = "claude-code"
+			}
 		}
 	} else {
 		// 기존 LLM provider 경로 (Gemini Flash 등)
@@ -553,6 +585,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		Selectors:   selectors,
 		Confidence:  confidence,
 		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, modelName),
+		PageType:    pageType, // EnrichedExtractor 모드에서만 채워짐 — legacy 경로는 "" (미분류, #326).
 	}
 	var insertErr error
 	if stale {
@@ -654,4 +687,60 @@ func selectorMatches(doc *goquery.Document, fs *storage.FieldSelector) bool {
 		return false
 	}
 	return doc.Find(fs.CSS).Length() > 0
+}
+
+// handleBlacklistDecision 은 EnrichedExtractor 가 페이지를 blacklist 로 판정했을 때 호출됩니다.
+//
+// blacklistRepo 가 비-nil 이면 sampleURL 의 path 를 정확 일치 regex (escape + ^/$ anchor) 로
+// parsing_blacklist 에 INSERT — 동일 URL 만 차단, 같은 host 의 다른 path 는 영향 없음.
+// 운영자가 후속으로 host-level catch-all 등 정책 widening 가능.
+//
+// 모든 실패 (blacklistRepo nil / Insert 에러 / ErrDuplicate) 는 non-fatal — 호출자는
+// 셀렉터 INSERT skip 만 보장하고 다음 흐름 진행. ErrDuplicate 는 같은 URL 이 이미 등록됨 — 정상.
+func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL string, targetType storage.TargetType, decision *BlacklistDecision) {
+	logFields := map[string]interface{}{
+		"host":             host,
+		"sample_url":       sampleURL,
+		"target_type":      string(targetType),
+		"blacklist_reason": decision.Reason,
+	}
+
+	if g.blacklistRepo == nil {
+		g.log.WithFields(logFields).Info("page judged as blacklist by LLM but blacklistRepo not wired — selector insert skipped only")
+		return
+	}
+
+	pathPattern := pathPatternFromURL(sampleURL)
+	rec := &storage.BlacklistRecord{
+		HostPattern: host,
+		PathPattern: pathPattern,
+		Reason:      decision.Reason,
+		Source:      storage.BlacklistSourceAuto,
+		Mode:        storage.BlacklistModeDrop,
+		Enabled:     true,
+	}
+	if err := g.blacklistRepo.Insert(ctx, rec); err != nil {
+		if errors.Is(err, storage.ErrDuplicate) {
+			g.log.WithFields(logFields).Info("page already in blacklist — selector insert skipped")
+			return
+		}
+		// Insert 실패는 non-fatal — 셀렉터 INSERT 는 어쨌든 skip.
+		g.log.WithFields(logFields).WithError(err).Warn("blacklist insert failed (non-fatal — selector insert still skipped)")
+		return
+	}
+	logFields["blacklist_id"] = rec.ID
+	g.log.WithFields(logFields).Info("page auto-blacklisted by LLM, selector insert skipped")
+}
+
+// pathPatternFromURL 은 sampleURL 의 path 부분을 RE2 regex 로 escape 한 anchor pattern 을
+// 반환합니다. parsing_blacklist 의 path_pattern 컬럼에 사용 — 정확히 동일한 URL 만 매칭.
+//
+// URL parse 실패 시 빈 문자열 반환 — host-level catch-all 효과 (host 단위 차단). 보수적으로
+// 의도된 fallback (LLM 이 이 호스트의 페이지를 bad 로 판정했으므로 host 전체 차단도 합리).
+func pathPatternFromURL(sampleURL string) string {
+	u, err := url.Parse(sampleURL)
+	if err != nil || u.Path == "" {
+		return ""
+	}
+	return "^" + regexp.QuoteMeta(u.Path) + "$"
 }
