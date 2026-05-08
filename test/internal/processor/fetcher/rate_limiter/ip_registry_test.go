@@ -177,13 +177,16 @@ func TestIPRateLimiterRegistryWithResolver_LookupsHostRPHEveryWait(t *testing.T)
 	// resolver.Resolve 는 mutex 밖에서 호출 (gemini Major 반영) — DB I/O 가 임계 구역에 stall
 	// 되지 않도록. resolver 자체 cache (5min TTL) 가 가격을 흡수하므로 매 호출 = O(1).
 	// 본 테스트는 호출이 매번 일어남 + RPH 가 정상 적용됨을 검증.
+	//
+	// 충분히 높은 RPH + burst=10 → 두 연속 Wait 가 즉시 통과 (token bucket 비고갈).
+	// 낮은 burst (예: 1) 면 두 번째 Wait 가 1/sec rate 한 번을 기다려 단위 테스트가 느려짐.
 	resolver := &staticIPResolver{ip: "8.8.8.8"}
 	configResolver := &stubSourceConfigResolver{
 		cfgs: map[string]ratelimiter.SourceConfig{
-			"high.example.com": {RequestsPerHour: 3600},
+			"high.example.com": {RequestsPerHour: 3_600_000},
 		},
 	}
-	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 1)
+	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 10)
 
 	err := registry.Wait(context.Background(), "http://high.example.com/p1")
 	require.NoError(t, err)

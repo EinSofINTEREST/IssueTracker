@@ -129,8 +129,9 @@ func TestSourceConfigResolver_Resolve_TTLExpiry_RefetchesFromDB(t *testing.T) {
 	repo := newFakeFetcherRuleRepo()
 	repo.put("dynamic.example.com", &storage.FetcherRuleRecord{RequestsPerHour: 100})
 
-	// 짧은 TTL 로 만료 시점 검증.
-	r, err := ratelimiter.NewSourceConfigResolver(repo, logger.New(logger.DefaultConfig()), 50*time.Millisecond)
+	// 짧은 TTL 로 만료 시점 검증. sleep 마진은 GC pause / OS scheduler delay 흡수를 위해
+	// TTL 의 4배 (100ms vs 25ms) — slow CI 환경에서 flaky 회피.
+	r, err := ratelimiter.NewSourceConfigResolver(repo, logger.New(logger.DefaultConfig()), 25*time.Millisecond)
 	require.NoError(t, err)
 
 	cfg, _ := r.Resolve(context.Background(), "dynamic.example.com")
@@ -143,8 +144,8 @@ func TestSourceConfigResolver_Resolve_TTLExpiry_RefetchesFromDB(t *testing.T) {
 	cfg, _ = r.Resolve(context.Background(), "dynamic.example.com")
 	assert.Equal(t, 100, cfg.RequestsPerHour, "TTL 내에는 stale cache")
 
-	// TTL 만료 후 재 lookup → 새 값 반영.
-	time.Sleep(60 * time.Millisecond)
+	// TTL 만료 후 재 lookup → 새 값 반영. sleep 마진 = TTL × 4.
+	time.Sleep(100 * time.Millisecond)
 	cfg, _ = r.Resolve(context.Background(), "dynamic.example.com")
 	assert.Equal(t, 50, cfg.RequestsPerHour, "TTL 만료 후 새 값 자동 반영")
 }

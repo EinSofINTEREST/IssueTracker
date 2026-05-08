@@ -55,7 +55,10 @@ func NewIPRateLimiterRegistry(resolver core.IPResolver, requestsPerHour, burst i
 //
 // 새 limiter 생성 시점에 configResolver.Resolve(host).RequestsPerHour 를 lookup —
 // fetcher_rules.requests_per_hour UPDATE 가 다음 limiter 부터 자연 반영.
-// configResolver 가 nil 이면 NewIPRateLimiterRegistry 와 동일 (정적 RPH 사용).
+//
+// configResolver 는 nil 이면 안 됨 — 본 생성자는 requestsPerHour 멤버를 설정하지 않으므로
+// nil resolver 시 모든 IP 에 RPH=0 (noop limiter) 적용. 정적 RPH 가 필요하면 대신
+// NewIPRateLimiterRegistry 사용.
 //
 // burst 는 fetcher_rules 에 컬럼 없으므로 호출자가 정적 값 주입.
 func NewIPRateLimiterRegistryWithResolver(resolver core.IPResolver, configResolver SourceConfigResolver, burst int) *IPRateLimiterRegistry {
