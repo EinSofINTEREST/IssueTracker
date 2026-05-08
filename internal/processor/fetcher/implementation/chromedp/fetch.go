@@ -34,6 +34,22 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		}
 	}
 
+	// 사이트별 rate limiting: chromedp 는 raw http.Client 를 거치지 않으므로 Fetch entry 에서
+	// 직접 Wait. limiter 가 nil 이면 즉시 진행.
+	if c.urlRateLimiter != nil {
+		if err := c.urlRateLimiter.Wait(ctx, target.URL); err != nil {
+			return nil, &core.CrawlerError{
+				Category:  core.ErrCategoryRateLimit,
+				Code:      "RATE_001",
+				Message:   "rate limit wait failed",
+				Source:    c.name,
+				URL:       target.URL,
+				Retryable: true,
+				Err:       err,
+			}
+		}
+	}
+
 	// 탭 생성 (요청별 격리)
 	// browserCtx는 timeout이 적용되지 않은 tab context로, graceful capture 시 재사용된다.
 	browserCtx, browserCancel := chromedp.NewContext(c.allocCtx)

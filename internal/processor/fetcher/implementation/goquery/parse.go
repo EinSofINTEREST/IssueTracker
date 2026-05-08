@@ -17,9 +17,15 @@ import (
 )
 
 // FetchAndParse: URL에서 컨텐츠를 가져와서 바로 파싱
-// goquery의 장점을 활용하여 한 번에 처리
+// goquery의 장점을 활용하여 한 번에 처리. Fetch 와 동일하게 limiter 가 주입된 경우 RPH 강제.
 func (c *GoqueryCrawler) FetchAndParse(ctx context.Context, target core.Target, selectors map[string]string) (*core.Content, error) {
 	log := logger.FromContext(ctx)
+
+	if c.urlRateLimiter != nil {
+		if err := c.urlRateLimiter.Wait(ctx, target.URL); err != nil {
+			return nil, fmt.Errorf("rate limit wait for %s: %w", target.URL, err)
+		}
+	}
 
 	// HTTP 요청
 	req, err := http.NewRequestWithContext(ctx, "GET", target.URL, nil)
