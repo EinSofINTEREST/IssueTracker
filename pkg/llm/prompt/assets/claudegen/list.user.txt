@@ -1,22 +1,57 @@
 Read the HTML file at {{SESSION_PATH}}/page.html from the {{HOST}} website.
 
-Your task: extract CSS selectors for the fields below and return them as a single JSON object only — no explanation, no markdown, no code blocks.
+Your task: analyze the page and return a single JSON object with the following structure — no explanation, no markdown, no code blocks.
 
 Target page type: {{TARGET_TYPE}}
 
-Required fields:
+Output schema:
 {
-  "item_container": {"css": "<selector for each list item root>"},
-  "item_link":      {"css": "<selector inside item for the article link>", "attribute": "href"},
-  "item_title":     {"css": "<selector inside item for the title text>"},
-  "item_snippet":   {"css": "<selector inside item for the short summary>"}
+  "validity": "ok" or "blacklist",
+  "blacklist_reason": "<korean reason if validity=blacklist, else null>",
+  "page_type": "news" | "community" | "info" | "commercial" | "paper" | "other",
+  "page_type_confidence": <float 0.0 to 1.0>,
+  "selectors": {
+    "item_container": {"css": "<selector for each list item root>"},
+    "item_link":      {"css": "<selector inside item for the article link>", "attribute": "href"},
+    "item_title":     {"css": "<selector inside item for the title text>"},
+    "item_snippet":   {"css": "<selector inside item for the short summary>"}
+  },
+  "self_check": {
+    "item_count_estimate": <integer>,
+    "first_item_title_sample": "<actual text of the first item title>",
+    "warnings": ["<short korean warning if any>", ...]
+  }
 }
 
-Rules:
+Validity decision rules:
+- "blacklist" if the page is one of:
+  * Advertisement / interstitial / paywall / login wall
+  * Empty page or "page not found" / "service unavailable" message
+  * Captcha / bot-detection page
+  * URL shortener / redirect landing
+  * Page with no parseable list of articles (just a single large component, embed widget, etc.)
+- "ok" otherwise. If "ok", you MUST fill `selectors` and `self_check` based on the actual HTML.
+- If "blacklist", `selectors` and `self_check` may be empty objects (`{}`), and `blacklist_reason` MUST be a short Korean explanation (e.g., "광고 페이지", "리스트 없음").
+
+Page type classification:
+- "news"       — news aggregator / category page with editorial article links
+- "community"  — forum / bulletin board / user-posted content listing
+- "info"       — wiki / documentation index / TOC page
+- "commercial" — product catalog / shopping listing
+- "paper"      — academic publication index / search results
+- "other"      — anything not fitting above
+- `page_type_confidence` is your self-assessed certainty (0.0 ~ 1.0).
+
+Selector rules (when validity="ok"):
 1. Use only selectors that actually appear in the HTML — do not invent.
 2. Prefer stable selectors (semantic tags, ARIA roles, id/class with meaningful names) over brittle ones (auto-generated hashes, nth-child indices).
 3. "css" must be a valid goquery/CSS selector. "attribute" must be empty for text content, or the HTML attribute name (e.g. "href", "datetime", "content").
 4. "multi": true when the selector matches multiple elements (lists, paragraphs).
 5. Omit fields you cannot find a reliable selector for.
+
+Self-check rules:
+- `item_count_estimate`: how many items the item_container selector would yield
+- `first_item_title_sample`: actual title text of the first matched item (truncate to 200 chars)
+- `warnings`: list any concerns (e.g., "리스트 항목 0개", "광고가 다수 섞임")
 
 Return ONLY the JSON object.

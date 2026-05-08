@@ -148,8 +148,16 @@ type ParsingRuleRecord struct {
 	// validator 는 보수적 default 정책 (모든 필드 reliable 가정) 적용.
 	Confidence  map[string]FieldConfidence
 	Description string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+
+	// PageType 은 페이지 도메인 분류입니다 (news/community/info/commercial/paper/other).
+	//
+	// claudegen multi-step extraction 이 LLM 응답에서 추출 (이슈 #326). 빈 문자열은 미분류 —
+	// non-claudegen 경로 (Gemini Flash 등) 또는 운영자 manual 등록 룰. 정보 신뢰도 시스템
+	// (별도 후속 이슈) 의 1차 입력.
+	PageType string
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // FieldConfidence 는 단일 필드의 추출 신뢰도.

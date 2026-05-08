@@ -143,17 +143,18 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to load blacklist config")
 	}
-	var blacklistMatcher *rule.BlacklistMatcher
+	var (
+		blacklistMatcher *rule.BlacklistMatcher
+		blacklistRepo    storage.BlacklistRepository // llmGen.SetBlacklistRepo 에 전달 (#326).
+	)
 	if blacklistCfg.Enabled {
-		blacklistRepo := pgstore.NewBlacklistRepository(pool, log)
-		bm, bmErr := rule.NewBlacklistMatcher(blacklistRepo)
+		repo := pgstore.NewBlacklistRepository(pool, log)
+		bm, bmErr := rule.NewBlacklistMatcher(repo)
 		if bmErr != nil {
 			log.WithError(bmErr).Fatal("failed to construct blacklist matcher")
 		}
-		// invalidatingBlacklistRepo decorator 는 현재 wiring 하지 않음.
-		// read-only 경로 (Matcher.Filter) 만 사용 — application 측 mutation 경로 부재.
-		// 운영 CLI / 자동 색출 후속 이슈에서 decorator 도입 + 변수 재할당으로 invalidate 결합.
-		// (decorator 코드 자체는 blacklist_matcher.go 에 보존, unit test 로 검증.)
+		// invalidatingBlacklistRepo decorator: claudegen 자동 INSERT (#326) 시 Matcher cache flush.
+		blacklistRepo = storage.WrapBlacklistWithInvalidator(repo, bm)
 		blacklistMatcher = bm
 		log.Info("page-parse blacklist enabled (parsing_blacklist DB-backed)")
 	} else {
@@ -585,6 +586,14 @@ func main() {
 			claudegenWorker = worker
 			log.Info("llmgen: Claude Code 웜 컨테이너 추출기 활성화")
 		}
+	}
+
+	// claudegen 의 EnrichedExtractor 분기에서 페이지를 blacklist 로 판정 시 자동 등록할
+	// repository 주입 (#326). blacklistRepo 가 nil (BLACKLIST_ENABLED=false) 이면
+	// Generator 내부 분기가 셀렉터 INSERT skip 만 보장.
+	if blacklistRepo != nil && llmGen != nil {
+		llmGen.SetBlacklistRepo(blacklistRepo)
+		log.Info("llmgen: 자동 blacklist 등록 활성화 (claudegen multi-step extraction)")
 	}
 
 	// ── Refiner ──────────────────────────────────────────
