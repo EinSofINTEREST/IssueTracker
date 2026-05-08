@@ -104,11 +104,18 @@ func RegisterAll(
 	// 캐시 TTL 안에서 동일 host 의 반복 lookup 비용을 흡수.
 	dnsResolver := rate_limiter.NewDNSIPResolver(dnsCacheTTL)
 
+	// host 단위 SourceConfig (RPH 등) 를 동적 lookup 하는 resolver — 모든 source 공유.
+	// fetcher_rules.requests_per_hour UPDATE 가 다음 limiter 생성 시 자연 반영. ttl 기본 5분.
+	sourceConfigResolver, err := rate_limiter.NewSourceConfigResolver(fetcherRuleRepo, log, 0)
+	if err != nil {
+		return fmt.Errorf("construct source config resolver: %w", err)
+	}
+
 	// source_name 별로 handler 를 빌드한 뒤, source_name 과 각 host_pattern 양쪽으로 등록.
 	// CrawlerName 이 host 기반으로 통일 (#248) — source_name 키는 하위 호환 유지.
 	for sourceName, entry := range bySource {
 		h, err := buildHandler(sourceName, entry.rec,
-			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, dnsResolver, log)
+			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, dnsResolver, sourceConfigResolver, log)
 		if err != nil {
 			return err
 		}
@@ -135,8 +142,8 @@ func RegisterAll(
 // 등록(registry.Register)은 호출자가 직접 수행 — source_name 과 host_pattern 양쪽 등록 지원.
 //
 // dnsResolver 는 모든 source 가 공유 — 사이트별 IPRateLimiterRegistry 가 IP 해석에 사용.
-// rec.RequestsPerHour 가 0 이면 IPRateLimiterRegistry 내부 NewRateLimiter 가 noop 으로
-// 분기 — 즉 limiter 객체는 유지하되 Wait 가 즉시 통과.
+// sourceConfigResolver 도 모든 source 가 공유 — fetcher_rules.requests_per_hour 동적 lookup.
+// rec.RequestsPerHour 가 0 이면 nil limiter 주입 (DNS lookup 비용 회피).
 func buildHandler(
 	sourceName string,
 	rec *storage.FetcherRuleRecord,
@@ -146,6 +153,7 @@ func buildHandler(
 	resolver rule.Resolver,
 	chromedpRemoteURLs []string,
 	dnsResolver core.IPResolver,
+	sourceConfigResolver rate_limiter.SourceConfigResolver,
 	log *logger.Logger,
 ) (handler.Handler, error) {
 	sourceInfo := core.SourceInfo{
@@ -164,13 +172,15 @@ func buildHandler(
 	// 사이트별 IPRateLimiterRegistry — 동일 source 의 모든 host (goquery + chromedp) 가 공유.
 	// IP 단위 token bucket 이므로 host 가 같은 IP 면 limiter 도 공유.
 	//
-	// RPH=0 (제한 없음) 인 source 는 nil 주입 — IPRateLimiterRegistry.Wait 가 항상 DNS lookup 을
-	// 수행하므로 의미 없는 네트워크 비용 + 잠재 에러 포인트 회피. crawler 가 nil limiter 를 graceful
-	// bypass 하는 분기는 이미 구현되어 있어 동작 안전.
-	var rateLimiter core.URLRateLimiter
-	if rec.RequestsPerHour > 0 {
-		rateLimiter = rate_limiter.NewIPRateLimiterRegistry(dnsResolver, rec.RequestsPerHour, defaultRateLimitBurst)
-	}
+	// 정책: rec.RequestsPerHour 값과 무관하게 항상 resolver 주입형 limiter 생성 — 0→N 동적
+	// 전환 (운영 중 fetcher_rules.requests_per_hour UPDATE) 을 지원하기 위한 trade-off.
+	// 0 (unlimited) source 도 limiter 객체는 유지하되 NewRateLimiter(0, _) 가 noopLimiter 를
+	// 반환해 Wait 가 즉시 통과 — DNS lookup 비용 (5min cache) 만 부담.
+	//
+	// configResolver 모드: 새 limiter 생성 시점에 sourceConfigResolver.Resolve(host).RPH 사용 →
+	// 운영 중 UPDATE 가 다음 신규 IP limiter 부터 반영. 기존 limiter 는 evict TTL (1h) 후 재생성
+	// 시 새 RPH 적용. 0→N 또는 N→0 양쪽 전환 모두 지원.
+	rateLimiter := rate_limiter.NewIPRateLimiterRegistryWithResolver(dnsResolver, sourceConfigResolver, defaultRateLimitBurst)
 
 	gqCrawler := goquery.NewGoqueryCrawlerWithRateLimiter(sourceName+"-goquery", sourceInfo, cfg, rateLimiter)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)

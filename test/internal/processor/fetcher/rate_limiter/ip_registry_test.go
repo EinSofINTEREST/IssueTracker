@@ -3,6 +3,7 @@ package rate_limiter_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -141,4 +142,92 @@ func TestNewRateLimiter_ZeroRequestsPerHour_ReturnsNoopLimiter(t *testing.T) {
 		assert.True(t, limiter.Allow())
 	}
 	assert.NoError(t, limiter.Wait(context.Background()))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolver 모드 (#322 — dynamic RPH)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// stubSourceConfigResolver 는 host 별 SourceConfig 를 in-memory 로 반환합니다.
+type stubSourceConfigResolver struct {
+	mu    sync.Mutex
+	cfgs  map[string]ratelimiter.SourceConfig
+	calls int
+}
+
+func (r *stubSourceConfigResolver) Resolve(_ context.Context, host string) (ratelimiter.SourceConfig, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if cfg, ok := r.cfgs[host]; ok {
+		return cfg, nil
+	}
+	return ratelimiter.SourceConfig{}, nil
+}
+
+func (r *stubSourceConfigResolver) Invalidate(_ string) {}
+
+func (r *stubSourceConfigResolver) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+func TestIPRateLimiterRegistryWithResolver_LookupsHostRPHEveryWait(t *testing.T) {
+	// resolver.Resolve 는 mutex 밖에서 호출 (gemini Major 반영) — DB I/O 가 임계 구역에 stall
+	// 되지 않도록. resolver 자체 cache (5min TTL) 가 가격을 흡수하므로 매 호출 = O(1).
+	// 본 테스트는 호출이 매번 일어남 + RPH 가 정상 적용됨을 검증.
+	//
+	// 충분히 높은 RPH + burst=10 → 두 연속 Wait 가 즉시 통과 (token bucket 비고갈).
+	// 낮은 burst (예: 1) 면 두 번째 Wait 가 1/sec rate 한 번을 기다려 단위 테스트가 느려짐.
+	resolver := &staticIPResolver{ip: "8.8.8.8"}
+	configResolver := &stubSourceConfigResolver{
+		cfgs: map[string]ratelimiter.SourceConfig{
+			"high.example.com": {RequestsPerHour: 3_600_000},
+		},
+	}
+	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 10)
+
+	err := registry.Wait(context.Background(), "http://high.example.com/p1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, configResolver.callCount(), "Wait 매 호출마다 resolver 1회 (cache 가 가격 흡수)")
+
+	err = registry.Wait(context.Background(), "http://high.example.com/p2")
+	require.NoError(t, err)
+	assert.Equal(t, 2, configResolver.callCount(), "두번째 Wait 도 resolver 호출 — limiter 객체는 재사용")
+}
+
+func TestIPRateLimiterRegistryWithResolver_DifferentIPs_LookupPerWait(t *testing.T) {
+	resolver := &multiIPResolver{mapping: map[string]string{
+		"site-a.com": "1.1.1.1",
+		"site-b.com": "2.2.2.2",
+	}}
+	configResolver := &stubSourceConfigResolver{
+		cfgs: map[string]ratelimiter.SourceConfig{
+			"site-a.com": {RequestsPerHour: 3600},
+			"site-b.com": {RequestsPerHour: 3600},
+		},
+	}
+	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 1)
+
+	require.NoError(t, registry.Wait(context.Background(), "http://site-a.com/p"))
+	require.NoError(t, registry.Wait(context.Background(), "http://site-b.com/p"))
+
+	// 매 Wait 마다 host 별 resolver 호출.
+	assert.Equal(t, 2, configResolver.callCount(), "Wait 마다 host 별 lookup")
+}
+
+func TestIPRateLimiterRegistryWithResolver_ZeroRPH_NoopBypass(t *testing.T) {
+	resolver := &staticIPResolver{ip: "9.9.9.9"}
+	configResolver := &stubSourceConfigResolver{
+		cfgs: map[string]ratelimiter.SourceConfig{
+			"unlimited.example.com": {RequestsPerHour: 0}, // 제한 없음
+		},
+	}
+	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 1)
+
+	// 0 RPH → NewRateLimiter 가 noop 반환 → 무한 호출 가능.
+	for i := 0; i < 50; i++ {
+		require.NoError(t, registry.Wait(context.Background(), "http://unlimited.example.com/p"))
+	}
 }
