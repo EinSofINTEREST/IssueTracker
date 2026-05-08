@@ -3,6 +3,7 @@ package rate_limiter_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -141,4 +142,87 @@ func TestNewRateLimiter_ZeroRequestsPerHour_ReturnsNoopLimiter(t *testing.T) {
 		assert.True(t, limiter.Allow())
 	}
 	assert.NoError(t, limiter.Wait(context.Background()))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolver 모드 (#322 — dynamic RPH)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// stubSourceConfigResolver 는 host 별 SourceConfig 를 in-memory 로 반환합니다.
+type stubSourceConfigResolver struct {
+	mu    sync.Mutex
+	cfgs  map[string]ratelimiter.SourceConfig
+	calls int
+}
+
+func (r *stubSourceConfigResolver) Resolve(_ context.Context, host string) (ratelimiter.SourceConfig, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if cfg, ok := r.cfgs[host]; ok {
+		return cfg, nil
+	}
+	return ratelimiter.SourceConfig{}, nil
+}
+
+func (r *stubSourceConfigResolver) Invalidate(_ string) {}
+
+func (r *stubSourceConfigResolver) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+func TestIPRateLimiterRegistryWithResolver_NewLimiter_LookupsHostRPH(t *testing.T) {
+	resolver := &staticIPResolver{ip: "8.8.8.8"}
+	configResolver := &stubSourceConfigResolver{
+		cfgs: map[string]ratelimiter.SourceConfig{
+			"high.example.com": {RequestsPerHour: 3600}, // 1/sec — burst 1 이면 두번째도 즉시 통과 가능
+		},
+	}
+	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 1)
+
+	err := registry.Wait(context.Background(), "http://high.example.com/p1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, configResolver.callCount(), "limiter 생성 시 resolver 1회 lookup")
+
+	// 같은 IP 의 두 번째 호출 — 기존 limiter 재사용, 추가 lookup 없음.
+	err = registry.Wait(context.Background(), "http://high.example.com/p2")
+	require.NoError(t, err)
+	assert.Equal(t, 1, configResolver.callCount(), "기존 limiter 재사용으로 lookup 추가 발생 X")
+}
+
+func TestIPRateLimiterRegistryWithResolver_DifferentIPs_LookupPerIP(t *testing.T) {
+	resolver := &multiIPResolver{mapping: map[string]string{
+		"site-a.com": "1.1.1.1",
+		"site-b.com": "2.2.2.2",
+	}}
+	configResolver := &stubSourceConfigResolver{
+		cfgs: map[string]ratelimiter.SourceConfig{
+			"site-a.com": {RequestsPerHour: 3600},
+			"site-b.com": {RequestsPerHour: 3600},
+		},
+	}
+	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 1)
+
+	require.NoError(t, registry.Wait(context.Background(), "http://site-a.com/p"))
+	require.NoError(t, registry.Wait(context.Background(), "http://site-b.com/p"))
+
+	// IP 별로 limiter 가 생성되며 각 host 의 RPH lookup 1회씩.
+	assert.Equal(t, 2, configResolver.callCount(), "IP 별 limiter 첫 생성 시 host 별 lookup")
+}
+
+func TestIPRateLimiterRegistryWithResolver_ZeroRPH_NoopBypass(t *testing.T) {
+	resolver := &staticIPResolver{ip: "9.9.9.9"}
+	configResolver := &stubSourceConfigResolver{
+		cfgs: map[string]ratelimiter.SourceConfig{
+			"unlimited.example.com": {RequestsPerHour: 0}, // 제한 없음
+		},
+	}
+	registry := ratelimiter.NewIPRateLimiterRegistryWithResolver(resolver, configResolver, 1)
+
+	// 0 RPH → NewRateLimiter 가 noop 반환 → 무한 호출 가능.
+	for i := 0; i < 50; i++ {
+		require.NoError(t, registry.Wait(context.Background(), "http://unlimited.example.com/p"))
+	}
 }

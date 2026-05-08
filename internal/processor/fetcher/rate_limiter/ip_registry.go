@@ -16,9 +16,15 @@ import (
 //
 // IPRateLimiterRegistry manages per-IP rate limiters.
 // Multiple domains resolving to the same IP share one limiter.
+//
+// RPH 결정 정책:
+//   - configResolver != nil: host 단위 동적 lookup (fetcher_rules.requests_per_hour) —
+//     운영 중 UPDATE 후 다음 신규 limiter 부터 새 RPH 반영. 기존 limiter 는 evict TTL 후 재생성.
+//   - configResolver == nil: legacy 정적 모드 — requestsPerHour 멤버 변수 사용.
 type IPRateLimiterRegistry struct {
 	resolver        core.IPResolver
-	requestsPerHour int
+	configResolver  SourceConfigResolver // nil 허용 (legacy static mode)
+	requestsPerHour int                  // configResolver == nil 일 때만 사용
 	burst           int
 	limiters        map[string]limiterEntry
 	mu              sync.Mutex
@@ -30,7 +36,9 @@ type limiterEntry struct {
 	lastUsed time.Time
 }
 
-// NewIPRateLimiterRegistry는 IP별 rate limiter 레지스트리를 생성합니다.
+// NewIPRateLimiterRegistry는 정적 RPH 기반 rate limiter 레지스트리를 생성합니다 (legacy).
+//
+// 신규 wiring 은 NewIPRateLimiterRegistryWithResolver 사용 권장 — 운영 중 RPH 동적 반영.
 // 미사용 limiter는 1시간 후 eviction 대상이 됩니다.
 func NewIPRateLimiterRegistry(resolver core.IPResolver, requestsPerHour, burst int) *IPRateLimiterRegistry {
 	return &IPRateLimiterRegistry{
@@ -42,9 +50,29 @@ func NewIPRateLimiterRegistry(resolver core.IPResolver, requestsPerHour, burst i
 	}
 }
 
+// NewIPRateLimiterRegistryWithResolver 는 SourceConfigResolver 기반 동적 rate limiter
+// 레지스트리를 생성합니다.
+//
+// 새 limiter 생성 시점에 configResolver.Resolve(host).RequestsPerHour 를 lookup —
+// fetcher_rules.requests_per_hour UPDATE 가 다음 limiter 부터 자연 반영.
+// configResolver 가 nil 이면 NewIPRateLimiterRegistry 와 동일 (정적 RPH 사용).
+//
+// burst 는 fetcher_rules 에 컬럼 없으므로 호출자가 정적 값 주입.
+func NewIPRateLimiterRegistryWithResolver(resolver core.IPResolver, configResolver SourceConfigResolver, burst int) *IPRateLimiterRegistry {
+	return &IPRateLimiterRegistry{
+		resolver:       resolver,
+		configResolver: configResolver,
+		burst:          burst,
+		limiters:       make(map[string]limiterEntry),
+		evictTTL:       1 * time.Hour,
+	}
+}
+
 // Wait는 URL의 목적지 IP를 해석하고 해당 IP의 rate limiter에서 대기합니다.
 // IP 해석 실패 시 ctx.Err()가 존재하면 해당 에러를 반환하고,
 // 그 외의 경우 rate limiting 없이 진행합니다 (graceful degradation).
+//
+// configResolver 모드에서는 동시에 host 도 추출하여 limiter 생성 시 RPH 결정에 사용.
 func (r *IPRateLimiterRegistry) Wait(ctx context.Context, rawURL string) error {
 	ip, err := r.resolver.Resolve(ctx, rawURL)
 	if err != nil {
@@ -60,13 +88,26 @@ func (r *IPRateLimiterRegistry) Wait(ctx context.Context, rawURL string) error {
 		return nil
 	}
 
-	limiter := r.getOrCreate(ip)
+	// host 추출은 configResolver 모드에서만 의미 있음 — 정적 모드는 host 무시.
+	var host string
+	if r.configResolver != nil {
+		if h, herr := extractHost(rawURL); herr == nil {
+			host = h
+		}
+	}
+
+	limiter := r.getOrCreate(ctx, host, ip)
 	return limiter.Wait(ctx)
 }
 
 // getOrCreate는 IP에 대한 rate limiter를 반환하거나 새로 생성합니다.
 // 접근 시마다 lastUsed를 갱신하고, 만료된 항목을 정리합니다.
-func (r *IPRateLimiterRegistry) getOrCreate(ip string) core.RateLimiter {
+//
+// configResolver 모드에서는 limiter 생성 시점에 host 단위 RPH 를 lookup — 다른 host 가
+// 같은 IP 를 공유해도 첫 entry 의 host 가 RPH 결정. 동일 IP 의 두 host 가 다른 RPH 라면
+// 운영 정책 불일치 사례 (rare) — 보수적으로 더 엄격한 (낮은) RPH 가 바람직하나 본 단계에서는
+// first-wins 단순 정책 채택.
+func (r *IPRateLimiterRegistry) getOrCreate(ctx context.Context, host, ip string) core.RateLimiter {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -78,7 +119,21 @@ func (r *IPRateLimiterRegistry) getOrCreate(ip string) core.RateLimiter {
 		return entry.limiter
 	}
 
-	limiter := NewRateLimiter(r.requestsPerHour, r.burst)
+	rph := r.requestsPerHour
+	if r.configResolver != nil {
+		// resolver 호출은 lock 안에서 수행 — host 별 cache hit 핫패스가 대부분이고 miss 시 DB
+		// 조회는 ttl 1회/host. lock contention 보다 lookup 단순성 우선.
+		cfg, err := r.configResolver.Resolve(ctx, host)
+		if err != nil {
+			// fail-open: resolver 실패는 정적 모드 fallback 또는 0 (unlimited).
+			// dbSourceConfigResolver 자체가 fail-open 구현이라 여기 도달 가능성은 낮으나 안전망.
+			rph = 0
+		} else {
+			rph = cfg.RequestsPerHour
+		}
+	}
+
+	limiter := NewRateLimiter(rph, r.burst)
 	r.limiters[ip] = limiterEntry{limiter: limiter, lastUsed: now}
 
 	// 주기적 eviction: 새 limiter 생성 시점에 만료 항목 정리
