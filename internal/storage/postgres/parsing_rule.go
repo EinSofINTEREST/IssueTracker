@@ -34,9 +34,9 @@ func NewParsingRuleRepository(pool *pgxpool.Pool, log *logger.Logger) storage.Pa
 
 const sqlInsertParsingRule = `
 INSERT INTO parsing_rules (
-  source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description
+  source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 )
 RETURNING id, created_at, updated_at
 `
@@ -68,7 +68,7 @@ func (r *pgParsingRuleRepository) Insert(ctx context.Context, rec *storage.Parsi
 	}
 	row := r.pool.QueryRow(ctx, sqlInsertParsingRule,
 		rec.SourceName, rec.HostPattern, rec.PathPattern, string(rec.TargetType), rec.Version,
-		rec.Enabled, selectors, confidence, rec.Description,
+		rec.Enabled, selectors, confidence, rec.Description, rec.PageType,
 	)
 	if err := row.Scan(&rec.ID, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 		var pgErr *pgconn.PgError
@@ -151,7 +151,7 @@ func (r *pgParsingRuleRepository) UpdatePathPattern(ctx context.Context, id int6
 }
 
 const sqlGetParsingRuleByID = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
 FROM parsing_rules
 WHERE id = $1
 `
@@ -170,7 +170,7 @@ func (r *pgParsingRuleRepository) GetByID(ctx context.Context, id int64) (*stora
 }
 
 const sqlFindParsingRuleByNaturalKey = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
 FROM parsing_rules
 WHERE source_name  = $1
   AND host_pattern = $2
@@ -261,7 +261,7 @@ func (r *pgParsingRuleRepository) HasAnyRule(ctx context.Context, hostPattern st
 //   - LENGTH(path_pattern) DESC : 더 구체적인 (긴) regex 패턴 우선 (path_pattern=” 은 길이 0 으로 마지막)
 //   - version DESC             : 같은 패턴 안에서 최신 버전 우선
 const sqlFindActiveCandidates = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
 FROM parsing_rules
 WHERE host_pattern = $1
   AND target_type  = $2
@@ -318,7 +318,7 @@ func (r *pgParsingRuleRepository) List(ctx context.Context, f storage.ParsingRul
 	}
 
 	query := `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
 FROM parsing_rules
 WHERE 1=1`
 	args := make([]any, 0, 4)
@@ -384,7 +384,8 @@ func scanParsingRule(s scanner) (*storage.ParsingRuleRecord, error) {
 	var targetType string
 	if err := s.Scan(
 		&rec.ID, &rec.SourceName, &rec.HostPattern, &rec.PathPattern, &targetType, &rec.Version,
-		&rec.Enabled, &selectorsRaw, &confidenceRaw, &rec.Description, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.Enabled, &selectorsRaw, &confidenceRaw, &rec.Description, &rec.PageType,
+		&rec.CreatedAt, &rec.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
