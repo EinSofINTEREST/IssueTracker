@@ -163,7 +163,14 @@ func buildHandler(
 
 	// 사이트별 IPRateLimiterRegistry — 동일 source 의 모든 host (goquery + chromedp) 가 공유.
 	// IP 단위 token bucket 이므로 host 가 같은 IP 면 limiter 도 공유.
-	rateLimiter := rate_limiter.NewIPRateLimiterRegistry(dnsResolver, rec.RequestsPerHour, defaultRateLimitBurst)
+	//
+	// RPH=0 (제한 없음) 인 source 는 nil 주입 — IPRateLimiterRegistry.Wait 가 항상 DNS lookup 을
+	// 수행하므로 의미 없는 네트워크 비용 + 잠재 에러 포인트 회피. crawler 가 nil limiter 를 graceful
+	// bypass 하는 분기는 이미 구현되어 있어 동작 안전.
+	var rateLimiter core.URLRateLimiter
+	if rec.RequestsPerHour > 0 {
+		rateLimiter = rate_limiter.NewIPRateLimiterRegistry(dnsResolver, rec.RequestsPerHour, defaultRateLimitBurst)
+	}
 
 	gqCrawler := goquery.NewGoqueryCrawlerWithRateLimiter(sourceName+"-goquery", sourceInfo, cfg, rateLimiter)
 	gqFetcher := fetcher.NewGoqueryFetcher(gqCrawler)

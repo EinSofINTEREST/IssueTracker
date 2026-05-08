@@ -23,7 +23,15 @@ func (c *GoqueryCrawler) FetchAndParse(ctx context.Context, target core.Target, 
 
 	if c.urlRateLimiter != nil {
 		if err := c.urlRateLimiter.Wait(ctx, target.URL); err != nil {
-			return nil, fmt.Errorf("rate limit wait for %s: %w", target.URL, err)
+			return nil, &core.CrawlerError{
+				Category:  core.ErrCategoryRateLimit,
+				Code:      "RATE_001",
+				Message:   "rate limit wait failed",
+				Source:    c.name,
+				URL:       target.URL,
+				Retryable: true,
+				Err:       err,
+			}
 		}
 	}
 
