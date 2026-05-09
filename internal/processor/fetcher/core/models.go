@@ -29,9 +29,10 @@ type SourceInfo struct {
 type TargetType string
 
 const (
-	TargetTypeSitemap  TargetType = "sitemap"
-	TargetTypeArticle  TargetType = "article"
-	TargetTypeCategory TargetType = "category"
+	TargetTypeSitemap       TargetType = "sitemap"
+	TargetTypeArticle       TargetType = "article"
+	TargetTypeCategory      TargetType = "category"
+	TargetTypeSearchResults TargetType = "search_results"
 )
 
 // Target은 크롤링 대상을 나타냅니다.
