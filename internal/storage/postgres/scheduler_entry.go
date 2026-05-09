@@ -88,8 +88,10 @@ RETURNING id, created_at, updated_at
 
 // Insert 는 새 entry 를 INSERT 합니다. (category, source_name, url) UNIQUE 충돌 시 ErrDuplicate.
 func (r *pgSchedulerEntryRepository) Insert(ctx context.Context, rec *storage.SchedulerEntryRecord) error {
-	if rec.Interval <= 0 {
-		return fmt.Errorf("%w: interval must be positive", storage.ErrInvalid)
+	if rec.Interval < time.Second {
+		// sub-second interval 은 INTEGER seconds 컬럼 변환 시 truncate 되어 0 또는 정확하지 않은
+		// 값으로 저장됨 (CodeRabbit Minor 반영). 1초 미만 interval 은 무의미하므로 명시 거부.
+		return fmt.Errorf("%w: interval must be at least 1s, got %s", storage.ErrInvalid, rec.Interval)
 	}
 	intervalSec := int(rec.Interval / time.Second)
 	metadata := rec.Metadata
@@ -120,8 +122,10 @@ RETURNING updated_at
 
 // Update 는 ID 기준으로 row 를 갱신합니다 (자연키 변경 불가).
 func (r *pgSchedulerEntryRepository) Update(ctx context.Context, rec *storage.SchedulerEntryRecord) error {
-	if rec.Interval <= 0 {
-		return fmt.Errorf("%w: interval must be positive", storage.ErrInvalid)
+	if rec.Interval < time.Second {
+		// sub-second interval 은 INTEGER seconds 컬럼 변환 시 truncate 되어 0 또는 정확하지 않은
+		// 값으로 저장됨 (CodeRabbit Minor 반영). 1초 미만 interval 은 무의미하므로 명시 거부.
+		return fmt.Errorf("%w: interval must be at least 1s, got %s", storage.ErrInvalid, rec.Interval)
 	}
 	intervalSec := int(rec.Interval / time.Second)
 	metadata := rec.Metadata

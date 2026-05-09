@@ -8,6 +8,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -56,14 +57,14 @@ type dbEntryResolver struct {
 // CrawlerName 매핑 등 도메인 결정 (host 기반 vs source_name 기반) 을 호출자가 주입.
 // 기본 구현은 NewDefaultEntryConverter — host 기반 CrawlerName + storage record 의 priority 를
 // core.Priority 로 매핑.
-type EntryConverter func(rec *storage.SchedulerEntryRecord, jobTimeout time.Duration) ScheduleEntry
+type EntryConverter func(rec *storage.SchedulerEntryRecord) ScheduleEntry
 
 // NewDefaultEntryConverter 는 host 기반 CrawlerName + priority 매핑 기본 구현입니다.
 //
-// jobTimeout 은 전역 SCHEDULER_JOB_TIMEOUT 사용 — entries 마다 다르게 두고 싶으면 metadata
-// JSONB 에서 추출하는 별도 converter 를 주입.
+// jobTimeout 은 closure 로 캡처 — 전역 SCHEDULER_JOB_TIMEOUT 사용. entries 마다 다른 timeout
+// 이 필요하면 metadata JSONB 에서 추출하는 별도 converter 를 주입.
 func NewDefaultEntryConverter(jobTimeout time.Duration) EntryConverter {
-	return func(rec *storage.SchedulerEntryRecord, _ time.Duration) ScheduleEntry {
+	return func(rec *storage.SchedulerEntryRecord) ScheduleEntry {
 		host := hostOf(rec.URL)
 		return ScheduleEntry{
 			CrawlerName: host,
@@ -120,7 +121,7 @@ func (r *dbEntryResolver) Resolve(ctx context.Context) ([]ScheduleEntry, error) 
 	}
 	r.mu.RUnlock()
 
-	v, _, _ := r.flight.Do("entries", func() (interface{}, error) {
+	v, err, _ := r.flight.Do("entries", func() (interface{}, error) {
 		// double-check: singleflight leader 진입 사이 다른 leader 가 cache 채웠을 수 있음.
 		r.mu.RLock()
 		if time.Since(r.at) < r.ttl && r.cached != nil {
@@ -130,20 +131,23 @@ func (r *dbEntryResolver) Resolve(ctx context.Context) ([]ScheduleEntry, error) 
 		}
 		r.mu.RUnlock()
 
-		recs, err := r.repo.ListEnabled(ctx, "")
-		if err != nil {
-			r.log.WithError(err).Warn("scheduler entries reload failed — keeping last snapshot")
+		recs, listErr := r.repo.ListEnabled(ctx, "")
+		if listErr != nil {
+			// fail-open: 마지막 snapshot 이 있으면 유지. 첫 로드 실패 시에는 error 전파 —
+			// 호출자 (Scheduler.initialEntries) 가 정적 fallback 으로 분기 가능 (CodeRabbit Major 반영).
 			r.mu.RLock()
-			defer r.mu.RUnlock()
-			if r.cached != nil {
-				return r.cached, nil
+			cached := r.cached
+			r.mu.RUnlock()
+			if cached != nil {
+				r.log.WithError(listErr).Warn("scheduler entries reload failed — keeping last snapshot")
+				return cached, nil
 			}
-			return []ScheduleEntry{}, nil
+			return nil, fmt.Errorf("scheduler entries first load failed: %w", listErr)
 		}
 
 		entries := make([]ScheduleEntry, 0, len(recs))
 		for _, rec := range recs {
-			entries = append(entries, r.cfg(rec, 0))
+			entries = append(entries, r.cfg(rec))
 		}
 
 		r.mu.Lock()
@@ -153,6 +157,9 @@ func (r *dbEntryResolver) Resolve(ctx context.Context) ([]ScheduleEntry, error) 
 
 		return entries, nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	return v.([]ScheduleEntry), nil
 }
 

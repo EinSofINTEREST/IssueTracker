@@ -50,6 +50,13 @@ type Scheduler struct {
 	resolver      EntryResolver
 	staticEntries []ScheduleEntry // 생성자 인자 — resolver 가 nil 일 때 사용
 
+	// ctx 는 Start 시점에 저장되는 long-lived parent context.
+	//
+	// spawnEntryLocked 는 Refresh 의 인자 ctx (DB lookup 용 short-lived) 가 아니라 본 ctx 를
+	// 사용해 entry goroutine 의 lifecycle 이 Refresh 호출자의 짧은 ctx 에 묶이지 않도록 분리
+	// (gemini High 반영). mu 보호 — Start 가 1회 set, spawnEntryLocked 가 read.
+	ctx context.Context
+
 	stopRefreshCh chan struct{}
 	refreshOnce   sync.Once
 }
@@ -109,13 +116,15 @@ func (s *Scheduler) SetEntryResolver(r EntryResolver) {
 // 각 goroutine은 즉시 1회 실행 후 Interval마다 반복합니다.
 //
 // resolver 가 등록되어 있으면 Resolve 결과로, 아니면 생성자 인자 정적 entries 로 구동.
+// ctx 는 entry goroutine 의 long-lived parent — Refresh 가 호출되는 short-lived ctx 와 분리.
 func (s *Scheduler) Start(ctx context.Context) {
 	entries := s.initialEntries(ctx)
 	s.log.WithField("entry_count", len(entries)).Info("scheduler starting")
 
 	s.mu.Lock()
+	s.ctx = ctx
 	for _, entry := range entries {
-		s.spawnEntryLocked(ctx, entry)
+		s.spawnEntryLocked(entry)
 	}
 	s.mu.Unlock()
 }
@@ -165,7 +174,10 @@ func (s *Scheduler) SetThrottler(t Throttler) {
 
 // spawnEntryLocked 는 mu 보유 상태에서 호출 — 새 entry goroutine 을 시작하고 running map 에
 // 등록합니다. interval 이 0 이하인 entry 는 spawn 안 함 (run 내부에서 거부될 거지만 사전 차단).
-func (s *Scheduler) spawnEntryLocked(parent context.Context, entry ScheduleEntry) {
+//
+// parent 는 s.ctx (Start 시점에 저장된 long-lived ctx) 를 사용 — Refresh 호출자의 short-lived
+// ctx 가 entry goroutine 을 조기 종료시키지 않도록 분리 (gemini High 반영).
+func (s *Scheduler) spawnEntryLocked(entry ScheduleEntry) {
 	if entry.Interval <= 0 {
 		s.log.WithFields(map[string]interface{}{
 			"crawler":  entry.CrawlerName,
@@ -173,6 +185,10 @@ func (s *Scheduler) spawnEntryLocked(parent context.Context, entry ScheduleEntry
 			"interval": entry.Interval,
 		}).Error("invalid schedule interval, skipping entry")
 		return
+	}
+	parent := s.ctx
+	if parent == nil {
+		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s.running[entryKey(entry)] = &entryHandle{snapshot: entry, cancel: cancel}
@@ -183,8 +199,10 @@ func (s *Scheduler) spawnEntryLocked(parent context.Context, entry ScheduleEntry
 // StartRefreshLoop 는 주기적으로 resolver 를 호출해 entries 를 동적 갱신합니다.
 //
 // resolver 가 등록되지 않았으면 noop. 운영 중 scheduler_entries UPDATE 가 다음 refresh
-// (default 30s) 부터 반영. resolver 자체 cache (5분 TTL) 가 DB 부하를 흡수하므로 짧은
-// refresh 주기여도 DB hit 은 최대 5분에 1회.
+// 주기 (default 30s) 부터 반영. ticker 직전에 resolver.Invalidate() 를 호출하여 5분 TTL
+// cache 가 30s refresh 를 차단하지 않도록 함 (CodeRabbit Major 반영) — Resolve 는 매 refresh
+// 마다 DB hit, 그러나 호출 간 cache hit 은 ad-hoc Resolve (e.g. Scheduler 외부 호출자) 가
+// 흡수.
 //
 // Stop 호출 시 본 loop 도 자동 종료.
 func (s *Scheduler) StartRefreshLoop(parent context.Context, interval time.Duration) {
@@ -209,6 +227,8 @@ func (s *Scheduler) StartRefreshLoop(parent context.Context, interval time.Durat
 			case <-s.stopRefreshCh:
 				return
 			case <-ticker.C:
+				// cache 우회 — refresh 가 의도된 DB hit 이 되도록.
+				s.resolver.Invalidate()
 				if err := s.Refresh(parent); err != nil {
 					s.log.WithError(err).Warn("scheduler refresh failed (non-fatal)")
 				}
@@ -255,7 +275,7 @@ func (s *Scheduler) Refresh(parent context.Context) error {
 		if !sameEntry(h.snapshot, newE) {
 			h.cancel()
 			delete(s.running, key)
-			s.spawnEntryLocked(parent, newE)
+			s.spawnEntryLocked(newE)
 			changed++
 		}
 	}
@@ -263,7 +283,7 @@ func (s *Scheduler) Refresh(parent context.Context) error {
 	// 신규 entry 추가.
 	for key, e := range desired {
 		if _, ok := s.running[key]; !ok {
-			s.spawnEntryLocked(parent, e)
+			s.spawnEntryLocked(e)
 			added++
 		}
 	}
