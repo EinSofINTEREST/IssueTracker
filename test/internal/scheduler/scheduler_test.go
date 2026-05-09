@@ -42,6 +42,15 @@ func (m *mockEmitter) count() int {
 	return len(m.jobs)
 }
 
+// snapshot 은 jobs 슬라이스의 race-safe 복사본을 반환합니다 — 호출자가 lock 없이 순회 가능.
+func (m *mockEmitter) snapshot() []*core.CrawlJob {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*core.CrawlJob, len(m.jobs))
+	copy(out, m.jobs)
+	return out
+}
+
 type countEmitter struct {
 	n atomic.Int32
 }

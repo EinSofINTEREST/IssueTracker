@@ -60,7 +60,7 @@ func TestScheduler_Refresh_AddsNewEntry(t *testing.T) {
 	sched.Stop()
 
 	urls := make(map[string]bool)
-	for _, j := range pub.jobs {
+	for _, j := range pub.snapshot() {
 		urls[j.Target.URL] = true
 	}
 	assert.True(t, urls["https://a.com"], "기존 entry 가 emit 됨")
@@ -92,7 +92,7 @@ func TestScheduler_Refresh_RemovesEntry(t *testing.T) {
 
 	// 제거 후 충분히 대기 — 기존 b.com goroutine 이 cancel 됐다면 더 이상 emit 발생 안 함.
 	beforeRemove := 0
-	for _, j := range pub.jobs {
+	for _, j := range pub.snapshot() {
 		if j.Target.URL == "https://b.com" {
 			beforeRemove++
 		}
@@ -103,7 +103,7 @@ func TestScheduler_Refresh_RemovesEntry(t *testing.T) {
 	sched.Stop()
 
 	afterRemove := 0
-	for _, j := range pub.jobs {
+	for _, j := range pub.snapshot() {
 		if j.Target.URL == "https://b.com" {
 			afterRemove++
 		}
