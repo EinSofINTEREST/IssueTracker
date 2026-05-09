@@ -23,6 +23,19 @@ func newTestLogger(t *testing.T) *logger.Logger {
 	return logger.New(logger.Config{Level: "error"})
 }
 
+// newTestClientOpts 는 테스트용 단일 시도 정책을 적용한 CSEClientOptions 를 반환합니다.
+// 실 운영 backoff (1s~10s) 가 테스트 timeout 을 잠식하지 않도록 MaxAttempts=1 (즉시 fail).
+func newTestClientOpts(apiKey, cx, baseURL string) search.CSEClientOptions {
+	noRetry := search.RetryPolicy{MaxAttempts: 1, InitialDelay: time.Millisecond, Multiplier: 1.0}
+	return search.CSEClientOptions{
+		APIKey:         apiKey,
+		CX:             cx,
+		BaseURL:        baseURL,
+		NetworkRetry:   noRetry,
+		RateLimitRetry: noRetry,
+	}
+}
+
 func TestCSEClient_NewClient_RequiresAPIKeyAndCX(t *testing.T) {
 	t.Parallel()
 	log := newTestLogger(t)
@@ -51,7 +64,7 @@ func TestCSEClient_Search_SinglePage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "test-key", CX: "test-cx", BaseURL: server.URL}, newTestLogger(t))
+	c, err := search.NewCSEClient(newTestClientOpts("test-key", "test-cx", server.URL), newTestLogger(t))
 	require.NoError(t, err)
 
 	urls, err := c.Search(context.Background(), "ai 규제", search.SearchOptions{MaxResults: 10})
@@ -93,7 +106,7 @@ func TestCSEClient_Search_PaginationAndDedup(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "k", CX: "cx", BaseURL: server.URL}, newTestLogger(t))
+	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), newTestLogger(t))
 	require.NoError(t, err)
 
 	urls, err := c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 20})
@@ -112,7 +125,7 @@ func TestCSEClient_Search_RateLimitedRetryable(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "k", CX: "cx", BaseURL: server.URL}, newTestLogger(t))
+	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), newTestLogger(t))
 	require.NoError(t, err)
 
 	_, err = c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 10})
@@ -134,7 +147,7 @@ func TestCSEClient_Search_AuthErrorNonRetryable(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "k", CX: "cx", BaseURL: server.URL}, newTestLogger(t))
+	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), newTestLogger(t))
 	require.NoError(t, err)
 
 	_, err = c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 10})
@@ -155,7 +168,7 @@ func TestCSEClient_Search_ServerErrorRetryable(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "k", CX: "cx", BaseURL: server.URL}, newTestLogger(t))
+	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), newTestLogger(t))
 	require.NoError(t, err)
 
 	_, err = c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 10})
@@ -193,7 +206,7 @@ func TestCSEClient_Search_PartialFailureReturnsPartialResults(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "k", CX: "cx", BaseURL: server.URL}, newTestLogger(t))
+	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), newTestLogger(t))
 	require.NoError(t, err)
 
 	urls, err := c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 30})
@@ -213,7 +226,7 @@ func TestCSEClient_Search_DateRangeAndLanguageInQuery(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "k", CX: "cx", BaseURL: server.URL}, newTestLogger(t))
+	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), newTestLogger(t))
 	require.NoError(t, err)
 
 	_, err = c.Search(context.Background(), "kw", search.SearchOptions{
@@ -223,6 +236,130 @@ func TestCSEClient_Search_DateRangeAndLanguageInQuery(t *testing.T) {
 		Region:        "kr",
 	})
 	require.NoError(t, err)
+}
+
+func TestCSEClient_Search_RetriesNetworkErrorThenSucceeds(t *testing.T) {
+	t.Parallel()
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			// 첫 시도: 5xx (retryable) — backoff 후 재시도.
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"code":500,"message":"transient"}}`))
+			return
+		}
+		// 둘째 시도: 정상 응답.
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":[{"link":"https://example.com/a"}]}`))
+	}))
+	defer server.Close()
+
+	// 빠른 retry — 1ms initial 로 테스트 latency 최소화.
+	opts := search.CSEClientOptions{
+		APIKey:       "k",
+		CX:           "cx",
+		BaseURL:      server.URL,
+		NetworkRetry: search.RetryPolicy{MaxAttempts: 3, InitialDelay: time.Millisecond, Multiplier: 1.0},
+		// RateLimit 정책은 본 테스트에서 사용 안 됨 — fail-fast 로 둠.
+		RateLimitRetry: search.RetryPolicy{MaxAttempts: 1, InitialDelay: time.Millisecond, Multiplier: 1.0},
+	}
+	c, err := search.NewCSEClient(opts, newTestLogger(t))
+	require.NoError(t, err)
+
+	urls, err := c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 10})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://example.com/a"}, urls)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "5xx 첫 시도 후 1회 재시도 후 성공")
+}
+
+func TestCSEClient_Search_RetryRateLimitExhausted(t *testing.T) {
+	t.Parallel()
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"quota"}}`))
+	}))
+	defer server.Close()
+
+	opts := search.CSEClientOptions{
+		APIKey:         "k",
+		CX:             "cx",
+		BaseURL:        server.URL,
+		NetworkRetry:   search.RetryPolicy{MaxAttempts: 1, InitialDelay: time.Millisecond, Multiplier: 1.0},
+		RateLimitRetry: search.RetryPolicy{MaxAttempts: 3, InitialDelay: time.Millisecond, Multiplier: 1.0},
+	}
+	c, err := search.NewCSEClient(opts, newTestLogger(t))
+	require.NoError(t, err)
+
+	_, err = c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 10})
+	require.Error(t, err)
+	assert.Equal(t, int32(3), atomic.LoadInt32(&calls), "429 max attempts (3) 모두 호출")
+}
+
+func TestCSEClient_Search_NoRetryOnNonRetryable(t *testing.T) {
+	t.Parallel()
+
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":403,"message":"key invalid"}}`))
+	}))
+	defer server.Close()
+
+	opts := search.CSEClientOptions{
+		APIKey:         "k",
+		CX:             "cx",
+		BaseURL:        server.URL,
+		NetworkRetry:   search.RetryPolicy{MaxAttempts: 5, InitialDelay: time.Millisecond, Multiplier: 1.0},
+		RateLimitRetry: search.RetryPolicy{MaxAttempts: 5, InitialDelay: time.Millisecond, Multiplier: 1.0},
+	}
+	c, err := search.NewCSEClient(opts, newTestLogger(t))
+	require.NoError(t, err)
+
+	_, err = c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 10})
+	require.Error(t, err)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "403 (non-retryable) 은 retry 안 됨")
+}
+
+func TestCSEClient_Search_PartialPreservedOnlyForRetryable(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start, _ := strconv.Atoi(r.URL.Query().Get("start"))
+		if start == 1 {
+			body := `{"items":[`
+			for i := 0; i < 10; i++ {
+				if i > 0 {
+					body += ","
+				}
+				body += fmt.Sprintf(`{"link":"https://example.com/a-%d"}`, i)
+			}
+			body += `],"queries":{"nextPage":[{"startIndex":11}]}}`
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		// 둘째 페이지에서 403 (non-retryable) — 부분 결과를 silently downgrade 하면 안 됨.
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":403,"message":"key revoked mid-cycle"}}`))
+	}))
+	defer server.Close()
+
+	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), newTestLogger(t))
+	require.NoError(t, err)
+
+	_, err = c.Search(context.Background(), "kw", search.SearchOptions{MaxResults: 30})
+	require.Error(t, err, "non-retryable 후속 페이지 에러는 호출자에게 전파")
+
+	var cseErr *search.CSEError
+	require.True(t, errors.As(err, &cseErr))
+	assert.Equal(t, http.StatusForbidden, cseErr.StatusCode)
+	assert.False(t, cseErr.Retryable)
 }
 
 func TestCSEClient_Search_ContextCancelInterrupts(t *testing.T) {
@@ -236,7 +373,9 @@ func TestCSEClient_Search_ContextCancelInterrupts(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "k", CX: "cx", BaseURL: server.URL, Timeout: 1 * time.Second}, newTestLogger(t))
+	opts := newTestClientOpts("k", "cx", server.URL)
+	opts.Timeout = 1 * time.Second
+	c, err := search.NewCSEClient(opts, newTestLogger(t))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)

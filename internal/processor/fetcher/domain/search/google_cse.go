@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,15 +29,55 @@ const cseMaxResultsPerCall = 10
 // cseMaxStart 는 Google CSE 가 허용하는 start 파라미터 최댓값 (총 100개 결과 = 10페이지).
 const cseMaxStart = 100
 
+// RetryPolicy 는 CSE API 호출 재시도 정책입니다.
+//
+// 프로젝트 규칙 (.claude/rules/04-error-handling.md):
+//   - Network/Timeout: 최대 3회, 1s initial, exp backoff + jitter
+//   - RateLimit (429): 최대 5회, 10s initial, exp backoff (jitter 없음)
+//
+// 재시도 비활성화 시 MaxAttempts=1 — 첫 시도 성공/실패 그대로 반환 (테스트 / 강제 fail-fast 용도).
+type RetryPolicy struct {
+	MaxAttempts  int
+	InitialDelay time.Duration
+	MaxDelay     time.Duration
+	Multiplier   float64
+	Jitter       bool
+}
+
+// DefaultNetworkRetryPolicy 는 네트워크/타임아웃/5xx 에 적용되는 재시도 정책입니다.
+func DefaultNetworkRetryPolicy() RetryPolicy {
+	return RetryPolicy{
+		MaxAttempts:  3,
+		InitialDelay: 1 * time.Second,
+		MaxDelay:     30 * time.Second,
+		Multiplier:   2.0,
+		Jitter:       true,
+	}
+}
+
+// DefaultRateLimitRetryPolicy 는 429 (rate limit) 에 적용되는 재시도 정책입니다.
+func DefaultRateLimitRetryPolicy() RetryPolicy {
+	return RetryPolicy{
+		MaxAttempts:  5,
+		InitialDelay: 10 * time.Second,
+		MaxDelay:     5 * time.Minute,
+		Multiplier:   2.0,
+		Jitter:       false,
+	}
+}
+
 // CSEClient 는 Google Custom Search Engine 의 JSON API 를 호출하는 client 입니다.
 //
 // 동시성 안전 — internal 상태는 모두 readonly 또는 http client 자체에서 관리.
 type CSEClient struct {
-	apiKey  string
-	cx      string
-	baseURL string
-	http    *http.Client
-	log     *logger.Logger
+	apiKey      string
+	cx          string
+	baseURL     string
+	http        *http.Client
+	log         *logger.Logger
+	netPolicy   RetryPolicy
+	rateLPolicy RetryPolicy
+	rng         *rand.Rand
 }
 
 // CSEClientOptions 는 CSEClient 생성 옵션입니다.
@@ -45,6 +86,11 @@ type CSEClientOptions struct {
 	CX      string // Search Engine ID
 	BaseURL string // 빈 문자열이면 CSEDefaultBaseURL
 	Timeout time.Duration
+
+	// NetworkRetry / RateLimitRetry: 0 (zero value) 이면 Default*RetryPolicy 사용.
+	// MaxAttempts=1 로 명시하면 retry 비활성 (테스트 / 강제 fail-fast).
+	NetworkRetry   RetryPolicy
+	RateLimitRetry RetryPolicy
 }
 
 // NewCSEClient 는 새 CSEClient 를 생성합니다.
@@ -68,12 +114,23 @@ func NewCSEClient(opts CSEClientOptions, log *logger.Logger) (*CSEClient, error)
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	netP := opts.NetworkRetry
+	if netP.MaxAttempts == 0 {
+		netP = DefaultNetworkRetryPolicy()
+	}
+	rateP := opts.RateLimitRetry
+	if rateP.MaxAttempts == 0 {
+		rateP = DefaultRateLimitRetryPolicy()
+	}
 	return &CSEClient{
-		apiKey:  opts.APIKey,
-		cx:      opts.CX,
-		baseURL: baseURL,
-		http:    &http.Client{Timeout: timeout},
-		log:     log,
+		apiKey:      opts.APIKey,
+		cx:          opts.CX,
+		baseURL:     baseURL,
+		http:        &http.Client{Timeout: timeout},
+		log:         log,
+		netPolicy:   netP,
+		rateLPolicy: rateP,
+		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}, nil
 }
 
@@ -157,15 +214,17 @@ func (c *CSEClient) Search(ctx context.Context, keyword string, opts SearchOptio
 			num = remaining
 		}
 
-		page, hasNext, err := c.searchOnce(ctx, keyword, opts, start, num)
+		page, hasNext, err := c.searchWithRetry(ctx, keyword, opts, start, num)
 		if err != nil {
-			// 부분 결과 보존: 첫 페이지가 아니면 warn + 누적 결과 반환.
-			if start > 1 && len(urls) > 0 {
+			// 부분 결과 보존: 첫 페이지가 아니고 retryable 에러일 때만 — non-retryable
+			// (auth / quota exhausted) 는 호출자에게 그대로 전파해야 cycle 차단 가능 (CodeRabbit Major 반영).
+			var cseErr *CSEError
+			if start > 1 && len(urls) > 0 && errors.As(err, &cseErr) && cseErr.Retryable {
 				c.log.WithFields(map[string]interface{}{
 					"keyword":   keyword,
 					"start":     start,
 					"partial_n": len(urls),
-				}).WithError(err).Warn("cse pagination interrupted — returning partial results")
+				}).WithError(err).Warn("cse pagination interrupted (retryable) — returning partial results")
 				return urls, nil
 			}
 			return nil, err
@@ -185,6 +244,101 @@ func (c *CSEClient) Search(ctx context.Context, keyword string, opts SearchOptio
 	}
 
 	return urls, nil
+}
+
+// searchWithRetry 는 searchOnce 를 retry policy 에 따라 재시도하며 호출합니다.
+//
+// 정책 선택:
+//   - 429 (rate limit) → rateLPolicy (max 5회, 10s initial, exp backoff)
+//   - 5xx / network    → netPolicy   (max 3회, 1s initial, exp backoff + jitter)
+//   - non-retryable    → 즉시 반환 (재시도 무용)
+//
+// ctx cancel/deadline 은 backoff 대기 중에도 즉시 반영됩니다.
+func (c *CSEClient) searchWithRetry(ctx context.Context, keyword string, opts SearchOptions, start, num int) ([]string, bool, error) {
+	var lastErr error
+	// max attempts 는 두 정책 중 큰 쪽 — 호출 전엔 어떤 정책이 적용될지 모르므로 union.
+	// 각 attempt 마다 에러 유형 보고 그 정책의 attempt 한도를 본격 확인.
+	maxLoops := c.rateLPolicy.MaxAttempts
+	if c.netPolicy.MaxAttempts > maxLoops {
+		maxLoops = c.netPolicy.MaxAttempts
+	}
+	if maxLoops < 1 {
+		maxLoops = 1
+	}
+
+	netAttempt, rateAttempt := 0, 0
+	for loop := 0; loop < maxLoops; loop++ {
+		urls, hasNext, err := c.searchOnce(ctx, keyword, opts, start, num)
+		if err == nil {
+			return urls, hasNext, nil
+		}
+
+		var cseErr *CSEError
+		if !errors.As(err, &cseErr) || !cseErr.Retryable {
+			return nil, false, err
+		}
+
+		// 정책 선택: 429 → rate, 그 외 retryable → network
+		var policy RetryPolicy
+		var attemptCounter *int
+		if cseErr.StatusCode == http.StatusTooManyRequests {
+			policy = c.rateLPolicy
+			attemptCounter = &rateAttempt
+		} else {
+			policy = c.netPolicy
+			attemptCounter = &netAttempt
+		}
+		*attemptCounter++
+		lastErr = err
+
+		// 정책별 attempt 한도 도달 시 더 이상 재시도하지 않음.
+		if *attemptCounter >= policy.MaxAttempts {
+			return nil, false, err
+		}
+
+		delay := c.computeBackoff(policy, *attemptCounter)
+		c.log.WithFields(map[string]interface{}{
+			"keyword":      keyword,
+			"start":        start,
+			"attempt":      *attemptCounter,
+			"max_attempts": policy.MaxAttempts,
+			"delay_ms":     delay.Milliseconds(),
+			"status_code":  cseErr.StatusCode,
+		}).WithError(err).Warn("cse retrying after retryable error")
+
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	if lastErr == nil {
+		// 안전망 — 위 루프 어느 분기에서도 lastErr 없이 빠져나오는 경우는 없음.
+		lastErr = errors.New("cse: retry exhausted without error capture")
+	}
+	return nil, false, lastErr
+}
+
+// computeBackoff 는 attempt-th 재시도 전 대기 시간을 계산합니다 (1-based attempt).
+//
+// delay = initial * multiplier^(attempt-1), MaxDelay 로 cap. Jitter=true 면 [0.5×, 1.5×] 범위 변동.
+func (c *CSEClient) computeBackoff(p RetryPolicy, attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := float64(p.InitialDelay)
+	for i := 1; i < attempt; i++ {
+		delay *= p.Multiplier
+	}
+	if max := float64(p.MaxDelay); max > 0 && delay > max {
+		delay = max
+	}
+	if p.Jitter {
+		// [0.5, 1.5) 범위 균일 분포 — exp backoff 시 동시성 군집 흩뜨리기.
+		factor := 0.5 + c.rng.Float64()
+		delay *= factor
+	}
+	return time.Duration(delay)
 }
 
 // searchOnce 는 1회의 CSE API 호출을 수행하고 (URLs, hasNextPage, err) 를 반환합니다.

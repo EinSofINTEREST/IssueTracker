@@ -153,7 +153,7 @@ func stubCSEServer(t *testing.T, byKeyword map[string][]string) *httptest.Server
 func newTestHandler(t *testing.T, server *httptest.Server, repo storage.SearchKeywordRepository, pub search.JobPublisher) *search.SearchHandler {
 	t.Helper()
 	log := newTestLogger(t)
-	c, err := search.NewCSEClient(search.CSEClientOptions{APIKey: "k", CX: "cx", BaseURL: server.URL}, log)
+	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), log)
 	require.NoError(t, err)
 	h, err := search.NewSearchHandler(search.SearchHandlerOptions{
 		Client:      c,
