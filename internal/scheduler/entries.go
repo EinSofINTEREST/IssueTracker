@@ -12,6 +12,10 @@ import (
 // 기존 sources/{kr,us}/*/config.go 에 하드코딩된 CategoryURLs 를 이 맵으로 통합.
 // DefaultEntries 가 이 목록에서 ScheduleEntry 를 생성합니다.
 // 카테고리 이름 키는 사용하지 않으므로 map[string][]string 으로 URL 목록만 보관합니다.
+//
+// 본 맵은 이슈 #328 부터 fallback 전용 — DB 우선 (scheduler_entries 테이블) 정책.
+// scheduler_entries seed 는 migrations/up/019_scheduler_entries.sql 참조. interval 은
+// migration 020 부터 30m 단축 적용 — 본 fallback 은 cfg.CategoryInterval (env) 사용.
 var sourceCategoryURLs = map[string][]string{
 	"naver": {
 		"https://news.naver.com/section/100", // politics
