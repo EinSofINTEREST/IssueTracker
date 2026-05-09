@@ -1189,7 +1189,7 @@ func Load(envFiles ...string) (DBConfig, error) {
 // SchedulerConfig는 Job Scheduler의 크롤 주기 설정을 나타냅니다.
 // 소스 타입별로 독립적으로 조정할 수 있습니다.
 type SchedulerConfig struct {
-	CategoryInterval time.Duration // 카테고리 목록 폴링 주기 — SCHEDULER_CATEGORY_INTERVAL (default: 2h)
+	CategoryInterval time.Duration // 카테고리 목록 폴링 주기 — SCHEDULER_CATEGORY_INTERVAL (default: 30m, 이슈 #329)
 	JobTimeout       time.Duration // 개별 Job 최대 실행 시간 — SCHEDULER_JOB_TIMEOUT (default: 30s)
 	MaxRetries       int           // Job 최대 재시도 횟수 — SCHEDULER_MAX_RETRIES (default: 3)
 
@@ -1203,7 +1203,9 @@ type SchedulerConfig struct {
 // DefaultSchedulerConfig는 기본 SchedulerConfig를 반환합니다.
 func DefaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
-		CategoryInterval:    2 * time.Hour,
+		// migration 020 (#329) 이 DB 의 news interval 을 30m 으로 단축한 것과 일관 —
+		// DB 부재 환경에서 DefaultEntries fallback 도 동일 주기로 동작.
+		CategoryInterval:    30 * time.Minute,
 		JobTimeout:          30 * time.Second,
 		MaxRetries:          3,
 		MaxBacklog:          0, // disabled by default — opt-in via env
