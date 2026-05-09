@@ -36,14 +36,18 @@ VALUES
     'https://www.fmkorea.com', 100),
 
   -- DCInside (KR community — 갤러리)
-  ('gallery.dcinside.com', 'chromedp', 'initial seed from migration 021', 'dcinside', 'community', 'KR', 'ko',
+  -- 정치 / 국내야구 등 메이저 갤러리는 gall.dcinside.com (gallery 는 마이너 갤러리 도메인 — gemini High 반영).
+  ('gall.dcinside.com', 'chromedp', 'initial seed from migration 021 — major galleries', 'dcinside', 'community', 'KR', 'ko',
+    'https://gall.dcinside.com', 100),
+  ('gallery.dcinside.com', 'chromedp', 'initial seed from migration 021 — minor galleries fallback', 'dcinside', 'community', 'KR', 'ko',
     'https://gallery.dcinside.com', 100),
 
   -- Reddit (국제 community)
   ('www.reddit.com', 'chromedp', 'initial seed from migration 021', 'reddit', 'community', 'US', 'en',
     'https://www.reddit.com', 200),
+  -- old.reddit.com 은 파싱 친화적 fallback. base_url 도 old 로 두어야 상대 경로가 new UI 로 ricochet 안 됨 (gemini Medium 반영).
   ('old.reddit.com', 'chromedp', 'initial seed from migration 021 — old reddit fallback', 'reddit', 'community', 'US', 'en',
-    'https://www.reddit.com', 200),
+    'https://old.reddit.com', 200),
 
   -- Hacker News (국제 community)
   ('news.ycombinator.com', 'chromedp', 'initial seed from migration 021', 'hackernews', 'community', 'US', 'en',
@@ -67,9 +71,9 @@ VALUES
   ('community', 'fmkorea', 'https://www.fmkorea.com/best', 'category', 600, 2, TRUE, 'best'),
   ('community', 'fmkorea', 'https://www.fmkorea.com/index.php?mid=politics', 'category', 600, 2, TRUE, 'politics'),
 
-  -- dcinside (2)
-  ('community', 'dcinside', 'https://gallery.dcinside.com/board/lists/?id=politics', 'category', 600, 2, TRUE, 'politics gallery'),
-  ('community', 'dcinside', 'https://gallery.dcinside.com/board/lists/?id=baseball_new11', 'category', 600, 2, TRUE, 'baseball gallery'),
+  -- dcinside (2) — 정치 / 국내야구 메이저 갤러리는 gall.dcinside.com (gemini High 반영).
+  ('community', 'dcinside', 'https://gall.dcinside.com/board/lists/?id=politics', 'category', 600, 2, TRUE, 'politics gallery (major)'),
+  ('community', 'dcinside', 'https://gall.dcinside.com/board/lists/?id=baseball_new11', 'category', 600, 2, TRUE, 'baseball gallery (major)'),
 
   -- reddit (3)
   ('community', 'reddit', 'https://www.reddit.com/r/news', 'category', 600, 2, TRUE, 'r/news'),
