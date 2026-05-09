@@ -13,6 +13,7 @@ import (
 	"issuetracker/internal/processor/fetcher"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general/sources"
+	"issuetracker/internal/processor/fetcher/domain/search"
 	"issuetracker/internal/processor/fetcher/handler"
 	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
@@ -217,6 +218,46 @@ func main() {
 	// fetcher 측 등록: fetcher_rules DB 에서 모든 source 를 읽어 일괄 등록.
 	if err := sources.RegisterAll(ctx, registry, fetcherRuleRepo, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
 		log.WithError(err).Fatal("failed to register crawlers from db")
+	}
+
+	// Search handler (Google CSE) — optional. APIKey/CX 미설정이면 wire skip.
+	// scheduler_entries 의 category='search' entry 가 fetcher 에 도달했을 때 본 handler 가 호출되어
+	// keyword × CSE fanout → host 단위 chained article job 발행.
+	googleCSECfg, err := config.LoadGoogleCSE()
+	if err != nil {
+		log.WithError(err).Warn("failed to load google cse config — search handler disabled")
+	} else if !googleCSECfg.IsConfigured() {
+		log.Info("google cse not configured (GOOGLE_CSE_API_KEY/CX) — search handler disabled")
+	} else {
+		searchKeywordRepo, kwErr := pgstore.NewSearchKeywordRepository(pool, log)
+		if kwErr != nil {
+			log.WithError(kwErr).Warn("search keyword repo construction failed — search handler disabled")
+		} else {
+			cseClient, cseErr := search.NewCSEClient(search.CSEClientOptions{
+				APIKey:  googleCSECfg.APIKey,
+				CX:      googleCSECfg.CX,
+				Timeout: googleCSECfg.Timeout,
+			}, log)
+			if cseErr != nil {
+				log.WithError(cseErr).Warn("cse client construction failed — search handler disabled")
+			} else {
+				searchHandler, hErr := search.NewSearchHandler(search.SearchHandlerOptions{
+					Client:      cseClient,
+					KeywordRepo: searchKeywordRepo,
+					Publisher:   jobPublisher,
+				}, log)
+				if hErr != nil {
+					log.WithError(hErr).Warn("search handler construction failed — search handler disabled")
+				} else {
+					// scheduler entry 의 url=https://customsearch.googleapis.com/... 가 host=customsearch.googleapis.com
+					// 으로 변환되어 CrawlerName 에 들어감 (NewDefaultEntryConverter). 두 키 모두 등록 — source_name
+					// 직접 매칭이나 host-based dispatch 양쪽 지원.
+					registry.Register("customsearch.googleapis.com", searchHandler)
+					registry.Register("google_cse", searchHandler)
+					log.Info("search handler registered (google cse)")
+				}
+			}
+		}
 	}
 
 	// Redis 기반 ProcessingLock: 동일 URL 이 여러 worker/인스턴스에서 단계별 (fetcher/parser/validator)
