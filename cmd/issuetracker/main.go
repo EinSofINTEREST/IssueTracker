@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 	"issuetracker/internal/locks"
@@ -622,8 +623,27 @@ func main() {
 		emitter.SetNormalizer(links.NewNormalizer())
 		log.Info("scheduler emitter pipeline guard enabled")
 	}
+	// Scheduler entries 는 두 source-of-truth 중 하나에서 결정 (이슈 #328):
+	//   1. DB (scheduler_entries 테이블) — 운영자 UPDATE 가 30s refresh 주기로 반영
+	//   2. fallback (DefaultEntries) — DB 부재 / 초기화 실패 시 기존 hardcoded map
+	// DB 우선 — Resolver wiring 성공 시 Scheduler 가 부팅 시 ListEnabled 결과로 spawn,
+	// StartRefreshLoop 가 주기적 diff.
 	entries := scheduler.DefaultEntries(schedulerCfg)
 	sched := scheduler.New(entries, emitter, log, schedulerCfg.MaxRetries)
+
+	schedulerEntryRepo, schedRepoErr := pgstore.NewSchedulerEntryRepository(pool, log)
+	if schedRepoErr != nil {
+		log.WithError(schedRepoErr).Warn("scheduler entry repo construction failed — using static DefaultEntries fallback")
+	} else {
+		entryConverter := scheduler.NewDefaultEntryConverter(schedulerCfg.JobTimeout)
+		entryResolver, resErr := scheduler.NewEntryResolver(schedulerEntryRepo, entryConverter, log, 0)
+		if resErr != nil {
+			log.WithError(resErr).Warn("scheduler entry resolver construction failed — using static DefaultEntries fallback")
+		} else {
+			sched.SetEntryResolver(entryResolver)
+			log.Info("scheduler entries resolver enabled (DB-backed scheduler_entries, 30s refresh)")
+		}
+	}
 
 	// Backlog throttle: SCHEDULER_MAX_BACKLOG > 0 일 때만 활성.
 	// crawl 토픽의 consumer-group lag 가 임계값 초과 시 publish 차단.
@@ -645,6 +665,9 @@ func main() {
 	}
 
 	sched.Start(ctx)
+	// Resolver 가 wiring 되어 있으면 30s 주기 refresh — DB 변경 자동 반영.
+	// resolver 자체 5min TTL cache 가 DB 부하 흡수, 짧은 refresh 가 stall 빈도 줄임.
+	sched.StartRefreshLoop(ctx, 30*time.Second)
 
 	log.WithField("entry_count", len(entries)).Info("scheduler started")
 
