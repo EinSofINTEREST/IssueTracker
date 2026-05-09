@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"sort"
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
@@ -125,11 +124,11 @@ func (h *SearchHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core
 	successKeywordIDs := make([]int64, 0, len(keywords))
 
 	for _, kw := range keywords {
-		select {
-		case <-ctx.Done():
-			h.log.WithError(ctx.Err()).Warn("search handler ctx done — interrupting keyword loop")
-			break
-		default:
+		// ctx cancel 시 즉시 cycle 종료 — select+break 는 select 만 빠져나오므로 명시 return.
+		if err := ctx.Err(); err != nil {
+			h.log.WithError(err).Warn("search handler ctx done — interrupting keyword loop")
+			h.markSearched(ctx, successKeywordIDs)
+			return nil, err
 		}
 
 		kwOpts := opts
@@ -138,6 +137,15 @@ func (h *SearchHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core
 
 		urls, searchErr := h.client.Search(ctx, kw.Keyword, kwOpts)
 		if searchErr != nil {
+			// ctx cancel/deadline 으로 인한 실패는 wrap 여부에 무관하게 ctx.Err() 가 유일 진실
+			// — 다른 에러 분류 분기보다 우선 검사 (gemini Medium 반영).
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				h.log.WithFields(map[string]interface{}{
+					"keyword": kw.Keyword,
+				}).WithError(searchErr).Warn("cse search interrupted by ctx — aborting cycle")
+				h.markSearched(ctx, successKeywordIDs)
+				return nil, searchErr
+			}
 			// non-retryable (auth / quota) → 전체 cycle 중단 (다음 cycle 까지 기다림).
 			var cseErr *CSEError
 			if errors.As(searchErr, &cseErr) && !cseErr.Retryable {
@@ -245,9 +253,7 @@ func (h *SearchHandler) markSearched(ctx context.Context, ids []int64) {
 
 // groupByHost 는 URL 리스트를 hostname 별로 group 합니다. 파싱 실패 URL 은 "_unknown_" group.
 //
-// 반환되는 map 은 deterministic 순서가 아님 — 호출자가 필요시 keys 를 sort 해야 합니다.
-// 본 함수는 host group 단위 batch publish 효율 + 결정성 테스트를 위해 keys 를 sort 한 결과를
-// 호출자가 사용할 수 있도록 sort 헬퍼도 제공.
+// 반환되는 map 은 deterministic 순서가 아님 — host 단위 batch publish 효율을 위한 group 화에만 사용.
 func groupByHost(urls []string) map[string][]string {
 	byHost := make(map[string][]string, 16)
 	for _, u := range urls {
@@ -264,14 +270,4 @@ func hostOf(rawURL string) string {
 		return "_unknown_"
 	}
 	return u.Hostname()
-}
-
-// sortedHosts 는 group map 의 키를 정렬하여 반환합니다 (테스트 결정성용 헬퍼).
-func sortedHosts(byHost map[string][]string) []string {
-	keys := make([]string, 0, len(byHost))
-	for k := range byHost {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
