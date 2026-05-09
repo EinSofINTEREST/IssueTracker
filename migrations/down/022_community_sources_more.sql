@@ -26,7 +26,7 @@ WHERE category = 'community'
     ('tildes',     'https://tildes.net/~news')
   );
 
--- fetcher_rules: 정확한 host_pattern set
+-- fetcher_rules: 정확한 host_pattern set + reason 매칭 — 동일 host_pattern 의 운영자 manual row 보호
 DELETE FROM fetcher_rules
 WHERE host_pattern IN (
   'bbs.ruliweb.com',
@@ -38,4 +38,5 @@ WHERE host_pattern IN (
   'news.slashdot.org',
   'lemmy.world',
   'tildes.net'
-);
+)
+  AND reason = 'initial seed from migration 022';

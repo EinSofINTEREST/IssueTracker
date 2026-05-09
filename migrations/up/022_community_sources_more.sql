@@ -44,7 +44,7 @@ VALUES
   ('slashdot.org', 'chromedp', 'initial seed from migration 022', 'slashdot', 'community', 'US', 'en',
     'https://slashdot.org', 200),
   ('news.slashdot.org', 'chromedp', 'initial seed from migration 022', 'slashdot', 'community', 'US', 'en',
-    'https://slashdot.org', 200),
+    'https://news.slashdot.org', 200),
 
   -- Lemmy.world (decentralized reddit alternative)
   ('lemmy.world', 'chromedp', 'initial seed from migration 022', 'lemmy', 'community', 'US', 'en',
