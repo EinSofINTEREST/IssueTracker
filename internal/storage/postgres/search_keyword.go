@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
@@ -83,8 +81,7 @@ func (r *pgSearchKeywordRepository) Insert(ctx context.Context, rec *storage.Sea
 		rec.Keyword, rec.Enabled, string(rec.Source), rec.Language, rec.Region, rec.Notes,
 	)
 	if err := row.Scan(&rec.ID, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+		if isPgUniqueViolation(err) {
 			return storage.ErrDuplicate
 		}
 		return fmt.Errorf("insert search_keyword: %w", err)
