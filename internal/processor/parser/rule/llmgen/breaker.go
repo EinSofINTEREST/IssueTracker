@@ -84,21 +84,28 @@ func NewHostBreaker(cfg HostBreakerConfig) *HostBreaker {
 
 // Allow 는 (host, target_type) 가 현재 호출 허용 상태인지 반환합니다.
 //
-// cooldown 만료 시 자동으로 state reset 후 true. 만료 전이면 false + remaining duration.
+// cooldown 만료 시 entry 삭제 — unbounded map growth 방지 (CodeRabbit Major 반영).
+// 만료 시점 비교는 inclusive — now == blockedUntil 도 통과로 간주 (one-tick false block 방지).
+//
+// 비차단 상태 (blockedUntil.IsZero) 의 entry 는 consecutive failure count 보존을 위해 삭제하지
+// 않음 — 그 카운터가 0 으로 되돌아가면 threshold 도달이 안 되어 cooldown 자체가 발화 안 함.
+// 비차단 entry 의 정리는 RecordSuccess (회복) 또는 cooldown 진입 후 만료 시점에 발생.
 func (b *HostBreaker) Allow(host string, targetType storage.TargetType) (bool, time.Duration) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	st, ok := b.st[hostKey{host, targetType}]
+	key := hostKey{host: host, targetType: targetType}
+	st, ok := b.st[key]
 	if !ok {
 		return true, 0
 	}
+	if st.blockedUntil.IsZero() {
+		// 비차단 — failure count 만 누적된 상태.
+		return true, 0
+	}
 	now := b.now()
-	if st.blockedUntil.IsZero() || now.After(st.blockedUntil) {
-		// cooldown 만료 — state 깨끗이 reset 하여 다음 실패가 새 카운트로 시작.
-		if !st.blockedUntil.IsZero() {
-			st.blockedUntil = time.Time{}
-			st.failures = 0
-		}
+	if !now.Before(st.blockedUntil) {
+		// cooldown 만료 — stale state 제거 (다음 실패는 새 entry 로 시작).
+		delete(b.st, key)
 		return true, 0
 	}
 	return false, st.blockedUntil.Sub(now)
@@ -124,16 +131,12 @@ func (b *HostBreaker) RecordRateLimit(host string, targetType storage.TargetType
 
 // RecordSuccess 는 (host, target_type) 에서 성공 / non-rate_limit 종료를 기록합니다.
 //
-// failures 카운터 + cooldown 모두 reset — 같은 host 의 정상 응답이 한 번이라도 들어오면
-// breaker state 를 깨끗하게 초기화 (rate_limit 회복 신호).
+// 같은 host 의 정상 응답이 한 번이라도 들어오면 entry 자체를 삭제 — failures/cooldown reset
+// 효과 + map 무한 성장 방지 (CodeRabbit Major 반영). 다음 실패는 새 entry 로 시작.
 func (b *HostBreaker) RecordSuccess(host string, targetType storage.TargetType) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	key := hostKey{host, targetType}
-	if st, ok := b.st[key]; ok {
-		st.failures = 0
-		st.blockedUntil = time.Time{}
-	}
+	delete(b.st, hostKey{host: host, targetType: targetType})
 }
 
 // Snapshot 은 디버깅 / 테스트용 state snapshot 입니다 (현재 차단 중인 host 목록).

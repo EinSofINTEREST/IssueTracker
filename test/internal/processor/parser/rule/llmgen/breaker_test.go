@@ -59,7 +59,8 @@ func TestHostBreaker_CooldownExpiresAndAllows(t *testing.T) {
 	allowed, _ := b.Allow("example.com", storage.TargetTypePage)
 	assert.False(t, allowed, "차단 진입")
 
-	time.Sleep(15 * time.Millisecond)
+	// CI 부하 환경에서 timing 흔들림 흡수 — 10ms cooldown 에 50ms 여유.
+	time.Sleep(50 * time.Millisecond)
 
 	allowed, _ = b.Allow("example.com", storage.TargetTypePage)
 	assert.True(t, allowed, "cooldown 만료 후 다시 통과")

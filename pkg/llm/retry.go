@@ -140,10 +140,14 @@ func (r *RetryProvider) Generate(ctx context.Context, req Request) (*Response, e
 		}
 
 		delay := r.computeBackoff(policy, *counter)
+		// time.After 는 ctx 취소 시에도 timer 가 만료까지 GC 되지 않아 메모리 압박 가능 (gemini Medium 반영).
+		// MaxDelay 5min 환경에서 취소된 요청 누적 시 leak. NewTimer + Stop 으로 명시 해제.
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil, ctx.Err()
-		case <-time.After(delay):
+		case <-timer.C:
 		}
 	}
 
