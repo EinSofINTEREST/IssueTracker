@@ -138,6 +138,7 @@ type Generator struct {
 	requeueFn     RequeueFunc                 // nil 이면 재투입 비활성
 	semValidator  SelectorValidator           // nil 이면 의미 검증 건너뜀
 	blacklistRepo storage.BlacklistRepository // nil 이면 자동 blacklist 등록 skip (#326)
+	breaker       *HostBreaker                // nil 이면 breaker 비활성 (이슈 #215)
 	wg            sync.WaitGroup
 	stopped       atomic.Bool
 }
@@ -188,6 +189,20 @@ func (g *Generator) SetExtractor(e SelectorExtractor) {
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
 func (g *Generator) SetBlacklistRepo(r storage.BlacklistRepository) {
 	g.blacklistRepo = r
+}
+
+// SetBreaker 는 host 단위 LLM rate_limit circuit breaker 를 등록합니다 (이슈 #215).
+//
+// 동작:
+//   - Enqueue 시 b.Allow(host, type) == false 면 즉시 skip (cooldown 중)
+//   - runOnce 결과의 wrap 된 *llm.Error 를 unwrap 하여:
+//     · ErrCodeRateLimit → b.RecordRateLimit
+//     · 그 외 / nil      → b.RecordSuccess
+//
+// nil 이면 breaker 비활성 — 기존 동작 유지 (모든 호출 그대로).
+// Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
+func (g *Generator) SetBreaker(b *HostBreaker) {
+	g.breaker = b
 }
 
 // New 는 Generator 를 생성합니다.
@@ -266,6 +281,19 @@ func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType sto
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "" {
 		return
+	}
+
+	// Host breaker (이슈 #215) — 동일 host 의 LLM 호출이 연속 rate_limit hit 한 상태이면
+	// 즉시 skip 하여 quota 소비 회피. cooldown 만료 시 자동으로 다시 통과.
+	if g.breaker != nil {
+		if allowed, remaining := g.breaker.Allow(host, targetType); !allowed {
+			g.log.WithFields(map[string]interface{}{
+				"host":               host,
+				"target_type":        string(targetType),
+				"cooldown_remaining": remaining.String(),
+			}).Info("llmgen enqueue skipped — host breaker cooldown")
+			return
+		}
 	}
 
 	// 필요한 데이터를 값으로 캡쳐 — goroutine 내 포인터 공유 없이 안전 (Copilot 피드백).
@@ -348,6 +376,18 @@ func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType sto
 		}()
 
 		err := g.runOnce(bgCtx, host, targetType, urlSnapshot, htmlSnapshot, stale)
+
+		// Host breaker (#215) state 갱신 — runOnce 결과에서 *llm.Error 를 unwrap 하여 분류.
+		// rate_limit 만 RecordRateLimit, 그 외 (nil 포함) 는 RecordSuccess (회복 신호).
+		if g.breaker != nil {
+			var llmErr *llm.Error
+			if errors.As(err, &llmErr) && llmErr.Code == llm.ErrCodeRateLimit {
+				g.breaker.RecordRateLimit(host, targetType)
+			} else {
+				g.breaker.RecordSuccess(host, targetType)
+			}
+		}
+
 		if err != nil {
 			// blacklist sentinel 은 normal completion — pending flush skip 만 하고 logging 도 별도.
 			if errors.Is(err, errBlacklistedNoRule) {

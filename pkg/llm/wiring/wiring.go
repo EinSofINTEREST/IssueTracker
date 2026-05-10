@@ -116,6 +116,10 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 			log.WithError(perr).WithField("provider", name).Warn("failed to construct LLM provider, skipping")
 			continue
 		}
+		// 각 provider 를 RetryProvider 로 감싸 — rate_limit / network 발생 시 chain fallback 전에
+		// 같은 provider 에서 backoff 재시도 (이슈 #215). chain 은 RetryProvider 가 모든 시도 소진
+		// 후에야 다음 provider 로 fallthrough — backoff 정책은 default (RateLimit 5회/10s + Network 3회/1s).
+		p = llm.NewRetryProvider(p, llm.RetryProviderOptions{})
 		candidates = append(candidates, p)
 		activeNames = append(activeNames, name)
 	}
