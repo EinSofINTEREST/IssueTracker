@@ -172,6 +172,7 @@ func extractPattern(resp string) string {
 //  2. positive (samples.Articles) 100% 매칭
 //  3. negative (samples.NonArticles) 0% 매칭
 //  4. trivially broad 거부 (isTriviallyBroad)
+//  5. broadness 휴리스틱 (이슈 #311) — broadnessCheckEnabled() 가 true 일 때만
 //
 // 모든 단계 통과 시 true, 1단계라도 실패 시 false.
 func validateLLMResult(pattern string, samples LLMSamples) bool {
@@ -193,6 +194,11 @@ func validateLLMResult(pattern string, samples LLMSamples) bool {
 		if re.MatchString("/" + strings.Trim(p, "/")) {
 			return false
 		}
+	}
+	// broadness 휴리스틱 (이슈 #311) — sample-driven 으로 segment 수 / literal segment 보존 검증.
+	// PATHINFER_BROADNESS_CHECK=false 면 skip — 정상 정밀화도 거부될 때 fail-safe off.
+	if broadnessCheckEnabled() && !validateBroadness(re, samples) {
+		return false
 	}
 	return true
 }
