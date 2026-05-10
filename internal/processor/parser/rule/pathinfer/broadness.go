@@ -49,10 +49,10 @@ func validateBroadness(re *regexp.Regexp, samples LLMSamples) bool {
 		return true
 	}
 
-	// positives 를 segment array 로 normalize.
+	// positives 를 segment array 로 normalize. pathinfer.go 의 splitSegments 재사용.
 	positives := make([][]string, 0, len(samples.Articles))
 	for _, a := range samples.Articles {
-		positives = append(positives, splitPathSegments(a))
+		positives = append(positives, splitSegments(a))
 	}
 
 	if !validateSegmentCount(re, positives) {
@@ -62,16 +62,6 @@ func validateBroadness(re *regexp.Regexp, samples LLMSamples) bool {
 		return false
 	}
 	return true
-}
-
-// splitPathSegments 는 path 를 정규화 (앞뒤 / 제거) 후 / 로 split 한 segment 슬라이스를 반환합니다.
-// 빈 path / "/" 는 빈 슬라이스 반환.
-func splitPathSegments(path string) []string {
-	trimmed := strings.Trim(path, "/")
-	if trimmed == "" {
-		return nil
-	}
-	return strings.Split(trimmed, "/")
 }
 
 // validateSegmentCount 는 positive 가 모두 동일 segment 수 K 인 경우, pattern 이 K-1 / K+1
@@ -107,10 +97,16 @@ func validateSegmentCount(re *regexp.Regexp, positives [][]string) bool {
 		return false
 	}
 
-	// K-1 segment 변형: 마지막 segment drop. K=1 이면 "/" 가 되므로 의미 없는 경우 skip.
+	// K-1 segment 변형: 앞 / 뒤 양쪽에서 한 segment drop (CodeRabbit Major 반영).
+	// optional leading group (예: ^(/lang)?/article/\d+$) 같은 패턴이 K-1 으로 통과하는 케이스도 거부.
+	// K=1 이면 "/" 가 되므로 의미 없는 경우 skip.
 	if k >= 2 {
-		shorter := "/" + strings.Join(base[:k-1], "/")
-		if re.MatchString(shorter) {
+		shorterFront := "/" + strings.Join(base[1:], "/")
+		if re.MatchString(shorterFront) {
+			return false
+		}
+		shorterBack := "/" + strings.Join(base[:k-1], "/")
+		if re.MatchString(shorterBack) {
 			return false
 		}
 	}
@@ -167,6 +163,11 @@ func validateLiteralSegments(re *regexp.Regexp, positives [][]string) bool {
 	copy(base, positives[0])
 	for _, idx := range constantIdx {
 		for _, tok := range tokens {
+			// constant value 와 동일한 token 은 substitution 효과 없음 → false rejection 회피
+			// (CodeRabbit Minor 반영).
+			if tok == base[idx] {
+				continue
+			}
 			variant := make([]string, k)
 			copy(variant, base)
 			variant[idx] = tok
