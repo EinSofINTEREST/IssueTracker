@@ -72,8 +72,11 @@ start: ## Crawler + Processor 통합 실행 (의존: chrome, kafka 자동 기동
 	@$(MAKE) run-issuetracker
 
 chrome-ensure: ## Chrome compose 서비스가 WORKER_COUNT 이상 실행 중이 아니면 chrome-start 호출
-	@running=$$($(COMPOSE) -f $(COMPOSE_FILE) ps -q $(CHROME_COMPOSE_SERVICE) 2>/dev/null | wc -l); \
-	target=$(CHROME_WORKER_COUNT); \
+	@target=$(CHROME_WORKER_COUNT); \
+	case "$$target" in \
+	  ''|*[!0-9]*) echo "Invalid CHROME_WORKER_COUNT='$$target' (must be non-negative integer)"; exit 1;; \
+	esac; \
+	running=$$($(COMPOSE) -f $(COMPOSE_FILE) ps --status running -q $(CHROME_COMPOSE_SERVICE) 2>/dev/null | wc -l); \
 	if [ "$$running" -lt "$$target" ]; then \
 	  echo "Chrome compose service running=$$running, target=$$target — starting..."; \
 	  $(MAKE) chrome-start; \
