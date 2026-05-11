@@ -25,9 +25,23 @@ GO=go
 GOFLAGS=-v
 
 # Docker Chrome 변수
+# 메인 chrome 운영은 docker compose --scale 으로 N replica (chrome-1 ... chrome-N).
+# 아래 단일 컨테이너 변수 (CHROME_CONTAINER) 는 legacy run-example-docker 용으로만 유지.
 CHROME_IMAGE=chromedp/headless-shell
 CHROME_PORT=9222
 CHROME_CONTAINER=issuetracker-chrome
+
+# Chrome compose-based 변수 (단일 docker run → docker compose --scale 전환)
+# CHROME_WORKER_COUNT 는 deployments/docker/.env 의 FETCHER_CHROMEDP_WORKER_COUNT 사용 — 미설정 시 2.
+# CHROME_PROJECT_NAME: compose project 명시 고정 (Copilot 피드백) — working dir 에 무관하게
+# 동일 project 의 chrome replica 를 일관 인식. 기본값 'docker' 는 compose-file 디렉토리 basename
+# (deployments/docker) 과 일치하여 운영 환경에 이미 떠 있는 docker-chrome-{N} 컨테이너와 정합.
+CHROME_COMPOSE_SERVICE=chrome
+CHROME_PROJECT_NAME=docker
+CHROME_WORKER_COUNT_RAW=$(shell [ -f $(KAFKA_ENV_FILE) ] && grep -E '^FETCHER_CHROMEDP_WORKER_COUNT=' $(KAFKA_ENV_FILE) | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
+CHROME_WORKER_COUNT=$(if $(CHROME_WORKER_COUNT_RAW),$(CHROME_WORKER_COUNT_RAW),2)
+# Chrome compose 호출 공통 prefix — project name + compose file 명시.
+CHROME_COMPOSE=$(COMPOSE) -p $(CHROME_PROJECT_NAME) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS)
 
 # Kafka Docker Compose 변수
 COMPOSE_FILE=deployments/docker/docker-compose.yml
@@ -63,12 +77,18 @@ start: ## Crawler + Processor 통합 실행 (의존: chrome, kafka 자동 기동
 	@$(MAKE) kafka-ensure
 	@$(MAKE) run-issuetracker
 
-chrome-ensure: ## Chrome 컨테이너가 실행 중이 아니면 chrome-start 호출
-	@if [ -z "$$(docker ps --filter name=^/$(CHROME_CONTAINER)$$ --filter status=running --quiet)" ]; then \
-	  echo "Chrome container '$(CHROME_CONTAINER)' not running, starting..."; \
+chrome-ensure: ## Chrome compose 서비스가 WORKER_COUNT 이상 실행 중이 아니면 chrome-start 호출
+	@target=$(CHROME_WORKER_COUNT); \
+	case "$$target" in \
+	  ''|*[!0-9]*) echo "Invalid CHROME_WORKER_COUNT='$$target' (must be positive integer)"; exit 1;; \
+	  0) echo "Invalid CHROME_WORKER_COUNT=0 (must be >= 1 — chrome 비활성은 FETCHER_CHROMEDP_ENABLED=false 사용)"; exit 1;; \
+	esac; \
+	running=$$($(CHROME_COMPOSE) ps --status running -q $(CHROME_COMPOSE_SERVICE) 2>/dev/null | wc -l | tr -d ' '); \
+	if [ "$$running" -lt "$$target" ]; then \
+	  echo "Chrome compose service running=$$running, target=$$target — starting..."; \
 	  $(MAKE) chrome-start; \
 	else \
-	  echo "Chrome container '$(CHROME_CONTAINER)' already running"; \
+	  echo "Chrome compose service has $$running running container(s) (target=$$target)"; \
 	fi
 
 kafka-ensure: ## Kafka 컨테이너가 실행 중이 아니면 kafka-start, 이미 실행 중이면 토픽 멱등 초기화
@@ -112,25 +132,21 @@ run-kafka-pipeline: $(KAFKA_PIPELINE_BINARY) ## Kafka 파이프라인 예제 실
 	@echo "Running Kafka pipeline example..."
 	./$(KAFKA_PIPELINE_BINARY)
 
-chrome-start: ## Docker Chrome 컨테이너 시작 (포트 9222)
-	@echo "Starting Chrome container ($(CHROME_IMAGE))..."
-	@docker run -d --rm \
-	  -p $(CHROME_PORT):9222 \
-	  --name $(CHROME_CONTAINER) \
-	  $(CHROME_IMAGE)
-	@echo "Waiting for Chrome to be ready..."
-	@sleep 2
-	@echo "Chrome started → ws://localhost:$(CHROME_PORT)"
+chrome-start: ## docker compose --scale 로 Chrome N replica 시작 (포트는 compose.yml 의 HOST_PORT_RANGE 기준)
+	@port_range=$$([ -f $(KAFKA_ENV_FILE) ] && grep -E '^FETCHER_CHROMEDP_HOST_PORT_RANGE=' $(KAFKA_ENV_FILE) | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' '); \
+	port_range=$${port_range:-9222-9229}; \
+	echo "Starting Chrome ($(CHROME_WORKER_COUNT) replicas via docker compose, host port range=$$port_range)..."
+	$(CHROME_COMPOSE) up -d --scale $(CHROME_COMPOSE_SERVICE)=$(CHROME_WORKER_COUNT) $(CHROME_COMPOSE_SERVICE)
+	@echo "Chrome started — replicas=$(CHROME_WORKER_COUNT)"
 
-chrome-stop: ## Docker Chrome 컨테이너 중지
-	@echo "Stopping Chrome container..."
-	-@docker stop $(CHROME_CONTAINER) 2>/dev/null
+chrome-stop: ## Chrome compose 서비스 중지 + 컨테이너 제거
+	@echo "Stopping Chrome compose service..."
+	-@$(CHROME_COMPOSE) stop $(CHROME_COMPOSE_SERVICE) 2>/dev/null
+	-@$(CHROME_COMPOSE) rm -f $(CHROME_COMPOSE_SERVICE) 2>/dev/null
 	@echo "Chrome stopped"
 
-chrome-status: ## Docker Chrome 컨테이너 상태 확인
-	@docker ps --filter name=$(CHROME_CONTAINER) \
-	  --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" \
-	  | { read header; read line 2>/dev/null && echo "$$header" && echo "$$line" || echo "$$header\n(not running)"; }
+chrome-status: ## Chrome compose 서비스 상태 확인 (전 replica)
+	@$(CHROME_COMPOSE) ps $(CHROME_COMPOSE_SERVICE)
 
 run-example-docker: $(EXAMPLE_BINARY) ## Docker Chrome으로 basic example 실행 (컨테이너 자동 시작/중지)
 	@echo "=== Docker Chrome + Basic Example ==="
