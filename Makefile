@@ -138,10 +138,9 @@ chrome-remote-urls: ## chrome compose 컨테이너의 실제 host 포트를 ws:/
 	  exit $$rc; \
 	fi; \
 	echo "$$out" \
-	  | grep -oE '0\.0\.0\.0:[0-9]+->9222/tcp' \
-	  | grep -oE '^0\.0\.0\.0:[0-9]+' \
-	  | grep -oE '[0-9]+$$' \
-	  | sort -n \
+	  | tr ',' '\n' \
+	  | sed -nE 's/.*:([0-9]+)->9222\/tcp/\1/p' \
+	  | sort -un \
 	  | head -n $(CHROME_WORKER_COUNT) \
 	  | sed 's|^|ws://localhost:|' \
 	  | paste -sd,
