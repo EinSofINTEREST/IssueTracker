@@ -1,6 +1,6 @@
 .PHONY: help build build-all test clean run-processor run-issuetracker run-example lint coverage \
         start chrome-ensure kafka-ensure \
-        chrome-start chrome-stop chrome-status run-example-docker \
+        chrome-start chrome-stop chrome-status chrome-remote-urls run-example-docker \
         run-kafka-pipeline \
         kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics kafka-init \
         pg-start pg-stop pg-clean pg-migrate pg-status pg-psql \
@@ -104,9 +104,27 @@ run-processor: build ## Validate processor 실행
 	@echo "Running processor..."
 	./$(PROCESSOR_BINARY)
 
-run-issuetracker: build ## Crawler + Processor 통합 실행
-	@echo "Running issuetracker (crawler + processor)..."
-	./scripts/entrypoint.sh
+run-issuetracker: build ## Crawler + Processor 통합 실행 (chrome 실제 포트 자동 매핑 — 이슈 #348)
+	@urls=$$($(MAKE) -s chrome-remote-urls 2>/dev/null); \
+	if [ -n "$$urls" ]; then \
+	  echo "Discovered chrome remote URLs: $$urls"; \
+	  echo "Running issuetracker (crawler + processor)..."; \
+	  FETCHER_CHROMEDP_REMOTE_URLS="$$urls" ./scripts/entrypoint.sh; \
+	else \
+	  echo "No chrome compose containers found — falling back to .env FETCHER_CHROMEDP_REMOTE_URLS"; \
+	  echo "Running issuetracker (crawler + processor)..."; \
+	  ./scripts/entrypoint.sh; \
+	fi
+
+chrome-remote-urls: ## chrome compose 컨테이너의 실제 host 포트를 ws:// URL 목록으로 출력 (이슈 #348)
+	@$(CHROME_COMPOSE) ps --status running --format '{{.Ports}}' $(CHROME_COMPOSE_SERVICE) 2>/dev/null \
+	  | grep -oE '0\.0\.0\.0:[0-9]+->9222/tcp' \
+	  | grep -oE '^0\.0\.0\.0:[0-9]+' \
+	  | grep -oE '[0-9]+$$' \
+	  | sort -n \
+	  | head -n $(CHROME_WORKER_COUNT) \
+	  | sed 's|^|ws://localhost:|' \
+	  | paste -sd,
 
 $(EXAMPLE_BINARY): ./examples/basic_usage/
 	@mkdir -p $(BINARY_DIR)
