@@ -796,8 +796,8 @@ func TestValidateWorker_NotFound_CommitsWithoutDLQ(t *testing.T) {
 	// 운영의 contentService.GetByID 는 storage.ErrNotFound 를 core.NewStorageError 로 wrap 함
 	// (gemini Medium 반영) — 테스트도 동일하게 wrap 하여 errors.Is 가 chain 을 정확히 관통하는지 검증.
 	wrappedNotFound := core.NewStorageError(core.CodeStorageRead, "get content by id", true, storage.ErrNotFound)
-	contentSvc.On("GetByID", mock.Anything, content.ID).Return((*core.Content)(nil), wrappedNotFound)
-	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return((*core.Content)(nil), wrappedNotFound).Once()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Once()
 
 	runWorker(t, consumer, w, msg)
 
@@ -809,8 +809,11 @@ func TestValidateWorker_NotFound_CommitsWithoutDLQ(t *testing.T) {
 		return m.Topic == queue.TopicValidated
 	}))
 	contentSvc.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
-	// commit 은 정확히 1회 호출됨 (consumer mock 의 Setup 검증).
-	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+	// GetByID / CommitMessages 정확히 1회 호출 (Copilot 반영) — ErrNotFound 분기 진입 + commit 수행 보증.
+	contentSvc.AssertNumberOfCalls(t, "GetByID", 1)
+	consumer.AssertNumberOfCalls(t, "CommitMessages", 1)
+	contentSvc.AssertExpectations(t)
+	consumer.AssertExpectations(t)
 }
 
 // TestValidateWorker_OtherFetchError_SendsToDLQ — 이슈 #321 회귀 방지.
@@ -827,11 +830,11 @@ func TestValidateWorker_OtherFetchError_SendsToDLQ(t *testing.T) {
 
 	// 의도적으로 ErrNotFound 가 아닌 다른 에러.
 	fetchErr := errors.New("simulated db connection error")
-	contentSvc.On("GetByID", mock.Anything, content.ID).Return((*core.Content)(nil), fetchErr)
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return((*core.Content)(nil), fetchErr).Once()
 	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
 		return m.Topic == queue.TopicDLQ
-	})).Return(nil)
-	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+	})).Return(nil).Once()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Once()
 
 	runWorker(t, consumer, w, msg)
 
@@ -840,4 +843,10 @@ func TestValidateWorker_OtherFetchError_SendsToDLQ(t *testing.T) {
 		return m.Topic == queue.TopicDLQ
 	}))
 	contentSvc.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	// GetByID / DLQ Publish / CommitMessages 각 1회 호출 보증 (Copilot 반영).
+	contentSvc.AssertNumberOfCalls(t, "GetByID", 1)
+	consumer.AssertNumberOfCalls(t, "CommitMessages", 1)
+	contentSvc.AssertExpectations(t)
+	producer.AssertExpectations(t)
+	consumer.AssertExpectations(t)
 }

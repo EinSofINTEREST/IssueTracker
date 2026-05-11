@@ -225,7 +225,7 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 			log.WithFields(map[string]interface{}{
 				"job_id": pm.ID,
 				"ref_id": ref.ID,
-			}).Info("content already processed (duplicate delivery), skipping silently")
+			}).Info("content already processed (duplicate delivery), skipping")
 			return w.commit(ctx, msg)
 		}
 		log.WithFields(map[string]interface{}{
