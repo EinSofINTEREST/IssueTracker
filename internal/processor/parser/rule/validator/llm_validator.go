@@ -156,7 +156,7 @@ func parseValidationResponse(content string, out *llmValidationResponse) error {
 	}
 	if err := json.Unmarshal([]byte(s), out); err == nil {
 		return nil
-	} else if salvageErr := salvageValid(content, out); salvageErr == nil {
+	} else if salvageErr := salvageValid(s, out); salvageErr == nil {
 		return nil
 	} else {
 		return fmt.Errorf("unmarshal: %w (raw: %q)", err, content)
@@ -165,10 +165,14 @@ func parseValidationResponse(content string, out *llmValidationResponse) error {
 
 // salvageValid 는 unmarshal 실패한 LLM 응답에서 regex 로 valid verdict 만 추출합니다 (이슈 #320).
 //
+// 인자 s 는 parseValidationResponse 가 첫 `{` ~ 마지막 `}` 로 trim 한 결과 — LLM 이 응답 서두에
+// prompt 를 echo 하거나 prose 를 출력해도 그 영역의 \"valid\": true 같은 문자열을 verdict 로 오인
+// 하지 않도록 JSON 블록 내부만 검사 (gemini Medium 반영).
+//
 // 매칭 실패 시 error 반환 — 호출자가 원본 unmarshal 에러 메시지를 그대로 노출하여 운영 진단성 보존.
 // 매칭 성공 시 out.Valid 만 채움 (Reason 은 빈 문자열).
-func salvageValid(content string, out *llmValidationResponse) error {
-	m := validRegex.FindStringSubmatch(content)
+func salvageValid(s string, out *llmValidationResponse) error {
+	m := validRegex.FindStringSubmatch(s)
 	if len(m) < 2 {
 		return errors.New("salvage: no valid key found in truncated response")
 	}
