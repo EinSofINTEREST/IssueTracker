@@ -5,7 +5,12 @@
 package wiring
 
 import (
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/llm"
@@ -46,34 +51,56 @@ func normalizePrimary(name string) string {
 // fallbackOrder 는 fixed-order fallback chain 의 시도 순서입니다.
 //
 // 현재는 gemini → openai → anthropic 으로 hardcoded — 비용 / 한도 / 가용성 우선순위 기준.
-// 향후 capability 기반 metric 정책 (cost / latency / 성공률) 도입 시 본 슬라이스 대신
-// pkg/llm/policy 의 dynamic policy (CheapestFirst / Latency / Hybrid 등) 로 NewFixedOrder 만 교체.
+// LLM_POLICY=chain (default) 일 때 적용. 다른 정책 (hybrid / latency / cheapest) 은 metric /
+// capability 기반으로 동적 정렬.
 var fallbackOrder = []string{"gemini", "openai", "anthropic"}
 
-// BuildProvider 는 LLMConfig (환경변수) 에 따라 fixed-order fallback chain 을 구성합니다.
+// metricsLabelPrefix 는 MeasuredFactory 가 collector 이름에 prepend 하는 prefix 입니다.
+// /metrics endpoint 에서 "issuetracker_llm_*" 메트릭으로 노출 — 다른 도메인 메트릭과 충돌 회피.
+const metricsLabelPrefix = "issuetracker_llm"
+
+// Options 는 BuildProviderWithOptions 의 선택 인자입니다.
 //
-// fallback 순서: gemini → openai → anthropic (hardcoded — 향후 metric 기반 정책으로 대체).
-// 각 provider 는 자신의 API key 가 환경변수에 설정된 경우에만 chain 후보에 포함:
-//   - GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY 직접 lookup
+// 모든 필드 zero value 면 BuildProvider 의 default 동작과 동일.
+type Options struct {
+	// PrometheusRegistry: nil 이면 Prometheus collector 등록 skip — in-memory EMA / Stats 만 유지
+	// (LatencyWeighted / Hybrid 정책은 그대로 동작). cmd/* 가 metrics endpoint 를 노출하는 경우 전달.
+	PrometheusRegistry *prometheus.Registry
+}
+
+// BuildProvider 는 backward-compatible wrapper — Prometheus registry 없이 default option 으로 wiring 합니다.
 //
-// LLM_API_KEY 의 역할 (backward compat — primary 1건 한정):
-//   - primary (LLM_PROVIDER 가 가리키는 provider) 가 자신의 specific key 부재인 경우에만 LLM_API_KEY 적용.
-//   - 다른 provider 에는 cascade 되지 않음 — 잘못된 key 가 chain 에 채워져 auth 실패로 시간 낭비하는 부작용 회피.
+// 신규 wiring 은 BuildProviderWithOptions 를 직접 호출하여 metrics registry 를 전달.
+func BuildProvider(log *logger.Logger) llm.Provider {
+	return BuildProviderWithOptions(log, Options{})
+}
+
+// BuildProviderWithOptions 는 LLMConfig (환경변수) + opts 에 따라 multi-provider chain 을 구성합니다.
+//
+// 각 provider 는 inner → outer 순으로 다음 decorator 로 wrap 됩니다:
+//  1. RealProvider (gemini / openai / anthropic)
+//  2. RetryProvider — rate_limit / network 백오프 재시도 (이슈 #215)
+//  3. MeasuredProvider — per-call latency EMA + Prometheus 메트릭 + Stats (이슈 #170)
+//
+// candidates 가 *MeasuredProvider 이므로 정책 (LatencyWeighted / Hybrid) 의 type assertion 이 hit —
+// 동적 metric 기반 정렬 가능.
+//
+// LLM_API_KEY fallback 은 primary (cfg.Provider) 1건에만 적용 — backward compat.
+// LLM_PROVIDER 의 alias (claude → anthropic) 는 normalizePrimary 가 정규화.
+//
+// 정책 선택 (LLM_POLICY, 이슈 #170):
+//   - "chain" (default) : FixedOrder(fallbackOrder...) — gemini → openai → anthropic 정적 순서
+//   - "cheapest"        : CheapestFirst(caps) — Capabilities.CostInputPer1M 오름차순
+//   - "latency"         : LatencyWeighted(caps) — Stats.LatencyMs() EMA 오름차순 (이력 없으면 Capabilities baseline)
+//   - "hybrid"          : Hybrid(caps, weights) — cost + latency + failure_rate 가중 합산
+//     가중치는 LLM_HYBRID_WEIGHTS 환경변수로 override (default 1.0,1.0,0.5)
 //
 // 반환값 nil 은 LLM 비활성을 의미 — 호출자가 nil 허용 분기:
 //   - LLM_ENABLED=false → nil
 //   - 모든 provider 가 API key 부재 / 생성 실패 → nil + warn
 //
-// 정책 적용:
-//   - policy.NewFixedOrder(fallbackOrder...) 로 후보를 정해진 순서로 정렬
-//   - 향후 metric 기반 정책 도입 시 본 함수의 policy 객체만 교체하면 됨
-//
-// LLM_PROVIDER / LLM_MODEL 의 역할 (backward compat):
-//   - LLM_PROVIDER 와 일치하는 provider 에는 LLM_MODEL 이 적용됨 (claude alias 포함)
-//   - 그 외 provider 는 자체 default model 사용 (gemini-2.5-flash / gpt-4o-mini / claude-opus-4-7)
-//
 // llmgen 과 refiner 가 동일 provider 를 공유 — 환경변수 1세트 (LLM_*) 로 두 컴포넌트 동시 제어.
-func BuildProvider(log *logger.Logger) llm.Provider {
+func BuildProviderWithOptions(log *logger.Logger, opts Options) llm.Provider {
 	cfg, err := config.LoadLLM()
 	if err != nil {
 		log.WithError(err).Warn("failed to load LLM config, llm provider disabled")
@@ -84,16 +111,17 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 		return nil
 	}
 
-	// LLM_PROVIDER alias (예: "claude" → "anthropic") 정규화 — fallbackOrder 의 정식 이름과 매칭하여
-	// LLM_API_KEY fallback / LLM_MODEL override 가 올바른 chain 항목에 적용되도록 보장.
 	primaryName := normalizePrimary(cfg.Provider)
+
+	// MeasuredFactory 는 모든 후보가 공유 — 단일 collector set 으로 등록.
+	// PrometheusRegistry 가 nil 이면 collector 등록 skip — in-memory EMA / Stats 는 그대로 동작.
+	measuredFactory := llm.NewMeasuredFactory(opts.PrometheusRegistry, metricsLabelPrefix)
 
 	candidates := make([]llm.Provider, 0, len(fallbackOrder))
 	activeNames := make([]string, 0, len(fallbackOrder))
 	for _, name := range fallbackOrder {
 		apiKey := lookupProviderAPIKey(name)
 		// LLM_API_KEY fallback 은 primary (LLM_PROVIDER) 에만 적용 — backward compat.
-		// 다른 provider 에 같은 key 를 cascade 하면 chain 이 잘못 채워져 auth 실패 후 다음 시도로 낭비.
 		if apiKey == "" && name == primaryName {
 			apiKey = cfg.APIKey
 		}
@@ -101,7 +129,6 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 			log.WithField("provider", name).Debug("skipping provider — no API key configured")
 			continue
 		}
-		// 사용자가 LLM_PROVIDER 로 지정한 primary 에는 LLM_MODEL override 적용. 나머지는 provider default.
 		model := ""
 		if name == primaryName {
 			model = cfg.Model
@@ -116,11 +143,13 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 			log.WithError(perr).WithField("provider", name).Warn("failed to construct LLM provider, skipping")
 			continue
 		}
-		// 각 provider 를 RetryProvider 로 감싸 — rate_limit / network 발생 시 chain fallback 전에
-		// 같은 provider 에서 backoff 재시도 (이슈 #215). chain 은 RetryProvider 가 모든 시도 소진
-		// 후에야 다음 provider 로 fallthrough — backoff 정책은 default (RateLimit 5회/10s + Network 3회/1s).
-		p = llm.NewRetryProvider(p, llm.RetryProviderOptions{})
-		candidates = append(candidates, p)
+		// RetryProvider — rate_limit / network 발생 시 chain fallback 전에 같은 provider 에서
+		// backoff 재시도 (이슈 #215). default 정책 (RateLimit 5회/10s + Network 3회/1s).
+		retryWrapped := llm.NewRetryProvider(p, llm.RetryProviderOptions{})
+		// MeasuredProvider — per-call latency EMA + Prometheus 메트릭 (이슈 #170).
+		// outer wrap 으로 retries 포함한 end-to-end 시간을 기록 — 정책이 보는 latency 는 실 사용자 경험.
+		measured := measuredFactory.Wrap(retryWrapped)
+		candidates = append(candidates, measured)
 		activeNames = append(activeNames, name)
 	}
 
@@ -129,22 +158,80 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 		return nil
 	}
 
-	// FixedOrder 정책 — fallbackOrder 의 순서를 후보에 강제. 향후 metric 정책으로 교체 시 본 줄만 변경.
-	pol := policy.NewFixedOrder(fallbackOrder...)
+	pol, polName := selectPolicy(log)
 	composed := chain.NewWithPolicy(pol, candidates, chain.WithPolicyLogger(log))
 
-	// 로그 필드 의미:
-	//   - chain          : 실제 활성화되어 시도되는 provider 시퀀스 (정책 적용 전 후보 목록)
-	//   - first_in_chain : chain[0] — 매 호출의 첫 시도 대상 (디버깅용)
-	//   - configured_primary : LLM_PROVIDER 가 가리키는 사용자 의도 (alias 정규화 후)
-	//                          — first_in_chain 과 다를 수 있음 (key 부재 등으로 chain 에서 제외된 경우)
 	log.WithFields(map[string]interface{}{
 		"chain":              activeNames,
 		"first_in_chain":     activeNames[0],
 		"configured_primary": primaryName,
-		"policy":             "FixedOrder",
+		"policy":             polName,
 		"timeout":            cfg.Timeout.String(),
-	}).Info("LLM provider chain enabled (fixed order — gemini → openai → anthropic; metric policy 후속 PR)")
+		"metrics_registered": opts.PrometheusRegistry != nil,
+	}).Info("LLM provider chain enabled")
 
 	return composed
+}
+
+// selectPolicy 는 LLM_POLICY 환경변수에 따라 정책을 생성합니다 — invalid 값은 default 로 fallback.
+//
+// 반환: (Policy, name) — name 은 로그용 식별자.
+func selectPolicy(log *logger.Logger) (policy.Policy, string) {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_POLICY")))
+	switch raw {
+	case "", "chain", "fixed":
+		// 기본값 — FixedOrder(fallbackOrder...) 로 gemini → openai → anthropic 정적 순서.
+		return policy.NewFixedOrder(fallbackOrder...), "FixedOrder"
+	case "cheapest":
+		return policy.NewCheapestFirst(llm.NewStaticCapabilitiesProvider()), "CheapestFirst"
+	case "latency":
+		return policy.NewLatencyWeighted(llm.NewStaticCapabilitiesProvider()), "LatencyWeighted"
+	case "hybrid":
+		weights, werr := loadHybridWeights()
+		if werr != nil {
+			log.WithError(werr).Warn("invalid LLM_HYBRID_WEIGHTS — falling back to default")
+			weights = policy.DefaultHybridWeights()
+		}
+		return policy.NewHybrid(llm.NewStaticCapabilitiesProvider(), weights), "Hybrid"
+	default:
+		log.WithField("requested", raw).Warn("unknown LLM_POLICY — falling back to chain (FixedOrder)")
+		return policy.NewFixedOrder(fallbackOrder...), "FixedOrder"
+	}
+}
+
+// loadHybridWeights 는 LLM_HYBRID_WEIGHTS 환경변수 (예: "1.0,1.0,0.5") 를 파싱합니다.
+//
+// 미설정 / 빈 값 이면 DefaultHybridWeights 반환. 형식 오류면 error + caller 가 default fallback.
+func loadHybridWeights() (policy.HybridWeights, error) {
+	v := strings.TrimSpace(os.Getenv("LLM_HYBRID_WEIGHTS"))
+	if v == "" {
+		return policy.DefaultHybridWeights(), nil
+	}
+	parts := strings.Split(v, ",")
+	if len(parts) != 3 {
+		return policy.HybridWeights{}, fmt.Errorf("LLM_HYBRID_WEIGHTS expects 3 comma-separated floats (cost,latency,failure_rate), got %q", v)
+	}
+	parseFloat := func(s, label string) (float64, error) {
+		f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse %s weight %q: %w", label, s, err)
+		}
+		if f < 0 {
+			return 0, fmt.Errorf("%s weight must be non-negative, got %v", label, f)
+		}
+		return f, nil
+	}
+	cost, err := parseFloat(parts[0], "cost")
+	if err != nil {
+		return policy.HybridWeights{}, err
+	}
+	latency, err := parseFloat(parts[1], "latency")
+	if err != nil {
+		return policy.HybridWeights{}, err
+	}
+	failure, err := parseFloat(parts[2], "failure_rate")
+	if err != nil {
+		return policy.HybridWeights{}, err
+	}
+	return policy.HybridWeights{Cost: cost, Latency: latency, FailureRate: failure}, nil
 }
