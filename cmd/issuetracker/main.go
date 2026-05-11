@@ -515,6 +515,27 @@ func main() {
 	// sample URL 누적 — parser_worker 가 정상 파싱 후 누적, 단계 4-2 의 정밀화 트리거 입력.
 	sampleRepo := pgstore.NewSampleURLRepository(pool, log)
 
+	// Parser StageGate (이슈 #355) — ProcessingLock + per-stage Semaphore 합성.
+	// Semaphore capacity 는 PARSER_MAX_CONCURRENT_PER_STAGE 와 worker_count/2 의 min.
+	stageGateCfg, err := config.LoadStageGate()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load stage gate config")
+	}
+	parserCap := config.CapPerStage(parserWorkerCount, stageGateCfg.ParserMaxConcurrentPerStage)
+	parserSem := locks.NewSemaphore(parserCap)
+	var parserGate locks.StageGate
+	if procLock != nil {
+		parserGate = locks.NewStageGate(locks.StageParser, parserSem, procLock, log)
+		log.WithFields(map[string]interface{}{
+			"worker_count": parserWorkerCount,
+			"capacity":     parserCap,
+			"configured":   stageGateCfg.ParserMaxConcurrentPerStage,
+		}).Info("parser stage gate enabled (ProcessingLock + Semaphore)")
+	} else {
+		parserGate = locks.NewNoopStageGate()
+		log.Warn("processing lock unavailable, parser stage gate falls back to noop")
+	}
+
 	pw := parserWorker.NewParserWorker(
 		parserConsumer,
 		crawlerProducer, // normalized 토픽 발행 + chained article jobs 발행 시 publisher 가 동일 producer 사용
@@ -524,7 +545,7 @@ func main() {
 		ruleParser,
 		ruleResolver, // sample 누적 시 매칭 rule lookup
 		sampleRepo,
-		procLock, // fetcher / parser / validator 가 동일 ProcessingLock 인스턴스 공유
+		parserGate, // fetcher / parser / validator 가 동일 ProcessingLock 공유 + parser stage Semaphore
 		llmGen,
 		failureCounter,  // host 단위 fetcher 실패 카운터
 		rawIDTracker,    // host 별 실패 raw_id 추적기
