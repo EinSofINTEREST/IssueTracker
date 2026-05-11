@@ -63,13 +63,22 @@ func (w *weightedSemaphore) Acquire(ctx context.Context) error {
 }
 
 func (w *weightedSemaphore) Release() {
-	if w.inFlight.Load() <= 0 {
-		// double-release 또는 acquire 없이 release — 호출 패턴 버그. defensive: 카운터만 비정상 방지.
-		// x/sync/semaphore 자체는 panic 발생 가능 — 호출자가 1:1 보장해야 함.
-		return
+	// CompareAndSwap loop — Load + Add 분리 시 race (gemini 반영): 두 goroutine 이 동시에
+	// Load=1 후 둘 다 Add(-1) → inFlight=-1 + sem.Release(1) 2회 호출 → x/sync/semaphore panic.
+	// CAS 로 atomic 감소 + 음수 가드 동시 보장.
+	for {
+		current := w.inFlight.Load()
+		if current <= 0 {
+			// double-release 또는 acquire 없이 release — 호출 패턴 버그. defensive: 카운터만 비정상 방지.
+			// x/sync/semaphore 자체는 panic 발생 가능하므로 본 가드로 차단.
+			return
+		}
+		if w.inFlight.CompareAndSwap(current, current-1) {
+			w.sem.Release(1)
+			return
+		}
+		// CAS 실패 — 다른 goroutine 이 변경. 다시 시도.
 	}
-	w.inFlight.Add(-1)
-	w.sem.Release(1)
 }
 
 func (w *weightedSemaphore) Capacity() int { return w.capacity }

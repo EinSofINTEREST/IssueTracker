@@ -3,9 +3,18 @@ package locks
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sync/atomic"
+	"time"
 
 	"issuetracker/pkg/logger"
 )
+
+// stageGateLockReleaseTimeout 은 release 시 lock.Release 호출에 적용되는 best-effort timeout 입니다.
+//
+// Redis / network 지연 시 worker 의 semaphore slot 이 장기 점유되는 것을 방지 (Copilot 반영).
+// 5s 면 일반적 Redis lock release 보다 훨씬 여유 — 진짜 stall 만 cap.
+const stageGateLockReleaseTimeout = 5 * time.Second
 
 // StageGate 는 stage 별 worker pool 진입 시 다음을 합성하여 단일 API 로 노출합니다 (이슈 #353/#354):
 //
@@ -50,16 +59,32 @@ func NewStageGate(stage string, sem Semaphore, lock ProcessingLock, log *logger.
 	if stage == "" {
 		panic("locks: NewStageGate requires non-empty stage")
 	}
-	if sem == nil {
+	if isNilInterface(sem) {
 		panic("locks: NewStageGate requires non-nil semaphore")
 	}
-	if lock == nil {
+	if isNilInterface(lock) {
 		panic("locks: NewStageGate requires non-nil lock")
 	}
 	if log == nil {
 		panic("locks: NewStageGate requires non-nil logger")
 	}
 	return &stageGate{stage: stage, sem: sem, lock: lock, log: log}
+}
+
+// isNilInterface 는 nil interface (untyped) 와 typed-nil (예: var p *T; var i I = p) 양쪽을 감지합니다.
+//
+// Copilot 반영 — 단순 \`v == nil\` 검사는 typed-nil 을 못 잡아 Acquire 호출 시 nil pointer
+// deref 로 늦은 panic 발생. constructor 에서 reflect 로 한 번만 검사 (hot path 아님).
+func isNilInterface(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Chan, reflect.Func, reflect.Map, reflect.Slice:
+		return rv.IsNil()
+	}
+	return false
 }
 
 func (g *stageGate) Acquire(ctx context.Context, url string) (func(), bool, error) {
@@ -80,17 +105,18 @@ func (g *stageGate) Acquire(ctx context.Context, url string) (func(), bool, erro
 		return nil, false, nil
 	}
 
-	// 3. 성공 — release 함수 반환 (idempotent).
-	released := false
+	// 3. 성공 — release 함수 반환 (idempotent + goroutine-safe).
+	var released atomic.Bool
 	release := func() {
-		if released {
-			return
+		if !released.CompareAndSwap(false, true) {
+			return // 이미 release 호출됨 — 중복 lock/sem Release 회피 (gemini High / Copilot 반영).
 		}
-		released = true
-		// lock.Release 가 ctx cancel 등으로 실패해도 semaphore 는 반드시 반납.
-		// release 자체는 호출자가 ctx.Err 무시하고 defer 로 호출하는 것을 전제 —
-		// graceful shutdown 시 별도 drain ctx 사용 가능하도록 ctx 분리.
-		drainCtx, cancel := context.WithCancel(context.Background())
+		// 순서: semaphore 먼저 반납 (다른 worker 진입 가능하게) → lock Release 는 best-effort timeout (Copilot 반영).
+		// 이전: lock.Release 가 Redis 지연 시 semaphore slot 장기 점유 → worker 정체.
+		g.sem.Release()
+
+		// drainCtx — parent ctx 의 trace ID / logger fields 보존 + 부모 cancel 영향 없이 timeout cap (gemini 반영).
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stageGateLockReleaseTimeout)
 		defer cancel()
 		if err := g.lock.Release(drainCtx, key); err != nil {
 			g.log.WithFields(map[string]interface{}{
@@ -98,7 +124,6 @@ func (g *stageGate) Acquire(ctx context.Context, url string) (func(), bool, erro
 				"url":   url,
 			}).WithError(err).Warn("stage gate lock release failed")
 		}
-		g.sem.Release()
 	}
 	return release, true, nil
 }

@@ -267,6 +267,58 @@ func TestStageGate_ConcurrentAcquireRespectsCapacity(t *testing.T) {
 	assert.Equal(t, 0, sem.InFlight(), "모든 release 후 0")
 }
 
+// TestStageGate_ReleaseConcurrent — release 함수가 여러 goroutine 에서 동시 호출되어도 정확히 1회만
+// 실효 (gemini High / Copilot 반영). atomic.Bool CAS 가 lock/sem 중복 Release 차단.
+func TestStageGate_ReleaseConcurrent(t *testing.T) {
+	t.Parallel()
+	sem := locks.NewSemaphore(2)
+	lk := newStubLock(true)
+	gate := locks.NewStageGate(locks.StageFetcher, sem, lk, newTestLog(t))
+
+	release, acquired, err := gate.Acquire(context.Background(), "https://example.com/a")
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			release()
+		}()
+	}
+	wg.Wait()
+
+	_, rel := lk.callCounts()
+	assert.Equal(t, 1, rel, "concurrent release 50회 호출해도 lock.Release 정확히 1회")
+	assert.Equal(t, 0, sem.InFlight(), "semaphore 도 정확히 1회 반납")
+}
+
+// TestSemaphore_ReleaseConcurrent — Release 의 atomic CAS 가 동시 호출에서도 음수로 못 내려가는지 확인.
+// 호출 패턴 버그 (over-release) 가 panic 으로 전파되지 않고 noop 으로 흡수.
+func TestSemaphore_ReleaseConcurrent(t *testing.T) {
+	t.Parallel()
+	sem := locks.NewSemaphore(5)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, sem.Acquire(context.Background()))
+	}
+	assert.Equal(t, 3, sem.InFlight())
+
+	// 5개의 release 를 동시 시도 — 3개만 실효 + 2개는 noop guard.
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem.Release()
+		}()
+	}
+	wg.Wait()
+
+	// in-flight 0 이하로 내려가지 않고 정확히 0.
+	assert.Equal(t, 0, sem.InFlight(), "over-release 가 noop 흡수, 음수 미발생")
+}
+
 func TestNoopStageGate_AlwaysAcquired(t *testing.T) {
 	t.Parallel()
 	gate := locks.NewNoopStageGate()
@@ -288,4 +340,9 @@ func TestNewStageGate_PanicsOnInvalidArgs(t *testing.T) {
 	assert.Panics(t, func() { locks.NewStageGate(locks.StageFetcher, nil, lk, log) })
 	assert.Panics(t, func() { locks.NewStageGate(locks.StageFetcher, sem, nil, log) })
 	assert.Panics(t, func() { locks.NewStageGate(locks.StageFetcher, sem, lk, nil) })
+
+	// typed-nil 검출 (Copilot 반영) — 단순 == nil 검사가 못 잡는 케이스.
+	var typedNilLock *locks.RedisProcessingLock // typed nil
+	assert.Panics(t, func() { locks.NewStageGate(locks.StageFetcher, sem, typedNilLock, log) },
+		"typed-nil ProcessingLock 도 constructor 에서 panic 으로 감지")
 }
