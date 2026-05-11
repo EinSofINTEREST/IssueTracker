@@ -105,19 +105,39 @@ run-processor: build ## Validate processor 실행
 	./$(PROCESSOR_BINARY)
 
 run-issuetracker: build ## Crawler + Processor 통합 실행 (chrome 실제 포트 자동 매핑 — 이슈 #348)
-	@urls=$$($(MAKE) -s chrome-remote-urls 2>/dev/null); \
-	if [ -n "$$urls" ]; then \
-	  echo "Discovered chrome remote URLs: $$urls"; \
+	@urls=$$($(MAKE) -s chrome-remote-urls 2>/tmp/chrome-urls.err); \
+	rc=$$?; \
+	if [ $$rc -ne 0 ]; then \
+	  echo "ERROR: chrome-remote-urls failed (rc=$$rc):" >&2; \
+	  cat /tmp/chrome-urls.err >&2; \
+	  rm -f /tmp/chrome-urls.err; \
+	  exit $$rc; \
+	fi; \
+	rm -f /tmp/chrome-urls.err; \
+	if [ -z "$$urls" ]; then \
+	  echo "No chrome compose containers running — falling back to .env FETCHER_CHROMEDP_REMOTE_URLS"; \
 	  echo "Running issuetracker (crawler + processor)..."; \
-	  FETCHER_CHROMEDP_REMOTE_URLS="$$urls" ./scripts/entrypoint.sh; \
-	else \
-	  echo "No chrome compose containers found — falling back to .env FETCHER_CHROMEDP_REMOTE_URLS"; \
+	  exec ./scripts/entrypoint.sh; \
+	fi; \
+	found=$$(echo "$$urls" | awk -F',' '{print NF}'); \
+	target=$(CHROME_WORKER_COUNT); \
+	if [ "$$found" -ne "$$target" ]; then \
+	  echo "WARNING: discovered $$found chrome URL(s) but FETCHER_CHROMEDP_WORKER_COUNT=$$target — degraded mode (overriding both to $$found)"; \
 	  echo "Running issuetracker (crawler + processor)..."; \
-	  ./scripts/entrypoint.sh; \
-	fi
+	  FETCHER_CHROMEDP_REMOTE_URLS="$$urls" FETCHER_CHROMEDP_WORKER_COUNT="$$found" exec ./scripts/entrypoint.sh; \
+	fi; \
+	echo "Discovered chrome remote URLs ($$found): $$urls"; \
+	echo "Running issuetracker (crawler + processor)..."; \
+	FETCHER_CHROMEDP_REMOTE_URLS="$$urls" exec ./scripts/entrypoint.sh
 
 chrome-remote-urls: ## chrome compose 컨테이너의 실제 host 포트를 ws:// URL 목록으로 출력 (이슈 #348)
-	@$(CHROME_COMPOSE) ps --status running --format '{{.Ports}}' $(CHROME_COMPOSE_SERVICE) 2>/dev/null \
+	@out=$$($(CHROME_COMPOSE) ps --status running --format '{{.Ports}}' $(CHROME_COMPOSE_SERVICE) 2>&1); \
+	rc=$$?; \
+	if [ $$rc -ne 0 ]; then \
+	  echo "docker compose ps failed (rc=$$rc): $$out" >&2; \
+	  exit $$rc; \
+	fi; \
+	echo "$$out" \
 	  | grep -oE '0\.0\.0\.0:[0-9]+->9222/tcp' \
 	  | grep -oE '^0\.0\.0\.0:[0-9]+' \
 	  | grep -oE '[0-9]+$$' \
