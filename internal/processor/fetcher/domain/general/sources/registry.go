@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
@@ -64,36 +65,9 @@ func RegisterAll(
 		return fmt.Errorf("list fetcher rules: %w", err)
 	}
 
-	// 단일 루프에서 canonical row(bySource)와 host 목록(hostsBySource) 동시 수집 (Gemini Medium 반영).
-	// - base_url hostname == host_pattern 인 row 를 canonical 로 우선 선택
-	// - 동일 source_name 내 SourceInfo 불일치 시 즉시 에러
-	type sourceEntry struct {
-		rec      *storage.FetcherRuleRecord
-		hasExact bool
-	}
-	bySource := make(map[string]sourceEntry)
-	hostsBySource := make(map[string][]string)
-	for _, r := range rules {
-		if r.SourceName == "" {
-			continue
-		}
-		hostsBySource[r.SourceName] = append(hostsBySource[r.SourceName], r.HostPattern)
-		if prev, seen := bySource[r.SourceName]; seen {
-			if prev.rec.Country != r.Country ||
-				prev.rec.Language != r.Language ||
-				prev.rec.BaseURL != r.BaseURL ||
-				prev.rec.SourceType != r.SourceType ||
-				prev.rec.RequestsPerHour != r.RequestsPerHour {
-				return fmt.Errorf("inconsistent source metadata for source_name=%q (host=%q vs host=%q)",
-					r.SourceName, prev.rec.HostPattern, r.HostPattern)
-			}
-			// canonical 우선: base_url hostname == host_pattern 인 row 로 교체.
-			if !prev.hasExact && isCanonicalHost(r) {
-				bySource[r.SourceName] = sourceEntry{rec: r, hasExact: true}
-			}
-			continue
-		}
-		bySource[r.SourceName] = sourceEntry{rec: r, hasExact: isCanonicalHost(r)}
+	bySource, hostsBySource, baseURLsBySource, aerr := AnalyzeSources(rules)
+	if aerr != nil {
+		return fmt.Errorf("analyze sources: %w", aerr)
 	}
 
 	if len(bySource) == 0 {
@@ -114,7 +88,7 @@ func RegisterAll(
 	// source_name 별로 handler 를 빌드한 뒤, source_name 과 각 host_pattern 양쪽으로 등록.
 	// CrawlerName 이 host 기반으로 통일 (#248) — source_name 키는 하위 호환 유지.
 	for sourceName, entry := range bySource {
-		h, err := buildHandler(sourceName, entry.rec,
+		h, err := buildHandler(sourceName, entry.Rec,
 			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, dnsResolver, sourceConfigResolver, log)
 		if err != nil {
 			return err
@@ -124,16 +98,31 @@ func RegisterAll(
 			registry.Register(host, h)
 		}
 		rateLimitMode := "unlimited"
-		if entry.rec.RequestsPerHour > 0 {
+		if entry.Rec.RequestsPerHour > 0 {
 			rateLimitMode = "enforced"
 		}
-		log.WithFields(map[string]interface{}{
+		fields := map[string]interface{}{
 			"source":            sourceName,
 			"hosts":             hostsBySource[sourceName],
-			"requests_per_hour": entry.rec.RequestsPerHour,
+			"requests_per_hour": entry.Rec.RequestsPerHour,
 			"burst":             defaultRateLimitBurst,
 			"rate_limit":        rateLimitMode,
-		}).Info("crawler registered from db")
+		}
+		// 같은 source_name 의 host 들이 다른 base_url 을 가지면 운영 가시성을 위해 명시 (이슈 #347).
+		// HealthCheck 는 canonical 만 사용 — 비-canonical 의 base_url 은 기능적으로 무시됨.
+		if urls := baseURLsBySource[sourceName]; len(urls) > 1 {
+			distinct := make([]string, 0, len(urls))
+			for u := range urls {
+				distinct = append(distinct, u)
+			}
+			// 로그 안정성 — map iteration 비결정성 흡수 (Copilot 반영).
+			sort.Strings(distinct)
+			fields["base_urls"] = distinct
+			fields["canonical_base_url"] = entry.Rec.BaseURL
+			log.WithFields(fields).Info("crawler registered from db (multiple base_urls — canonical used for HealthCheck only)")
+		} else {
+			log.WithFields(fields).Info("crawler registered from db")
+		}
 	}
 	return nil
 }
@@ -204,6 +193,74 @@ func buildHandler(
 	}
 
 	return general.NewChainHandler(crawler, defaultChain, chromedpChains, resolver, rawSvc, producer, log), nil
+}
+
+// SourceEntry 는 source_name 별 canonical row 와 그 row 가 canonical (base_url hostname ==
+// host_pattern) 인지 여부를 보관합니다 — AnalyzeSources 가 채워서 반환.
+type SourceEntry struct {
+	Rec      *storage.FetcherRuleRecord
+	HasExact bool
+}
+
+// AnalyzeSources 는 fetcher_rules 의 rows 를 source_name 별로 분석하여 다음을 반환합니다:
+//   - bySource         : source_name → canonical FetcherRuleRecord (base_url hostname == host_pattern 우선)
+//   - hostsBySource    : source_name → []HostPattern (모든 host 보존)
+//   - baseURLsBySource : source_name → 등장한 BaseURL set (다양성 감지 로깅용)
+//
+// 동일 source_name 내 SourceInfo 불일치 (Country / Language / SourceType / RequestsPerHour) 시
+// error 즉시 반환. **BaseURL 은 strict check 에서 제외** (이슈 #347) — host 별로 다를 수 있으며
+// canonical 만 HealthCheck 에 사용. baseURLsBySource 로 다양성 감지하여 운영 로그.
+//
+// source_name 이 빈 row 는 skip (legacy).
+//
+// 노출 사유 (gemini Medium 응답): 프로젝트 규칙 .claude/rules/05-testing.md 에 따라 모든 테스트는
+// test/internal/<pkg>/ 하위에 외부 _test 패키지로 작성. 내부 helper 의 unit test 를 위한
+// internal/<pkg>/*_test.go (same-package) 패턴은 본 repo 의 디렉토리 컨벤션 위반이므로,
+// testability 최소 노출로 본 함수를 export. API 안정 약속 아님 — 내부 도우미.
+func AnalyzeSources(rules []*storage.FetcherRuleRecord) (
+	bySource map[string]SourceEntry,
+	hostsBySource map[string][]string,
+	baseURLsBySource map[string]map[string]struct{},
+	err error,
+) {
+	bySource = make(map[string]SourceEntry)
+	hostsBySource = make(map[string][]string)
+	baseURLsBySource = make(map[string]map[string]struct{})
+	for _, r := range rules {
+		if r.SourceName == "" {
+			continue
+		}
+		hostsBySource[r.SourceName] = append(hostsBySource[r.SourceName], r.HostPattern)
+		if _, ok := baseURLsBySource[r.SourceName]; !ok {
+			baseURLsBySource[r.SourceName] = map[string]struct{}{}
+		}
+		baseURLsBySource[r.SourceName][r.BaseURL] = struct{}{}
+		if prev, seen := bySource[r.SourceName]; seen {
+			// 어느 필드가 mismatch 했는지 명시 (gemini Medium 반영) — 운영 boot fail 시 즉시 진단.
+			var mismatched string
+			switch {
+			case prev.Rec.Country != r.Country:
+				mismatched = "Country"
+			case prev.Rec.Language != r.Language:
+				mismatched = "Language"
+			case prev.Rec.SourceType != r.SourceType:
+				mismatched = "SourceType"
+			case prev.Rec.RequestsPerHour != r.RequestsPerHour:
+				mismatched = "RequestsPerHour"
+			}
+			if mismatched != "" {
+				return nil, nil, nil, fmt.Errorf("inconsistent %s for source_name=%q (host=%q vs host=%q)",
+					mismatched, r.SourceName, prev.Rec.HostPattern, r.HostPattern)
+			}
+			// canonical 우선: base_url hostname == host_pattern 인 row 로 교체.
+			if !prev.HasExact && isCanonicalHost(r) {
+				bySource[r.SourceName] = SourceEntry{Rec: r, HasExact: true}
+			}
+			continue
+		}
+		bySource[r.SourceName] = SourceEntry{Rec: r, HasExact: isCanonicalHost(r)}
+	}
+	return bySource, hostsBySource, baseURLsBySource, nil
 }
 
 // isCanonicalHost 는 r.BaseURL 의 hostname 이 r.HostPattern 과 일치하면 true 를 반환합니다.
