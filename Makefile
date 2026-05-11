@@ -33,9 +33,15 @@ CHROME_CONTAINER=issuetracker-chrome
 
 # Chrome compose-based 변수 (단일 docker run → docker compose --scale 전환)
 # CHROME_WORKER_COUNT 는 deployments/docker/.env 의 FETCHER_CHROMEDP_WORKER_COUNT 사용 — 미설정 시 2.
+# CHROME_PROJECT_NAME: compose project 명시 고정 (Copilot 피드백) — working dir 에 무관하게
+# 동일 project 의 chrome replica 를 일관 인식. 기본값 'docker' 는 compose-file 디렉토리 basename
+# (deployments/docker) 과 일치하여 운영 환경에 이미 떠 있는 docker-chrome-{N} 컨테이너와 정합.
 CHROME_COMPOSE_SERVICE=chrome
-CHROME_WORKER_COUNT_RAW=$(shell [ -f $(KAFKA_ENV_FILE) ] && grep -E '^FETCHER_CHROMEDP_WORKER_COUNT=' $(KAFKA_ENV_FILE) | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+CHROME_PROJECT_NAME=docker
+CHROME_WORKER_COUNT_RAW=$(shell [ -f $(KAFKA_ENV_FILE) ] && grep -E '^FETCHER_CHROMEDP_WORKER_COUNT=' $(KAFKA_ENV_FILE) | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ')
 CHROME_WORKER_COUNT=$(if $(CHROME_WORKER_COUNT_RAW),$(CHROME_WORKER_COUNT_RAW),2)
+# Chrome compose 호출 공통 prefix — project name + compose file 명시.
+CHROME_COMPOSE=$(COMPOSE) -p $(CHROME_PROJECT_NAME) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS)
 
 # Kafka Docker Compose 변수
 COMPOSE_FILE=deployments/docker/docker-compose.yml
@@ -74,9 +80,10 @@ start: ## Crawler + Processor 통합 실행 (의존: chrome, kafka 자동 기동
 chrome-ensure: ## Chrome compose 서비스가 WORKER_COUNT 이상 실행 중이 아니면 chrome-start 호출
 	@target=$(CHROME_WORKER_COUNT); \
 	case "$$target" in \
-	  ''|*[!0-9]*) echo "Invalid CHROME_WORKER_COUNT='$$target' (must be non-negative integer)"; exit 1;; \
+	  ''|*[!0-9]*) echo "Invalid CHROME_WORKER_COUNT='$$target' (must be positive integer)"; exit 1;; \
+	  0) echo "Invalid CHROME_WORKER_COUNT=0 (must be >= 1 — chrome 비활성은 FETCHER_CHROMEDP_ENABLED=false 사용)"; exit 1;; \
 	esac; \
-	running=$$($(COMPOSE) -f $(COMPOSE_FILE) ps --status running -q $(CHROME_COMPOSE_SERVICE) 2>/dev/null | wc -l); \
+	running=$$($(CHROME_COMPOSE) ps --status running -q $(CHROME_COMPOSE_SERVICE) 2>/dev/null | wc -l | tr -d ' '); \
 	if [ "$$running" -lt "$$target" ]; then \
 	  echo "Chrome compose service running=$$running, target=$$target — starting..."; \
 	  $(MAKE) chrome-start; \
@@ -125,19 +132,21 @@ run-kafka-pipeline: $(KAFKA_PIPELINE_BINARY) ## Kafka 파이프라인 예제 실
 	@echo "Running Kafka pipeline example..."
 	./$(KAFKA_PIPELINE_BINARY)
 
-chrome-start: ## docker compose --scale 로 Chrome N replica 시작 (포트 9222-922N)
-	@echo "Starting Chrome ($(CHROME_WORKER_COUNT) replicas via docker compose)..."
-	$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) up -d --scale $(CHROME_COMPOSE_SERVICE)=$(CHROME_WORKER_COUNT) $(CHROME_COMPOSE_SERVICE)
-	@echo "Chrome started — replicas=$(CHROME_WORKER_COUNT) → ws://localhost:9222..."
+chrome-start: ## docker compose --scale 로 Chrome N replica 시작 (포트는 compose.yml 의 HOST_PORT_RANGE 기준)
+	@port_range=$$([ -f $(KAFKA_ENV_FILE) ] && grep -E '^FETCHER_CHROMEDP_HOST_PORT_RANGE=' $(KAFKA_ENV_FILE) | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' '); \
+	port_range=$${port_range:-9222-9229}; \
+	echo "Starting Chrome ($(CHROME_WORKER_COUNT) replicas via docker compose, host port range=$$port_range)..."
+	$(CHROME_COMPOSE) up -d --scale $(CHROME_COMPOSE_SERVICE)=$(CHROME_WORKER_COUNT) $(CHROME_COMPOSE_SERVICE)
+	@echo "Chrome started — replicas=$(CHROME_WORKER_COUNT)"
 
 chrome-stop: ## Chrome compose 서비스 중지 + 컨테이너 제거
 	@echo "Stopping Chrome compose service..."
-	-@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) stop $(CHROME_COMPOSE_SERVICE) 2>/dev/null
-	-@$(COMPOSE) -f $(COMPOSE_FILE) $(KAFKA_ENV_ARGS) rm -f $(CHROME_COMPOSE_SERVICE) 2>/dev/null
+	-@$(CHROME_COMPOSE) stop $(CHROME_COMPOSE_SERVICE) 2>/dev/null
+	-@$(CHROME_COMPOSE) rm -f $(CHROME_COMPOSE_SERVICE) 2>/dev/null
 	@echo "Chrome stopped"
 
 chrome-status: ## Chrome compose 서비스 상태 확인 (전 replica)
-	@$(COMPOSE) -f $(COMPOSE_FILE) ps $(CHROME_COMPOSE_SERVICE)
+	@$(CHROME_COMPOSE) ps $(CHROME_COMPOSE_SERVICE)
 
 run-example-docker: $(EXAMPLE_BINARY) ## Docker Chrome으로 basic example 실행 (컨테이너 자동 시작/중지)
 	@echo "=== Docker Chrome + Basic Example ==="
