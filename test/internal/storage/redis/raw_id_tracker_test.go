@@ -194,6 +194,9 @@ func TestRedisRawIDTracker_FreshnessFilter_ExcludesStaleEntries(t *testing.T) {
 
 	host := "stale.example.com"
 	ctx := context.Background()
+	t.Cleanup(func() {
+		client.Raw().Del(context.Background(), prefix+":"+host)
+	})
 
 	// stale entry: Track 후 score 를 과거로 직접 overwrite — cleanup 이 raw_contents 삭제한 상황 simulate.
 	require.NoError(t, tr.Track(ctx, host, "raw-stale"))
@@ -219,6 +222,9 @@ func TestRedisRawIDTracker_FreshnessFilter_ZeroDisablesFilter(t *testing.T) {
 
 	host := "all.example.com"
 	ctx := context.Background()
+	t.Cleanup(func() {
+		client.Raw().Del(context.Background(), prefix+":"+host)
+	})
 
 	require.NoError(t, tr.Track(ctx, host, "raw-old"))
 	// 의도적으로 score 를 과거로 overwrite — freshness=0 이라 필터링 없음.
@@ -244,6 +250,9 @@ func TestRedisRawIDTracker_FreshnessFilter_RespectsLimit(t *testing.T) {
 
 	host := "limit.example.com"
 	ctx := context.Background()
+	t.Cleanup(func() {
+		client.Raw().Del(context.Background(), prefix+":"+host)
+	})
 	for i := 0; i < 5; i++ {
 		require.NoError(t, tr.Track(ctx, host, "raw-"+string(rune('a'+i))))
 		time.Sleep(1 * time.Millisecond)

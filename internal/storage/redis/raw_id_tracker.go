@@ -58,10 +58,10 @@ func NewRawIDTracker(client *goredis.Client, ttl time.Duration, keyPrefix string
 // freshness=0 또는 음수면 score 필터 비활성 — NewRawIDTracker 와 동일 동작.
 func NewRawIDTrackerWithFreshness(client *goredis.Client, ttl, freshness time.Duration, keyPrefix string, log *logger.Logger) (storage.RawIDTracker, error) {
 	if client == nil {
-		return nil, errors.New("redisstore: NewRawIDTracker requires non-nil redis client")
+		return nil, errors.New("redisstore: raw id tracker requires non-nil redis client")
 	}
 	if ttl <= 0 {
-		return nil, fmt.Errorf("redisstore: NewRawIDTracker requires positive ttl, got %s", ttl)
+		return nil, fmt.Errorf("redisstore: raw id tracker requires positive ttl, got %s", ttl)
 	}
 	if freshness < 0 {
 		freshness = 0
