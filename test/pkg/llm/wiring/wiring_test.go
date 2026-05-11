@@ -14,8 +14,12 @@ import (
 )
 
 // llmEnvKeys 는 본 테스트가 격리해야 하는 LLM 관련 환경변수 키들입니다.
+//
+// LLM_POLICY / LLM_HYBRID_WEIGHTS 포함 — 로컬 운영자 .env 가 set 된 상태에서 hermetic 보장
+// (Copilot 피드백 #342).
 var llmEnvKeys = []string{
 	"LLM_ENABLED", "LLM_PROVIDER", "LLM_MODEL", "LLM_TIMEOUT", "LLM_API_KEY",
+	"LLM_POLICY", "LLM_HYBRID_WEIGHTS",
 	"GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
 }
 
@@ -28,7 +32,7 @@ func clearLLMEnv(t *testing.T) {
 
 // captureLog 는 BuildProvider 의 로그 출력을 캡처할 (logger, *bytes.Buffer) 페어를 반환합니다.
 //
-// chain 구성 검증을 위해 "LLM provider chain enabled" info 로그의 chain / first_in_chain /
+// chain 구성 검증을 위해 "LLM provider chain enabled" info 로그의 chain / first_in_candidates /
 // configured_primary 필드 값을 assert (PR #280 Copilot 리뷰).
 func captureLog(t *testing.T) (*logger.Logger, *bytes.Buffer) {
 	t.Helper()
@@ -107,7 +111,7 @@ func TestBuildProvider_SingleKey_ChainHasOnlyThatProvider(t *testing.T) {
 
 	entry := findChainEnabledLog(t, buf)
 	assert.Equal(t, []string{"gemini"}, chainNames(t, entry), "단일 key 환경 — chain 1개")
-	assert.Equal(t, "gemini", entry["first_in_chain"])
+	assert.Equal(t, "gemini", entry["first_in_candidates"])
 }
 
 // TestBuildProvider_AllKeys_ChainHasAllInOrder 는 3개 key 모두 있을 때 fallbackOrder 순서대로 chain 구성됨을 검증합니다.
@@ -125,7 +129,7 @@ func TestBuildProvider_AllKeys_ChainHasAllInOrder(t *testing.T) {
 	entry := findChainEnabledLog(t, buf)
 	assert.Equal(t, []string{"gemini", "openai", "anthropic"}, chainNames(t, entry),
 		"3개 key 환경 — fallbackOrder 순서로 chain 구성")
-	assert.Equal(t, "gemini", entry["first_in_chain"])
+	assert.Equal(t, "gemini", entry["first_in_candidates"])
 }
 
 // TestBuildProvider_LLMAPIKeyFallback_OnlyPrimary 는 LLM_API_KEY fallback 이 primary (LLM_PROVIDER) 에만
@@ -167,10 +171,10 @@ func TestBuildProvider_LLMAPIKeyFallback_ClaudeAlias(t *testing.T) {
 }
 
 // TestBuildProvider_PrimaryDifferentFromFirstInChain 는 LLM_PROVIDER 가 chain 에 포함되지 않은 경우
-// configured_primary 와 first_in_chain 이 다르게 로깅되는지 검증합니다 (PR #280 Copilot).
+// configured_primary 와 first_in_candidates 이 다르게 로깅되는지 검증합니다 (PR #280 Copilot).
 //
 // 시나리오: LLM_PROVIDER=openai (primary 의도) 인데 OPENAI_API_KEY 부재, GEMINI_API_KEY 만 있음 →
-// chain=[gemini], first_in_chain=gemini, configured_primary=openai 으로 운영자가 의도 vs 실제 차이를 감지 가능.
+// chain=[gemini], first_in_candidates=gemini, configured_primary=openai 으로 운영자가 의도 vs 실제 차이를 감지 가능.
 func TestBuildProvider_PrimaryDifferentFromFirstInChain(t *testing.T) {
 	clearLLMEnv(t)
 	t.Setenv("LLM_ENABLED", "true")
@@ -183,7 +187,7 @@ func TestBuildProvider_PrimaryDifferentFromFirstInChain(t *testing.T) {
 
 	entry := findChainEnabledLog(t, buf)
 	assert.Equal(t, []string{"gemini"}, chainNames(t, entry))
-	assert.Equal(t, "gemini", entry["first_in_chain"])
+	assert.Equal(t, "gemini", entry["first_in_candidates"])
 	assert.Equal(t, "openai", entry["configured_primary"],
 		"운영자 의도 (openai) 와 실제 chain 첫 시도 (gemini) 가 다른 상황을 운영 로그로 식별 가능")
 }

@@ -161,13 +161,16 @@ func BuildProviderWithOptions(log *logger.Logger, opts Options) llm.Provider {
 	pol, polName := selectPolicy(log)
 	composed := chain.NewWithPolicy(pol, candidates, chain.WithPolicyLogger(log))
 
+	// first_in_candidates 는 정책 적용 전 후보 목록의 첫 항목 — FixedOrder 일 때만 실제 첫 시도 대상과
+	// 일치. 동적 정책 (cheapest / latency / hybrid) 은 매 호출마다 policy.Select 가 정렬을 변경하므로
+	// 실제 첫 시도는 chain Generate 시점 로그에 의존 (Copilot 피드백 #342).
 	log.WithFields(map[string]interface{}{
-		"chain":              activeNames,
-		"first_in_chain":     activeNames[0],
-		"configured_primary": primaryName,
-		"policy":             polName,
-		"timeout":            cfg.Timeout.String(),
-		"metrics_registered": opts.PrometheusRegistry != nil,
+		"chain":               activeNames,
+		"first_in_candidates": activeNames[0],
+		"configured_primary":  primaryName,
+		"policy":              polName,
+		"timeout":             cfg.Timeout.String(),
+		"metrics_registered":  opts.PrometheusRegistry != nil,
 	}).Info("LLM provider chain enabled")
 
 	return composed
@@ -209,15 +212,15 @@ func loadHybridWeights() (policy.HybridWeights, error) {
 	}
 	parts := strings.Split(v, ",")
 	if len(parts) != 3 {
-		return policy.HybridWeights{}, fmt.Errorf("LLM_HYBRID_WEIGHTS expects 3 comma-separated floats (cost,latency,failure_rate), got %q", v)
+		return policy.HybridWeights{}, fmt.Errorf("invalid LLM_HYBRID_WEIGHTS: expected 3 comma-separated floats (cost,latency,failure_rate), got %q", v)
 	}
 	parseFloat := func(s, label string) (float64, error) {
 		f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 		if err != nil {
-			return 0, fmt.Errorf("parse %s weight %q: %w", label, s, err)
+			return 0, fmt.Errorf("invalid LLM_HYBRID_WEIGHTS: parse %s weight %q: %w", label, s, err)
 		}
 		if f < 0 {
-			return 0, fmt.Errorf("%s weight must be non-negative, got %v", label, f)
+			return 0, fmt.Errorf("invalid LLM_HYBRID_WEIGHTS: %s weight must be non-negative, got %v", label, f)
 		}
 		return f, nil
 	}

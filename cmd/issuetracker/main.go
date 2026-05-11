@@ -386,7 +386,9 @@ func main() {
 	// rule.ErrNoRule (host 매칭 활성 규칙 없음) fallback 으로 LLM 이 selector 를 자동 생성합니다.
 	// LLM_ENABLED=false 또는 API key 누락 시 nil — parser worker 는 ErrNoRule 시 raw 만 잔존.
 	//
-	// **현재 정책**: FixedOrder("gemini") 정책으로 Gemini 단일 provider 사용 (1000회/일 무료 한도 내 검증).
+	// **현재 정책**: LLM_POLICY 환경변수로 선택 (default "chain"):
+	//   - chain (default): FixedOrder(gemini → openai → anthropic) — 정적 순서
+	//   - cheapest / latency / hybrid: capability + MeasuredProvider 메트릭 기반 dynamic routing (이슈 #170)
 	// metricsRegistry 를 전달하여 각 provider 호출의 latency / failure 를 Prometheus 로 노출 +
 	// MeasuredProvider Stats 를 hybrid/latency 정책이 dynamic routing 에 활용 (이슈 #170).
 	//
