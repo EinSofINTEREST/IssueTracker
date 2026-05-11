@@ -778,3 +778,63 @@ func TestValidateWorker_RecordRejectedFailure_DoesNotBlockMainFlow(t *testing.T)
 		return m.Topic == queue.TopicDLQ
 	}))
 }
+
+// TestValidateWorker_NotFound_CommitsWithoutDLQ — 이슈 #321.
+// GetByID 가 ErrNotFound 반환 시 (이미 처리되어 row 삭제됨) DLQ 발송하지 않고 commit 만 수행해야 함.
+// duplicate Kafka delivery (at-least-once) 의 idempotent 정상 분기.
+func TestValidateWorker_NotFound_CommitsWithoutDLQ(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := newMockContentService()
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	msg := makeProcessingMessage(content, 0)
+
+	// GetByID 가 ErrNotFound — 이미 다른 worker (또는 이전 retry) 가 처리하여 row 삭제됨.
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return((*core.Content)(nil), storage.ErrNotFound)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorker(t, consumer, w, msg)
+
+	// DLQ 발송 / Delete / Validated publish 모두 호출되지 않아야 함.
+	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	}))
+	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicValidated
+	}))
+	contentSvc.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	// commit 은 정확히 1회 호출됨 (consumer mock 의 Setup 검증).
+	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
+}
+
+// TestValidateWorker_OtherFetchError_SendsToDLQ — 이슈 #321 회귀 방지.
+// ErrNotFound 가 아닌 다른 fetch 에러 (DB connection 등) 는 여전히 DLQ 로 보내야 함 — 기존 동작 보존.
+func TestValidateWorker_OtherFetchError_SendsToDLQ(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := newMockContentService()
+
+	w := newWorker(consumer, producer, contentSvc)
+
+	content := newNewsContent()
+	msg := makeProcessingMessage(content, 0)
+
+	// 의도적으로 ErrNotFound 가 아닌 다른 에러.
+	fetchErr := errors.New("simulated db connection error")
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return((*core.Content)(nil), fetchErr)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorker(t, consumer, w, msg)
+
+	// DLQ 발송됨 — 기존 동작 보존.
+	producer.AssertCalled(t, "Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicDLQ
+	}))
+	contentSvc.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+}
