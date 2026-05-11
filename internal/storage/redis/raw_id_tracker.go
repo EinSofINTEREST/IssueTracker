@@ -108,45 +108,36 @@ func (r *rawIDTracker) PeekByHost(ctx context.Context, host string, limit int) (
 	}
 	key := r.keyFor(host)
 
-	// freshness=0 (back-compat) → 인덱스 기반 ZRANGE REV.
+	// ZRangeArgs 구성 일원화 — freshness 분기별 차이만 분리, 호출/에러 처리 공통화 (gemini Medium 반영).
+	args := goredis.ZRangeArgs{Key: key, Rev: true}
+	op := "ZREVRANGE"
+
 	if r.freshness <= 0 {
-		res, err := r.client.ZRangeArgs(ctx, goredis.ZRangeArgs{
-			Key:   key,
-			Start: 0,
-			Stop:  int64(limit - 1),
-			Rev:   true,
-		}).Result()
-		if err != nil {
-			if errors.Is(err, goredis.Nil) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("redis raw id tracker ZREVRANGE for host %s: %w", host, err)
+		// freshness=0 (back-compat) → 인덱스 기반 ZRANGE REV.
+		args.Start = 0
+		args.Stop = int64(limit - 1)
+	} else {
+		// freshness>0 → score 필터 (이슈 #299).
+		// Rev=true 이면 Start/Stop 의미가 뒤집힘 (Start=max, Stop=min).
+		// score (unix-nano) 가 (now - freshness) 이상인 member 만 반환.
+		now := time.Now()
+		if r.now != nil {
+			now = r.now()
 		}
-		return res, nil
+		minScore := now.Add(-r.freshness).UnixNano()
+		args.Start = "+inf"
+		args.Stop = strconv.FormatInt(minScore, 10)
+		args.ByScore = true
+		args.Count = int64(limit)
+		op = "ZRANGE BYSCORE"
 	}
 
-	// freshness>0 → score 필터 적용 (이슈 #299):
-	//   ZRANGE BYSCORE REV — Rev=true 이면 Start/Stop 의 의미가 뒤집힘: Start=max, Stop=min.
-	//   score (unix-nano) 가 (now - freshness) 이상인 member 만 반환.
-	now := time.Now()
-	if r.now != nil {
-		now = r.now()
-	}
-	minScore := now.Add(-r.freshness).UnixNano()
-
-	res, err := r.client.ZRangeArgs(ctx, goredis.ZRangeArgs{
-		Key:     key,
-		Start:   "+inf",
-		Stop:    strconv.FormatInt(minScore, 10),
-		ByScore: true,
-		Rev:     true,
-		Count:   int64(limit),
-	}).Result()
+	res, err := r.client.ZRangeArgs(ctx, args).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("redis raw id tracker ZRANGE BYSCORE for host %s: %w", host, err)
+		return nil, fmt.Errorf("redis raw id tracker %s for host %s: %w", op, host, err)
 	}
 	return res, nil
 }
