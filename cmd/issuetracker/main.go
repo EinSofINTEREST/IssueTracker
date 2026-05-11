@@ -457,11 +457,17 @@ func main() {
 
 	// host 단위 실패 raw_id 추적기 — 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상 수집에 사용.
 	// 카운터와 같은 lifecycle (window TTL 동기화) — Redis 미연결 시 Noop.
+	//
+	// freshness = parserWorker.DefaultStaleRawTTL (1h) — raw_contents cleanup 의 StaleTTL 과 동기화.
+	// ZSET key-level EXPIRE 는 Track 마다 refresh 되어 stale entry 가 살아남는 race 차단 (이슈 #299).
+	// raw_contents row 가 cleanup 으로 삭제된 직후 Upgrader 가 그 ID 로 GetByID 호출하여 ErrNotFound
+	// (STORAGE_001) 노이즈 발생하던 케이스 봉쇄.
 	var rawIDTracker storage.RawIDTracker = storage.NewNoopRawIDTracker()
 	if fetcherUpgradeCfg.Enabled && redisClientShared != nil {
-		t, tErr := redisstore.NewRawIDTracker(
+		t, tErr := redisstore.NewRawIDTrackerWithFreshness(
 			redisClientShared.Raw(),
 			fetcherUpgradeCfg.Window,
+			parserWorker.DefaultStaleRawTTL,
 			"", // default keyPrefix "fetcher:failed_raws"
 			log,
 		)
@@ -469,7 +475,8 @@ func main() {
 			log.WithError(tErr).Warn("failed to construct redis raw id tracker, falling back to noop")
 		} else {
 			rawIDTracker = t
-			log.Info("fetcher raw id tracker (redis set) enabled")
+			log.WithField("freshness", parserWorker.DefaultStaleRawTTL.String()).
+				Info("fetcher raw id tracker (redis zset) enabled with freshness filter")
 		}
 	}
 
