@@ -216,6 +216,18 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 	// DB에서 Content 조회 (content_bodies, content_meta 포함)
 	content, err := w.contentSvc.GetByID(ctx, ref.ID)
 	if err != nil {
+		// ErrNotFound = 이미 처리되어 row 삭제된 상태 (이슈 #321).
+		// Kafka at-least-once + 상위 producer retry / validate 자체 requeue loop 로 같은 ref.ID 가
+		// 여러 번 deliver 될 수 있음. 첫 처리에서 validation fail (max retries) → contents.Delete →
+		// commit. 그 후 도착한 duplicate 들은 row 없음 → 본 분기. **idempotent 정상 분기** —
+		// DLQ 보낼 사안 아님 + ERROR 알람 false-positive 회피. info 레벨로 가시성 유지.
+		if errors.Is(err, storage.ErrNotFound) {
+			log.WithFields(map[string]interface{}{
+				"job_id": pm.ID,
+				"ref_id": ref.ID,
+			}).Info("content already processed (duplicate delivery), skipping")
+			return w.commit(ctx, msg)
+		}
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
 			"ref_id": ref.ID,
