@@ -78,7 +78,7 @@ func TestAnalyzeSources_RPHMismatch_Rejected(t *testing.T) {
 	}
 	_, _, _, err := sources.AnalyzeSources(rules)
 	require.Error(t, err, "RPH 불일치는 reject")
-	assert.Contains(t, err.Error(), "inconsistent source metadata")
+	assert.Contains(t, err.Error(), "inconsistent ")
 }
 
 // TestAnalyzeSources_CountryMismatch_Rejected — 의미론적 metadata 불일치는 reject.
@@ -90,7 +90,7 @@ func TestAnalyzeSources_CountryMismatch_Rejected(t *testing.T) {
 	}
 	_, _, _, err := sources.AnalyzeSources(rules)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "inconsistent source metadata")
+	assert.Contains(t, err.Error(), "inconsistent ")
 }
 
 // TestAnalyzeSources_LanguageMismatch_Rejected — Language 불일치 reject.

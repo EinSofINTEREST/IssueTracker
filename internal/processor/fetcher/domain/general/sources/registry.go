@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
@@ -66,7 +67,7 @@ func RegisterAll(
 
 	bySource, hostsBySource, baseURLsBySource, aerr := AnalyzeSources(rules)
 	if aerr != nil {
-		return aerr
+		return fmt.Errorf("analyze sources: %w", aerr)
 	}
 
 	if len(bySource) == 0 {
@@ -114,6 +115,8 @@ func RegisterAll(
 			for u := range urls {
 				distinct = append(distinct, u)
 			}
+			// 로그 안정성 — map iteration 비결정성 흡수 (Copilot 반영).
+			sort.Strings(distinct)
 			fields["base_urls"] = distinct
 			fields["canonical_base_url"] = entry.Rec.BaseURL
 			log.WithFields(fields).Info("crawler registered from db (multiple base_urls — canonical used for HealthCheck only)")
@@ -209,6 +212,11 @@ type SourceEntry struct {
 // canonical 만 HealthCheck 에 사용. baseURLsBySource 로 다양성 감지하여 운영 로그.
 //
 // source_name 이 빈 row 는 skip (legacy).
+//
+// 노출 사유 (gemini Medium 응답): 프로젝트 규칙 .claude/rules/05-testing.md 에 따라 모든 테스트는
+// test/internal/<pkg>/ 하위에 외부 _test 패키지로 작성. 내부 helper 의 unit test 를 위한
+// internal/<pkg>/*_test.go (same-package) 패턴은 본 repo 의 디렉토리 컨벤션 위반이므로,
+// testability 최소 노출로 본 함수를 export. API 안정 약속 아님 — 내부 도우미.
 func AnalyzeSources(rules []*storage.FetcherRuleRecord) (
 	bySource map[string]SourceEntry,
 	hostsBySource map[string][]string,
@@ -228,12 +236,21 @@ func AnalyzeSources(rules []*storage.FetcherRuleRecord) (
 		}
 		baseURLsBySource[r.SourceName][r.BaseURL] = struct{}{}
 		if prev, seen := bySource[r.SourceName]; seen {
-			if prev.Rec.Country != r.Country ||
-				prev.Rec.Language != r.Language ||
-				prev.Rec.SourceType != r.SourceType ||
-				prev.Rec.RequestsPerHour != r.RequestsPerHour {
-				return nil, nil, nil, fmt.Errorf("inconsistent source metadata for source_name=%q (host=%q vs host=%q)",
-					r.SourceName, prev.Rec.HostPattern, r.HostPattern)
+			// 어느 필드가 mismatch 했는지 명시 (gemini Medium 반영) — 운영 boot fail 시 즉시 진단.
+			var mismatched string
+			switch {
+			case prev.Rec.Country != r.Country:
+				mismatched = "Country"
+			case prev.Rec.Language != r.Language:
+				mismatched = "Language"
+			case prev.Rec.SourceType != r.SourceType:
+				mismatched = "SourceType"
+			case prev.Rec.RequestsPerHour != r.RequestsPerHour:
+				mismatched = "RequestsPerHour"
+			}
+			if mismatched != "" {
+				return nil, nil, nil, fmt.Errorf("inconsistent %s for source_name=%q (host=%q vs host=%q)",
+					mismatched, r.SourceName, prev.Rec.HostPattern, r.HostPattern)
 			}
 			// canonical 우선: base_url hostname == host_pattern 인 row 로 교체.
 			if !prev.HasExact && isCanonicalHost(r) {

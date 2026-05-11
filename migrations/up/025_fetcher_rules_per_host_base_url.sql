@@ -24,16 +24,16 @@ UPDATE fetcher_rules
    SET base_url = 'https://gallery.dcinside.com'
  WHERE host_pattern = 'gallery.dcinside.com'
    AND source_name = 'dcinside'
-   AND base_url <> 'https://gallery.dcinside.com';
+   AND base_url IS DISTINCT FROM 'https://gallery.dcinside.com';
 
 UPDATE fetcher_rules
    SET base_url = 'https://www.reddit.com'
  WHERE host_pattern = 'www.reddit.com'
    AND source_name = 'reddit'
-   AND base_url <> 'https://www.reddit.com';
+   AND base_url IS DISTINCT FROM 'https://www.reddit.com';
 
 UPDATE fetcher_rules
    SET base_url = 'https://news.slashdot.org'
  WHERE host_pattern = 'news.slashdot.org'
    AND source_name = 'slashdot'
-   AND base_url <> 'https://news.slashdot.org';
+   AND base_url IS DISTINCT FROM 'https://news.slashdot.org';
