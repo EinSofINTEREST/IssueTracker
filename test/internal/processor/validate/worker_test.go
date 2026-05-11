@@ -793,7 +793,10 @@ func TestValidateWorker_NotFound_CommitsWithoutDLQ(t *testing.T) {
 	msg := makeProcessingMessage(content, 0)
 
 	// GetByID 가 ErrNotFound — 이미 다른 worker (또는 이전 retry) 가 처리하여 row 삭제됨.
-	contentSvc.On("GetByID", mock.Anything, content.ID).Return((*core.Content)(nil), storage.ErrNotFound)
+	// 운영의 contentService.GetByID 는 storage.ErrNotFound 를 core.NewStorageError 로 wrap 함
+	// (gemini Medium 반영) — 테스트도 동일하게 wrap 하여 errors.Is 가 chain 을 정확히 관통하는지 검증.
+	wrappedNotFound := core.NewStorageError(core.CodeStorageRead, "get content by id", true, storage.ErrNotFound)
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return((*core.Content)(nil), wrappedNotFound)
 	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
 
 	runWorker(t, consumer, w, msg)
