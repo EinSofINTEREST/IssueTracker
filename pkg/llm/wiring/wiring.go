@@ -6,6 +6,7 @@ package wiring
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -218,6 +219,10 @@ func loadHybridWeights() (policy.HybridWeights, error) {
 		f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 		if err != nil {
 			return 0, fmt.Errorf("invalid LLM_HYBRID_WEIGHTS: parse %s weight %q: %w", label, s, err)
+		}
+		// NaN / ±Inf 는 Hybrid 정책의 normalize 계산을 깨뜨림 (NaN 전파) — 명시 거부 (gemini Medium 반영).
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, fmt.Errorf("invalid LLM_HYBRID_WEIGHTS: %s weight must be a finite number, got %v", label, f)
 		}
 		if f < 0 {
 			return 0, fmt.Errorf("invalid LLM_HYBRID_WEIGHTS: %s weight must be non-negative, got %v", label, f)

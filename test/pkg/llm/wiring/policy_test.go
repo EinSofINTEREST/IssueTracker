@@ -134,6 +134,28 @@ func TestBuildProvider_PolicyHybridWithWrongCount(t *testing.T) {
 	assert.Contains(t, buf.String(), "invalid LLM_HYBRID_WEIGHTS")
 }
 
+// TestBuildProvider_PolicyHybridNaNInfRejected 는 NaN / Inf 가중치를 invalid 로 거부함을 검증합니다.
+// Hybrid normalize 계산이 NaN 전파로 깨지는 것 방지 (gemini Medium 반영).
+func TestBuildProvider_PolicyHybridNaNInfRejected(t *testing.T) {
+	cases := []string{"NaN,1.0,0.5", "1.0,Inf,0.5", "1.0,1.0,-Inf"}
+	for _, weights := range cases {
+		weights := weights
+		t.Run(weights, func(t *testing.T) {
+			clearLLMEnv(t)
+			t.Setenv("LLM_ENABLED", "true")
+			t.Setenv("LLM_POLICY", "hybrid")
+			t.Setenv("LLM_HYBRID_WEIGHTS", weights)
+			t.Setenv("GEMINI_API_KEY", "fake-gemini-key")
+
+			log, buf := captureLog(t)
+			p := wiring.BuildProvider(log)
+			require.NotNil(t, p, "invalid weights → default fallback, provider 정상 생성")
+
+			assert.Contains(t, buf.String(), "invalid LLM_HYBRID_WEIGHTS")
+		})
+	}
+}
+
 // TestBuildProvider_PolicyHybridNegativeWeightRejected 는 음수 가중치를 invalid 로 거부함을 검증합니다.
 func TestBuildProvider_PolicyHybridNegativeWeightRejected(t *testing.T) {
 	clearLLMEnv(t)
