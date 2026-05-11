@@ -35,18 +35,21 @@ func newTestLLMValidator(t *testing.T, provider llm.Provider) *validator.LLMVali
 // ─────────────────────────────────────────────────────────────────────────────
 
 type fakeProvider struct {
-	response string
-	err      error
-	calls    int
+	response      string
+	stopReason    string // 빈 문자열이면 응답에서 미설정
+	err           error
+	calls         int
+	lastMaxTokens int // Validator 가 전달한 MaxTokens 검증용
 }
 
 func (f *fakeProvider) Name() string { return "fake" }
-func (f *fakeProvider) Generate(_ context.Context, _ llm.Request) (*llm.Response, error) {
+func (f *fakeProvider) Generate(_ context.Context, req llm.Request) (*llm.Response, error) {
 	f.calls++
+	f.lastMaxTokens = req.MaxTokens
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &llm.Response{Content: f.response, Model: "fake-model"}, nil
+	return &llm.Response{Content: f.response, StopReason: f.stopReason, Model: "fake-model"}, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +141,90 @@ func TestLLMValidator_ResponseWrappedInMarkdown(t *testing.T) {
 	res, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
 	require.NoError(t, err)
 	assert.True(t, res.Valid)
+}
+
+// TestLLMValidator_MaxTokensIncreasedTo512 — 이슈 #320 의 #1 수정 검증.
+// Validator 가 Generate 호출 시 MaxTokens=512 를 전달하는지 fakeProvider 가 기록한 값으로 확인.
+func TestLLMValidator_MaxTokensIncreasedTo512(t *testing.T) {
+	provider := &fakeProvider{response: `{"valid": true, "reason": "ok"}`}
+	v := newTestLLMValidator(t, provider)
+
+	_, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.Equal(t, 512, provider.lastMaxTokens, "MaxTokens 가 512 로 상향됨")
+}
+
+// TestLLMValidator_TruncatedResponseSalvagesValidVerdict — 이슈 #320 의 #3 (regex fallback).
+// 응답이 reason 중간에 truncate 되어도 "valid" verdict 만큼은 salvage 되어 결과 반환.
+func TestLLMValidator_TruncatedResponseSalvagesValidVerdict(t *testing.T) {
+	provider := &fakeProvider{
+		response: `{"valid": false, "reason": "The extracted`, // mid-reason 잘림
+	}
+	v := newTestLLMValidator(t, provider)
+
+	res, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
+	require.NoError(t, err, "regex salvage 로 verdict 추출 성공")
+	assert.False(t, res.Valid, "valid: false 추출 확인")
+	assert.Empty(t, res.Reason, "reason 은 truncate 되어 빈 문자열")
+}
+
+// TestLLMValidator_TruncatedResponseTrueVerdict — true verdict 도 동일하게 salvage.
+func TestLLMValidator_TruncatedResponseTrueVerdict(t *testing.T) {
+	provider := &fakeProvider{
+		response: "```json\n{\n  \"valid\": true, \"reason\": \"looks like a valid",
+	}
+	v := newTestLLMValidator(t, provider)
+
+	res, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
+	require.NoError(t, err)
+	assert.True(t, res.Valid)
+}
+
+// TestLLMValidator_TruncatedAtValidKey_ReturnsTruncateError — 이슈 #320 의 #2 (truncate 명시 에러).
+// 응답이 "valid" 키 도달 전에 truncate 되어 salvage 도 실패 + StopReason 이 max-tokens 신호면
+// 명시 truncate 에러로 반환.
+func TestLLMValidator_TruncatedAtValidKey_ReturnsTruncateError(t *testing.T) {
+	provider := &fakeProvider{
+		response:   "```json\n{",
+		stopReason: "MAX_TOKENS",
+	}
+	v := newTestLLMValidator(t, provider)
+
+	_, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "truncated", "truncate 명시 에러 메시지")
+	assert.Contains(t, err.Error(), "stop_reason=MAX_TOKENS")
+	assert.Contains(t, err.Error(), "max_tokens=512")
+}
+
+// TestLLMValidator_TruncateDetection_OpenAI — provider 별 StopReason 모두 인식.
+func TestLLMValidator_TruncateDetection_StopReasons(t *testing.T) {
+	cases := []string{"length", "max_tokens", "MAX_TOKENS"}
+	for _, sr := range cases {
+		sr := sr
+		t.Run(sr, func(t *testing.T) {
+			provider := &fakeProvider{response: "incomplete", stopReason: sr}
+			v := newTestLLMValidator(t, provider)
+			_, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "truncated")
+		})
+	}
+}
+
+// TestLLMValidator_NonTruncateError_NoTruncateMessage — StopReason 이 일반 종료 (stop / end_turn)
+// 인데 unmarshal 실패하면 기존 unmarshal 에러 메시지 그대로 — truncate 메시지 추가 X (오분류 방지).
+func TestLLMValidator_NonTruncateError_NoTruncateMessage(t *testing.T) {
+	provider := &fakeProvider{
+		response:   "not valid json",
+		stopReason: "stop",
+	}
+	v := newTestLLMValidator(t, provider)
+
+	_, err := v.Validate(context.Background(), samplePageHTML, pageSelectors, storage.TargetTypePage)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "truncated", "stop 은 정상 종료 — truncate 분류 안 함")
+	assert.Contains(t, err.Error(), "parse validation response")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
