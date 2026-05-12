@@ -8,26 +8,23 @@
 -- Phase 1 (본 migration) — schema 명칭 + Go SQL 문자열 동시 갱신
 -- Phase 2 (후속 이슈) — Go 식별자 (ParsingRule → ParserRule 등) 정리
 --
--- 변경 항목:
---   Tables (3):
---     parsing_rules → parser_rules
---     parsing_blacklist → parser_blacklist
---     parsing_rule_sample_urls → parser_rule_sample_urls
---   Indexes (4):
---     idx_parsing_rules_lookup, idx_parsing_rules_source_enabled,
---     idx_parsing_blacklist_host_enabled, idx_parsing_rule_sample_urls_lookup
---   Named constraints (4):
---     parsing_rules_target_type_check, parsing_rules_version_positive,
---     parsing_rules_lookup_key_unique, parsing_rule_sample_urls_unique
---   Anonymous CHECK constraints (PG auto-named `<table>_<col>_check`, 2):
---     parsing_blacklist_source_check, parsing_blacklist_mode_check
---   Trigger + Function:
---     parsing_rules_touch_updated_at
+-- 변경 항목 (총 23 catalog 객체):
+--   Tables (3): parsing_rules / parsing_blacklist / parsing_rule_sample_urls
+--   Indexes (4): idx_parsing_rules_*, idx_parsing_blacklist_*, idx_parsing_rule_sample_urls_*
+--   Named constraints (4): parsing_rules_target_type_check, _version_positive,
+--                          _lookup_key_unique, parsing_rule_sample_urls_unique
+--   Anonymous CHECK (2): parsing_blacklist_source_check, parsing_blacklist_mode_check
+--   Auto-generated PK/FK/UNIQUE (5): *_pkey 3, _key 1, _fkey 1
+--   Sequences (3): parsing_*_id_seq (BIGSERIAL backing)
+--   Trigger + Function (2): parsing_rules_touch_updated_at
 --
--- 멱등성:
---   - ALTER TABLE/INDEX/TRIGGER/FUNCTION 은 IF EXISTS 미지원 (PG 16 기준 인덱스만 지원)
---     → DO $$ BEGIN ... END $$ 블록으로 존재 여부 체크 후 RENAME 수행
---   - 이미 RENAME 된 상태에서 재실행해도 무처리 (catalog 조회로 분기)
+-- 멱등성 + 안전성:
+--   - 모든 존재 확인은 `to_regclass('public.<obj>')` / `to_regprocedure('public.<func>(...)')`
+--     로 schema-qualified 처리 — search_path 변동 / 동명 객체 다른 schema 위험 회피
+--     (Copilot / gemini PR #373 피드백)
+--   - 모든 DDL 도 `public.<obj>` 로 schema 명시
+--   - constraint / trigger 는 (table, conname/tgname) 단위라 pg_class + pg_namespace JOIN
+--   - 이미 RENAME 된 상태에서 재실행해도 무처리
 --
 -- 운영 영향:
 --   - ALTER TABLE RENAME 은 ACCESS EXCLUSIVE lock — in-flight 쿼리 ERROR
@@ -37,147 +34,75 @@
 -- ─── Tables ──────────────────────────────────────────────────────────────────
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'parsing_rules') THEN
-    ALTER TABLE parsing_rules RENAME TO parser_rules;
+  IF to_regclass('public.parsing_rules') IS NOT NULL THEN
+    ALTER TABLE public.parsing_rules RENAME TO parser_rules;
   END IF;
 
-  IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'parsing_blacklist') THEN
-    ALTER TABLE parsing_blacklist RENAME TO parser_blacklist;
+  IF to_regclass('public.parsing_blacklist') IS NOT NULL THEN
+    ALTER TABLE public.parsing_blacklist RENAME TO parser_blacklist;
   END IF;
 
-  IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'parsing_rule_sample_urls') THEN
-    ALTER TABLE parsing_rule_sample_urls RENAME TO parser_rule_sample_urls;
+  IF to_regclass('public.parsing_rule_sample_urls') IS NOT NULL THEN
+    ALTER TABLE public.parsing_rule_sample_urls RENAME TO parser_rule_sample_urls;
   END IF;
 END $$;
 
 -- ─── Indexes ─────────────────────────────────────────────────────────────────
-ALTER INDEX IF EXISTS idx_parsing_rules_lookup
+ALTER INDEX IF EXISTS public.idx_parsing_rules_lookup
   RENAME TO idx_parser_rules_lookup;
 
-ALTER INDEX IF EXISTS idx_parsing_rules_source_enabled
+ALTER INDEX IF EXISTS public.idx_parsing_rules_source_enabled
   RENAME TO idx_parser_rules_source_enabled;
 
-ALTER INDEX IF EXISTS idx_parsing_blacklist_host_enabled
+ALTER INDEX IF EXISTS public.idx_parsing_blacklist_host_enabled
   RENAME TO idx_parser_blacklist_host_enabled;
 
-ALTER INDEX IF EXISTS idx_parsing_rule_sample_urls_lookup
+ALTER INDEX IF EXISTS public.idx_parsing_rule_sample_urls_lookup
   RENAME TO idx_parser_rule_sample_urls_lookup;
 
--- ─── Named constraints ───────────────────────────────────────────────────────
+-- ─── Sequences ───────────────────────────────────────────────────────────────
+-- BIGSERIAL 컬럼이 자동 생성한 sequence — RENAME TABLE 은 sequence 명을 자동 갱신하지 않음.
+ALTER SEQUENCE IF EXISTS public.parsing_rules_id_seq
+  RENAME TO parser_rules_id_seq;
+
+ALTER SEQUENCE IF EXISTS public.parsing_blacklist_id_seq
+  RENAME TO parser_blacklist_id_seq;
+
+ALTER SEQUENCE IF EXISTS public.parsing_rule_sample_urls_id_seq
+  RENAME TO parser_rule_sample_urls_id_seq;
+
+-- ─── Constraints (named + anonymous + auto-generated PK/FK) ──────────────────
+-- constraint / trigger 는 (table, name) 단위라 schema 는 pg_namespace JOIN 으로 확인.
 DO $$
+DECLARE
+  rec record;
 BEGIN
-  -- parser_rules constraints
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_rules' AND c.conname = 'parsing_rules_target_type_check'
-  ) THEN
-    ALTER TABLE parser_rules
-      RENAME CONSTRAINT parsing_rules_target_type_check TO parser_rules_target_type_check;
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_rules' AND c.conname = 'parsing_rules_version_positive'
-  ) THEN
-    ALTER TABLE parser_rules
-      RENAME CONSTRAINT parsing_rules_version_positive TO parser_rules_version_positive;
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_rules' AND c.conname = 'parsing_rules_lookup_key_unique'
-  ) THEN
-    ALTER TABLE parser_rules
-      RENAME CONSTRAINT parsing_rules_lookup_key_unique TO parser_rules_lookup_key_unique;
-  END IF;
-
-  -- parser_rule_sample_urls constraints
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_rule_sample_urls' AND c.conname = 'parsing_rule_sample_urls_unique'
-  ) THEN
-    ALTER TABLE parser_rule_sample_urls
-      RENAME CONSTRAINT parsing_rule_sample_urls_unique TO parser_rule_sample_urls_unique;
-  END IF;
-
-  -- parser_blacklist anonymous CHECK constraints (PG auto-named)
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_blacklist' AND c.conname = 'parsing_blacklist_source_check'
-  ) THEN
-    ALTER TABLE parser_blacklist
-      RENAME CONSTRAINT parsing_blacklist_source_check TO parser_blacklist_source_check;
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_blacklist' AND c.conname = 'parsing_blacklist_mode_check'
-  ) THEN
-    ALTER TABLE parser_blacklist
-      RENAME CONSTRAINT parsing_blacklist_mode_check TO parser_blacklist_mode_check;
-  END IF;
-
-  -- PG auto-generated constraint names: <orig_table>_pkey / <orig_table>_<cols>_key /
-  -- <orig_table>_<col>_fkey. RENAME TABLE 은 이 이름을 자동 갱신하지 않음 → 명시 처리.
-  -- parser_rules
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_rules' AND c.conname = 'parsing_rules_pkey'
-  ) THEN
-    ALTER TABLE parser_rules
-      RENAME CONSTRAINT parsing_rules_pkey TO parser_rules_pkey;
-  END IF;
-
-  -- parser_blacklist auto-generated PK + UNIQUE
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_blacklist' AND c.conname = 'parsing_blacklist_pkey'
-  ) THEN
-    ALTER TABLE parser_blacklist
-      RENAME CONSTRAINT parsing_blacklist_pkey TO parser_blacklist_pkey;
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_blacklist' AND c.conname = 'parsing_blacklist_host_pattern_path_pattern_key'
-  ) THEN
-    ALTER TABLE parser_blacklist
-      RENAME CONSTRAINT parsing_blacklist_host_pattern_path_pattern_key
-                     TO parser_blacklist_host_pattern_path_pattern_key;
-  END IF;
-
-  -- parser_rule_sample_urls auto-generated PK + FK
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_rule_sample_urls' AND c.conname = 'parsing_rule_sample_urls_pkey'
-  ) THEN
-    ALTER TABLE parser_rule_sample_urls
-      RENAME CONSTRAINT parsing_rule_sample_urls_pkey TO parser_rule_sample_urls_pkey;
-  END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint c
-    JOIN pg_class t ON c.conrelid = t.oid
-    WHERE t.relname = 'parser_rule_sample_urls' AND c.conname = 'parsing_rule_sample_urls_rule_id_fkey'
-  ) THEN
-    ALTER TABLE parser_rule_sample_urls
-      RENAME CONSTRAINT parsing_rule_sample_urls_rule_id_fkey TO parser_rule_sample_urls_rule_id_fkey;
-  END IF;
+  FOR rec IN
+    SELECT * FROM (VALUES
+      ('parser_rules',            'parsing_rules_target_type_check',                  'parser_rules_target_type_check'),
+      ('parser_rules',            'parsing_rules_version_positive',                   'parser_rules_version_positive'),
+      ('parser_rules',            'parsing_rules_lookup_key_unique',                  'parser_rules_lookup_key_unique'),
+      ('parser_rules',            'parsing_rules_pkey',                               'parser_rules_pkey'),
+      ('parser_blacklist',        'parsing_blacklist_source_check',                   'parser_blacklist_source_check'),
+      ('parser_blacklist',        'parsing_blacklist_mode_check',                     'parser_blacklist_mode_check'),
+      ('parser_blacklist',        'parsing_blacklist_pkey',                           'parser_blacklist_pkey'),
+      ('parser_blacklist',        'parsing_blacklist_host_pattern_path_pattern_key',  'parser_blacklist_host_pattern_path_pattern_key'),
+      ('parser_rule_sample_urls', 'parsing_rule_sample_urls_unique',                  'parser_rule_sample_urls_unique'),
+      ('parser_rule_sample_urls', 'parsing_rule_sample_urls_pkey',                    'parser_rule_sample_urls_pkey'),
+      ('parser_rule_sample_urls', 'parsing_rule_sample_urls_rule_id_fkey',            'parser_rule_sample_urls_rule_id_fkey')
+    ) AS v(tbl, old_name, new_name)
+  LOOP
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class t ON c.conrelid = t.oid
+      JOIN pg_namespace n ON t.relnamespace = n.oid
+      WHERE n.nspname = 'public' AND t.relname = rec.tbl AND c.conname = rec.old_name
+    ) THEN
+      EXECUTE format('ALTER TABLE public.%I RENAME CONSTRAINT %I TO %I',
+                     rec.tbl, rec.old_name, rec.new_name);
+    END IF;
+  END LOOP;
 END $$;
-
--- 명명된 인덱스가 PG 카탈로그에 자동으로 같이 따라오므로 UNIQUE / PK 의 backing 인덱스 명도
--- constraint 명과 동기화 — PG 는 constraint rename 시 backing 인덱스도 함께 rename 한다
--- (catalog 시맨틱), 따라서 별도 ALTER INDEX 불필요.
 
 -- ─── Trigger + Function ──────────────────────────────────────────────────────
 DO $$
@@ -185,23 +110,25 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM pg_trigger tr
     JOIN pg_class t ON tr.tgrelid = t.oid
-    WHERE t.relname = 'parser_rules' AND tr.tgname = 'parsing_rules_touch_updated_at'
+    JOIN pg_namespace n ON t.relnamespace = n.oid
+    WHERE n.nspname = 'public'
+      AND t.relname = 'parser_rules'
+      AND tr.tgname = 'parsing_rules_touch_updated_at'
   ) THEN
-    ALTER TRIGGER parsing_rules_touch_updated_at ON parser_rules
+    ALTER TRIGGER parsing_rules_touch_updated_at ON public.parser_rules
       RENAME TO parser_rules_touch_updated_at;
   END IF;
 END $$;
 
 DO $$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_proc WHERE proname = 'parsing_rules_touch_updated_at'
-  ) THEN
-    ALTER FUNCTION parsing_rules_touch_updated_at() RENAME TO parser_rules_touch_updated_at;
+  -- to_regprocedure 는 schema + signature 까지 명시 — overloading 충돌 방지.
+  IF to_regprocedure('public.parsing_rules_touch_updated_at()') IS NOT NULL THEN
+    ALTER FUNCTION public.parsing_rules_touch_updated_at()
+      RENAME TO parser_rules_touch_updated_at;
   END IF;
 END $$;
 
 -- ─── Comments — 본문에 참조된 테이블 명 갱신 ──────────────────────────────────
--- (016 에서 설정한 parsing_blacklist 관련 COMMENT 는 catalog 상 자동 follow — 별도 처리 불필요)
-COMMENT ON TABLE parser_blacklist IS
+COMMENT ON TABLE public.parser_blacklist IS
   'page-parse 블랙리스트 (이슈 #295) — 매칭 URL 은 article job 발행 단계에서 drop.';
