@@ -101,7 +101,7 @@ type publishCall struct {
 	Timeout     time.Duration
 }
 
-func (p *recordingPublisher) Publish(_ context.Context, crawlerName string, urls []string, targetType core.TargetType, timeout time.Duration) error {
+func (p *recordingPublisher) PublishChained(_ context.Context, crawlerName string, urls []string, targetType core.TargetType, timeout time.Duration) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.err != nil {

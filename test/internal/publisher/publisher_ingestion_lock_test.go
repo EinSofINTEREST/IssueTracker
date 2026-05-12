@@ -81,8 +81,8 @@ func TestPublisher_IngestionLock_BlocksDuplicateOnSecondPublish(t *testing.T) {
 	pub.SetIngestionLock(newFakeLock())
 
 	urls := []string{"https://example.com/a", "https://example.com/b"}
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
 
 	// 첫 호출에서만 2개 publish, 두 번째 호출은 lock 차단으로 0개
 	assert.ElementsMatch(t, urls, prod.urls(), "두 번째 publish 는 lock 으로 모두 차단")
@@ -96,8 +96,8 @@ func TestPublisher_IngestionLock_SkippedForCategory(t *testing.T) {
 
 	urls := []string{"https://example.com/category/news"}
 	// 두 번 publish 해도 카테고리는 둘 다 통과
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeCategory, time.Second))
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeCategory, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeCategory, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeCategory, time.Second))
 
 	assert.Len(t, prod.urls(), 2, "Category 는 lock 미적용")
 }
@@ -112,7 +112,7 @@ func TestPublisher_IngestionLock_FailOpenOnError(t *testing.T) {
 	pub.SetIngestionLock(lock)
 
 	urls := []string{"https://example.com/x", "https://example.com/y"}
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
 
 	// 첫 URL 은 lock 에러 → fail-open 으로 통과, 두 번째는 정상 acquire 로 통과
 	assert.Len(t, prod.urls(), 2, "lock 에러 시 fail-open — 모든 URL 통과")
@@ -126,8 +126,8 @@ func TestPublisher_IngestionLock_NilDisablesDedup(t *testing.T) {
 	pub.SetIngestionLock(nil) // 비활성화
 
 	urls := []string{"https://example.com/x"}
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
 
 	assert.Len(t, prod.urls(), 2, "lock nil 이면 dedup 비활성")
 }
@@ -144,7 +144,7 @@ func TestPublisher_Normalizer_AppliedBeforeLock(t *testing.T) {
 		"https://example.com/x#section1",
 		"https://example.com/x?utm_source=email",
 	}
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
 
 	// 정규화 후 둘 다 "https://example.com/x" — Ingestion Lock 이 두 번째를 차단
 	assert.Len(t, prod.urls(), 1, "정규화 후 동일 URL — lock 이 두 번째 차단")
@@ -159,7 +159,7 @@ func TestPublisher_Normalizer_EarlyReturnOnAllEmpty(t *testing.T) {
 
 	// 빈 문자열 / 상대 URL — 정규화 후 모두 빈 슬라이스 또는 host 없음
 	urls := []string{"", ""}
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
 
 	assert.Empty(t, prod.urls(), "정규화 후 빈 슬라이스면 PublishBatch 호출 0회 (early return)")
 }
@@ -171,7 +171,7 @@ func TestPublisher_Normalizer_DisabledByDefault(t *testing.T) {
 	// Normalizer 미설정
 
 	urls := []string{"https://EXAMPLE.com/X#frag"}
-	require.NoError(t, pub.Publish(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
 
 	assert.Equal(t, urls, prod.urls(), "Normalizer 미설정 시 원본 그대로")
 }

@@ -425,12 +425,12 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 	}
 
 	if len(articleURLs) > 0 {
-		if err := w.publisher.Publish(ctx, crawlerName, articleURLs, core.TargetTypeArticle, jobTimeout); err != nil {
+		if err := w.publisher.PublishChained(ctx, crawlerName, articleURLs, core.TargetTypeArticle, jobTimeout); err != nil {
 			return fmt.Errorf("publish chained article jobs: %w", err)
 		}
 	}
 	if len(listURLs) > 0 {
-		if err := w.publisher.Publish(ctx, crawlerName, listURLs, core.TargetTypeCategory, jobTimeout); err != nil {
+		if err := w.publisher.PublishChained(ctx, crawlerName, listURLs, core.TargetTypeCategory, jobTimeout); err != nil {
 			return fmt.Errorf("publish chained list jobs (extract_links_only): %w", err)
 		}
 	}
