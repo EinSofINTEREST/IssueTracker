@@ -39,7 +39,7 @@ func (s *stubThrottler) ShouldThrottle(_ context.Context, _ *core.CrawlJob) bool
 // Throttler 호출 자체는 발생 (>=1) 했는지 확인하여 "스케줄러가 한 번도 안 돈 것"
 // 과 구분.
 func TestScheduler_Throttler_BlocksWhenThrottled(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 	throttler := &stubThrottler{throttle: true}
 
 	entry := scheduler.ScheduleEntry{
@@ -69,7 +69,7 @@ func TestScheduler_Throttler_BlocksWhenThrottled(t *testing.T) {
 // TestScheduler_Throttler_AllowsWhenNotThrottled:
 // throttle = false 결정 시 emit 정상 호출.
 func TestScheduler_Throttler_AllowsWhenNotThrottled(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 	throttler := &stubThrottler{throttle: false}
 
 	entry := scheduler.ScheduleEntry{
@@ -97,7 +97,7 @@ func TestScheduler_Throttler_AllowsWhenNotThrottled(t *testing.T) {
 // TestScheduler_NoThrottler_LegacyBehavior:
 // SetThrottler 미호출 시 모든 publish 진행 (기존 동작 보존).
 func TestScheduler_NoThrottler_LegacyBehavior(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
@@ -122,7 +122,7 @@ func TestScheduler_NoThrottler_LegacyBehavior(t *testing.T) {
 // TestScheduler_Throttler_NilUnsetsPrevious:
 // SetThrottler(nil) 호출 시 이전 throttler 가 제거되고 publish 가 정상 진행되어야 함.
 func TestScheduler_Throttler_NilUnsetsPrevious(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 	throttler := &stubThrottler{throttle: true}
 
 	entry := scheduler.ScheduleEntry{
@@ -153,7 +153,7 @@ func TestScheduler_Throttler_NilUnsetsPrevious(t *testing.T) {
 // 실제 BacklogThrottler 와 mock BacklogChecker 를 결합하여 end-to-end 흐름 검증.
 // lag > maxBacklog 시 emit 차단되고 WARN 로그가 발생함을 확인.
 func TestScheduler_BacklogThrottler_Integration(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 	checker := &mockBacklogChecker{lag: 5_000}
 	logBuf := &safeBuffer{}
 

@@ -99,6 +99,9 @@ func (p *Publisher) PublishSeed(ctx context.Context, job *core.CrawlJob) error {
 //
 // guardAcquired=false 이거나 guard=nil 이면 noop. Release 실패는 non-fatal — TTL fallback 으로
 // 자연 해제.
+//
+// Copilot PR #395 피드백 — 로그 메시지를 일반화 (구 "after publish error" 는 marshal 실패
+// 분기에서도 호출되어 모호) → "after marshal/publish failure" 로 정정.
 func (p *Publisher) releaseGuardOnFailure(ctx context.Context, url string, guardAcquired bool, job *core.CrawlJob) {
 	if !guardAcquired {
 		return
@@ -111,6 +114,6 @@ func (p *Publisher) releaseGuardOnFailure(ctx context.Context, url string, guard
 		p.log.WithFields(map[string]interface{}{
 			"job_id": job.ID,
 			"url":    url,
-		}).WithError(rerr).Warn("pipeline guard release failed after publish error (TTL fallback applies)")
+		}).WithError(rerr).Warn("pipeline guard release failed after marshal/publish failure (TTL fallback applies)")
 	}
 }

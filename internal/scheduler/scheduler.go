@@ -17,20 +17,20 @@ import (
 )
 
 // Scheduler는 등록된 ScheduleEntry 목록을 기반으로 주기적으로 시드 CrawlJob을 생성하고
-// Emitter를 통해 Kafka crawl 토픽에 발행합니다.
-// 체이닝 Job(크롤된 페이지에서 발견된 URL)은 internal/publisher 패키지가 담당합니다.
+// SeedPublisher (= publisher.Publisher.PublishSeed) 를 통해 Kafka crawl 토픽에 발행합니다 (이슈 #387).
+// 체이닝 Job(크롤된 페이지에서 발견된 URL)은 동일 publisher 의 PublishChained 가 담당합니다.
 //
 // URL 가드:
 //   - SetGate 로 urlguard.Gate 를 설정하면 publish 직전에 entry.URL 검사
-//   - 차단된 URL 은 Emit 호출 없이 silent drop + WARN 로그
+//   - 차단된 URL 은 PublishSeed 호출 없이 silent drop + WARN 로그
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
 //   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — Start 이후 변경에도 race 없음
 //
 // Backlog throttle:
-//   - SetThrottler 로 Throttler 를 설정하면 emit 직전에 ShouldThrottle 검사
-//   - throttle 결정 시 emit 호출 없이 silent drop (구현체가 WARN 로그 책임)
+//   - SetThrottler 로 Throttler 를 설정하면 publish 직전에 ShouldThrottle 검사
+//   - throttle 결정 시 PublishSeed 호출 없이 silent drop (구현체가 WARN 로그 책임)
 //   - 미설정 시 throttle 비활성 (기존 동작 유지)
-//   - URL 가드와 직렬 적용: gate(질적 차단) → throttle(양적 차단) → emit
+//   - URL 가드와 직렬 적용: gate(질적 차단) → throttle(양적 차단) → publish
 //
 // 동적 Refresh (이슈 #328):
 //   - SetEntryResolver + StartRefreshLoop 로 DB 기반 entries 운영 중 변경 반영
