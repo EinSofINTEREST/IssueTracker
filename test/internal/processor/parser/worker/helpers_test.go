@@ -20,7 +20,7 @@ func newMinimalWorker(prod queue.Producer, log *logger.Logger) *worker.ParserWor
 		nil,  // parser
 		nil,  // resolver
 		nil,  // sampleSvc
-		nil,  // procLock
+		nil,  // gate
 		nil,  // llmGen
 		nil,  // failureCounter
 		nil,  // rawIDTracker

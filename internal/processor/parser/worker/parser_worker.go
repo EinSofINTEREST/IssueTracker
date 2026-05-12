@@ -59,7 +59,7 @@ type ParserWorker struct {
 	parser     *rule.Parser
 	resolver   *rule.Resolver              // sample 누적 시 매칭된 rule lookup
 	sampleSvc  storage.SampleURLRepository // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
-	procLock   locks.ProcessingLock        // nil 이면 NoopProcessingLock 사용 (단일 인스턴스 fallback)
+	gate       locks.StageGate             // nil 이면 NoopStageGate 사용 — 이슈 #355 (StageGate 합성: ProcessingLock + per-stage Semaphore)
 	llmGen     *llmgen.Generator           // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 
 	// failureCounter: host 단위 fetcher 실패 카운터.
@@ -114,7 +114,7 @@ type PipelineGuard interface {
 // NewParserWorker 는 ParserWorker 를 생성합니다.
 //
 //   - publisher 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 건너뜀 (이런 모드는 보통 운영 금지)
-//   - procLock 은 nil 허용 — nil 이면 NoopProcessingLock 으로 fallback (단일 인스턴스 환경에서 dedup 비활성)
+//   - gate 는 nil 허용 — nil 이면 NoopStageGate 로 fallback (단일 인스턴스 환경에서 dedup + cap 비활성)
 //   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 //   - resolver / sampleSvc 는 nil 허용 — nil 이면 sample 누적 skip
 //   - failureCounter 는 nil 허용 — nil 이면 NoopFailureCounter 로 fallback
@@ -123,8 +123,9 @@ type PipelineGuard interface {
 // 도메인 중립화 이후 news_articles 도메인 특화 보존은 제거됐습니다 — 모든 article
 // 결과는 contentSvc.Store 로 contents 단일 테이블에 저장됩니다.
 //
-// ProcessingLock 으로 fetcher / parser / validator 가 동일 인터페이스로 단계별 dedup.
-// parser 단계는 raw.URL 단위로 acquire — Kafka rebalance 시 같은 raw 가 두 worker 에 도달해도 1회만 파싱.
+// StageGate (ProcessingLock + Semaphore 합성, 이슈 #353/#354) 로 fetcher / parser / validator
+// 가 동일 패턴으로 stage 별 동시성 cap + URL 중복 처리 차단을 단일 API 로 적용 — parser 단계는
+// raw.URL 단위로 acquire, Kafka rebalance 시 같은 raw 가 두 worker 에 도달해도 1회만 파싱.
 func NewParserWorker(
 	consumer *queue.KafkaConsumer,
 	producer queue.Producer,
@@ -134,7 +135,7 @@ func NewParserWorker(
 	parser *rule.Parser,
 	resolver *rule.Resolver,
 	sampleSvc storage.SampleURLRepository,
-	procLock locks.ProcessingLock,
+	gate locks.StageGate,
 	llmGen *llmgen.Generator,
 	failureCounter storage.FailureCounter,
 	rawIDTracker storage.RawIDTracker,
@@ -147,8 +148,8 @@ func NewParserWorker(
 	if workerCount <= 0 {
 		workerCount = 1
 	}
-	if procLock == nil {
-		procLock = locks.NoopProcessingLock{}
+	if gate == nil {
+		gate = locks.NewNoopStageGate()
 	}
 	if failureCounter == nil {
 		failureCounter = storage.NewNoopFailureCounter()
@@ -165,7 +166,7 @@ func NewParserWorker(
 		parser:              parser,
 		resolver:            resolver,
 		sampleSvc:           sampleSvc,
-		procLock:            procLock,
+		gate:                gate,
 		llmGen:              llmGen,
 		failureCounter:      failureCounter,
 		rawIDTracker:        rawIDTracker,
@@ -253,7 +254,14 @@ func (w *ParserWorker) runWorker(ctx context.Context, idx int) {
 			continue
 		}
 
-		if err := w.processMessage(ctx, msg); err != nil {
+		if err := w.ProcessMessage(ctx, msg); err != nil {
+			// StageGate not-acquired sentinel — commit 없이 다음 메시지로. 다른 worker 가 처리 중이므로
+			// 시끄러운 Warn 대신 Debug. Kafka 가 같은 partition 의 다음 offset 으로 fetch 진행 — 같은
+			// msg 재배달은 lock 해제 + 재시도 stream 에서 발생 (이슈 #355 PR #358 리뷰 반영).
+			if errors.Is(err, ErrStageGateNotAcquired) {
+				wlog.WithField("offset", msg.Offset).Debug("stage gate not acquired by this worker, uncommitted")
+				continue
+			}
 			// processMessage 가 commit 안 한 경우 — 재시도 위해 commit skip (Kafka 가 redeliver).
 			wlog.WithError(err).WithField("offset", msg.Offset).Warn("process message failed, will be redelivered")
 			continue
@@ -267,14 +275,29 @@ func (w *ParserWorker) runWorker(ctx context.Context, idx int) {
 	}
 }
 
-// processMessage 는 단일 메시지 처리 흐름. 성공 시 nil, 재시도 필요 시 error 반환.
+// ErrStageGateNotAcquired 는 parser stage 의 ProcessingLock 이 다른 worker 에 점유 중이라
+// 본 worker 가 스킵해야 함을 나타내는 sentinel. runWorker 가 본 에러를 감지하면 Warn 대신
+// Debug 로 처리하여 정상 dedup 경로를 시끄럽게 만들지 않습니다 (PR #358 리뷰 반영).
+//
+// commit 정책: 본 sentinel 반환 시 호출자는 commit 하지 않음 — 같은 partition 의 다음 msg
+// 처리로 진행하고, 본 offset 의 commit 은 실제 처리 담당 worker 가 수행 (또는 재배달 stream
+// 에서 다시 결정).
+//
+// exported 이유: 외부 테스트 / 모니터링 코드에서 errors.Is 매칭으로 dedup-skip 을 일반 실패와
+// 구분할 수 있도록.
+var ErrStageGateNotAcquired = errors.New("parser stage gate not acquired by this worker")
+
+// ProcessMessage 는 단일 메시지 처리 흐름. 성공 시 nil, 재시도 필요 시 error 반환.
 //
 // Commit 정책:
 //   - 정상 처리 → 호출자가 commit
 //   - rule.Error (parse 실패) → commit (raw 잔존, 재시도 X)
 //   - payload 손상 → commit (DLQ 발행 후, 재시도 무의미)
 //   - 기타 transient → commit 안 함 (재시도)
-func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) error {
+//
+// 일반적으로 runWorker 가 내부에서 호출하지만, 외부 테스트가 분기별 행동을 black-box 로
+// 검증할 수 있도록 exported. consumer 가 nil 인 worker 도 본 메소드는 호출 가능.
+func (w *ParserWorker) ProcessMessage(ctx context.Context, msg *queue.Message) error {
 	var ref core.RawContentRef
 	if err := json.Unmarshal(msg.Value, &ref); err != nil {
 		w.log.WithError(err).Error("malformed RawContentRef payload, dropping")
@@ -287,26 +310,28 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 		"url":    ref.URL,
 	})
 
-	// parser 단계 ProcessingLock — 같은 URL 의 동시 파싱을 차단.
+	// parser 단계 StageGate (ProcessingLock + Semaphore 합성, 이슈 #355) —
+	// 같은 URL 의 동시 파싱 차단 + parser stage 의 동시 처리 슬롯 cap.
 	// Kafka rebalance / 재배달 시 같은 raw 가 두 parser worker 에 도달해도 1회만 처리.
 	// ref.URL 은 fetcher 가 정규화한 URL — Ingestion Lock 키와 같은 정규형 사용.
-	procKey := locks.ProcessingKey(locks.StageParser, ref.URL)
-	acquired, lockErr := w.procLock.Acquire(ctx, procKey)
-	if lockErr != nil {
-		mlog.WithError(lockErr).Warn("failed to acquire parser processing lock, proceeding without lock")
+	release, acquired, gateErr := w.gate.Acquire(ctx, ref.URL)
+	if gateErr != nil {
+		// ctx cancel / deadline — shutdown 또는 semaphore 대기 timeout. fail-open 으로 진행하면
+		// 취소된 ctx 로 쓸데없는 작업 + per-stage cap 무력화 위험 (PR #358 gemini / Copilot 반영).
+		// commit 안 하고 종료 → Kafka redeliver 보장.
+		// SoT: ctx.Err() != nil (errors.Is(ctx.Canceled) 대비 정확 — 종료 사유 단일화).
+		if ctx.Err() != nil {
+			return fmt.Errorf("stage gate acquire aborted by ctx: %w", gateErr)
+		}
+		// 그 외 인프라 에러 (예: Redis 장애) — fail-open. 다른 worker 와의 dedup 만 일시 비활성화.
+		mlog.WithError(gateErr).Warn("failed to acquire parser stage gate, proceeding without gate")
 	} else if !acquired {
 		mlog.Debug("parser processing lock already held by another worker, skipping")
-		// 다른 parser worker 가 처리 중 — commit 없이 종료. 처리 담당 worker 의 commit 에 의존.
-		return nil
+		// 다른 parser worker 가 처리 중 — sentinel 반환으로 commit skip. runWorker 가 Warn 대신
+		// Debug 로 처리. 처리 담당 worker 가 commit 책임 (PR #358 CodeRabbit 반영).
+		return ErrStageGateNotAcquired
 	} else {
-		defer func() {
-			// 셧다운 시 ctx cancel 되어도 락 해제 보장 + trace ID 등 메타데이터 보존.
-			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			if releaseErr := w.procLock.Release(releaseCtx, procKey); releaseErr != nil {
-				mlog.WithError(releaseErr).Warn("failed to release parser processing lock")
-			}
-		}()
+		defer release()
 	}
 
 	raw, err := w.rawSvc.GetByID(ctx, ref.ID)
