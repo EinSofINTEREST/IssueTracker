@@ -626,6 +626,9 @@ func countLines(buf *safeBuffer, substr string) int {
 
 // TestRedisDelayedRetryScheduler_IdleHeartbeat_CompressedEveryN 는
 // HeartbeatEveryNIdleTicks=N 설정 시 N tick 마다 1회만 heartbeat 로그가 나오는지 검증.
+//
+// CI 부하 / 스케줄링 지연에서도 안정적으로 통과하도록 Eventually 로 최소 heartbeat
+// 도달까지 대기한 뒤 끊는다 (Sleep 으로 tick 수를 '대략' 맞추는 방식은 flaky 위험).
 func TestRedisDelayedRetryScheduler_IdleHeartbeat_CompressedEveryN(t *testing.T) {
 	q := newFakeRetryQueue() // 비어있음 — 항상 idle
 	prod := new(mockProducer)
@@ -639,16 +642,27 @@ func TestRedisDelayedRetryScheduler_IdleHeartbeat_CompressedEveryN(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sched.Run(ctx); close(done) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
 
-	// ~12 tick 분 폴링 대기 (= heartbeat 2회 기대: tick 5, 10)
-	time.Sleep(125 * time.Millisecond)
-	cancel()
-	<-done
+	// 최소 2회 heartbeat 가 emit 될 때까지 대기 — CI 지연에도 deterministic.
+	// 부하 환경에서 ticker 가 지연되더라도 결국 heartbeat 가 발생함.
+	require.Eventually(t, func() bool {
+		return countLines(buf, "retry pipeline idle heartbeat") >= 2
+	}, 3*time.Second, 5*time.Millisecond, "최소 2회 heartbeat emit 되어야 함")
 
+	// 핵심 검증: 매 tick 로깅이 아니라는 것 — 압축이 동작하는가.
+	// peek 호출 횟수 대비 heartbeat 횟수가 ~1/N 이어야 함.
+	peekCount := int(q.peekCallCount.Load())
 	heartbeats := countLines(buf, "retry pipeline idle heartbeat")
-	// 정확한 횟수는 ticker timing 변동으로 ±1 허용 — 핵심은 매 tick 12회 ≠ heartbeat 12회
-	assert.GreaterOrEqual(t, heartbeats, 1, "heartbeat 가 최소 1회 emit")
-	assert.LessOrEqual(t, heartbeats, 4, "12 tick 동안 heartbeat 가 N=5 압축으로 4회 이하")
+	require.Greater(t, peekCount, heartbeats,
+		"peek 호출 횟수가 heartbeat 보다 많아야 함 (압축 동작)")
+	// 압축 비율: N=5 기준 heartbeat 는 peek 의 약 1/5 — 여유롭게 1/2 이하만 검증
+	assert.LessOrEqual(t, heartbeats*2, peekCount,
+		"heartbeat 가 peek 의 절반 이하 (N=5 압축 확인) — heartbeats=%d peeks=%d",
+		heartbeats, peekCount)
 	// 메시지 명 변경 — 구 메시지가 남아있으면 안 됨
 	assert.Equal(t, 0, countLines(buf, "retry peek returned no due items"),
 		"구 메시지는 더 이상 emit 되지 않아야 함")
@@ -669,14 +683,23 @@ func TestRedisDelayedRetryScheduler_IdleHeartbeat_LegacyEveryTick(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sched.Run(ctx); close(done) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
 
-	time.Sleep(105 * time.Millisecond) // ~10 tick
-	cancel()
-	<-done
+	// 5 회 heartbeat 도달까지 deterministic 하게 대기 — Sleep 으로 tick 수 추정하지 않음.
+	require.Eventually(t, func() bool {
+		return countLines(buf, "retry pipeline idle heartbeat") >= 5
+	}, 3*time.Second, 5*time.Millisecond, "legacy 모드는 매 tick heartbeat — 5회 도달")
 
+	// legacy 동작: heartbeat 수가 peek 수와 같아야 함 (매 idle peek 마다 emit).
+	// timing race 로 마지막 peek 직후 cancel 되면 ±1 차이 가능.
+	peekCount := int(q.peekCallCount.Load())
 	heartbeats := countLines(buf, "retry pipeline idle heartbeat")
-	// legacy 는 매 tick → 10 tick 부근. timing 변동으로 5 이상이면 legacy 동작 확인 충분.
-	assert.GreaterOrEqual(t, heartbeats, 5, "legacy 동작 — 매 tick heartbeat (≥5/10 tick)")
+	assert.InDelta(t, peekCount, heartbeats, 1,
+		"legacy 모드는 heartbeat 가 peek 와 거의 1:1 — heartbeats=%d peeks=%d",
+		heartbeats, peekCount)
 }
 
 // TestRedisDelayedRetryScheduler_IdleTicksResetOnDue 는 due 항목 처리 시 idleTicks 가
@@ -713,9 +736,9 @@ func TestRedisDelayedRetryScheduler_IdleTicksResetOnDue(t *testing.T) {
 	cancel()
 	<-done
 
-	// due 로그에 previous_idle_ticks 필드가 포함됐는지 확인 — 0 이 아닌 양수값
+	// due 로그에 previous_idle_ticks 필드가 포함됐는지 확인 — 0 이 아닌 양수값.
+	// 정규식 `[1-9][0-9]*` 로 두 자릿수 이상 idle (sleep 오버슈트 시) 도 매칭.
 	require.Contains(t, buf.String(), "previous_idle_ticks", "due 로그에 previous_idle_ticks 필드 노출")
-	// previous_idle_ticks 가 1 이상 — 직전 idle 이 있었음
-	assert.Regexp(t, `"previous_idle_ticks":[1-9]`, buf.String(),
+	assert.Regexp(t, `"previous_idle_ticks":[1-9][0-9]*`, buf.String(),
 		"previous_idle_ticks 가 양수여야 함 (직전 idle window 존재)")
 }

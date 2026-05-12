@@ -153,7 +153,11 @@ type RedisDelayedRetryScheduler struct {
 }
 
 // NewRedisDelayedRetryScheduler 는 RedisDelayedRetryScheduler 를 생성합니다.
-// cfg 의 0 값 필드는 DefaultRedisRetrySchedulerConfig 로 보정합니다.
+//
+// 보정 규칙:
+//   - PollInterval / BatchSize / RepublishFailureBackoff: 0 또는 음수 → default 적용.
+//   - HeartbeatEveryNIdleTicks: **0 은 legacy (매 tick 로깅) 로 유효한 값** 이므로
+//     음수일 때만 default (60) 로 보정. 따라서 0 을 명시하면 default 가 적용되지 않음.
 func NewRedisDelayedRetryScheduler(client retryQueueClient, producer queue.Producer, cfg RedisRetrySchedulerConfig, log *logger.Logger) *RedisDelayedRetryScheduler {
 	def := DefaultRedisRetrySchedulerConfig()
 	if cfg.PollInterval <= 0 {
