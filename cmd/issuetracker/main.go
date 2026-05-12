@@ -126,14 +126,14 @@ func main() {
 
 	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
-	parsingRuleRepo := pgstore.NewParsingRuleRepository(pool, log)
-	ruleResolver, err := rule.NewResolver(parsingRuleRepo)
+	parserRuleRepo := pgstore.NewParserRuleRepository(pool, log)
+	ruleResolver, err := rule.NewResolver(parserRuleRepo)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")
 	}
 	// parser_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
 	// 호출처가 명시적 Invalidate 를 까먹어도 stale cache 발생 X — single source of truth.
-	parsingRuleRepo = storage.WrapWithInvalidator(parsingRuleRepo, ruleResolver)
+	parserRuleRepo = storage.WrapWithInvalidator(parserRuleRepo, ruleResolver)
 	ruleParser, err := rule.NewParser(ruleResolver)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule parser")
@@ -443,7 +443,7 @@ func main() {
 		}).Info("LLM prompt loader enabled (file → embed chain)")
 	}
 
-	llmGen, err := llmgenwiring.Build(llmProvider, parsingRuleRepo, ruleResolver, promptLoader, redisClientShared, log)
+	llmGen, err := llmgenwiring.Build(llmProvider, parserRuleRepo, ruleResolver, promptLoader, redisClientShared, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build llmgen generator")
 	}
@@ -699,7 +699,7 @@ func main() {
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
 	// metricsRegistry 는 nil 허용 — Record* 호출이 noop.
-	pathRefiner, err := refinerwiring.Build(llmProvider, promptLoader, parsingRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
+	pathRefiner, err := refinerwiring.Build(llmProvider, promptLoader, parserRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build refiner")
 	}

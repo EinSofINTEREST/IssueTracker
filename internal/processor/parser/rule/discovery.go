@@ -24,7 +24,7 @@ import (
 // URL dedup / rate limiter 가 흡수합니다.
 //
 // stateless / goroutine-safe — 호출 시마다 regex 컴파일을 회피하기 위해
-// Resolver 가 cache 한 ParsingRuleRecord 를 재사용하는 호출자 측에서 컴파일 결과를
+// Resolver 가 cache 한 ParserRuleRecord 를 재사용하는 호출자 측에서 컴파일 결과를
 // 메모이즈하는 것이 이상적이나, 현재 구현에서는 호출 시 한 번만 컴파일.
 type PageLinkDiscovery struct{}
 

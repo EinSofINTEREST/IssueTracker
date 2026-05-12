@@ -33,11 +33,11 @@ var pathinferLoader = prompt.MapLoader{
 // In-memory mocks
 // ─────────────────────────────────────────────────────────────────────────────
 
-// fakeRulesRepo 는 ParsingRuleRepository 의 in-memory 구현입니다.
+// fakeRulesRepo 는 ParserRuleRepository 의 in-memory 구현입니다.
 // List / InsertNextVersion / FindActiveCandidates 만 사용 — 나머지는 zero stub.
 type fakeRulesRepo struct {
 	mu       sync.Mutex
-	records  []*storage.ParsingRuleRecord
+	records  []*storage.ParserRuleRecord
 	inserts  []insertCall // 이슈 #282 Phase 2: 새 InsertNextVersion 추적
 	listErr  error
 	insErr   error // InsertNextVersion 강제 에러
@@ -52,15 +52,15 @@ type insertCall struct {
 	description string
 }
 
-func (r *fakeRulesRepo) Insert(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
-func (r *fakeRulesRepo) Update(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
-func (r *fakeRulesRepo) GetByID(_ context.Context, _ int64) (*storage.ParsingRuleRecord, error) {
+func (r *fakeRulesRepo) Insert(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
+func (r *fakeRulesRepo) Update(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
+func (r *fakeRulesRepo) GetByID(_ context.Context, _ int64) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *fakeRulesRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParsingRuleRecord, error) {
+func (r *fakeRulesRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *fakeRulesRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+func (r *fakeRulesRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (r *fakeRulesRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
@@ -68,7 +68,7 @@ func (r *fakeRulesRepo) HasAnyRule(_ context.Context, _ string, _ storage.Target
 }
 
 // InsertNextVersion 은 자연키의 MAX(version)+1 로 새 record 를 기록하고 sequential ID 를 할당합니다 (이슈 #282).
-func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, rec *storage.ParsingRuleRecord) error {
+func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, rec *storage.ParserRuleRecord) error {
 	if r.insErr != nil {
 		return r.insErr
 	}
@@ -104,16 +104,16 @@ func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, rec *storage.Parsin
 	return nil
 }
 
-func (r *fakeRulesRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+func (r *fakeRulesRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *fakeRulesRepo) List(_ context.Context, f storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
+func (r *fakeRulesRepo) List(_ context.Context, f storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]*storage.ParsingRuleRecord, 0)
+	out := make([]*storage.ParserRuleRecord, 0)
 	for _, rec := range r.records {
 		if f.SourceName != "" && rec.SourceName != f.SourceName {
 			continue
@@ -127,7 +127,7 @@ func (r *fakeRulesRepo) List(_ context.Context, f storage.ParsingRuleFilter) ([]
 }
 func (r *fakeRulesRepo) Delete(_ context.Context, _ int64) error { return nil }
 
-// UpdatePathPattern 은 ParsingRuleRepository 인터페이스 충족용 stub — 이슈 #282 Phase 2 이후
+// UpdatePathPattern 은 ParserRuleRepository 인터페이스 충족용 stub — 이슈 #282 Phase 2 이후
 // refiner 는 본 메소드를 호출하지 않음 (InsertNextVersion 으로 전환). 호출 시 단순 ErrNotFound.
 func (r *fakeRulesRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) error {
 	return storage.ErrNotFound
@@ -215,8 +215,8 @@ func (f *fakeLLM) Generate(_ context.Context, _ string, _ string) (string, error
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-func newCatchAllRule(id int64, host string) *storage.ParsingRuleRecord {
-	return &storage.ParsingRuleRecord{
+func newCatchAllRule(id int64, host string) *storage.ParserRuleRecord {
+	return &storage.ParserRuleRecord{
 		ID:          id,
 		SourceName:  llmgen.LLMAutoSourceName,
 		HostPattern: host,
@@ -227,7 +227,7 @@ func newCatchAllRule(id int64, host string) *storage.ParsingRuleRecord {
 	}
 }
 
-func newRefiner(t *testing.T, rules storage.ParsingRuleRepository, samples storage.SampleURLRepository, opts ...refiner.Option) *refiner.Refiner {
+func newRefiner(t *testing.T, rules storage.ParserRuleRepository, samples storage.SampleURLRepository, opts ...refiner.Option) *refiner.Refiner {
 	t.Helper()
 	resolver, _ := rule.NewResolver(rules)
 	log := logger.New(logger.DefaultConfig())
@@ -245,7 +245,7 @@ func newRefiner(t *testing.T, rules storage.ParsingRuleRepository, samples stora
 
 func TestRunOnce_AlgorithmSuccess_InsertsNextVersion(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}, nextID: 1}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}, nextID: 1}
 	samples := newFakeSamplesRepo()
 
 	// numeric ID 패턴 — InferHeuristic 이 ^/article/(\d+)$ 추론.
@@ -287,7 +287,7 @@ func TestRunOnce_AlgorithmSuccess_InsertsNextVersion(t *testing.T) {
 
 func TestRunOnce_BelowThreshold_NoUpdate(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 
 	// 2 sample — minSamples 3 미만.
@@ -305,7 +305,7 @@ func TestRunOnce_AlreadyRefined_Skipped(t *testing.T) {
 	// PathPattern != "" → 정밀화 대상 아님.
 	rec := newCatchAllRule(1, "news.example.com")
 	rec.PathPattern = `^/news/(\d+)$`
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	for i := 0; i < 5; i++ {
 		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/news/1"))
@@ -319,7 +319,7 @@ func TestRunOnce_AlreadyRefined_Skipped(t *testing.T) {
 
 func TestRunOnce_AlgorithmFails_LLMFallback(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 
 	// segment 길이가 다른 sample — InferHeuristic 실패 케이스.
@@ -346,7 +346,7 @@ func TestRunOnce_AlgorithmFails_LLMFallback(t *testing.T) {
 
 func TestRunOnce_AlgorithmFails_NoLLM_Skipped(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	// segment 길이가 다른 sample — InferHeuristic 실패.
 	for _, u := range []string{
@@ -366,7 +366,7 @@ func TestRunOnce_AlgorithmFails_NoLLM_Skipped(t *testing.T) {
 
 func TestRunOnce_LLMError_NoUpdate(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	// algorithm 실패 케이스.
 	for _, u := range []string{
@@ -389,7 +389,7 @@ func TestRunOnce_NonAutoRule_Skipped(t *testing.T) {
 	// SourceName != "llm-auto" → List filter 가 거름.
 	rec := newCatchAllRule(1, "news.example.com")
 	rec.SourceName = "operator-tuned"
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	for i := 0; i < 5; i++ {
 		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/article/1"))
@@ -404,7 +404,7 @@ func TestRunOnce_NonAutoRule_Skipped(t *testing.T) {
 func TestRunOnce_DisabledRule_Skipped(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
 	rec.Enabled = false
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	for i := 0; i < 5; i++ {
 		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/article/1"))
@@ -430,7 +430,7 @@ func TestRunOnce_ListError_Returned(t *testing.T) {
 func TestRunOnce_InsertError_NoPurge(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
 	rules := &fakeRulesRepo{
-		records: []*storage.ParsingRuleRecord{rec},
+		records: []*storage.ParserRuleRecord{rec},
 		insErr:  errors.New("insert failed"),
 	}
 	samples := newFakeSamplesRepo()
@@ -453,7 +453,7 @@ func TestRunOnce_InsertError_NoPurge(t *testing.T) {
 func TestRunOnce_InsertDuplicate_Skipped(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
 	rules := &fakeRulesRepo{
-		records:  []*storage.ParsingRuleRecord{rec},
+		records:  []*storage.ParserRuleRecord{rec},
 		insIsDup: true,
 	}
 	samples := newFakeSamplesRepo()
@@ -531,7 +531,7 @@ func TestRunOnce_RecordsMetrics(t *testing.T) {
 
 	// (1) success / algorithm — numeric ID 패턴.
 	rec1 := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParsingRuleRecord{rec1}}
+	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec1}}
 	samples := newFakeSamplesRepo()
 	for _, u := range []string{
 		"https://news.example.com/article/100",

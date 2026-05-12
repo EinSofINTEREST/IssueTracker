@@ -113,7 +113,7 @@ func TestGenerator_EnrichedExtractor_BlacklistBranch(t *testing.T) {
 	g.Stop(stopCtx)
 
 	// 셀렉터 INSERT skip 검증.
-	assert.Empty(t, repo.inserts(), "blacklist 분기 시 ParsingRuleRepository.Insert 발생 X")
+	assert.Empty(t, repo.inserts(), "blacklist 분기 시 ParserRuleRepository.Insert 발생 X")
 	assert.Equal(t, 1, extractor.callCount(), "ExtractEnriched 1회 호출")
 
 	// Blacklist Insert 1회 검증 + 페이로드 확인.
@@ -129,7 +129,7 @@ func TestGenerator_EnrichedExtractor_BlacklistBranch(t *testing.T) {
 }
 
 // TestGenerator_EnrichedExtractor_Ok_PageTypeStored 는 validity=ok 분기에서 PageType 이
-// 정상으로 ParsingRuleRecord 에 저장되는지 검증합니다.
+// 정상으로 ParserRuleRecord 에 저장되는지 검증합니다.
 func TestGenerator_EnrichedExtractor_Ok_PageTypeStored(t *testing.T) {
 	provider := &fakeProvider{name: "gemini-flash", response: "{}"}
 	repo := &recordingRepo{}
@@ -155,7 +155,7 @@ func TestGenerator_EnrichedExtractor_Ok_PageTypeStored(t *testing.T) {
 
 	recs := repo.inserts()
 	require.Len(t, recs, 1)
-	assert.Equal(t, "news", recs[0].PageType, "ExtractResult.PageType 가 ParsingRuleRecord.PageType 에 저장")
+	assert.Equal(t, "news", recs[0].PageType, "ExtractResult.PageType 가 ParserRuleRecord.PageType 에 저장")
 }
 
 // TestGenerator_EnrichedExtractor_BlacklistRepoNil_StillSkipsInsert 는 blacklistRepo 가

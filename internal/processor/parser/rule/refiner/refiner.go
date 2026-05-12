@@ -2,7 +2,7 @@
 // 추론하여 자동 갱신하는 점진적 정밀화 워크플로를 구현합니다.
 //
 // 흐름 (Run goroutine 1회 cycle):
-//  1. ParsingRuleRepository.List(SourceName='llm-auto', OnlyEnabled=true) 로 후보 rule 조회.
+//  1. ParserRuleRepository.List(SourceName='llm-auto', OnlyEnabled=true) 로 후보 rule 조회.
 //  2. PathPattern == "" (catch-all) 인 rule 만 정밀화 대상으로 선별.
 //  3. 각 대상 rule 마다:
 //     a. SampleURLRepository.Count(rule.ID) >= MinSamples 검사 — 미만이면 skip.
@@ -10,7 +10,7 @@
 //     c. pathinfer.InferHeuristic(samples) 시도 — 성공하면 algorithm 방식 채택.
 //     d. 실패 + LLMClient != nil 이면 pathinfer.InferLLM(samples) 시도 — 성공하면 llm 방식 채택.
 //     e. 결과 regex 가 비어있으면 skip (다음 polling 에서 재시도 — sample 누적 추가 후 재평가).
-//     f. ParsingRuleRepository.InsertNextVersion — 기존 catch-all (v1) 보존 + 정밀 path_pattern 으로
+//     f. ParserRuleRepository.InsertNextVersion — 기존 catch-all (v1) 보존 + 정밀 path_pattern 으로
 //     새 version (v2) INSERT. v2 가 매칭 안 되는 path 는 v1 (catch-all)
 //     로 fallback — 정밀화 적용 범위가 좁아도 silent miss 없음.
 //     g. resolver.Invalidate(host, type) — cache flush (다음 lookup 부터 갱신된 rule 적용).
@@ -59,7 +59,7 @@ const DefaultMinSamples = 5
 //   - Start 두 번 호출은 두 번째가 noop, Stop 후 Start 는 noop (race 안전).
 //   - 테스트 친화 — Run / RunOnce 는 그대로 유지하여 외부에서 단일 cycle 호출 가능.
 type Refiner struct {
-	rules    storage.ParsingRuleRepository
+	rules    storage.ParserRuleRepository
 	samples  storage.SampleURLRepository
 	resolver *rule.Resolver
 	llm      pathinfer.LLMClient // nil 허용
@@ -118,7 +118,7 @@ func WithMetrics(m *Metrics) Option {
 // New 는 Refiner 를 생성합니다. rules / samples / resolver / log 가 nil 이면 error —
 // 호출자 (cmd/main) 가 boot fatal 처리. LLMClient 만 nil 허용 (algorithm-only 동작).
 func New(
-	rules storage.ParsingRuleRepository,
+	rules storage.ParserRuleRepository,
 	samples storage.SampleURLRepository,
 	resolver *rule.Resolver,
 	log *logger.Logger,
@@ -239,7 +239,7 @@ func (r *Refiner) Run(ctx context.Context) {
 // 모든 rule 의 단계별 실패는 cycle 안에서 흡수 (Warn 로그) — 함수는 cycle 자체의 치명적
 // 에러 (rule List 실패) 만 에러 반환. test 친화 — Run 외부에서 단발 호출 가능.
 func (r *Refiner) RunOnce(ctx context.Context) error {
-	candidates, err := r.rules.List(ctx, storage.ParsingRuleFilter{
+	candidates, err := r.rules.List(ctx, storage.ParserRuleFilter{
 		SourceName:  llmgen.LLMAutoSourceName,
 		OnlyEnabled: true,
 		Limit:       1000, // 운영상 llm-auto rule 은 호스트 수 만큼 — 1000 이면 충분.
@@ -260,7 +260,7 @@ func (r *Refiner) RunOnce(ctx context.Context) error {
 
 // refineOne 은 단일 rule 에 대한 정밀화 단계를 수행합니다.
 // 모든 단계 실패는 함수 내에서 Warn 로그 + 조용히 return — 호출자가 다음 rule 로 진행 가능.
-func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord) {
+func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParserRuleRecord) {
 	rlog := r.log.WithFields(map[string]interface{}{
 		"rule_id": rec.ID,
 		"host":    rec.HostPattern,
@@ -333,7 +333,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParsingRuleRecord)
 	// 정렬로 v2 를 우선 시도하고 매칭 실패 시 v1 catch-all 로 자연 fallback.
 	//
 	// 새 record 의 selector / confidence / source / host / target / enabled 는 v1 의 값을 그대로 복사.
-	newRec := &storage.ParsingRuleRecord{
+	newRec := &storage.ParserRuleRecord{
 		SourceName:  rec.SourceName,
 		HostPattern: rec.HostPattern,
 		PathPattern: pattern,

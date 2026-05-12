@@ -24,7 +24,7 @@ const resolveTimeout = 5 * time.Second
 // Parser 는 DB 기반 파싱 규칙으로 동작하는 단일 page parser engine 입니다.
 //
 // Parser implements both parser.ContentParser and parser.LinkListParser, driven by
-// storage.ParsingRuleRecord resolved per request via Resolver. 사이트별 hardcode 파서
+// storage.ParserRuleRecord resolved per request via Resolver. 사이트별 hardcode 파서
 // (NaverParser/DaumParser/...) 를 대체 — 새 사이트 지원 = parser_rules row 추가.
 //
 // 도메인 중립 — 뉴스 / 블로그 / 제품 페이지 / 일반 문서 모두 동일 engine 으로 처리.

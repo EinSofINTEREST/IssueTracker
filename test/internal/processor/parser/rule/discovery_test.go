@@ -44,8 +44,8 @@ const fullPageHTML = `
 </body></html>
 `
 
-func discoveryRule(cfg *storage.LinkDiscoveryConfig) *storage.ParsingRuleRecord {
-	return &storage.ParsingRuleRecord{
+func discoveryRule(cfg *storage.LinkDiscoveryConfig) *storage.ParserRuleRecord {
+	return &storage.ParserRuleRecord{
 		ID:          3,
 		SourceName:  "test",
 		HostPattern: "news.example.com",
@@ -418,7 +418,7 @@ func TestParser_ParseLinks_RoutesToDiscoveryWhenPatternSet(t *testing.T) {
 		ArticleURLPattern: `/article/\d{4}/\d{2}/\d{2}/`,
 		SameOriginOnly:    true,
 	}
-	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{discoveryRule(cfg)}}
+	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{discoveryRule(cfg)}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -429,7 +429,7 @@ func TestParser_ParseLinks_RoutesToDiscoveryWhenPatternSet(t *testing.T) {
 
 func TestParser_ParseLinks_FallsBackToItemContainerWhenPatternEmpty(t *testing.T) {
 	// LinkDiscovery 가 nil → 기존 ItemContainer 경로 사용
-	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{listRule()}}
+	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{listRule()}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -453,7 +453,7 @@ func TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery(t *tes
 	}
 	// ItemContainer 를 매칭 0건 selector 로 변경 — fallback 진입 시 ErrParseFailure 보장
 	r.Selectors.ItemContainer = &storage.FieldSelector{CSS: "div.no-such-class-anywhere"}
-	repo := &fakeRepo{rules: []*storage.ParsingRuleRecord{r}}
+	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{r}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 

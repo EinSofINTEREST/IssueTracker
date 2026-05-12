@@ -33,9 +33,9 @@ const DefaultNegativeCacheTTL = 30 * time.Second
 // 부하 패턴 (소수의 동일 host 반복 lookup) 에는 충분.
 const DefaultMaxCacheEntries = 10_000
 
-// Resolver 는 URL 에서 host 를 추출해 storage.ParsingRuleRecord 를 조회합니다.
+// Resolver 는 URL 에서 host 를 추출해 storage.ParserRuleRecord 를 조회합니다.
 //
-// Resolver maps a URL to its active ParsingRule via host_pattern + target_type.
+// Resolver maps a URL to its active ParserRule via host_pattern + target_type.
 // In-memory cache (TTL based) 로 DB roundtrip 을 줄입니다 — 운영자는 새 rule enabled 후
 // 최대 DefaultCacheTTL 만큼 지연을 감수합니다.
 //
@@ -45,7 +45,7 @@ const DefaultMaxCacheEntries = 10_000
 //
 // goroutine-safe — sync.RWMutex 로 cache 보호. regex compile cache 는 sync.Map.
 type Resolver struct {
-	repo             storage.ParsingRuleRepository
+	repo             storage.ParserRuleRepository
 	cacheTTL         time.Duration
 	negativeCacheTTL time.Duration
 	maxEntries       int
@@ -89,7 +89,7 @@ type cacheKey struct {
 // 후보 슬라이스를 통째로 보관 — application 측 path 매칭은 매 호출마다 실행
 // (cache hit path 안에서 수행). 매칭 비용은 ms 미만 (regex 컴파일은 regexCache 로 분리).
 type cacheEntry struct {
-	candidates []*storage.ParsingRuleRecord // 빈 슬라이스 = negative cache
+	candidates []*storage.ParserRuleRecord // 빈 슬라이스 = negative cache
 	expiresAt  time.Time
 }
 
@@ -116,9 +116,9 @@ func WithMaxCacheEntries(n int) Option {
 	}
 }
 
-// NewResolver 는 ParsingRuleRepository 를 사용하는 Resolver 를 생성합니다.
+// NewResolver 는 ParserRuleRepository 를 사용하는 Resolver 를 생성합니다.
 // repo 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
-func NewResolver(repo storage.ParsingRuleRepository, opts ...Option) (*Resolver, error) {
+func NewResolver(repo storage.ParserRuleRepository, opts ...Option) (*Resolver, error) {
 	if repo == nil {
 		return nil, errors.New("rule: NewResolver requires non-nil repo")
 	}
@@ -151,7 +151,7 @@ func NewResolver(repo storage.ParsingRuleRepository, opts ...Option) (*Resolver,
 //
 // 매칭 없음은 storage.ErrNotFound 가 아닌 rule.ErrNoRule 로 정규화 — 호출자가 errors.Is
 // 로 분기 가능 (예: LLM 자동 생성 fallback 트리거).
-func (r *Resolver) ResolveByURL(ctx context.Context, rawURL string, targetType storage.TargetType) (*storage.ParsingRuleRecord, error) {
+func (r *Resolver) ResolveByURL(ctx context.Context, rawURL string, targetType storage.TargetType) (*storage.ParserRuleRecord, error) {
 	host, path, err := extractHostPath(rawURL)
 	if err != nil {
 		return nil, &Error{Code: ErrInvalidURL, Message: err.Error(), URL: rawURL}
@@ -163,7 +163,7 @@ func (r *Resolver) ResolveByURL(ctx context.Context, rawURL string, targetType s
 //
 // host 는 정규화 (lowercase, 포트 제외) 된 상태로 전달 권장. path 는 URL.Path (rawpath 아님) —
 // 정규화는 호출자 책임.
-func (r *Resolver) Resolve(ctx context.Context, host, path string, targetType storage.TargetType) (*storage.ParsingRuleRecord, error) {
+func (r *Resolver) Resolve(ctx context.Context, host, path string, targetType storage.TargetType) (*storage.ParserRuleRecord, error) {
 	host = strings.ToLower(host)
 	key := cacheKey{host: host, targetType: targetType}
 
@@ -287,7 +287,7 @@ func (r *Resolver) HasAnyRule(ctx context.Context, host string, targetType stora
 
 // lookupCache 는 캐시 조회 결과를 반환합니다.
 // 반환값: (candidates, hit) — hit=true 이면 캐시 적용 (negative cache 는 빈 슬라이스).
-func (r *Resolver) lookupCache(key cacheKey) ([]*storage.ParsingRuleRecord, bool) {
+func (r *Resolver) lookupCache(key cacheKey) ([]*storage.ParserRuleRecord, bool) {
 	r.mu.RLock()
 	entry, ok := r.cache[key]
 	r.mu.RUnlock()
@@ -344,7 +344,7 @@ func (r *Resolver) evictHasAnyExpiringSoon() {
 
 // storeCache 는 후보 슬라이스를 저장합니다.
 // maxEntries 초과 시 evictExpiringSoon 으로 가장 만료 임박 entry 제거 후 저장.
-func (r *Resolver) storeCache(key cacheKey, candidates []*storage.ParsingRuleRecord, ttl time.Duration) {
+func (r *Resolver) storeCache(key cacheKey, candidates []*storage.ParserRuleRecord, ttl time.Duration) {
 	r.mu.Lock()
 	r.evictExpiringSoon()
 	r.cache[key] = cacheEntry{candidates: candidates, expiresAt: r.now().Add(ttl)}
