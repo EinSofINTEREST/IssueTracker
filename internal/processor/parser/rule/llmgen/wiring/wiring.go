@@ -24,7 +24,7 @@ import (
 // provider 가 nil (LLM 비활성) 이면 (nil, nil) 반환 — parser worker 는 ErrNoRule 시 raw 만 잔존.
 // llmgen.New 자체 실패는 wiring 버그 — 호출자 (main) 에서 Fatal 결정.
 // redisClient 가 nil 이면 in-process memInflightLocker 로 graceful degrade.
-func Build(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, redisClient *redis.Client, log *logger.Logger) (*llmgen.Generator, error) {
+func Build(provider llm.Provider, repo storage.ParserRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, redisClient *redis.Client, log *logger.Logger) (*llmgen.Generator, error) {
 	if provider == nil {
 		return nil, nil
 	}

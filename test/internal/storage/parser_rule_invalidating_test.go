@@ -49,7 +49,7 @@ type recordingRepo struct {
 	insertErr     error
 	updateErr     error
 	updatePathErr error
-	getByIDResult *storage.ParsingRuleRecord
+	getByIDResult *storage.ParserRuleRecord
 	getByIDErr    error
 
 	insertCalls            int
@@ -60,18 +60,18 @@ type recordingRepo struct {
 	getByIDCalls           int
 }
 
-func (r *recordingRepo) Insert(_ context.Context, _ *storage.ParsingRuleRecord) error {
+func (r *recordingRepo) Insert(_ context.Context, _ *storage.ParserRuleRecord) error {
 	r.insertCalls++
 	return r.insertErr
 }
-func (r *recordingRepo) InsertNextVersion(_ context.Context, rec *storage.ParsingRuleRecord) error {
+func (r *recordingRepo) InsertNextVersion(_ context.Context, rec *storage.ParserRuleRecord) error {
 	r.insertNextVersionCalls++
 	if rec.Version == 0 {
 		rec.Version = 1
 	}
 	return r.insertErr
 }
-func (r *recordingRepo) Update(_ context.Context, _ *storage.ParsingRuleRecord) error {
+func (r *recordingRepo) Update(_ context.Context, _ *storage.ParserRuleRecord) error {
 	r.updateCalls++
 	return r.updateErr
 }
@@ -83,23 +83,23 @@ func (r *recordingRepo) Delete(_ context.Context, _ int64) error {
 	r.deleteCalls++
 	return nil
 }
-func (r *recordingRepo) GetByID(_ context.Context, _ int64) (*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) GetByID(_ context.Context, _ int64) (*storage.ParserRuleRecord, error) {
 	r.getByIDCalls++
 	return r.getByIDResult, r.getByIDErr
 }
-func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (r *recordingRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
 	return false, false, nil
 }
-func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *recordingRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) List(_ context.Context, _ storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
 	return nil, nil
 }
 
@@ -112,7 +112,7 @@ func TestInvalidatingRepo_Insert_Success_TriggersInvalidate(t *testing.T) {
 	inv := &recordingInvalidator{}
 	repo := storage.WrapWithInvalidator(inner, inv)
 
-	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
+	rec := &storage.ParserRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
 	err := repo.Insert(context.Background(), rec)
 	require.NoError(t, err)
 	assert.Equal(t, 1, inv.callCount(), "Insert 성공 시 Invalidate 호출")
@@ -124,7 +124,7 @@ func TestInvalidatingRepo_Insert_ErrDuplicate_TriggersInvalidate(t *testing.T) {
 	inv := &recordingInvalidator{}
 	repo := storage.WrapWithInvalidator(inner, inv)
 
-	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
+	rec := &storage.ParserRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
 	err := repo.Insert(context.Background(), rec)
 	require.ErrorIs(t, err, storage.ErrDuplicate)
 	assert.Equal(t, 1, inv.callCount(), "ErrDuplicate 도 invalidate — cache 가 stale 일 가능성")
@@ -139,7 +139,7 @@ func TestInvalidatingRepo_InsertNextVersion_Success_TriggersInvalidate(t *testin
 	inv := &recordingInvalidator{}
 	repo := storage.WrapWithInvalidator(inner, inv)
 
-	rec := &storage.ParsingRuleRecord{HostPattern: "stale.example.com", TargetType: storage.TargetTypePage}
+	rec := &storage.ParserRuleRecord{HostPattern: "stale.example.com", TargetType: storage.TargetTypePage}
 	err := repo.InsertNextVersion(context.Background(), rec)
 	require.NoError(t, err)
 	assert.Equal(t, 1, inner.insertNextVersionCalls)
@@ -152,7 +152,7 @@ func TestInvalidatingRepo_InsertNextVersion_ErrDuplicate_TriggersInvalidate(t *t
 	inv := &recordingInvalidator{}
 	repo := storage.WrapWithInvalidator(inner, inv)
 
-	err := repo.InsertNextVersion(context.Background(), &storage.ParsingRuleRecord{HostPattern: "x", TargetType: storage.TargetTypePage})
+	err := repo.InsertNextVersion(context.Background(), &storage.ParserRuleRecord{HostPattern: "x", TargetType: storage.TargetTypePage})
 	require.ErrorIs(t, err, storage.ErrDuplicate)
 	assert.Equal(t, 1, inv.callCount(), "ErrDuplicate (race window) 도 invalidate")
 }
@@ -162,7 +162,7 @@ func TestInvalidatingRepo_Insert_OtherError_NoInvalidate(t *testing.T) {
 	inv := &recordingInvalidator{}
 	repo := storage.WrapWithInvalidator(inner, inv)
 
-	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
+	rec := &storage.ParserRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypePage}
 	err := repo.Insert(context.Background(), rec)
 	require.Error(t, err)
 	assert.Equal(t, 0, inv.callCount(), "기타 에러 (DB 장애 등) 시 invalidate 안 함 — cache 보존")
@@ -177,7 +177,7 @@ func TestInvalidatingRepo_Update_Success_TriggersInvalidate(t *testing.T) {
 	inv := &recordingInvalidator{}
 	repo := storage.WrapWithInvalidator(inner, inv)
 
-	rec := &storage.ParsingRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypeList}
+	rec := &storage.ParserRuleRecord{HostPattern: "example.com", TargetType: storage.TargetTypeList}
 	err := repo.Update(context.Background(), rec)
 	require.NoError(t, err)
 	assert.Equal(t, 1, inv.callCount())
@@ -189,7 +189,7 @@ func TestInvalidatingRepo_Update_Error_NoInvalidate(t *testing.T) {
 	inv := &recordingInvalidator{}
 	repo := storage.WrapWithInvalidator(inner, inv)
 
-	err := repo.Update(context.Background(), &storage.ParsingRuleRecord{})
+	err := repo.Update(context.Background(), &storage.ParserRuleRecord{})
 	require.Error(t, err)
 	assert.Equal(t, 0, inv.callCount())
 }
@@ -200,7 +200,7 @@ func TestInvalidatingRepo_Update_Error_NoInvalidate(t *testing.T) {
 
 func TestInvalidatingRepo_UpdatePathPattern_Success_PrefetchesAndInvalidates(t *testing.T) {
 	inner := &recordingRepo{
-		getByIDResult: &storage.ParsingRuleRecord{
+		getByIDResult: &storage.ParserRuleRecord{
 			ID: 42, HostPattern: "yna.co.kr", TargetType: storage.TargetTypePage,
 		},
 	}
@@ -217,7 +217,7 @@ func TestInvalidatingRepo_UpdatePathPattern_Success_PrefetchesAndInvalidates(t *
 
 func TestInvalidatingRepo_UpdatePathPattern_Error_NoInvalidate(t *testing.T) {
 	inner := &recordingRepo{
-		getByIDResult: &storage.ParsingRuleRecord{HostPattern: "x.com", TargetType: storage.TargetTypePage},
+		getByIDResult: &storage.ParserRuleRecord{HostPattern: "x.com", TargetType: storage.TargetTypePage},
 		updatePathErr: errors.New("not found"),
 	}
 	inv := &recordingInvalidator{}
@@ -247,7 +247,7 @@ func TestInvalidatingRepo_UpdatePathPattern_PrefetchFails_NoInvalidate(t *testin
 
 func TestInvalidatingRepo_Delete_Success_PrefetchesAndInvalidates(t *testing.T) {
 	inner := &recordingRepo{
-		getByIDResult: &storage.ParsingRuleRecord{
+		getByIDResult: &storage.ParserRuleRecord{
 			ID: 99, HostPattern: "delete.example.com", TargetType: storage.TargetTypePage,
 		},
 	}
@@ -284,7 +284,7 @@ func TestInvalidatingRepo_NilInvalidator_NoOp(t *testing.T) {
 	inner := &recordingRepo{}
 	repo := storage.WrapWithInvalidator(inner, nil)
 
-	err := repo.Insert(context.Background(), &storage.ParsingRuleRecord{HostPattern: "x", TargetType: storage.TargetTypePage})
+	err := repo.Insert(context.Background(), &storage.ParserRuleRecord{HostPattern: "x", TargetType: storage.TargetTypePage})
 	require.NoError(t, err)
 	assert.Equal(t, 1, inner.insertCalls, "inner 호출은 정상")
 	// invalidator 가 nil 이라 panic 없이 통과 — 정상 동작 확인 만으로 충분.

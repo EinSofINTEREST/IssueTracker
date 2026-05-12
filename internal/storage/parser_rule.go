@@ -125,10 +125,10 @@ type LinkDiscoveryConfig struct {
 	MaxLinksPerPage int `json:"max_links_per_page,omitempty"`
 }
 
-// ParsingRuleRecord 는 parser_rules 테이블의 단일 행입니다.
+// ParserRuleRecord 는 parser_rules 테이블의 단일 행입니다.
 //
-// ParsingRuleRecord represents a single row of the parser_rules table.
-type ParsingRuleRecord struct {
+// ParserRuleRecord represents a single row of the parser_rules table.
+type ParserRuleRecord struct {
 	ID          int64
 	SourceName  string     // "naver" / "cnn"
 	HostPattern string     // URL host 매칭 (예: "n.news.naver.com")
@@ -171,8 +171,8 @@ type FieldConfidence struct {
 	SampleCount int     `json:"sample_count"`
 }
 
-// ParsingRuleFilter 는 List 조회 시 필터 조건입니다.
-type ParsingRuleFilter struct {
+// ParserRuleFilter 는 List 조회 시 필터 조건입니다.
+type ParserRuleFilter struct {
 	SourceName  string     // 빈 문자열이면 전체
 	HostPattern string     // 빈 문자열이면 전체
 	TargetType  TargetType // 빈 문자열이면 전체
@@ -181,18 +181,18 @@ type ParsingRuleFilter struct {
 	Offset      int
 }
 
-// ParsingRuleRepository 는 parser_rules 테이블에 대한 데이터 접근 인터페이스입니다.
+// ParserRuleRepository 는 parser_rules 테이블에 대한 데이터 접근 인터페이스입니다.
 //
-// ParsingRuleRepository is the data access interface for parser_rules.
+// ParserRuleRepository is the data access interface for parser_rules.
 // All implementations must be goroutine-safe.
-type ParsingRuleRepository interface {
+type ParserRuleRepository interface {
 	// Insert 는 새 규칙을 저장합니다. 자연키 충돌 시 ErrDuplicate 반환.
 	// 성공 시 r.ID 가 채워집니다.
-	Insert(ctx context.Context, r *ParsingRuleRecord) error
+	Insert(ctx context.Context, r *ParserRuleRecord) error
 
 	// Update 는 ID 로 규칙을 갱신합니다. 존재하지 않으면 ErrNotFound 반환.
 	// 갱신 가능 필드: Selectors, Enabled, Description (자연키는 변경 불가).
-	Update(ctx context.Context, r *ParsingRuleRecord) error
+	Update(ctx context.Context, r *ParserRuleRecord) error
 
 	// UpdatePathPattern 은 정밀화 워크플로 에서 호출 — path_pattern + description 갱신.
 	//
@@ -206,7 +206,7 @@ type ParsingRuleRepository interface {
 	UpdatePathPattern(ctx context.Context, id int64, pattern, description string) error
 
 	// GetByID 는 ID 로 규칙을 조회합니다.
-	GetByID(ctx context.Context, id int64) (*ParsingRuleRecord, error)
+	GetByID(ctx context.Context, id int64) (*ParserRuleRecord, error)
 
 	// FindActive 는 host + target_type 에 매칭되는 활성 규칙을 반환합니다 (RuleResolver 핫패스).
 	// 같은 (host, type) 에 여러 활성 row 가 있다면 version DESC 순으로 첫 항목 반환.
@@ -215,7 +215,7 @@ type ParsingRuleRepository interface {
 	// Deprecated: path_pattern 도입 후 후보 슬라이스를 한꺼번에 받아 application 측에서
 	// 매칭하는 FindActiveCandidates 사용 권장. 본 메소드는 후방 호환을 위해 유지 — 내부적으로
 	// FindActiveCandidates 의 첫 항목 (length DESC 정렬, '' 포함) 을 반환합니다.
-	FindActive(ctx context.Context, host string, targetType TargetType) (*ParsingRuleRecord, error)
+	FindActive(ctx context.Context, host string, targetType TargetType) (*ParserRuleRecord, error)
 
 	// InsertNextVersion 은 (source_name, host_pattern, path_pattern, target_type) 자연키의 다음
 	// version 으로 rec 을 INSERT 합니다.
@@ -232,7 +232,7 @@ type ParsingRuleRepository interface {
 	//   3. 자연키 충돌 (race window) 시 ErrDuplicate 반환 — 호출자 retry 또는 흡수
 	//
 	// rec.Version 은 입력 무관 (자동 계산). 성공 시 rec.ID / Version / CreatedAt / UpdatedAt 채워짐.
-	InsertNextVersion(ctx context.Context, r *ParsingRuleRecord) error
+	InsertNextVersion(ctx context.Context, r *ParserRuleRecord) error
 
 	// HasAnyRule 은 (host_pattern, target_type) 에 대한 룰 존재 여부를 반환합니다.
 	//
@@ -254,7 +254,7 @@ type ParsingRuleRepository interface {
 	// 회피하는 사전 lookup. Insert 시 ErrDuplicate 위반과 동일한 자연키를 검사합니다.
 	//
 	// 매칭 없으면 ErrNotFound.
-	FindByNaturalKey(ctx context.Context, sourceName, hostPattern, pathPattern string, targetType TargetType, version int) (*ParsingRuleRecord, error)
+	FindByNaturalKey(ctx context.Context, sourceName, hostPattern, pathPattern string, targetType TargetType, version int) (*ParserRuleRecord, error)
 
 	// FindActiveCandidates 는 host + target_type 매칭 활성 rule 들을 LENGTH(path_pattern) DESC,
 	// version DESC 정렬로 반환합니다.
@@ -263,10 +263,10 @@ type ParsingRuleRepository interface {
 	// path_pattern='' 인 row 는 길이 0 으로 가장 마지막에 위치 (catch-all).
 	//
 	// 매칭 없으면 빈 슬라이스 + nil 에러 (ErrNotFound 아님 — 호출자가 빈 슬라이스로 분기).
-	FindActiveCandidates(ctx context.Context, host string, targetType TargetType) ([]*ParsingRuleRecord, error)
+	FindActiveCandidates(ctx context.Context, host string, targetType TargetType) ([]*ParserRuleRecord, error)
 
 	// List 는 필터 조건에 맞는 규칙들을 반환합니다 (운영 대시보드용).
-	List(ctx context.Context, filter ParsingRuleFilter) ([]*ParsingRuleRecord, error)
+	List(ctx context.Context, filter ParserRuleFilter) ([]*ParserRuleRecord, error)
 
 	// Delete 는 ID 로 규칙을 삭제합니다. 존재하지 않아도 nil 반환 (idempotent).
 	Delete(ctx context.Context, id int64) error

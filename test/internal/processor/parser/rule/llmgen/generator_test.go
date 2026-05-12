@@ -50,14 +50,14 @@ func (p *fakeProvider) callCount() int {
 	return p.calls
 }
 
-// recordingRepo 는 Insert 호출을 기록하는 ParsingRuleRepository 구현입니다.
+// recordingRepo 는 Insert 호출을 기록하는 ParserRuleRepository 구현입니다.
 type recordingRepo struct {
 	mu       sync.Mutex
-	inserted []*storage.ParsingRuleRecord
+	inserted []*storage.ParserRuleRecord
 	insertEr error
 
 	// findByNaturalKeyResult: 사전 lookup 시뮬레이션 (이슈 #274). nil 이면 ErrNotFound.
-	findByNaturalKeyResult *storage.ParsingRuleRecord
+	findByNaturalKeyResult *storage.ParserRuleRecord
 	// findByNaturalKeyErr: 설정 시 result 무시하고 본 에러 반환 (PR #275 리뷰 — DB 장애 시뮬레이션).
 	findByNaturalKeyErr   error
 	findByNaturalKeyCalls int
@@ -68,7 +68,7 @@ type recordingRepo struct {
 	insertNextVersionCalls int
 }
 
-func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParsingRuleRecord) error {
+func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParserRuleRecord) error {
 	if r.insertEr != nil {
 		return r.insertEr
 	}
@@ -80,20 +80,20 @@ func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParsingRuleRecord
 	r.inserted = append(r.inserted, &clone)
 	return nil
 }
-func (r *recordingRepo) Update(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
-func (r *recordingRepo) GetByID(_ context.Context, _ int64) (*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) Update(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
+func (r *recordingRepo) GetByID(_ context.Context, _ int64) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (r *recordingRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
 	return false, false, nil
 }
-func (r *recordingRepo) InsertNextVersion(ctx context.Context, rec *storage.ParsingRuleRecord) error {
+func (r *recordingRepo) InsertNextVersion(ctx context.Context, rec *storage.ParserRuleRecord) error {
 	r.mu.Lock()
 	r.insertNextVersionCalls++
 	// 자연키 (source, host, path, type) 동일 row 의 MAX(version)+1 시뮬레이션 — postgres 구현과 일치.
@@ -112,7 +112,7 @@ func (r *recordingRepo) InsertNextVersion(ctx context.Context, rec *storage.Pars
 	r.mu.Unlock()
 	return r.Insert(ctx, rec)
 }
-func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParserRuleRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.findByNaturalKeyCalls++
@@ -124,17 +124,17 @@ func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ st
 	}
 	return nil, storage.ErrNotFound
 }
-func (r *recordingRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
+func (r *recordingRepo) List(_ context.Context, _ storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (r *recordingRepo) Delete(_ context.Context, _ int64) error { return nil }
 func (r *recordingRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) error {
 	return nil
 }
-func (r *recordingRepo) inserts() []*storage.ParsingRuleRecord {
+func (r *recordingRepo) inserts() []*storage.ParserRuleRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]*storage.ParsingRuleRecord, len(r.inserted))
+	out := make([]*storage.ParserRuleRecord, len(r.inserted))
 	copy(out, r.inserted)
 	return out
 }
@@ -165,7 +165,7 @@ var testPromptLoader = prompt.MapLoader{
 	"llmgen/list.user": "host={{HOST}} type={{TARGET_TYPE}} html={{HTML}}",
 }
 
-func newGenerator(t *testing.T, provider llm.Provider, repo storage.ParsingRuleRepository) (*llmgen.Generator, *rule.Resolver) {
+func newGenerator(t *testing.T, provider llm.Provider, repo storage.ParserRuleRepository) (*llmgen.Generator, *rule.Resolver) {
 	t.Helper()
 	resolver, _ := rule.NewResolver(&noopFindRepo{}, rule.WithCacheTTL(time.Minute))
 	g, err := llmgen.New(provider, repo, resolver, testPromptLoader, logger.New(logger.DefaultConfig()))
@@ -173,30 +173,30 @@ func newGenerator(t *testing.T, provider llm.Provider, repo storage.ParsingRuleR
 	return g, resolver
 }
 
-// noopFindRepo: Resolver 가 요구하는 ParsingRuleRepository 인터페이스를 만족하는 stub.
+// noopFindRepo: Resolver 가 요구하는 ParserRuleRepository 인터페이스를 만족하는 stub.
 type noopFindRepo struct{}
 
-func (noopFindRepo) Insert(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
-func (noopFindRepo) Update(_ context.Context, _ *storage.ParsingRuleRecord) error { return nil }
-func (noopFindRepo) GetByID(_ context.Context, _ int64) (*storage.ParsingRuleRecord, error) {
+func (noopFindRepo) Insert(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
+func (noopFindRepo) Update(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
+func (noopFindRepo) GetByID(_ context.Context, _ int64) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (noopFindRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParsingRuleRecord, error) {
+func (noopFindRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (noopFindRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParsingRuleRecord, error) {
+func (noopFindRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (noopFindRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
 	return false, false, nil
 }
-func (noopFindRepo) InsertNextVersion(_ context.Context, _ *storage.ParsingRuleRecord) error {
+func (noopFindRepo) InsertNextVersion(_ context.Context, _ *storage.ParserRuleRecord) error {
 	return nil
 }
-func (noopFindRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParsingRuleRecord, error) {
+func (noopFindRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (noopFindRepo) List(_ context.Context, _ storage.ParsingRuleFilter) ([]*storage.ParsingRuleRecord, error) {
+func (noopFindRepo) List(_ context.Context, _ storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (noopFindRepo) Delete(_ context.Context, _ int64) error { return nil }
@@ -687,7 +687,7 @@ func TestGenerator_DuplicateInsert_AbsorbedAsSuccess(t *testing.T) {
 func TestGenerator_PreCheckHit_SkipsLLMCall(t *testing.T) {
 	provider := &fakeProvider{name: "fake", response: `{"title":{"css":"h1"}}`}
 	repo := &recordingRepo{
-		findByNaturalKeyResult: &storage.ParsingRuleRecord{
+		findByNaturalKeyResult: &storage.ParserRuleRecord{
 			ID:          42,
 			SourceName:  llmgen.LLMAutoSourceName,
 			HostPattern: "example.com",
@@ -745,7 +745,7 @@ func TestGenerator_PreCheckMiss_ProceedsToLLM(t *testing.T) {
 func TestGenerator_PreCheckHit_DisabledRule_SkipsLLM(t *testing.T) {
 	provider := &fakeProvider{name: "fake", response: `{"title":{"css":"h1"}}`}
 	repo := &recordingRepo{
-		findByNaturalKeyResult: &storage.ParsingRuleRecord{
+		findByNaturalKeyResult: &storage.ParserRuleRecord{
 			ID:          99,
 			SourceName:  llmgen.LLMAutoSourceName,
 			HostPattern: "example.com",
@@ -837,7 +837,7 @@ func TestGenerator_EnqueueStale_BypassesEnabledPreCheck(t *testing.T) {
 	// 사전 lookup 결과 — enabled=true 룰 잔존 (정상적으로 fresh Enqueue 면 skip 대상).
 	// 동일 자연키 row 를 inserted 에 미리 시딩하여 InsertNextVersion 의 MAX(version)+1 동작이
 	// v=2 를 산출하도록 — postgres 의 실제 자연키 충돌 회피 동작과 일치.
-	existingV1 := &storage.ParsingRuleRecord{
+	existingV1 := &storage.ParserRuleRecord{
 		ID:          1,
 		SourceName:  llmgen.LLMAutoSourceName,
 		HostPattern: "stale.example.com",
@@ -847,7 +847,7 @@ func TestGenerator_EnqueueStale_BypassesEnabledPreCheck(t *testing.T) {
 		Enabled:     true,
 	}
 	repo := &recordingRepo{
-		inserted:               []*storage.ParsingRuleRecord{existingV1},
+		inserted:               []*storage.ParserRuleRecord{existingV1},
 		findByNaturalKeyResult: existingV1,
 	}
 	g, _ := newGenerator(t, provider, repo)

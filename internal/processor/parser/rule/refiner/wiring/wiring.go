@@ -30,7 +30,7 @@ import (
 func Build(
 	provider llm.Provider,
 	promptLoader prompt.Loader,
-	rules storage.ParsingRuleRepository,
+	rules storage.ParserRuleRepository,
 	samples storage.SampleURLRepository,
 	resolver *rule.Resolver,
 	metricsRegistry *prometheus.Registry,

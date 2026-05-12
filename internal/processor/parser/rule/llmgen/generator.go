@@ -8,7 +8,7 @@
 //  2. Generator goroutine: in-flight dedup 후 LLM 프롬프트 생성 → Provider.Generate 호출
 //  3. 응답 JSON 파싱 → storage.SelectorMap 으로 변환
 //  4. validation: 생성된 selector 로 실제 HTML 매칭 확인 (0건이면 폐기)
-//  5. ParsingRuleRepository.Insert (enabled=true — CSS selector 검증 통과가 품질 게이트)
+//  5. ParserRuleRepository.Insert (enabled=true — CSS selector 검증 통과가 품질 게이트)
 //  6. Resolver.Invalidate 로 negative cache flush — 다음 fetch 부터 새 rule 사용 가능
 //
 // 현재 구현 범위:
@@ -120,7 +120,7 @@ var errBlacklistedNoRule = errors.New("llmgen: page blacklisted, no rule generat
 type Generator struct {
 	provider     llm.Provider
 	extractor    SelectorExtractor // nil 이면 provider 로 fallback
-	repo         storage.ParsingRuleRepository
+	repo         storage.ParserRuleRepository
 	resolver     *rule.Resolver
 	promptLoader prompt.Loader
 	log          *logger.Logger
@@ -209,7 +209,7 @@ func (g *Generator) SetBreaker(b *HostBreaker) {
 //
 // provider / repo / resolver / promptLoader / log 모두 비-nil 필수. 하나라도 nil 이면 error —
 // 호출자 (cmd/main) 가 boot fatal 처리.
-func New(provider llm.Provider, repo storage.ParsingRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, log *logger.Logger) (*Generator, error) {
+func New(provider llm.Provider, repo storage.ParserRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, log *logger.Logger) (*Generator, error) {
 	if provider == nil {
 		return nil, errors.New("llmgen: New requires non-nil provider")
 	}
@@ -639,7 +639,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 	confidence := ComputeFieldConfidence(selectors, html)
 	selectors = ApplyConfidenceFilter(selectors, confidence)
 
-	record := &storage.ParsingRuleRecord{
+	record := &storage.ParserRuleRecord{
 		SourceName:  LLMAutoSourceName,
 		HostPattern: host,
 		TargetType:  targetType,
