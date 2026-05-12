@@ -1508,8 +1508,10 @@ func LoadRetryScheduler(envFiles ...string) (RetrySchedulerConfig, error) {
 
 // WorkerCountsConfig 는 처리 stage 별 worker goroutine 수를 일괄 관리합니다 (이슈 #376).
 //
-// 운영자가 처리량 튜닝 시 env 만 조정하면 즉시 반영 — 재빌드 불필요. 모든 필드 default 는
-// 기존 hardcoded 값과 동일하므로 env 미설정 시 동작 100% 보존.
+// 운영자가 처리량 튜닝 시 env 만 조정하면 재빌드 없이 다음 재시작에 반영 — 즉시
+// hot-reload 는 아님 (LoadWorkerCounts 가 startup 1회 호출). 변경 후 프로세스
+// 재시작 필요. 모든 필드 default 는 기존 hardcoded 값과 동일하므로 env 미설정 시
+// 동작 100% 보존.
 //
 // 명명 규약: 기존 `CLAUDE_CODE_WORKER_COUNT` / `FETCHER_CHROMEDP_WORKER_COUNT` 와 동일하게
 // `<STAGE>_WORKER_COUNT` 형식.
