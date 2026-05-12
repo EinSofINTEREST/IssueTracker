@@ -3,6 +3,7 @@ Read the HTML file at {{SESSION_PATH}}/page.html from the {{HOST}} website.
 Your task: analyze the page and return a single JSON object with the following structure — no explanation, no markdown, no code blocks.
 
 Target page type: {{TARGET_TYPE}}
+{{VALIDATION_REJECT_REASON_CONTEXT}}
 
 Output schema:
 {
