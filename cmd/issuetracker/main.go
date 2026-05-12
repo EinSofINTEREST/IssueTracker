@@ -526,8 +526,8 @@ func main() {
 			fetcherResolver,
 			rawIDTracker,
 			rawSvc,
-			crawlerProducer,
-			redisRaw, // nil 허용 — in-flight lock 비활성 (단일 인스턴스)
+			jobPublisher, // 이슈 #388 — publisher.UpgradePublisher (단일 facade)
+			redisRaw,     // nil 허용 — in-flight lock 비활성 (단일 인스턴스)
 			log,
 		)
 		if upErr != nil {
