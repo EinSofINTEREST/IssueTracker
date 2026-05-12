@@ -112,14 +112,21 @@ type RedisRetrySchedulerConfig struct {
 	// RepublishFailureBackoff: Kafka publish 실패 시 동일 항목을 재 enqueue 할 지연
 	// (default: 1s). 일시적 Kafka 장애 흡수용 — Redis enqueue 까지 실패하면 데이터 손실
 	RepublishFailureBackoff time.Duration
+
+	// HeartbeatEveryNIdleTicks: idle (due 항목 0) tick 이 연속 N 회 발생할 때마다 1회
+	// "retry pipeline idle heartbeat" DEBUG 로그를 남김 (default: 60 = 1s polling 기준 ~1분).
+	// 0 이면 legacy 동작 (매 idle tick 마다 1줄 — 노이즈 많음).
+	// due 항목 발견 시점 로그는 본 설정 무관하게 항상 즉시 emit.
+	HeartbeatEveryNIdleTicks int
 }
 
 // DefaultRedisRetrySchedulerConfig 는 운영 기본값을 반환합니다.
 func DefaultRedisRetrySchedulerConfig() RedisRetrySchedulerConfig {
 	return RedisRetrySchedulerConfig{
-		PollInterval:            1 * time.Second,
-		BatchSize:               50,
-		RepublishFailureBackoff: 1 * time.Second,
+		PollInterval:             1 * time.Second,
+		BatchSize:                50,
+		RepublishFailureBackoff:  1 * time.Second,
+		HeartbeatEveryNIdleTicks: 60,
 	}
 }
 
@@ -139,6 +146,10 @@ type RedisDelayedRetryScheduler struct {
 	cfg      RedisRetrySchedulerConfig
 	log      *logger.Logger
 	wg       sync.WaitGroup
+
+	// idleTicks: 연속 idle (due 0) tick 수. due 발견 시 0 으로 reset.
+	// pollOnce 만 접근 — goroutine 단일 진입이라 race 없음.
+	idleTicks int
 }
 
 // NewRedisDelayedRetryScheduler 는 RedisDelayedRetryScheduler 를 생성합니다.
@@ -153,6 +164,9 @@ func NewRedisDelayedRetryScheduler(client retryQueueClient, producer queue.Produ
 	}
 	if cfg.RepublishFailureBackoff <= 0 {
 		cfg.RepublishFailureBackoff = def.RepublishFailureBackoff
+	}
+	if cfg.HeartbeatEveryNIdleTicks < 0 {
+		cfg.HeartbeatEveryNIdleTicks = def.HeartbeatEveryNIdleTicks
 	}
 	return &RedisDelayedRetryScheduler{
 		client:   client,
@@ -248,18 +262,26 @@ func (s *RedisDelayedRetryScheduler) pollOnce(ctx context.Context) {
 		return
 	}
 
-	// peek 결과를 항상 DEBUG 로 노출 (count=0 이어도 한 줄).
-	// 운영자가 retry pipeline 이 살아있고 polling 중인지 즉답 가능.
+	// peek 결과를 DEBUG 로 노출 — due 발견 시 즉시, idle 시 주기적 heartbeat.
+	// 운영자가 retry pipeline 이 살아있고 polling 중인지 즉답 가능하면서
+	// 매 tick 1줄 노이즈는 피한다 (이슈 #370).
 	if len(due) > 0 {
 		s.log.WithFields(map[string]interface{}{
-			"due_count":  len(due),
-			"peek_ms":    time.Since(peekStart).Milliseconds(),
-			"batch_size": s.cfg.BatchSize,
+			"due_count":           len(due),
+			"peek_ms":             time.Since(peekStart).Milliseconds(),
+			"batch_size":          s.cfg.BatchSize,
+			"previous_idle_ticks": s.idleTicks,
 		}).Debug("retry peek returned due items")
+		s.idleTicks = 0
 	} else {
-		s.log.WithFields(map[string]interface{}{
-			"peek_ms": time.Since(peekStart).Milliseconds(),
-		}).Debug("retry peek returned no due items")
+		s.idleTicks++
+		every := s.cfg.HeartbeatEveryNIdleTicks
+		if every == 0 || s.idleTicks%every == 0 {
+			s.log.WithFields(map[string]interface{}{
+				"peek_ms":                time.Since(peekStart).Milliseconds(),
+				"consecutive_idle_ticks": s.idleTicks,
+			}).Debug("retry pipeline idle heartbeat")
+		}
 	}
 
 	for _, item := range due {
