@@ -68,7 +68,7 @@ func TestPublisher_Gate_FiltersBlockedURLs(t *testing.T) {
 		"https://news.naver.com/main/read.naver", // pass
 		"mailto:foo@example.com",                 // block
 	}
-	err := pub.Publish(context.Background(), "cnn", urls, core.TargetTypeArticle, 5*time.Second)
+	err := pub.PublishChained(context.Background(), "cnn", urls, core.TargetTypeArticle, 5*time.Second)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, prod.batchSize(), "통과 2건만 batch 에 포함")
@@ -82,7 +82,7 @@ func TestPublisher_Gate_AllBlocked_NoPublish(t *testing.T) {
 	gate, _ := urlguard.NewGate(urlguard.Default(), gateLog())
 	pub.SetGate(gate)
 
-	err := pub.Publish(context.Background(), "cnn", []string{
+	err := pub.PublishChained(context.Background(), "cnn", []string{
 		"https://rss.cnn.com/rss/cnn_health.rss",
 		"mailto:x@y.z",
 	}, core.TargetTypeArticle, 5*time.Second)
@@ -104,7 +104,7 @@ func TestPublisher_NoGate_LegacyBehavior(t *testing.T) {
 		"https://rss.cnn.com/rss/cnn_health.rss",
 		"https://edition.cnn.com/article/1",
 	}
-	require.NoError(t, pub.Publish(context.Background(), "cnn", urls, core.TargetTypeArticle, 5*time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "cnn", urls, core.TargetTypeArticle, 5*time.Second))
 
 	assert.Equal(t, 2, prod.batchSize(), "가드 미설정 — 모든 URL publish")
 }
@@ -121,6 +121,6 @@ func TestPublisher_Gate_AllowAllGuard_NoFiltering(t *testing.T) {
 		"https://rss.cnn.com/rss/cnn_health.rss",
 		"mailto:foo@example.com",
 	}
-	require.NoError(t, pub.Publish(context.Background(), "cnn", urls, core.TargetTypeArticle, 5*time.Second))
+	require.NoError(t, pub.PublishChained(context.Background(), "cnn", urls, core.TargetTypeArticle, 5*time.Second))
 	assert.Equal(t, 2, prod.batchSize())
 }

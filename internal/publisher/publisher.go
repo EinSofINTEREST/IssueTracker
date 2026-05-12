@@ -1,18 +1,26 @@
-// Package publisher는 크롤러가 페이지에서 발견한 URL을 다음 CrawlJob으로 연결하는
-// 체이닝 발행 컴포넌트를 제공합니다.
+// Package publisher 는 Kafka crawl 토픽 발행 책임을 단일 hub 로 통합합니다 (이슈 #385).
 //
-// 역할 분리:
-//   - Scheduler  : 등록된 소스의 시드 Job만 생성 (internal/scheduler)
-//   - Publisher  : 크롤 결과에서 발견된 URL을 다음 Job으로 연결 (이 패키지)
+// 역할 (메타 #385 — Publisher 통합 모듈화):
+//   - PublishChained : 크롤된 페이지에서 발견된 URL 을 다음 CrawlJob 으로 연결 (chain.go)
+//   - PublishSeed    : scheduler 의 시드 entry 발행 (Sub 2 — pending)
+//   - PublishRetry   : 워커 실패 시 재시도 발행 (Sub 4 — pending)
+//   - PublishUpgrade : auto-upgrade (goquery → chromedp) republish (Sub 3 — pending)
+//
+// 외부 facade 단일화 — caller 는 *Publisher 의 메소드만 사용하면 됨. 내부 file 분리:
+//   - publisher.go : facade struct + 생성자 + 공통 Kafka helpers (buildMessage / crawlTopic / newJobID)
+//   - chain.go     : PublishChained 메소드 + 정규화 / guard / ingestion lock helper
+//   - guard.go     : IngestionLock / PipelineGuard / atomic wrapper + Set* setters
+//
+// 의존 관계 (이슈 #385 책임 분리 원칙):
+//   - 본 패키지 = Kafka I/O + 라우팅 (priority resolver) + guard/lock 책임
+//   - caller 의 stage 핵심 로직 (parsing rule / validation / fetch decision) 은 본 패키지 의존성 없음
 package publisher
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"sync/atomic"
-	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/links"
@@ -21,54 +29,30 @@ import (
 	"issuetracker/pkg/urlguard"
 )
 
-// PriorityResolver는 CrawlJob의 우선순위를 결정하는 인터페이스입니다.
+// DefaultMaxRetries 는 PublishX 메소드들이 생성하는 CrawlJob 의 기본 재시도 횟수입니다
+// (CodeRabbit PR #394 피드백 — magic number 상수화).
+const DefaultMaxRetries = 3
+
+// PriorityResolver 는 CrawlJob 의 우선순위를 결정하는 인터페이스입니다.
 // worker.CompositeResolver 등이 이를 구현합니다.
+//
+// 메타 #385 Sub 6 에서 본 인터페이스 및 chain 구현이 publisher 측으로 이동될 예정 —
+// 그 시점에 본 인터페이스가 모든 PublishX 메소드의 priority 결정 단일 진입점이 됩니다.
 type PriorityResolver interface {
 	Resolve(job *core.CrawlJob) core.Priority
 }
 
-// IngestionLock 은 publish 직전에 URL 의 파이프라인 진입 marker 를 atomic 으로 set
-// 하는 최소 인터페이스입니다.
+// Publisher 는 Kafka crawl 토픽 발행 단일 facade 입니다 (이슈 #385).
 //
-// 의도적으로 작은 인터페이스 — Publisher 는 단지 "이 URL 의 진입 슬롯을 잡을 수 있는가?"
-// 만 알고 싶어합니다. worker 패키지의 IngestionLock 와 method signature 가 동일하지만
-// publisher 가 worker 를 import 하지 않도록 별도 정의 — RedisIngestionLock 등 기존
-// 구현체는 구조적 타이핑으로 그대로 만족합니다.
+// 필드는 모두 atomic.Pointer 로 lock-free 설정/조회 — Set* setter 가 동시 publish 와 race-safe.
 //
-// 구현체는 goroutine-safe 해야 합니다.
-type IngestionLock interface {
-	Acquire(ctx context.Context, url string) (bool, error)
-}
-
-// PipelineGuard 는 publish 진입 시 URL 의 pipeline membership 을 target type 별 정책으로 체크합니다.
+// 사용 흐름:
 //
-// publisher 가 internal/locks 를 직접 import 하지 않도록 별도 정의 — 구조적 타이핑으로
-// locks.PipelineGuard 가 그대로 만족.
-type PipelineGuard interface {
-	CheckAndAcquire(ctx context.Context, url string, targetType core.TargetType) (bool, error)
-}
-
-// Publisher는 크롤된 페이지에서 발견된 URL을 새 CrawlJob으로 변환하여
-// 우선순위에 맞는 Kafka crawl 토픽에 발행합니다.
-//
-// URL 가드:
-//   - SetGate 로 urlguard.Gate 를 설정하면 PublishBatch 직전에 urls 슬라이스를 필터링
-//   - 차단된 URL 은 발행에서 제외 (Gate 가 자체 WARN 로그)
-//   - 미설정 시 가드 비활성 (기존 동작 유지)
-//   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — 워커 동시 실행 중 변경에도 race 없음
-//
-// URL dedup — Pipeline Guard / Ingestion Lock:
-//   - SetNormalizer 로 pkg/links.Normalizer 를 주입하면 publish 직전 모든 URL 정규화
-//     (정규화된 URL 이 marker 키 / Kafka payload / 다운스트림 dedup 모두에 일관)
-//   - SetPipelineGuard 우선 — 모든 target type 에 적용:
-//     · TargetTypeCategory: 단명 TTL (default 60s, PIPELINE_GUARD_CATEGORY_TTL)
-//     · TargetTypeArticle : default TTL (24h, REDIS_INGESTION_LOCK_TTL)
-//   - SetIngestionLock fallback (backward compat) — guard 미주입 시:
-//     · TargetTypeArticle 만 적용
-//     · TargetTypeCategory 는 lock 미적용 (legacy 경로 — 카테고리 매 주기 갱신 의도)
-//   - lock 조회 실패는 fail-open (해당 URL publish 진행) — Redis 일시 장애로 publish 가
-//     멈추지 않도록
-//   - 둘 다 미설정 시 dedup 비활성 (기존 동작 유지)
+//	pub := publisher.New(producer, resolver, log)
+//	pub.SetNormalizer(...)        // 선택
+//	pub.SetPipelineGuard(...)     // 선택 (또는 SetIngestionLock fallback)
+//	pub.SetGate(...)              // 선택
+//	pub.PublishChained(ctx, ...)  // chained URL 발행
 type Publisher struct {
 	producer   queue.Producer
 	resolver   PriorityResolver
@@ -79,18 +63,7 @@ type Publisher struct {
 	log        *logger.Logger
 }
 
-// ingestionLockRef 는 atomic.Pointer 가 인터페이스 값을 직접 저장하지 못하므로
-// IngestionLock 인터페이스를 감싸 atomic 교체를 지원하는 wrapper 입니다.
-type ingestionLockRef struct {
-	l IngestionLock
-}
-
-// guardRef 는 PipelineGuard 의 atomic 교체용 wrapper 입니다.
-type guardRef struct {
-	g PipelineGuard
-}
-
-// New는 새 Publisher를 생성합니다.
+// New 는 새 Publisher 를 생성합니다.
 func New(producer queue.Producer, resolver PriorityResolver, log *logger.Logger) *Publisher {
 	return &Publisher{
 		producer: producer,
@@ -99,247 +72,11 @@ func New(producer queue.Producer, resolver PriorityResolver, log *logger.Logger)
 	}
 }
 
-// SetGate 는 Publish 시 urls 사전 필터링에 사용할 urlguard.Gate 를 설정합니다.
-// 미설정(nil) 시 가드 비활성 — 모든 urls 가 그대로 publish 됩니다.
-//
-// 동시성: atomic.Pointer 기반 lock-free 설정/조회 — Publish 동시 실행 중 변경에도 race-safe.
-func (p *Publisher) SetGate(g *urlguard.Gate) {
-	p.gate.Store(g)
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// 공통 Kafka helpers (모든 PublishX 메소드가 공유)
+// ─────────────────────────────────────────────────────────────────────────────
 
-// SetNormalizer 는 Publish 직전 URL 정규화에 사용할 Normalizer 를 설정합니다.
-// nil 전달 시 정규화 비활성 (URL 원본 그대로 사용). atomic 으로 race-safe 한 swap 보장.
-//
-// 정규화는 Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두에 동일하게 적용되도록
-// Publisher 단에서 단일 책임으로 수행.
-func (p *Publisher) SetNormalizer(n *links.Normalizer) {
-	p.normalizer.Store(n)
-}
-
-// SetIngestionLock 은 Publish 시 atomic SETNX 로 진입 marker 를 잡을 IngestionLock 을
-// 설정합니다. nil 전달 시 dedup 비활성 (기존 동작 유지).
-//
-// atomic 으로 race-safe 한 swap 보장.
-//
-// Deprecated: SetPipelineGuard 사용 권장 — target type 별 TTL 정책 적용.
-// 본 메소드는 backward compat 로 유지 — guard 미설정 시 fallback 으로 사용됨.
-func (p *Publisher) SetIngestionLock(l IngestionLock) {
-	if l == nil {
-		p.lock.Store(nil)
-		return
-	}
-	p.lock.Store(&ingestionLockRef{l: l})
-}
-
-// SetPipelineGuard 는 publish 진입 시 target type 별 정책으로 marker 를 잡을 PipelineGuard 를
-// 설정합니다.
-//
-// guard 가 설정되어 있으면 IngestionLock 보다 우선 — 모든 target type 에 적용 (Article 24h,
-// Category 단명 TTL). nil 전달 시 가드 비활성 — IngestionLock fallback (있으면).
-func (p *Publisher) SetPipelineGuard(g PipelineGuard) {
-	if g == nil {
-		p.guard.Store(nil)
-		return
-	}
-	p.guard.Store(&guardRef{g: g})
-}
-
-// Publish는 발견된 URL 목록으로 CrawlJob을 생성하고 한 번의 배치 요청으로 Kafka에 발행합니다.
-// 단건 순차 호출 대신 PublishBatch를 사용하여 Kafka 왕복을 1회로 줄입니다.
-func (p *Publisher) Publish(
-	ctx context.Context,
-	crawlerName string,
-	urls []string,
-	targetType core.TargetType,
-	timeout time.Duration,
-) error {
-	if len(urls) == 0 {
-		return nil
-	}
-
-	// URL 정규화: publish 직전 단일 책임으로 정규화
-	// - Ingestion Lock 키 / Kafka payload / 다운스트림 dedup 모두 동일 정규형 사용
-	// - 정규화 실패한 URL 은 통과 (fail-open) — 정규화 실패가 fetch 가능성을 차단하지 않도록
-	// - Normalizer 미설정 시 원본 그대로
-	if n := p.normalizer.Load(); n != nil {
-		urls = p.normalizeURLs(urls, n, crawlerName)
-		if len(urls) == 0 {
-			return nil
-		}
-	}
-
-	// URL 가드: 차단된 URL 을 사전 필터링
-	// Gate 가 자체 WARN 로그 + url/reason/crawler/stage 필드 자동 부착
-	if g := p.gate.Load(); g != nil {
-		urls = g.Filter(urls, map[string]interface{}{
-			"crawler": crawlerName,
-			"stage":   "publisher",
-		})
-		if len(urls) == 0 {
-			return nil
-		}
-	}
-
-	// Pipeline Guard / Ingestion Lock:
-	// - PipelineGuard 우선 — target type 별 TTL 정책 (Article 24h / Category 단명)
-	// - IngestionLock fallback — Article 만 적용 (Category 우회) — backward compat
-	// - 둘 다 미설정 시 dedup 비활성
-	// - 조회 실패는 fail-open — Redis 일시 장애가 publish 를 영구 차단하지 않도록
-	if gr := p.guard.Load(); gr != nil {
-		urls = p.acquireViaGuard(ctx, urls, crawlerName, gr.g, targetType)
-		if len(urls) == 0 {
-			return nil
-		}
-	} else if r := p.lock.Load(); r != nil && targetType != core.TargetTypeCategory {
-		urls = p.acquireIngestion(ctx, urls, crawlerName, r.l)
-		if len(urls) == 0 {
-			return nil
-		}
-	}
-
-	msgs := make([]queue.Message, 0, len(urls))
-
-	for _, url := range urls {
-		job := &core.CrawlJob{
-			ID:          newJobID(),
-			CrawlerName: crawlerName,
-			Target: core.Target{
-				URL:  url,
-				Type: targetType,
-			},
-			ScheduledAt: time.Now(),
-			Timeout:     timeout,
-			MaxRetries:  3,
-		}
-
-		job.Priority = p.resolver.Resolve(job)
-
-		msg, err := p.buildMessage(job)
-		if err != nil {
-			return fmt.Errorf("build message for %s: %w", url, err)
-		}
-
-		msgs = append(msgs, msg)
-	}
-
-	if err := p.producer.PublishBatch(ctx, msgs); err != nil {
-		return fmt.Errorf("batch publish %d jobs for crawler %s: %w", len(msgs), crawlerName, err)
-	}
-
-	p.log.WithFields(map[string]interface{}{
-		"crawler":   crawlerName,
-		"job_count": len(msgs),
-	}).Debug("chained jobs batch published to kafka")
-
-	return nil
-}
-
-// normalizeURLs 는 입력 URL 슬라이스를 정규화하여 새 슬라이스로 반환합니다.
-//
-// 정규화 실패한 URL 은 원본을 그대로 통과 (fail-open) + WARN 로그 — 정규화 자체가
-// fetch 가능성을 차단하지 않도록. 정규화 결과가 빈 문자열이면 결과에서 제외.
-//
-// 성능: crawler/stage sub-logger 를 1회 생성 후 재사용.
-func (p *Publisher) normalizeURLs(urls []string, n *links.Normalizer, crawlerName string) []string {
-	out := make([]string, 0, len(urls))
-	l := p.log.WithFields(map[string]interface{}{
-		"crawler": crawlerName,
-		"stage":   "publisher",
-	})
-
-	for _, url := range urls {
-		normalized, err := n.Normalize(url)
-		if err != nil {
-			l.WithField("url", url).WithError(err).Warn("url normalize failed, using original")
-			out = append(out, url)
-			continue
-		}
-		if normalized == "" {
-			continue
-		}
-		out = append(out, normalized)
-	}
-	return out
-}
-
-// acquireViaGuard 는 PipelineGuard 로 target type 별 TTL 정책을 적용하여 진입 marker 를 잡습니다.
-//
-// 동작 정책은 acquireIngestion 과 동일 — fail-open / ctx 취소 / 정규화 가정 등.
-// 차이점: lock.Acquire 대신 guard.CheckAndAcquire(targetType) 호출 — Category 는 단명 TTL 적용.
-func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerName string, guard PipelineGuard, targetType core.TargetType) []string {
-	out := make([]string, 0, len(urls))
-	l := p.log.WithFields(map[string]interface{}{
-		"crawler":     crawlerName,
-		"stage":       "publisher",
-		"target_type": string(targetType),
-	})
-
-	for i, url := range urls {
-		if err := ctx.Err(); err != nil {
-			l.WithError(err).Warn("context cancelled during pipeline guard acquire, allowing remaining URLs")
-			return append(out, urls[i:]...)
-		}
-
-		acquired, err := guard.CheckAndAcquire(ctx, url, targetType)
-		if err != nil {
-			l.WithField("url", url).WithError(err).Warn("pipeline guard check failed, allowing publish")
-			out = append(out, url)
-			continue
-		}
-		if !acquired {
-			l.WithField("url", url).Debug("url already in pipeline, skipping publish")
-			continue
-		}
-		out = append(out, url)
-	}
-	return out
-}
-
-// acquireIngestion 은 IngestionLock 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
-// 반환합니다.
-//
-//   - acquired=true  : 신규 진입 marker 획득 — 결과 슬라이스에 포함
-//   - acquired=false : 이미 다른 publisher 또는 재배달이 marker 점유 — DEBUG 로그 후 제외
-//   - 조회 실패      : fail-open (결과 슬라이스에 포함) + WARN 로그 — Redis 일시 장애가
-//     publish 를 영구 차단하지 않도록
-//   - ctx 취소       : 즉시 종료하고 남은 URL 은 fail-open 으로 그대로 통과 — 셧다운 중
-//     무의미한 lock 호출/WARN 누적 회피. 후속 PublishBatch 가 ctx 에러로 자연 실패.
-//
-// 결과 슬라이스는 입력과 다른 underlying array 로 새로 할당됩니다 (입력 mutate 없음).
-//
-// 성능: crawler/stage sub-logger 를 루프 외부에서 1회 생성하여 재사용.
-//
-// Deprecated: SetPipelineGuard 사용 시 acquireViaGuard 가 우선 — 본 메소드는
-// guard 미주입 환경의 backward compat fallback.
-func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionLock) []string {
-	out := make([]string, 0, len(urls))
-	l := p.log.WithFields(map[string]interface{}{
-		"crawler": crawlerName,
-		"stage":   "publisher",
-	})
-
-	for i, url := range urls {
-		if err := ctx.Err(); err != nil {
-			l.WithError(err).Warn("context cancelled during ingestion lock acquire, allowing remaining URLs")
-			return append(out, urls[i:]...)
-		}
-
-		acquired, err := lock.Acquire(ctx, url)
-		if err != nil {
-			l.WithField("url", url).WithError(err).Warn("ingestion lock acquire failed, allowing publish")
-			out = append(out, url)
-			continue
-		}
-		if !acquired {
-			l.WithField("url", url).Debug("url already in pipeline, skipping publish")
-			continue
-		}
-		out = append(out, url)
-	}
-	return out
-}
-
-// buildMessage는 CrawlJob을 Kafka Message로 변환합니다.
+// buildMessage 는 CrawlJob 을 Kafka Message 로 변환합니다.
 func (p *Publisher) buildMessage(job *core.CrawlJob) (queue.Message, error) {
 	data, err := job.Marshal()
 	if err != nil {
@@ -357,7 +94,7 @@ func (p *Publisher) buildMessage(job *core.CrawlJob) (queue.Message, error) {
 	}, nil
 }
 
-// crawlTopic은 Priority에 대응하는 Kafka crawl 토픽 이름을 반환합니다.
+// crawlTopic 은 Priority 에 대응하는 Kafka crawl 토픽 이름을 반환합니다.
 func crawlTopic(p core.Priority) string {
 	switch p {
 	case core.PriorityHigh:
@@ -369,9 +106,15 @@ func crawlTopic(p core.Priority) string {
 	}
 }
 
-// newJobID는 crypto/rand 기반의 고유 Job ID(32자 hex)를 생성합니다.
+// newJobID 는 crypto/rand 기반의 고유 Job ID (32자 hex) 를 생성합니다.
+//
+// rand.Read 실패는 매우 드물지만 발생 시 all-zero ID → Kafka partition 충돌 / 다운스트림
+// dedup 깨짐 → 데이터 정합성 심각. 운영 fail-fast 가 silent 데이터 손상보다 안전 (gemini
+// security-medium PR #394 피드백).
 func newJobID() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Errorf("publisher: crypto/rand failure generating job ID: %w", err))
+	}
 	return hex.EncodeToString(b)
 }

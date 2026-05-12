@@ -16,8 +16,9 @@ import (
 // JobPublisher 는 SearchHandler 가 fanout chained article job 을 발행할 때 사용하는 인터페이스입니다.
 //
 // 실제 구현은 internal/publisher.Publisher — host 별 batch 발행을 위해 host group 마다 호출.
+// 이슈 #386 — Publisher.PublishChained 메소드명 일치 (구 Publish 에서 rename).
 type JobPublisher interface {
-	Publish(
+	PublishChained(
 		ctx context.Context,
 		crawlerName string,
 		urls []string,
@@ -184,7 +185,7 @@ func (h *SearchHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core
 
 	var publishedTotal int
 	for host, urls := range byHost {
-		if err := h.publisher.Publish(ctx, host, urls, core.TargetTypeArticle, h.articleTimeout); err != nil {
+		if err := h.publisher.PublishChained(ctx, host, urls, core.TargetTypeArticle, h.articleTimeout); err != nil {
 			h.log.WithFields(map[string]interface{}{
 				"host":      host,
 				"url_count": len(urls),
