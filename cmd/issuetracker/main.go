@@ -124,14 +124,14 @@ func main() {
 
 	jobPublisher := publisher.New(crawlerProducer, resolver, log)
 
-	// rule.Parser: parsing_rules 테이블 기반 단일 파서 엔진.
+	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
 	parsingRuleRepo := pgstore.NewParsingRuleRepository(pool, log)
 	ruleResolver, err := rule.NewResolver(parsingRuleRepo)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")
 	}
-	// parsing_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
+	// parser_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
 	// 호출처가 명시적 Invalidate 를 까먹어도 stale cache 발생 X — single source of truth.
 	parsingRuleRepo = storage.WrapWithInvalidator(parsingRuleRepo, ruleResolver)
 	ruleParser, err := rule.NewParser(ruleResolver)
@@ -158,16 +158,16 @@ func main() {
 		// invalidatingBlacklistRepo decorator: claudegen 자동 INSERT (#326) 시 Matcher cache flush.
 		blacklistRepo = storage.WrapBlacklistWithInvalidator(repo, bm)
 		blacklistMatcher = bm
-		log.Info("page-parse blacklist enabled (parsing_blacklist DB-backed)")
+		log.Info("page-parse blacklist enabled (parser_blacklist DB-backed)")
 	} else {
 		log.Info("page-parse blacklist disabled (BLACKLIST_ENABLED=false)")
 	}
 
-	// Readiness check: 사이트 등록 전 parsing_rules 가 seed 됐는지 검증.
+	// Readiness check: 사이트 등록 전 parser_rules 가 seed 됐는지 검증.
 	// 부재 시 fail-fast — 실행 중 모든 ParsePage/ParseLinks 가 ErrNoRule 로 죽는 것보다 즉시 종료.
 	// migration 007 (또는 동등한 운영자 seed) 가 적용되어야 통과.
 	if err := rule.VerifySeeded(ctx, ruleResolver); err != nil {
-		log.WithError(err).Fatal("parsing_rules seed missing — apply migration 007 before deploy")
+		log.WithError(err).Fatal("parser_rules seed missing — apply migration 007 before deploy")
 	}
 
 	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제.

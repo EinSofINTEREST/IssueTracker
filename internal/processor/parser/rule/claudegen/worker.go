@@ -337,7 +337,7 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 //  5. 세션 디렉토리 정리 (defer)
 //
 // validity == "blacklist" 면 ExtractResult.Blacklist 비-nil — 호출자가 셀렉터 INSERT skip
-// + parsing_blacklist Upsert 분기. Selectors / PageType 은 의미 없음.
+// + parser_blacklist Upsert 분기. Selectors / PageType 은 의미 없음.
 func (w *ClaudeWorker) ExtractEnriched(ctx context.Context, host string, targetType storage.TargetType, html string) (*llmgen.ExtractResult, error) {
 	// wg.Add 를 락 획득보다 먼저 수행 — Stop() 의 wg.Wait() 이 이 Extract 호출을 놓치지 않도록 함.
 	w.wg.Add(1)
@@ -559,7 +559,7 @@ func truncate(s string, n int) string {
 // knownPageTypes 는 prompt schema 에 명시된 valid page_type 집합입니다 (CodeRabbit Major 반영).
 //
 // LLM 응답이 prompt 명세를 벗어나면 (예: "News" 대문자, "news_article" 등 변종) silent 하게
-// parsing_rules.page_type 에 들어가 분류 통계가 오염될 수 있어 정규화 + 허용 set 검증.
+// parser_rules.page_type 에 들어가 분류 통계가 오염될 수 있어 정규화 + 허용 set 검증.
 //
 // 동의어 매핑: 잘 알려진 변종은 표준 PageType 으로 매핑. 모르는 값은 빈 문자열 (Unspecified)
 // 로 fall-back — rule INSERT 자체는 막지 않음 (selector 가 정상이면 분류만 미상태로 저장).

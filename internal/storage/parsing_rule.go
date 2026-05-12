@@ -125,9 +125,9 @@ type LinkDiscoveryConfig struct {
 	MaxLinksPerPage int `json:"max_links_per_page,omitempty"`
 }
 
-// ParsingRuleRecord 는 parsing_rules 테이블의 단일 행입니다.
+// ParsingRuleRecord 는 parser_rules 테이블의 단일 행입니다.
 //
-// ParsingRuleRecord represents a single row of the parsing_rules table.
+// ParsingRuleRecord represents a single row of the parser_rules table.
 type ParsingRuleRecord struct {
 	ID          int64
 	SourceName  string     // "naver" / "cnn"
@@ -181,9 +181,9 @@ type ParsingRuleFilter struct {
 	Offset      int
 }
 
-// ParsingRuleRepository 는 parsing_rules 테이블에 대한 데이터 접근 인터페이스입니다.
+// ParsingRuleRepository 는 parser_rules 테이블에 대한 데이터 접근 인터페이스입니다.
 //
-// ParsingRuleRepository is the data access interface for parsing_rules.
+// ParsingRuleRepository is the data access interface for parser_rules.
 // All implementations must be goroutine-safe.
 type ParsingRuleRepository interface {
 	// Insert 는 새 규칙을 저장합니다. 자연키 충돌 시 ErrDuplicate 반환.

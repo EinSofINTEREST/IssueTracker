@@ -25,7 +25,7 @@ const resolveTimeout = 5 * time.Second
 //
 // Parser implements both parser.ContentParser and parser.LinkListParser, driven by
 // storage.ParsingRuleRecord resolved per request via Resolver. 사이트별 hardcode 파서
-// (NaverParser/DaumParser/...) 를 대체 — 새 사이트 지원 = parsing_rules row 추가.
+// (NaverParser/DaumParser/...) 를 대체 — 새 사이트 지원 = parser_rules row 추가.
 //
 // 도메인 중립 — 뉴스 / 블로그 / 제품 페이지 / 일반 문서 모두 동일 engine 으로 처리.
 // 호출자가 도메인-specific 모델로 변환 (예: Page → news.NewsArticle) 하면 됨.

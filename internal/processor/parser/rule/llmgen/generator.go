@@ -1,6 +1,6 @@
 // Package llmgen 은 LLM 으로 parsing rule 을 자동 생성하는 컴포넌트입니다.
 //
-// Package llmgen automatically generates parsing_rules entries via LLM when a host
+// Package llmgen automatically generates parser_rules entries via LLM when a host
 // has no rule registered (rule.ErrNoRule fallback path).
 //
 // 흐름:
@@ -755,7 +755,7 @@ func selectorMatches(doc *goquery.Document, fs *storage.FieldSelector) bool {
 // handleBlacklistDecision 은 EnrichedExtractor 가 페이지를 blacklist 로 판정했을 때 호출됩니다.
 //
 // blacklistRepo 가 비-nil 이면 sampleURL 의 path 를 정확 일치 regex (escape + ^/$ anchor) 로
-// parsing_blacklist 에 INSERT — 동일 URL 만 차단, 같은 host 의 다른 path 는 영향 없음.
+// parser_blacklist 에 INSERT — 동일 URL 만 차단, 같은 host 의 다른 path 는 영향 없음.
 // 운영자가 후속으로 host-level catch-all 등 정책 widening 가능.
 //
 // 모든 실패 (blacklistRepo nil / Insert 에러 / ErrDuplicate) 는 non-fatal — 호출자는
@@ -803,7 +803,7 @@ func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL
 }
 
 // pathPatternFromURL 은 sampleURL 의 path 부분을 RE2 regex 로 escape 한 anchor pattern 을
-// 반환합니다. parsing_blacklist 의 path_pattern 컬럼에 사용 — 정확히 동일한 URL 만 매칭.
+// 반환합니다. parser_blacklist 의 path_pattern 컬럼에 사용 — 정확히 동일한 URL 만 매칭.
 //
 // 정책 (CodeRabbit Major 반영):
 //   - URL parse 실패 → "" 반환 (호출자가 insert skip)

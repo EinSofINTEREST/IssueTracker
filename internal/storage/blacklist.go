@@ -35,7 +35,7 @@ const (
 	BlacklistModeExtractLinksOnly BlacklistMode = "extract_links_only"
 )
 
-// BlacklistRecord 는 parsing_blacklist 테이블의 단일 행입니다.
+// BlacklistRecord 는 parser_blacklist 테이블의 단일 행입니다.
 //
 // page-parse 차단 정책 — 매칭 URL 은 article job 발행 단계에서 drop:
 //   - HostPattern : URL host 매칭 (정확 일치, 호출자가 normalize)
@@ -65,7 +65,7 @@ type BlacklistFilter struct {
 	Offset      int
 }
 
-// BlacklistRepository 는 parsing_blacklist 테이블에 대한 데이터 접근 인터페이스입니다.
+// BlacklistRepository 는 parser_blacklist 테이블에 대한 데이터 접근 인터페이스입니다.
 //
 // goroutine-safe: 모든 구현은 동시 호출 안전해야 함.
 type BlacklistRepository interface {
@@ -86,7 +86,7 @@ type BlacklistRepository interface {
 
 	// FindEnabledByHost 는 host_pattern 매칭 enabled=TRUE row 들을 반환합니다 (Matcher 핫패스).
 	//
-	// 정렬: LENGTH(path_pattern) DESC — 더 구체적인 path 가 먼저 평가되도록 (parsing_rules 의
+	// 정렬: LENGTH(path_pattern) DESC — 더 구체적인 path 가 먼저 평가되도록 (parser_rules 의
 	// FindActiveCandidates 와 동일 정책). path_pattern="" (catch-all) 은 가장 마지막.
 	//
 	// 매칭 없으면 빈 슬라이스 + nil error.

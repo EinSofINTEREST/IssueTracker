@@ -1,4 +1,4 @@
-// rule-validator 는 parsing_rules 의 특정 row 를 의미 검증하는 수동 운영 CLI 입니다.
+// rule-validator 는 parser_rules 의 특정 row 를 의미 검증하는 수동 운영 CLI 입니다.
 //
 // 사용법:
 //

@@ -29,14 +29,14 @@ func NewBlacklistRepository(pool *pgxpool.Pool, log *logger.Logger) storage.Blac
 }
 
 const sqlInsertBlacklist = `
-INSERT INTO parsing_blacklist (host_pattern, path_pattern, reason, source, mode, enabled)
+INSERT INTO parser_blacklist (host_pattern, path_pattern, reason, source, mode, enabled)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, created_at, updated_at
 `
 
 // Insert 는 새 row 를 저장합니다. 자연키 (host_pattern, path_pattern) 충돌 시 ErrDuplicate.
 //
-// path_pattern 이 비어있지 않으면 RE2 컴파일 검증 — parsing_rules.Insert 와 동일 정책 (DB write
+// path_pattern 이 비어있지 않으면 RE2 컴파일 검증 — parser_rules.Insert 와 동일 정책 (DB write
 // 전 잘못된 regex 거부, 운영 가시성 ↑ + Matcher 가 매 호출마다 negative cache 로 흡수하지 않도록).
 //
 // HostPattern 을 lowercase 로 정규화 — BlacklistMatcher 가 host 를
@@ -68,7 +68,7 @@ func (r *pgBlacklistRepository) Insert(ctx context.Context, rec *storage.Blackli
 }
 
 const sqlUpdateBlacklist = `
-UPDATE parsing_blacklist
+UPDATE parser_blacklist
 SET reason = $2, source = $3, mode = $4, enabled = $5, updated_at = NOW()
 WHERE id = $1
 RETURNING updated_at
@@ -92,7 +92,7 @@ func (r *pgBlacklistRepository) Update(ctx context.Context, rec *storage.Blackli
 	return nil
 }
 
-const sqlDeleteBlacklist = `DELETE FROM parsing_blacklist WHERE id = $1`
+const sqlDeleteBlacklist = `DELETE FROM parser_blacklist WHERE id = $1`
 
 // Delete 는 ID 로 row 를 삭제합니다. 존재하지 않아도 nil 반환 (idempotent).
 func (r *pgBlacklistRepository) Delete(ctx context.Context, id int64) error {
@@ -104,7 +104,7 @@ func (r *pgBlacklistRepository) Delete(ctx context.Context, id int64) error {
 
 const sqlGetBlacklistByID = `
 SELECT id, host_pattern, path_pattern, reason, source, mode, enabled, created_at, updated_at
-FROM parsing_blacklist
+FROM parser_blacklist
 WHERE id = $1
 `
 
@@ -123,14 +123,14 @@ func (r *pgBlacklistRepository) GetByID(ctx context.Context, id int64) (*storage
 
 const sqlFindEnabledBlacklistByHost = `
 SELECT id, host_pattern, path_pattern, reason, source, mode, enabled, created_at, updated_at
-FROM parsing_blacklist
+FROM parser_blacklist
 WHERE host_pattern = $1 AND enabled = TRUE
 ORDER BY LENGTH(path_pattern) DESC, id DESC
 `
 
 // FindEnabledByHost 는 (host) 매칭 enabled=TRUE row 들을 LENGTH(path_pattern) DESC 정렬로 반환합니다.
 //
-// parsing_rules.FindActiveCandidates 와 동일 정책 — 더 구체적인 path 우선 평가, catch-all (path="")
+// parser_rules.FindActiveCandidates 와 동일 정책 — 더 구체적인 path 우선 평가, catch-all (path="")
 // 이 가장 마지막. tie-break 로 id DESC (최근 등록 우선) 사용.
 //
 // host 는 lowercase 로 정규화된 상태 가정 (Matcher 가 lowercase 로 호출). DB 에 저장된 host_pattern
@@ -164,7 +164,7 @@ func (r *pgBlacklistRepository) List(ctx context.Context, f storage.BlacklistFil
 	}
 	q := `
 SELECT id, host_pattern, path_pattern, reason, source, mode, enabled, created_at, updated_at
-FROM parsing_blacklist
+FROM parser_blacklist
 WHERE ($1 = '' OR host_pattern = $1)
   AND ($2 = '' OR source = $2)
   AND (NOT $3 OR enabled = TRUE)
