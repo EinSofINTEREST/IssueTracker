@@ -122,7 +122,62 @@ BEGIN
     ALTER TABLE parser_blacklist
       RENAME CONSTRAINT parsing_blacklist_mode_check TO parser_blacklist_mode_check;
   END IF;
+
+  -- PG auto-generated constraint names: <orig_table>_pkey / <orig_table>_<cols>_key /
+  -- <orig_table>_<col>_fkey. RENAME TABLE 은 이 이름을 자동 갱신하지 않음 → 명시 처리.
+  -- parser_rules
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_rules' AND c.conname = 'parsing_rules_pkey'
+  ) THEN
+    ALTER TABLE parser_rules
+      RENAME CONSTRAINT parsing_rules_pkey TO parser_rules_pkey;
+  END IF;
+
+  -- parser_blacklist auto-generated PK + UNIQUE
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_blacklist' AND c.conname = 'parsing_blacklist_pkey'
+  ) THEN
+    ALTER TABLE parser_blacklist
+      RENAME CONSTRAINT parsing_blacklist_pkey TO parser_blacklist_pkey;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_blacklist' AND c.conname = 'parsing_blacklist_host_pattern_path_pattern_key'
+  ) THEN
+    ALTER TABLE parser_blacklist
+      RENAME CONSTRAINT parsing_blacklist_host_pattern_path_pattern_key
+                     TO parser_blacklist_host_pattern_path_pattern_key;
+  END IF;
+
+  -- parser_rule_sample_urls auto-generated PK + FK
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_rule_sample_urls' AND c.conname = 'parsing_rule_sample_urls_pkey'
+  ) THEN
+    ALTER TABLE parser_rule_sample_urls
+      RENAME CONSTRAINT parsing_rule_sample_urls_pkey TO parser_rule_sample_urls_pkey;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_rule_sample_urls' AND c.conname = 'parsing_rule_sample_urls_rule_id_fkey'
+  ) THEN
+    ALTER TABLE parser_rule_sample_urls
+      RENAME CONSTRAINT parsing_rule_sample_urls_rule_id_fkey TO parser_rule_sample_urls_rule_id_fkey;
+  END IF;
 END $$;
+
+-- 명명된 인덱스가 PG 카탈로그에 자동으로 같이 따라오므로 UNIQUE / PK 의 backing 인덱스 명도
+-- constraint 명과 동기화 — PG 는 constraint rename 시 backing 인덱스도 함께 rename 한다
+-- (catalog 시맨틱), 따라서 별도 ALTER INDEX 불필요.
 
 -- ─── Trigger + Function ──────────────────────────────────────────────────────
 DO $$

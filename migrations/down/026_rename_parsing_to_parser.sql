@@ -25,9 +25,57 @@ BEGIN
   END IF;
 END $$;
 
--- ─── Constraints ─────────────────────────────────────────────────────────────
+-- ─── Constraints (역순) ──────────────────────────────────────────────────────
 DO $$
 BEGIN
+  -- Auto-generated names — up 의 역순
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_rule_sample_urls' AND c.conname = 'parser_rule_sample_urls_rule_id_fkey'
+  ) THEN
+    ALTER TABLE parser_rule_sample_urls
+      RENAME CONSTRAINT parser_rule_sample_urls_rule_id_fkey TO parsing_rule_sample_urls_rule_id_fkey;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_rule_sample_urls' AND c.conname = 'parser_rule_sample_urls_pkey'
+  ) THEN
+    ALTER TABLE parser_rule_sample_urls
+      RENAME CONSTRAINT parser_rule_sample_urls_pkey TO parsing_rule_sample_urls_pkey;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_blacklist' AND c.conname = 'parser_blacklist_host_pattern_path_pattern_key'
+  ) THEN
+    ALTER TABLE parser_blacklist
+      RENAME CONSTRAINT parser_blacklist_host_pattern_path_pattern_key
+                     TO parsing_blacklist_host_pattern_path_pattern_key;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_blacklist' AND c.conname = 'parser_blacklist_pkey'
+  ) THEN
+    ALTER TABLE parser_blacklist
+      RENAME CONSTRAINT parser_blacklist_pkey TO parsing_blacklist_pkey;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'parser_rules' AND c.conname = 'parser_rules_pkey'
+  ) THEN
+    ALTER TABLE parser_rules
+      RENAME CONSTRAINT parser_rules_pkey TO parsing_rules_pkey;
+  END IF;
+
+  -- Named constraints
   IF EXISTS (
     SELECT 1 FROM pg_constraint c
     JOIN pg_class t ON c.conrelid = t.oid
