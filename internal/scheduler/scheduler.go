@@ -38,7 +38,7 @@ import (
 //     사라진 / 변경된 entry 는 cancel + (변경의 경우) respawn
 //   - SetEntryResolver 미사용 시 기존 정적 entries (생성자 인자) 가 유지되며 Refresh 비활성
 type Scheduler struct {
-	publisher  SeedPublisher
+	publisher  publisher.SeedPublisher
 	gate       atomic.Pointer[urlguard.Gate]
 	throttler  atomic.Pointer[throttlerRef]
 	log        *logger.Logger
@@ -90,7 +90,7 @@ type throttlerRef struct {
 // 부팅 직후 ListEnabled 로 첫 snapshot 을 채워 동일 역할 수행).
 func New(
 	entries []ScheduleEntry,
-	pub SeedPublisher,
+	pub publisher.SeedPublisher,
 	log *logger.Logger,
 	maxRetries int,
 ) *Scheduler {

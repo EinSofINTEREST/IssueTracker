@@ -16,6 +16,21 @@ import (
 // 로그 회피.
 var ErrPublishSkipped = errors.New("publish skipped — url already in pipeline")
 
+// SeedPublisher 는 시드 CrawlJob 발행 책임을 정의하는 인터페이스입니다
+// (이슈 #396 — 메타 #385 의 Kafka I/O 단일 책임 원칙에 따라 publisher 패키지에서 계약을 정의).
+//
+// publisher.Publisher 가 본 인터페이스를 만족하며, 외부 모듈은 본 인터페이스를 통해 시드
+// 발행 기능을 주입받아 사용합니다. 인터페이스 정의를 publisher 측에 두는 이유:
+//   - Kafka I/O 책임 = publisher 단일 진실 원천 — 시그니처 / 계약 변경 시 publisher 측만 갱신
+//   - 다른 sub (UpgradePublisher / RetryPublisher 등) 도 동일 원칙 적용 — 정합 일관
+//
+// SeedPublisher dispatches seed CrawlJobs to the appropriate Kafka crawl topic.
+// Callers are only responsible for creating jobs; publish routing, guarding, and
+// normalization are owned by the publisher implementation.
+type SeedPublisher interface {
+	PublishSeed(ctx context.Context, job *core.CrawlJob) error
+}
+
 // PublishSeed 는 scheduler 가 생성한 시드 CrawlJob 을 Kafka crawl 토픽에 발행합니다 (이슈 #387).
 //
 // 흐름 (구 scheduler.JobEmitter.Emit 이 본 메소드로 이동):
