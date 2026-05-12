@@ -775,16 +775,9 @@ func (w *ParserWorker) publishContents(ctx context.Context, contents []*core.Con
 			"country":          c.Country,
 			core.HeaderCrawler: crawlerName,
 		}
-		// validator → parser 재학습 cycle (이슈 #366): inbox 의 reparse 헤더를 normalized 메시지로 전파.
-		// validate worker 가 본 헤더로 retry count 를 enforce — 이 전파가 없으면 무한 reparse 위험.
-		if inbox := core.InboxHeadersFromContext(ctx); inbox != nil {
-			if v := inbox[core.HeaderValidateReparseCount]; v != "" {
-				headers[core.HeaderValidateReparseCount] = v
-			}
-			if v := inbox[core.HeaderValidateReparseReason]; v != "" {
-				headers[core.HeaderValidateReparseReason] = v
-			}
-		}
+		// reparse / trace 헤더 propagation — 화이트리스트 기반 (이슈 #366 gemini 반영).
+		// validate worker 가 reparse_count 헤더로 retry 한도 enforce — 미전파 시 무한 루프 위험.
+		core.PropagateInboxHeaders(ctx, headers)
 
 		msg := queue.Message{
 			Topic:   queue.TopicNormalized,

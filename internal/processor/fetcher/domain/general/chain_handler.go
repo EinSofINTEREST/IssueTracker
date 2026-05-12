@@ -371,15 +371,8 @@ func (h *ChainHandler) publishFetchedRef(ctx context.Context, job *core.CrawlJob
 		core.HeaderTargetType: string(job.Target.Type),
 		core.HeaderTimeoutMs:  fmt.Sprintf("%d", job.Timeout.Milliseconds()),
 	}
-	// reparse 헤더 propagation — incoming msg 의 reparse_* 값을 fetched 메시지로 전파.
-	if inbox := core.InboxHeadersFromContext(ctx); inbox != nil {
-		if v := inbox[core.HeaderValidateReparseCount]; v != "" {
-			headers[core.HeaderValidateReparseCount] = v
-		}
-		if v := inbox[core.HeaderValidateReparseReason]; v != "" {
-			headers[core.HeaderValidateReparseReason] = v
-		}
-	}
+	// reparse / trace 헤더 propagation — 화이트리스트 기반 (이슈 #366 gemini 반영).
+	core.PropagateInboxHeaders(ctx, headers)
 
 	msg := queue.Message{
 		Topic:   queue.TopicFetched,

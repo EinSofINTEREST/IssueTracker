@@ -37,3 +37,42 @@ func InboxHeadersFromContext(ctx context.Context) map[string]string {
 	v, _ := ctx.Value(inboxHeadersKey{}).(map[string]string)
 	return v
 }
+
+// propagatedInboxHeaderKeys 는 stage 간 전파할 헤더 키의 화이트리스트입니다 (이슈 #366 gemini 반영).
+//
+// 화이트리스트 방식 채택 이유:
+//   - 의도된 헤더만 전파 — Rule 2 (의도적 설정) 원칙 부합
+//   - 새 헤더 추가 시 명시적 코드 변경 — 운영 가시성 + 동적 / blacklist 누락 위험 회피
+//
+// 포함 항목:
+//   - validate_reparse_count / validate_reparse_reason — validator → parser 재학습 cycle (#363)
+//   - x-trace-id / x-request-id — observability (분산 추적 메타데이터)
+//
+// 호출자 (publishFetchedRef / publishContents) 가 본 슬라이스를 iterate 하여 incoming 헤더 값
+// 존재 시 outgoing 헤더에 복사.
+var propagatedInboxHeaderKeys = []string{
+	HeaderValidateReparseCount,
+	HeaderValidateReparseReason,
+	"x-trace-id",
+	"x-request-id",
+}
+
+// PropagateInboxHeaders 는 ctx 의 inbox headers 중 화이트리스트 키를 outgoing headers map 에
+// 복사합니다 (이슈 #366).
+//
+// 기존 outgoing 의 동일 키는 덮어쓰지 않음 — 호출자의 명시적 설정 우선 (예: target_type 을
+// 호출자가 새로 설정한 경우 inbox 의 값 무시).
+func PropagateInboxHeaders(ctx context.Context, outgoing map[string]string) {
+	inbox := InboxHeadersFromContext(ctx)
+	if inbox == nil || outgoing == nil {
+		return
+	}
+	for _, k := range propagatedInboxHeaderKeys {
+		if _, set := outgoing[k]; set {
+			continue
+		}
+		if v := inbox[k]; v != "" {
+			outgoing[k] = v
+		}
+	}
+}
