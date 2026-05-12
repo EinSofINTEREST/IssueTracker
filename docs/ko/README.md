@@ -86,11 +86,11 @@ make kafka-stop
 make kafka-clean
 ```
 
-**파티션 설정** — 시작하기 전에 `.env.example`을 복사하고 조정:
+**파티션 설정** — 시작하기 전에 통합된 루트 `.env` 를 조정:
 
 ```bash
-cp deployments/docker/.env.example deployments/docker/.env
-# 편집: KAFKA_PARTITIONS_HIGH, KAFKA_PARTITIONS_NORMAL, KAFKA_PARTITIONS_LOW
+cp .env.example .env
+# 편집: KAFKA_PARTITIONS_HIGH, KAFKA_PARTITIONS_NORMAL, KAFKA_PARTITIONS_LOW, KAFKA_PARTITIONS_CHROMEDP
 make kafka-start
 ```
 

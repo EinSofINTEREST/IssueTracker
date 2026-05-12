@@ -90,11 +90,11 @@ make kafka-stop
 make kafka-clean
 ```
 
-**Partition configuration** — copy `.env.example` and adjust before starting:
+**Partition configuration** — adjust the unified `.env` (root) before starting:
 
 ```bash
-cp deployments/docker/.env.example deployments/docker/.env
-# Edit: KAFKA_PARTITIONS_HIGH, KAFKA_PARTITIONS_NORMAL, KAFKA_PARTITIONS_LOW
+cp .env.example .env
+# Edit: KAFKA_PARTITIONS_HIGH, KAFKA_PARTITIONS_NORMAL, KAFKA_PARTITIONS_LOW, KAFKA_PARTITIONS_CHROMEDP
 make kafka-start
 ```
 
