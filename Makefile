@@ -50,7 +50,8 @@ COMPOSE=docker compose
 KAFKA_DATA_DIR=/data/ELArchive/issuetracker/kafka
 KAFKA_CONTAINER=issuetracker-kafka
 KAFKA_ENV_FILE=.env
-# .env가 없으면 .env.example 기본값 사용
+# .env 부재 시: --env-file 미지정 → docker-compose.yml 의 ${VAR:-default} 가 fallback 작동
+# (.env.example 은 운영자 reference 용이며 자동 로드되지 않음 — cp .env.example .env 필요)
 KAFKA_ENV_ARGS=$(shell [ -f $(KAFKA_ENV_FILE) ] && echo "--env-file $(KAFKA_ENV_FILE)")
 
 help: ## 도움말 표시
