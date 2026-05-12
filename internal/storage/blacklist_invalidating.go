@@ -12,7 +12,7 @@ type BlacklistInvalidator interface {
 }
 
 // invalidatingBlacklistRepo 는 BlacklistRepository 를 wrap 하여 mutation 후 자동으로 Matcher 의
-// host cache 를 invalidate 하는 decorator 입니다 (parsing_rules 의 invalidatingRepo 와 동일 패턴).
+// host cache 를 invalidate 하는 decorator 입니다 (parser_rules 의 invalidatingRepo 와 동일 패턴).
 //
 // 적용 정책:
 //   - Insert 성공          → Invalidate (host)

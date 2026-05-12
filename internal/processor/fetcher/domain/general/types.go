@@ -7,7 +7,7 @@
 // 의 단일 DB 규칙 기반 엔진이 처리합니다.
 //
 // Source-specific parsers (NaverParser/CNNParser/...) 는 더 이상 존재하지 않습니다.
-// 새 사이트 지원 = parsing_rules 테이블에 row 추가.
+// 새 사이트 지원 = parser_rules 테이블에 row 추가.
 package general
 
 import (

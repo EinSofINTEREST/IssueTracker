@@ -33,7 +33,7 @@ func NewParsingRuleRepository(pool *pgxpool.Pool, log *logger.Logger) storage.Pa
 }
 
 const sqlInsertParsingRule = `
-INSERT INTO parsing_rules (
+INSERT INTO parser_rules (
   source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
@@ -81,7 +81,7 @@ func (r *pgParsingRuleRepository) Insert(ctx context.Context, rec *storage.Parsi
 }
 
 const sqlUpdateParsingRule = `
-UPDATE parsing_rules
+UPDATE parser_rules
 SET selectors = $2, confidence = $3, enabled = $4, description = $5
 WHERE id = $1
 RETURNING updated_at
@@ -121,7 +121,7 @@ func (r *pgParsingRuleRepository) Update(ctx context.Context, rec *storage.Parsi
 // 가드 조건이 false 면 `pgx.ErrNoRows` → storage.ErrNotFound 반환 — 호출자 (refiner) 는 이미 ErrNotFound
 // 분기에서 Invalidate / Purge 모두 skip 하므로 stale 변경 사이드이펙트 없음.
 const sqlUpdatePathPattern = `
-UPDATE parsing_rules
+UPDATE parser_rules
 SET path_pattern = $2, description = $3
 WHERE id = $1
   AND source_name = 'llm-auto'
@@ -152,7 +152,7 @@ func (r *pgParsingRuleRepository) UpdatePathPattern(ctx context.Context, id int6
 
 const sqlGetParsingRuleByID = `
 SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
-FROM parsing_rules
+FROM parser_rules
 WHERE id = $1
 `
 
@@ -171,7 +171,7 @@ func (r *pgParsingRuleRepository) GetByID(ctx context.Context, id int64) (*stora
 
 const sqlFindParsingRuleByNaturalKey = `
 SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
-FROM parsing_rules
+FROM parser_rules
 WHERE source_name  = $1
   AND host_pattern = $2
   AND path_pattern = $3
@@ -202,7 +202,7 @@ func (r *pgParsingRuleRepository) FindByNaturalKey(ctx context.Context, sourceNa
 
 const sqlMaxVersionByNaturalKey = `
 SELECT COALESCE(MAX(version), 0)
-FROM parsing_rules
+FROM parser_rules
 WHERE source_name = $1
   AND host_pattern = $2
   AND path_pattern = $3
@@ -238,7 +238,7 @@ const sqlHasAnyRule = `
 SELECT
   COUNT(*) > 0                        AS exists_any,
   COALESCE(bool_or(enabled), FALSE)   AS has_enabled
-FROM parsing_rules
+FROM parser_rules
 WHERE host_pattern=$1 AND target_type=$2
 `
 
@@ -262,7 +262,7 @@ func (r *pgParsingRuleRepository) HasAnyRule(ctx context.Context, hostPattern st
 //   - version DESC             : 같은 패턴 안에서 최신 버전 우선
 const sqlFindActiveCandidates = `
 SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
-FROM parsing_rules
+FROM parser_rules
 WHERE host_pattern = $1
   AND target_type  = $2
   AND enabled      = TRUE
@@ -319,7 +319,7 @@ func (r *pgParsingRuleRepository) List(ctx context.Context, f storage.ParsingRul
 
 	query := `
 SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
-FROM parsing_rules
+FROM parser_rules
 WHERE 1=1`
 	args := make([]any, 0, 4)
 	idx := 1
@@ -366,7 +366,7 @@ WHERE 1=1`
 	return out, nil
 }
 
-const sqlDeleteParsingRule = `DELETE FROM parsing_rules WHERE id = $1`
+const sqlDeleteParsingRule = `DELETE FROM parser_rules WHERE id = $1`
 
 // Delete 는 ID 로 규칙을 삭제합니다 (idempotent — 미존재여도 nil).
 func (r *pgParsingRuleRepository) Delete(ctx context.Context, id int64) error {

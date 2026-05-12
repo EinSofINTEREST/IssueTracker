@@ -27,11 +27,11 @@ const (
 
 // BlacklistDecision 은 LLM 이 페이지를 \"파싱에 부적합\" 으로 판단했을 때의 결정입니다.
 //
-// 호출자 (Generator) 가 본 결정을 받으면 셀렉터 INSERT 를 skip 하고 parsing_blacklist 에
+// 호출자 (Generator) 가 본 결정을 받으면 셀렉터 INSERT 를 skip 하고 parser_blacklist 에
 // source='auto' 로 등록 — 동일 host+path 가 다음 사이클에서 fetch / parse 되지 않음.
 type BlacklistDecision struct {
 	// Reason 은 운영자가 사후 분류 / 검증할 수 있도록 한국어로 작성된 사유.
-	// parsing_blacklist.reason 컬럼에 그대로 저장.
+	// parser_blacklist.reason 컬럼에 그대로 저장.
 	Reason string
 }
 

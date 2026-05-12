@@ -29,12 +29,12 @@ func NewSampleURLRepository(pool *pgxpool.Pool, log *logger.Logger) storage.Samp
 
 const sqlCountSamples = `
 SELECT COUNT(*)
-FROM parsing_rule_sample_urls
+FROM parser_rule_sample_urls
 WHERE rule_id = $1
 `
 
 const sqlInsertSample = `
-INSERT INTO parsing_rule_sample_urls (rule_id, url)
+INSERT INTO parser_rule_sample_urls (rule_id, url)
 VALUES ($1, $2)
 `
 
@@ -77,7 +77,7 @@ func (r *pgSampleURLRepository) Count(ctx context.Context, ruleID int64) (int, e
 
 const sqlListSamples = `
 SELECT id, rule_id, url, observed_at
-FROM parsing_rule_sample_urls
+FROM parser_rule_sample_urls
 WHERE rule_id = $1
 ORDER BY observed_at DESC
 LIMIT $2
@@ -108,7 +108,7 @@ func (r *pgSampleURLRepository) List(ctx context.Context, ruleID int64, limit in
 	return out, nil
 }
 
-const sqlPurgeSamples = `DELETE FROM parsing_rule_sample_urls WHERE rule_id = $1`
+const sqlPurgeSamples = `DELETE FROM parser_rule_sample_urls WHERE rule_id = $1`
 
 // Purge 는 rule_id 의 모든 sample 을 삭제합니다 (정밀화 완료 후 호출, idempotent).
 func (r *pgSampleURLRepository) Purge(ctx context.Context, ruleID int64) error {
