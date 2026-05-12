@@ -25,7 +25,7 @@ const retryDrainTimeout = 5 * time.Second
 // 호출자 (fetcher/worker pool) 가 atomic.Pointer[RetrySchedulerHolder] 필드로 보유 후
 // SetRetryScheduler / 조회 시 사용.
 type RetrySchedulerHolder struct {
-	S RetryScheduler
+	Scheduler RetryScheduler
 }
 
 // RetryScheduler 는 처리 실패한 CrawlJob 의 재시도 발행 시점을 관리하는 인터페이스입니다
@@ -70,7 +70,7 @@ func (s *KafkaImmediateRetryScheduler) Enqueue(ctx context.Context, job *core.Cr
 	}
 
 	msg := queue.Message{
-		Topic:   crawlTopic(job.Priority),
+		Topic:   CrawlTopic(job.Priority),
 		Key:     []byte(job.ID),
 		Value:   data,
 		Headers: retryHeaders(job, lastErr),
@@ -338,7 +338,7 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 	}
 
 	msg := queue.Message{
-		Topic:   crawlTopic(job.Priority),
+		Topic:   CrawlTopic(job.Priority),
 		Key:     []byte(item.JobID),
 		Value:   entry.JobBytes,
 		Headers: retryHeaders(&job, lastErr),

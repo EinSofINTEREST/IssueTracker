@@ -169,7 +169,7 @@ func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 		return fmt.Errorf("marshal job %s: %w", job.ID, err)
 	}
 
-	topic := topicForPriority(priority)
+	topic := publisher.CrawlTopic(priority)
 
 	msg := queue.Message{
 		Topic: topic,

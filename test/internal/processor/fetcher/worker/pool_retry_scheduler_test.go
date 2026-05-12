@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,9 +51,6 @@ func (f *poolRetryFakeQueue) snapshotLen() int {
 	return len(f.items)
 }
 
-// idle counter helper (RedisDelayedRetryScheduler 가 폴링되지 않도록 PollInterval=1h)
-var poolRetrySchedulerCounter atomic.Int32
-
 // TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish 는 SetRetryScheduler 로
 // 주입한 publisher.RetryScheduler 구현체가 호출되어 inline producer.Publish 가 우회됨을 검증.
 func TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish(t *testing.T) {
@@ -86,7 +82,4 @@ func TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish(t *testing.T)
 	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
 	assert.Equal(t, 1, q.snapshotLen(), "주입된 RedisDelayedRetryScheduler 가 enqueue 받았음")
 	consumer.AssertCalled(t, "CommitMessages", mock.Anything, mock.Anything)
-
-	// counter referenced to silence unused-var lint on package init paths
-	_ = poolRetrySchedulerCounter.Load()
 }

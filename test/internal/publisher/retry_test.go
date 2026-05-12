@@ -137,7 +137,7 @@ func TestKafkaImmediateRetryScheduler_NilLastErr_OmitsHeader(t *testing.T) {
 // AckRetry 호출 시에만 제거합니다 — 진짜 Redis 와 동일 시맨틱.
 type fakeRetryQueue struct {
 	mu               sync.Mutex
-	items            []fakeRetryItem
+	items            []fakeRetryItem // ScheduledAt 정렬 유지
 	enqueueErr       error
 	peekErr          error
 	ackErr           error

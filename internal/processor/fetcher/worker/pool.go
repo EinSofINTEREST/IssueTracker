@@ -183,7 +183,7 @@ func (p *KafkaConsumerPool) SetRetryScheduler(rs publisher.RetryScheduler) {
 		p.retryScheduler.Store(nil)
 		return
 	}
-	p.retryScheduler.Store(&publisher.RetrySchedulerHolder{S: rs})
+	p.retryScheduler.Store(&publisher.RetrySchedulerHolder{Scheduler: rs})
 }
 
 // SetGate 는 processJob 진입 시 URL 검사에 사용할 urlguard.Gate 를 설정합니다.
@@ -763,7 +763,7 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 	job.ScheduledAt = time.Now().Add(backoffDelay)
 
 	scheduler := p.resolveRetryScheduler()
-	topic := topicForPriority(job.Priority)
+	topic := publisher.CrawlTopic(job.Priority)
 
 	log.WithFields(map[string]interface{}{
 		"job_id":   job.ID,
@@ -799,7 +799,7 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 // 를 lazy 생성합니다. 매 호출마다 새 인스턴스이지만 stateless 이므로 비용 무시 가능.
 func (p *KafkaConsumerPool) resolveRetryScheduler() publisher.RetryScheduler {
 	if h := p.retryScheduler.Load(); h != nil {
-		return h.S
+		return h.Scheduler
 	}
 	return publisher.NewKafkaImmediateRetryScheduler(p.producer)
 }
@@ -824,16 +824,4 @@ func logShutdownAware(ctx context.Context, log *logger.Logger, err error, msg st
 		return
 	}
 	log.WithError(err).Error(msg)
-}
-
-// topicForPriority는 우선순위에 맞는 Kafka 토픽 이름을 반환합니다.
-func topicForPriority(p core.Priority) string {
-	switch p {
-	case core.PriorityHigh:
-		return queue.TopicCrawlHigh
-	case core.PriorityLow:
-		return queue.TopicCrawlLow
-	default:
-		return queue.TopicCrawlNormal
-	}
 }
