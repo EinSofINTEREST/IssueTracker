@@ -54,7 +54,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	ruleRepo := pgstore.NewParsingRuleRepository(pool, log)
+	ruleRepo := pgstore.NewParserRuleRepository(pool, log)
 
 	// parsing_rule 조회
 	record, err := ruleRepo.GetByID(ctx, *ruleID)

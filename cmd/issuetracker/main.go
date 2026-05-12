@@ -126,7 +126,7 @@ func main() {
 
 	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
-	parserRuleRepo := pgstore.NewParsingRuleRepository(pool, log)
+	parserRuleRepo := pgstore.NewParserRuleRepository(pool, log)
 	ruleResolver, err := rule.NewResolver(parserRuleRepo)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")

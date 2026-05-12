@@ -43,7 +43,7 @@ type invalidatingRepo struct {
 //
 // 사용 예 (cmd/issuetracker/main.go):
 //
-//	parserRuleRepo := pgstore.NewParsingRuleRepository(pool, log)
+//	parserRuleRepo := pgstore.NewParserRuleRepository(pool, log)
 //	parserRuleRepo = storage.WrapWithInvalidator(parserRuleRepo, ruleResolver)
 //
 // inner 가 nil 이면 panic — wiring 버그 (호출자가 nil 검사 필요).
