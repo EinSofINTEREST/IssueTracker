@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/pkg/categories"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/urlguard"
 )
@@ -369,12 +370,20 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 		}
 	}
 
+	// 카테고리 hint 주입 (이슈 #381) — 다운스트림 CategoryBasedResolver 가 priority
+	// 결정에 사용. 빈 카테고리는 Metadata 키 자체를 생략하여 nil-safe 동작 보존.
+	var meta map[string]interface{}
+	if entry.Category != "" {
+		meta = map[string]interface{}{categories.MetadataKey: string(entry.Category)}
+	}
+
 	job := &core.CrawlJob{
 		ID:          id,
 		CrawlerName: entry.CrawlerName,
 		Target: core.Target{
-			URL:  entry.URL,
-			Type: entry.TargetType,
+			URL:      entry.URL,
+			Type:     entry.TargetType,
+			Metadata: meta,
 		},
 		Priority:    entry.Priority,
 		ScheduledAt: time.Now(),

@@ -105,7 +105,16 @@ func main() {
 	crawlerProducer := queue.NewProducer(crawlerKafkaCfg)
 	defer crawlerProducer.Close()
 
-	resolver := crawlerWorker.NewCompositeResolver(core.PriorityNormal)
+	// 이슈 #381 — CategoryBased + Retry resolver 신규 도입. cold-start fallback 은 Low.
+	// chain 순서 (앞쪽 우선):
+	//   1. RetryPriorityResolver       — RetryCount>0 → Normal (cycle 안정성)
+	//   2. CategoryBasedResolver       — Target.Metadata["category"] / TargetType → tier
+	//   3. SourcePriorityResolver      — backward compat (등록 룰 0개)
+	//   4. RuleBasedPriorityResolver   — backward compat (등록 룰 0개)
+	//   5. DefaultPriorityResolver     — fallback Low (cold-start = Low, 사용자 결정)
+	resolver := crawlerWorker.NewCompositeResolver(core.PriorityLow)
+	resolver.Add(crawlerWorker.NewRetryPriorityResolver())
+	resolver.Add(crawlerWorker.NewCategoryBasedResolver())
 	resolver.Add(crawlerWorker.NewSourcePriorityResolver(core.PriorityNormal))
 	resolver.Add(crawlerWorker.NewRuleBasedPriorityResolver(core.PriorityNormal))
 

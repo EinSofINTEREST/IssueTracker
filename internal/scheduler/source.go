@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/pkg/categories"
 )
 
 // ScheduleEntry는 주기적으로 발행할 크롤 Job의 스케줄 항목입니다.
@@ -30,6 +31,14 @@ type ScheduleEntry struct {
 
 	// Priority는 crawl 토픽 우선순위입니다.
 	Priority core.Priority
+
+	// Category 는 본 entry 의 콘텐츠 도메인 분류입니다 (이슈 #381 — pkg/categories).
+	// scheduler 가 CrawlJob 생성 시 Target.Metadata["category"] 로 주입 → 다운스트림
+	// CategoryBasedResolver 가 priority 결정에 사용. 빈 값이면 미분류 (Low fallback).
+	//
+	// 본 필드는 entry 자체의 분류 — chained job (category page → article) 의 category
+	// 상속은 별도 follow-up (publisher 측 작업).
+	Category categories.Category
 
 	// Timeout은 개별 크롤 Job의 최대 실행 시간입니다.
 	Timeout time.Duration

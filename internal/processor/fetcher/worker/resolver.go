@@ -3,6 +3,7 @@ package worker
 
 import (
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/pkg/categories"
 )
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -195,6 +196,103 @@ func (r *DefaultPriorityResolver) Resolve(_ *core.CrawlJob) core.Priority {
 // 종단 resolver이므로 모든 job에 대해 결정을 내립니다.
 func (r *DefaultPriorityResolver) CanResolve(_ *core.CrawlJob) bool {
 	return true
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// RetryPriorityResolver — retry 작업은 Normal 로 흡수
+// ─────────────────────────────────────────────────────────────────────────
+
+// RetryPriorityResolver 는 RetryCount > 0 인 job 을 Normal 로 강제 분류합니다 (이슈 #381).
+//
+// 의도:
+//   - reparse / requeue / backoff retry 가 High 로 흘러 폭주하는 것을 방지
+//   - retry 흐름이 일반 cycle (Normal) 에 흡수되어 High pool 의 시의성 자원 보존
+//
+// 체인 위치 — Explicit 다음 (가장 앞쪽) 권장. RetryCount 기준이라 카테고리 분기 전에 흡수.
+type RetryPriorityResolver struct{}
+
+// NewRetryPriorityResolver 는 RetryPriorityResolver 를 생성합니다.
+func NewRetryPriorityResolver() *RetryPriorityResolver {
+	return &RetryPriorityResolver{}
+}
+
+// Resolve 는 RetryCount > 0 이면 Normal 을 반환합니다. 0 이면 호출되지 않아야 합니다
+// (CompositeResolver 는 CanResolve=false 면 본 함수를 호출하지 않음).
+func (r *RetryPriorityResolver) Resolve(_ *core.CrawlJob) core.Priority {
+	return core.PriorityNormal
+}
+
+// CanResolve 는 job.RetryCount > 0 일 때만 true 를 반환합니다.
+// 0 이면 다음 resolver 에 위임.
+func (r *RetryPriorityResolver) CanResolve(job *core.CrawlJob) bool {
+	return job.RetryCount > 0
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CategoryBasedResolver — Target.Metadata 의 카테고리 hint 기반 분류
+// ─────────────────────────────────────────────────────────────────────────
+
+// CategoryBasedResolver 는 job.Target.Metadata 의 "category" 키와 Target.Type 을
+// 기반으로 우선순위를 결정합니다 (이슈 #381).
+//
+// 결정 규칙:
+//  1. TargetType 이 sitemap / category / search_results 면 Low — 광범위 traverse
+//  2. Metadata["category"] 가 categories enum 에 매핑되면 해당 tier 반환
+//  3. 그 외 (TargetTypeArticle + category 미지정 등) 는 CanResolve=false → 다음 resolver 위임
+//
+// 카테고리 enum / 매핑은 pkg/categories 가 단일 source.
+type CategoryBasedResolver struct{}
+
+// NewCategoryBasedResolver 는 CategoryBasedResolver 를 생성합니다.
+func NewCategoryBasedResolver() *CategoryBasedResolver {
+	return &CategoryBasedResolver{}
+}
+
+// extractCategory 는 Target.Metadata 에서 카테고리 hint 를 추출합니다.
+// 값이 string 이 아니거나 부재면 CategoryUnknown 반환.
+func (r *CategoryBasedResolver) extractCategory(job *core.CrawlJob) categories.Category {
+	if job.Target.Metadata == nil {
+		return categories.CategoryUnknown
+	}
+	v, ok := job.Target.Metadata[categories.MetadataKey]
+	if !ok {
+		return categories.CategoryUnknown
+	}
+	s, ok := v.(string)
+	if !ok {
+		return categories.CategoryUnknown
+	}
+	return categories.Category(s)
+}
+
+// isTraversalType 은 TargetType 이 광범위 traverse 류 (sitemap / category / search_results) 인지 반환합니다.
+// Low 강제 분류 대상.
+func (r *CategoryBasedResolver) isTraversalType(t core.TargetType) bool {
+	switch t {
+	case core.TargetTypeSitemap, core.TargetTypeCategory, core.TargetTypeSearchResults:
+		return true
+	default:
+		return false
+	}
+}
+
+// Resolve 는 traversal 류면 Low, 그 외엔 카테고리 매핑된 tier 를 반환합니다.
+func (r *CategoryBasedResolver) Resolve(job *core.CrawlJob) core.Priority {
+	if r.isTraversalType(job.Target.Type) {
+		return core.PriorityLow
+	}
+	return r.extractCategory(job).Priority()
+}
+
+// CanResolve 는 결정 가능 여부를 반환합니다:
+//   - traversal 류 TargetType → 항상 결정 가능 (Low)
+//   - article + 알려진 카테고리 → 결정 가능
+//   - article + 미지정 / 미등록 카테고리 → false (다음 resolver 위임)
+func (r *CategoryBasedResolver) CanResolve(job *core.CrawlJob) bool {
+	if r.isTraversalType(job.Target.Type) {
+		return true
+	}
+	return r.extractCategory(job).IsKnown()
 }
 
 // ─────────────────────────────────────────────────────────────────────────
