@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -247,6 +248,42 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 
 	_, err = RunValidation(ctx, v, content)
 	if err != nil {
+		// validator → parser 재학습 트리거 분기 (이슈 #363/#364) — selector 보강으로 해결
+		// 가능한 에러 (PublishedAt required / Title-Body min_length) 가 trigger 대상.
+		// 본 분기는 cfg.ReparseEnabled + 횟수 < max 일 때만 동작 — 그 외에는 기존 DLQ/requeue 흐름.
+		if w.cfg.ReparseEnabled && IsReparseEligible(err) {
+			reparseCount := readReparseCount(msg)
+			if reparseCount < core.MaxValidateReparseCount {
+				log.WithFields(map[string]interface{}{
+					"job_id":        pm.ID,
+					"ref_id":        ref.ID,
+					"source":        content.SourceID,
+					"reparse_count": reparseCount,
+					"max":           core.MaxValidateReparseCount,
+				}).WithError(err).Info("content validation failed, triggering parser reparse (LLM rule relearn)")
+
+				// reparse cycle 시작 — 기존 contents row 정리 후 새 CrawlJob 발행.
+				// reject 사유 기록은 reparse 의 메타데이터로 충분 — DB 컬럼 갱신 skip 으로 단순화.
+				if delErr := w.contentSvc.Delete(ctx, ref.ID); delErr != nil {
+					log.WithFields(map[string]interface{}{
+						"job_id": pm.ID,
+						"ref_id": ref.ID,
+					}).WithError(delErr).Warn("failed to delete content before reparse (non-fatal — reparse will overwrite)")
+				}
+				if rpErr := w.republishForReparse(ctx, content, reparseCount, err); rpErr != nil {
+					return fmt.Errorf("republish reparse: %w", rpErr)
+				}
+				return w.commit(ctx, msg)
+			}
+			// max 도달 — 기존 DLQ 경로로 폴스루 (info 로그로 사유 명시)
+			log.WithFields(map[string]interface{}{
+				"job_id":        pm.ID,
+				"ref_id":        ref.ID,
+				"reparse_count": reparseCount,
+				"max":           core.MaxValidateReparseCount,
+			}).Info("reparse count reached max, falling through to permanent DLQ")
+		}
+
 		// 검증 실패: contents에서 삭제 후 DLQ 또는 재큐잉
 		if pm.RetryCount >= maxRetries(msg) {
 			log.WithFields(map[string]interface{}{
@@ -472,6 +509,76 @@ func (w *Worker) requeue(ctx context.Context, msg *queue.Message, pm *core.Proce
 		}).WithError(err).Error("failed to requeue processing message for retry")
 		return err
 	}
+	return nil
+}
+
+// republishForReparse 는 validate 실패 시 parser 재학습 트리거용 새 CrawlJob 을
+// TopicCrawlNormal 에 발행합니다 (이슈 #364).
+//
+// 헤더에 validate_reparse_count (현재 + 1) 와 validate_reparse_reason (err.Error())
+// 을 설정 — Sub C 의 parser worker 가 본 헤더 보고 LLM 호출 시 reason context 주입.
+//
+// 호출 사전 조건 (호출자가 보장):
+//   - cfg.ReparseEnabled == true
+//   - IsReparseEligible(err) == true
+//   - currentCount < core.MaxValidateReparseCount
+func (w *Worker) republishForReparse(ctx context.Context, content *core.Content, currentCount int, reason error) error {
+	log := logger.FromContext(ctx)
+	nextCount := currentCount + 1
+
+	job := core.CrawlJob{
+		ID:          fmt.Sprintf("reparse-%s-%d", content.ID, nextCount),
+		CrawlerName: content.SourceID,
+		Target: core.Target{
+			URL:  content.URL,
+			Type: core.TargetTypeArticle, // validate 는 article (page) 단계만 처리
+		},
+		Priority:    core.PriorityNormal,
+		ScheduledAt: time.Now(),
+		Timeout:     30 * time.Second, // fetcher 기본값 — entrypoint 가 scheduler timeout 헤더 없으면 기본
+		RetryCount:  0,
+		MaxRetries:  3,
+	}
+	payload, err := json.Marshal(&job)
+	if err != nil {
+		return fmt.Errorf("marshal reparse crawl job: %w", err)
+	}
+
+	reparseMsg := queue.Message{
+		Topic: queue.TopicCrawlNormal,
+		Key:   []byte(content.URL),
+		Value: payload,
+		Headers: map[string]string{
+			core.HeaderTargetType:            "page",
+			core.HeaderCrawler:               content.SourceID,
+			core.HeaderValidateReparseCount:  strconv.Itoa(nextCount),
+			core.HeaderValidateReparseReason: reason.Error(),
+		},
+	}
+
+	pubErr := w.producer.Publish(ctx, reparseMsg)
+	if pubErr != nil && errors.Is(pubErr, context.Canceled) {
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+		defer cancel()
+		pubErr = w.producer.Publish(drainCtx, reparseMsg)
+	}
+	if pubErr != nil {
+		log.WithFields(map[string]interface{}{
+			"content_id":    content.ID,
+			"url":           content.URL,
+			"reparse_count": nextCount,
+		}).WithError(pubErr).Error("failed to publish reparse crawl job")
+		return pubErr
+	}
+
+	log.WithFields(map[string]interface{}{
+		"content_id":    content.ID,
+		"url":           content.URL,
+		"source":        content.SourceID,
+		"reparse_count": nextCount,
+		"max":           core.MaxValidateReparseCount,
+		"reason":        reason.Error(),
+	}).Info("published reparse crawl job for validator-driven rule relearn")
 	return nil
 }
 

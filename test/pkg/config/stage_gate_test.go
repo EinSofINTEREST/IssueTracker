@@ -48,6 +48,26 @@ func TestLoadStageGate_InvalidValidateValue(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestLoadValidate_ReparseEnabled_DefaultFalse(t *testing.T) {
+	t.Setenv("VALIDATE_REPARSE_ENABLED", "")
+	cfg, err := config.LoadValidate("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+	require.False(t, cfg.ReparseEnabled, "default 는 false (Sub C 머지 후 활성화)")
+}
+
+func TestLoadValidate_ReparseEnabled_True(t *testing.T) {
+	t.Setenv("VALIDATE_REPARSE_ENABLED", "true")
+	cfg, err := config.LoadValidate("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+	require.True(t, cfg.ReparseEnabled)
+}
+
+func TestLoadValidate_ReparseEnabled_InvalidValue(t *testing.T) {
+	t.Setenv("VALIDATE_REPARSE_ENABLED", "not-a-bool")
+	_, err := config.LoadValidate("/tmp/nonexistent-env-file.env")
+	require.Error(t, err)
+}
+
 func TestCapPerStage(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -173,6 +173,11 @@ type ValidateConfig struct {
 	CommunityQualityThreshold float64 // VALIDATE_COMMUNITY_QUALITY_THRESHOLD (default: 0.4)
 	CommunityMaxRepeatRatio   float64 // VALIDATE_COMMUNITY_MAX_REPEAT_RATIO (default: 0.30)
 	CommunityMinRepeatRun     int     // VALIDATE_COMMUNITY_MIN_REPEAT_RUN (default: 4)
+
+	// ReparseEnabled: validate 실패 시 parser 재학습 트리거 활성화 여부 (이슈 #364).
+	// VALIDATE_REPARSE_ENABLED (default: false — Sub C wiring 완료 후 활성화)
+	// false 면 reparse 트리거 자체가 비활성 — 기존 DLQ 경로 그대로 동작 (회귀 안전).
+	ReparseEnabled bool
 }
 
 // DefaultValidateConfig는 개발 환경 기본 ValidateConfig를 반환합니다.
@@ -193,6 +198,7 @@ func DefaultValidateConfig() ValidateConfig {
 		CommunityQualityThreshold: 0.4,
 		CommunityMaxRepeatRatio:   0.30,
 		CommunityMinRepeatRun:     4,
+		ReparseEnabled:            false, // Sub C 머지 후 활성화 (이슈 #366)
 	}
 }
 
@@ -228,6 +234,14 @@ func LoadValidate(envFiles ...string) (ValidateConfig, error) {
 			*dest = f
 		}
 		return nil
+	}
+
+	if v := os.Getenv("VALIDATE_REPARSE_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return ValidateConfig{}, fmt.Errorf("parse VALIDATE_REPARSE_ENABLED %q: %w", v, err)
+		}
+		cfg.ReparseEnabled = b
 	}
 
 	for _, op := range []error{
