@@ -384,6 +384,23 @@ func TestBuildStageGate_ValidProcLock_ReturnsRealGate(t *testing.T) {
 	assert.Equal(t, 1, rel)
 }
 
+func TestBuildStageGate_TypedNilProcLock_ReturnsNoop(t *testing.T) {
+	// typed-nil 가드 (gemini 반영 PR #359) — NewStageGate 가 typed-nil 에 panic 하므로
+	// BuildStageGate 는 graceful degrade 로 NoopStageGate 반환 보장.
+	log := logger.New(logger.DefaultConfig())
+	var typedNilLock *locks.RedisProcessingLock // typed-nil
+
+	gate := locks.BuildStageGate(locks.StageFetcher, 3, typedNilLock, log)
+	require.NotNil(t, gate)
+
+	// Noop 동작 검증
+	release, acquired, err := gate.Acquire(context.Background(), "https://example.com")
+	assert.NoError(t, err)
+	assert.True(t, acquired)
+	require.NotNil(t, release)
+	release()
+}
+
 func TestBuildStageGate_CapacityFloor(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	lock := newStubLock(true)
