@@ -35,11 +35,15 @@ type ScheduleEntry struct {
 	Timeout time.Duration
 }
 
-// Emitter는 Scheduler가 생성한 CrawlJob을 Kafka crawl 토픽에 발행하는 인터페이스입니다.
-// Scheduler의 역할은 시드 Job 생성에 한정되며, 라우팅은 Emitter 구현체가 담당합니다.
+// SeedPublisher 는 Scheduler 가 생성한 시드 CrawlJob 을 Kafka crawl 토픽에 발행하는 인터페이스입니다
+// (이슈 #387 — 구 Emitter 에서 rename + publisher.Publisher 의존).
 //
-// Emitter routes initial seed CrawlJobs to the appropriate Kafka crawl topic.
-// Scheduler is only responsible for creating jobs; Emitter handles delivery.
-type Emitter interface {
-	Emit(ctx context.Context, job *core.CrawlJob) error
+// publisher.Publisher 가 구조적 타이핑으로 본 인터페이스를 만족하며, ChainHandler 와 동일한
+// guard / normalizer 를 공유합니다 (단일 facade — 메타 #385).
+//
+// SeedPublisher dispatches seed CrawlJobs created by the Scheduler to the appropriate Kafka
+// crawl topic. The Scheduler is only responsible for creating jobs; publish routing /
+// guard / normalize is owned by publisher.Publisher.
+type SeedPublisher interface {
+	PublishSeed(ctx context.Context, job *core.CrawlJob) error
 }

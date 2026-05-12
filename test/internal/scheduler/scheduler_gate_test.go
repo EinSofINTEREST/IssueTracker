@@ -25,7 +25,7 @@ type gateMockEmitter struct {
 	calls int
 }
 
-func (m *gateMockEmitter) Emit(_ context.Context, job *core.CrawlJob) error {
+func (m *gateMockEmitter) PublishSeed(_ context.Context, job *core.CrawlJob) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.jobs = append(m.jobs, job)

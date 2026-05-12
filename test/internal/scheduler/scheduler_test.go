@@ -26,7 +26,7 @@ type mockEmitter struct {
 	err  error
 }
 
-func (m *mockEmitter) Emit(_ context.Context, job *core.CrawlJob) error {
+func (m *mockEmitter) PublishSeed(_ context.Context, job *core.CrawlJob) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -55,7 +55,7 @@ type countEmitter struct {
 	n atomic.Int32
 }
 
-func (c *countEmitter) Emit(_ context.Context, _ *core.CrawlJob) error {
+func (c *countEmitter) PublishSeed(_ context.Context, _ *core.CrawlJob) error {
 	c.n.Add(1)
 	return nil
 }

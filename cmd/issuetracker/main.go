@@ -721,20 +721,16 @@ func main() {
 		log.WithError(err).Fatal("failed to load scheduler config")
 	}
 
-	emitter := scheduler.NewJobEmitter(crawlerProducer, log)
-	if pipelineGuard != nil {
-		emitter.SetGuard(pipelineGuard)
-		// publisher 와 동일 normalizer 공유 — marker 키 일관성.
-		emitter.SetNormalizer(links.NewNormalizer())
-		log.Info("scheduler emitter pipeline guard enabled")
-	}
+	// 이슈 #387 — scheduler.JobEmitter 제거. scheduler 가 publisher.Publisher 직접 의존.
+	// guard / normalizer 는 jobPublisher 에 이미 wiring 되어 있어 시드 / chained 둘 다 동일
+	// 정책 적용 (메타 #385 — 단일 facade).
 	// Scheduler entries 는 두 source-of-truth 중 하나에서 결정 (이슈 #328):
 	//   1. DB (scheduler_entries 테이블) — 운영자 UPDATE 가 30s refresh 주기로 반영
 	//   2. fallback (DefaultEntries) — DB 부재 / 초기화 실패 시 기존 hardcoded map
 	// DB 우선 — Resolver wiring 성공 시 Scheduler 가 부팅 시 ListEnabled 결과로 spawn,
 	// StartRefreshLoop 가 주기적 diff.
 	entries := scheduler.DefaultEntries(schedulerCfg)
-	sched := scheduler.New(entries, emitter, log, schedulerCfg.MaxRetries)
+	sched := scheduler.New(entries, jobPublisher, log, schedulerCfg.MaxRetries)
 
 	schedulerEntryRepo, schedRepoErr := pgstore.NewSchedulerEntryRepository(pool, log)
 	if schedRepoErr != nil {

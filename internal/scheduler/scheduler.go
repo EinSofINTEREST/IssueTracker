@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/publisher"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/urlguard"
 )
@@ -37,7 +38,7 @@ import (
 //     사라진 / 변경된 entry 는 cancel + (변경의 경우) respawn
 //   - SetEntryResolver 미사용 시 기존 정적 entries (생성자 인자) 가 유지되며 Refresh 비활성
 type Scheduler struct {
-	emitter    Emitter
+	publisher  SeedPublisher
 	gate       atomic.Pointer[urlguard.Gate]
 	throttler  atomic.Pointer[throttlerRef]
 	log        *logger.Logger
@@ -89,12 +90,12 @@ type throttlerRef struct {
 // 부팅 직후 ListEnabled 로 첫 snapshot 을 채워 동일 역할 수행).
 func New(
 	entries []ScheduleEntry,
-	emitter Emitter,
+	pub SeedPublisher,
 	log *logger.Logger,
 	maxRetries int,
 ) *Scheduler {
 	return &Scheduler{
-		emitter:       emitter,
+		publisher:     pub,
 		log:           log,
 		maxRetries:    maxRetries,
 		running:       make(map[string]*entryHandle),
@@ -388,10 +389,10 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 		return
 	}
 
-	if err := s.emitter.Emit(ctx, job); err != nil {
-		// ErrEmitSkipped: PipelineGuard 가 cycle 진행 중 판단으로 skip — non-fatal.
+	if err := s.publisher.PublishSeed(ctx, job); err != nil {
+		// ErrPublishSkipped: PipelineGuard 가 cycle 진행 중 판단으로 skip — non-fatal.
 		// "scheduled" / "failed" 양쪽 로그 모두 생략 (실제 발행 안 된 job 이 발행된 것처럼 보이지 않게).
-		if errors.Is(err, ErrEmitSkipped) {
+		if errors.Is(err, publisher.ErrPublishSkipped) {
 			return
 		}
 		s.log.WithFields(map[string]interface{}{
