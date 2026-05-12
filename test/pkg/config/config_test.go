@@ -892,3 +892,112 @@ func TestLoadRetryScheduler_InvalidValues(t *testing.T) {
 		})
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WorkerCountsConfig (이슈 #376)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestLoadWorkerCounts_DefaultValues(t *testing.T) {
+	for _, k := range []string{
+		"FETCHER_HIGH_WORKER_COUNT",
+		"FETCHER_NORMAL_WORKER_COUNT",
+		"FETCHER_LOW_WORKER_COUNT",
+		"PARSER_WORKER_COUNT",
+		"VALIDATE_WORKER_COUNT",
+	} {
+		t.Setenv(k, "")
+	}
+
+	cfg, err := config.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+
+	def := config.DefaultWorkerCountsConfig()
+	if cfg.FetcherHigh != def.FetcherHigh {
+		t.Errorf("FetcherHigh: got %d, want %d", cfg.FetcherHigh, def.FetcherHigh)
+	}
+	if cfg.FetcherNormal != def.FetcherNormal {
+		t.Errorf("FetcherNormal: got %d, want %d", cfg.FetcherNormal, def.FetcherNormal)
+	}
+	if cfg.FetcherLow != def.FetcherLow {
+		t.Errorf("FetcherLow: got %d, want %d", cfg.FetcherLow, def.FetcherLow)
+	}
+	if cfg.Parser != def.Parser {
+		t.Errorf("Parser: got %d, want %d", cfg.Parser, def.Parser)
+	}
+	if cfg.Validate != def.Validate {
+		t.Errorf("Validate: got %d, want %d", cfg.Validate, def.Validate)
+	}
+}
+
+func TestLoadWorkerCounts_EnvOverride(t *testing.T) {
+	t.Setenv("FETCHER_HIGH_WORKER_COUNT", "10")
+	t.Setenv("FETCHER_NORMAL_WORKER_COUNT", "20")
+	t.Setenv("FETCHER_LOW_WORKER_COUNT", "5")
+	t.Setenv("PARSER_WORKER_COUNT", "12")
+	t.Setenv("VALIDATE_WORKER_COUNT", "16")
+
+	cfg, err := config.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+
+	if cfg.FetcherHigh != 10 || cfg.FetcherNormal != 20 || cfg.FetcherLow != 5 ||
+		cfg.Parser != 12 || cfg.Validate != 16 {
+		t.Errorf("env override 실패: %+v", cfg)
+	}
+}
+
+func TestLoadWorkerCounts_PartialOverride(t *testing.T) {
+	// 일부 env 만 설정 → 설정된 것만 변경, 나머지는 default 유지
+	for _, k := range []string{
+		"FETCHER_HIGH_WORKER_COUNT",
+		"FETCHER_NORMAL_WORKER_COUNT",
+		"FETCHER_LOW_WORKER_COUNT",
+		"PARSER_WORKER_COUNT",
+		"VALIDATE_WORKER_COUNT",
+	} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("PARSER_WORKER_COUNT", "12")
+
+	cfg, err := config.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+
+	def := config.DefaultWorkerCountsConfig()
+	if cfg.Parser != 12 {
+		t.Errorf("Parser env override 미반영: got %d, want 12", cfg.Parser)
+	}
+	if cfg.FetcherNormal != def.FetcherNormal {
+		t.Errorf("FetcherNormal: 미설정인데 default 와 다름: got %d, want %d",
+			cfg.FetcherNormal, def.FetcherNormal)
+	}
+}
+
+func TestLoadWorkerCounts_InvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		val  string
+	}{
+		{"negative", "FETCHER_HIGH_WORKER_COUNT", "-1"},
+		{"zero", "PARSER_WORKER_COUNT", "0"},
+		{"non-numeric", "VALIDATE_WORKER_COUNT", "abc"},
+		{"float", "FETCHER_NORMAL_WORKER_COUNT", "1.5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// reset all
+			for _, k := range []string{
+				"FETCHER_HIGH_WORKER_COUNT",
+				"FETCHER_NORMAL_WORKER_COUNT",
+				"FETCHER_LOW_WORKER_COUNT",
+				"PARSER_WORKER_COUNT",
+				"VALIDATE_WORKER_COUNT",
+			} {
+				t.Setenv(k, "")
+			}
+			t.Setenv(tt.key, tt.val)
+
+			_, err := config.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
+			require.Error(t, err, "%s=%q 는 에러여야 함", tt.key, tt.val)
+		})
+	}
+}
