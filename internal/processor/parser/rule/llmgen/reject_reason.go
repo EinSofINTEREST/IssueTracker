@@ -1,6 +1,9 @@
 package llmgen
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // reject_reason.go — validator → parser 재학습 cycle 의 reason 컨텍스트 전파 (이슈 #365).
 //
@@ -15,13 +18,15 @@ type rejectReasonKey struct{}
 
 // WithRejectReason 은 ctx 에 validator rejection reason 을 첨부한 새 ctx 를 반환합니다.
 //
-// reason 빈 문자열이면 ctx 그대로 반환 — 명시적 unset 호출 케이스 회피 (None Object 패턴).
-// 호출자는 ProcessMessage / Enqueue 입구에서 reparse 헤더 감지 시 본 함수로 ctx 보강.
+// reason 빈 문자열 또는 공백 only 면 ctx 그대로 반환 — None Object 패턴 (gemini 반영 PR #368).
+// strings.TrimSpace 로 정규화하여 공백만 포함된 reason 도 부재로 분류 — 공허한 feedback
+// 블록이 prompt 에 삽입되는 것을 차단.
 func WithRejectReason(ctx context.Context, reason string) context.Context {
-	if reason == "" {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, rejectReasonKey{}, reason)
+	return context.WithValue(ctx, rejectReasonKey{}, trimmed)
 }
 
 // RejectReasonFromContext 는 ctx 에서 validator rejection reason 을 추출합니다.

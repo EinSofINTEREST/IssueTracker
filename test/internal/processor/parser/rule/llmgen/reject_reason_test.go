@@ -30,6 +30,27 @@ func TestWithRejectReason_EmptyString_ReturnsSameCtx(t *testing.T) {
 	assert.Equal(t, "", got)
 }
 
+func TestWithRejectReason_WhitespaceOnly_ReturnsSameCtx(t *testing.T) {
+	// gemini 반영 PR #368 — 공백만 포함된 reason 은 부재로 분류하여 공허한 feedback 블록 차단.
+	for _, raw := range []string{"   ", "\t\n", " \n ", "\r\n\t"} {
+		t.Run("raw="+raw, func(t *testing.T) {
+			ctx := context.Background()
+			enriched := llmgen.WithRejectReason(ctx, raw)
+			assert.Equal(t, ctx, enriched, "whitespace-only reason 도 None Object 패턴")
+			got, ok := llmgen.RejectReasonFromContext(enriched)
+			assert.False(t, ok)
+			assert.Equal(t, "", got)
+		})
+	}
+}
+
+func TestWithRejectReason_TrimsLeadingTrailingWhitespace(t *testing.T) {
+	ctx := llmgen.WithRejectReason(context.Background(), "  PublishedAt required  \n")
+	got, ok := llmgen.RejectReasonFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "PublishedAt required", got, "외곽 공백 trim — feedback 블록의 가독성 보장")
+}
+
 func TestRejectReasonFromContext_Absent_ReturnsFalse(t *testing.T) {
 	ctx := context.Background()
 	got, ok := llmgen.RejectReasonFromContext(ctx)

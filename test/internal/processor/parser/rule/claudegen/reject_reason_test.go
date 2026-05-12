@@ -11,12 +11,16 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"issuetracker/internal/processor/parser/rule/claudegen"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
+	"issuetracker/pkg/llm/prompt"
+	"issuetracker/pkg/logger"
 )
 
 // extractPromptArg 는 ExecSession 호출의 args slice 에서 "-p" 다음 prompt 문자열을 추출합니다.
@@ -85,6 +89,70 @@ func TestExtractEnriched_EmptyReason_NoFeedbackBlock(t *testing.T) {
 
 	prompt := extractPromptArg(runner.execedWith.args)
 	assert.NotContains(t, prompt, "Validation feedback from previous attempt")
+}
+
+// TestExtractEnriched_TemplateMissingPlaceholder_FailsFast 는 LLM_PROMPT_DIR override 등으로
+// 외부 템플릿이 placeholder 를 가지지 않을 때 reparse 경로 (reason 존재) 가 silent drop 되지
+// 않고 fail-fast 하는지 검증합니다 (Copilot 반영 PR #368).
+func TestExtractEnriched_TemplateMissingPlaceholder_FailsFast(t *testing.T) {
+	// 외부 override 시뮬레이션 — placeholder 토큰 없는 prompt loader 주입.
+	brokenLoader := prompt.MapLoader{
+		"claudegen/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.",
+		"claudegen/list.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.",
+	}
+	log := logger.New(logger.DefaultConfig())
+	authDir := makeAuthDir(t)
+	w, err := claudegen.NewWithRunner(
+		"ghcr.io/anthropics/claude-code:latest",
+		"claude-sonnet-4-6",
+		authDir,
+		"/root/.claude",
+		10*time.Second,
+		&mockContainerRunner{},
+		brokenLoader,
+		log,
+	)
+	require.NoError(t, err)
+	require.NoError(t, w.Start(t.Context()))
+	t.Cleanup(func() { _ = w.Stop(context.Background()) })
+
+	// reason 존재 + placeholder 부재 → 에러 반환
+	ctx := llmgen.WithRejectReason(t.Context(), "PublishedAt required")
+	_, extractErr := w.ExtractEnriched(ctx, "news.example.com", storage.TargetTypePage, "<html></html>")
+	require.Error(t, extractErr, "placeholder 부재 시 reparse 경로는 fail-fast")
+	assert.Contains(t, extractErr.Error(), "VALIDATION_REJECT_REASON_CONTEXT",
+		"에러 메시지에 누락된 placeholder 이름 포함")
+}
+
+// TestExtractEnriched_TemplateMissingPlaceholder_NoReason_OK 는 placeholder 가 없어도
+// reason 부재 시에는 (정상 경로) 통과하는지 검증 — 기존 외부 템플릿 호환성.
+func TestExtractEnriched_TemplateMissingPlaceholder_NoReason_OK(t *testing.T) {
+	brokenLoader := prompt.MapLoader{
+		"claudegen/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.",
+		"claudegen/list.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.",
+	}
+	log := logger.New(logger.DefaultConfig())
+	authDir := makeAuthDir(t)
+	runner := &mockContainerRunner{
+		execStdout: `{"validity":"ok","page_type":"news","selectors":{"title":{"css":"h1"},"main_content":{"css":"article","multi":true}},"self_check":{"title_sample":"x","body_word_count_estimate":200}}`,
+	}
+	w, err := claudegen.NewWithRunner(
+		"ghcr.io/anthropics/claude-code:latest",
+		"claude-sonnet-4-6",
+		authDir,
+		"/root/.claude",
+		10*time.Second,
+		runner,
+		brokenLoader,
+		log,
+	)
+	require.NoError(t, err)
+	require.NoError(t, w.Start(t.Context()))
+	t.Cleanup(func() { _ = w.Stop(context.Background()) })
+
+	// reason 부재 → placeholder 부재해도 정상 동작 (기존 호환성)
+	_, extractErr := w.ExtractEnriched(t.Context(), "news.example.com", storage.TargetTypePage, "<html><h1>x</h1><article>y</article></html>")
+	assert.NoError(t, extractErr, "reason 부재 시 placeholder 부재 OK (기존 외부 템플릿 호환)")
 }
 
 // TestExtractEnriched_ListTarget_WithReason_PromptHasFeedbackBlock 은 list (category)
