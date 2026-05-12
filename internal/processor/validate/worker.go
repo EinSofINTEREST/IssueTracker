@@ -262,26 +262,30 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 					"max":           core.MaxValidateReparseCount,
 				}).WithError(err).Info("content validation failed, triggering parser reparse (LLM rule relearn)")
 
-				// reparse cycle 시작 — 기존 contents row 정리 후 새 CrawlJob 발행.
-				// reject 사유 기록은 reparse 의 메타데이터로 충분 — DB 컬럼 갱신 skip 으로 단순화.
+				// reparse cycle 시작 — 발행 성공 후 contents row 정리 (순서 중요, gemini 반영).
+				// Delete 가 republish 보다 먼저면 Delete 성공 + republish 실패 시 Kafka 재처리에서
+				// GetByID 가 ErrNotFound 로 본 분기 자체를 못 타고 idempotent skip 되어 trigger 누락.
+				// → republish 성공 후에만 Delete 호출 → republish 실패해도 Kafka 재처리 시 재시도 가능.
+				if rpErr := w.republishForReparse(ctx, content, reparseCount, err, msg); rpErr != nil {
+					return fmt.Errorf("republish reparse: %w", rpErr)
+				}
 				if delErr := w.contentSvc.Delete(ctx, ref.ID); delErr != nil {
 					log.WithFields(map[string]interface{}{
 						"job_id": pm.ID,
 						"ref_id": ref.ID,
-					}).WithError(delErr).Warn("failed to delete content before reparse (non-fatal — reparse will overwrite)")
+					}).WithError(delErr).Warn("failed to delete content after reparse publish (non-fatal — reparse cycle will overwrite)")
 				}
-				if rpErr := w.republishForReparse(ctx, content, reparseCount, err); rpErr != nil {
-					return fmt.Errorf("republish reparse: %w", rpErr)
-				}
-				return w.commit(ctx, msg)
+				// commit 은 shutdown 시 ctx cancel 영향 회피 — context.WithoutCancel 로 metadata 보존 (gemini 반영).
+				return w.commit(context.WithoutCancel(ctx), msg)
 			}
-			// max 도달 — 기존 DLQ 경로로 폴스루 (info 로그로 사유 명시)
+			// max 도달 — 기존 DLQ/requeue 흐름으로 폴스루. pm.RetryCount/maxRetries 에 따라
+			// DLQ 또는 requeue 가 결정되므로 "permanent DLQ" 단정 금지 (Copilot 반영).
 			log.WithFields(map[string]interface{}{
 				"job_id":        pm.ID,
 				"ref_id":        ref.ID,
 				"reparse_count": reparseCount,
 				"max":           core.MaxValidateReparseCount,
-			}).Info("reparse count reached max, falling through to permanent DLQ")
+			}).Info("reparse count reached max, falling through to existing DLQ/requeue flow")
 		}
 
 		// 검증 실패: contents에서 삭제 후 DLQ 또는 재큐잉
@@ -512,19 +516,40 @@ func (w *Worker) requeue(ctx context.Context, msg *queue.Message, pm *core.Proce
 	return nil
 }
 
+// reparseJobTimeoutDefault 는 원본 timeout_ms 헤더 부재 시 사용할 reparse CrawlJob timeout.
+const reparseJobTimeoutDefault = 30 * time.Second
+
 // republishForReparse 는 validate 실패 시 parser 재학습 트리거용 새 CrawlJob 을
 // TopicCrawlNormal 에 발행합니다 (이슈 #364).
 //
-// 헤더에 validate_reparse_count (현재 + 1) 와 validate_reparse_reason (err.Error())
-// 을 설정 — Sub C 의 parser worker 가 본 헤더 보고 LLM 호출 시 reason context 주입.
+// 헤더 정책:
+//   - 원본 메시지 (orig) 의 모든 헤더를 base 로 복사 후 reparse 전용 키만 덮어쓰기 —
+//     timeout_ms / trace ID / 기타 observability 메타데이터 보존 (gemini 반영)
+//   - validate_reparse_count = currentCount + 1
+//   - validate_reparse_reason = err.Error()
+//   - target_type = string(TargetTypeArticle) — fetcher chain handler 가 article 분기 사용
+//     (Copilot 반영 — wire 포맷은 core.TargetType 문자열 "article" 이지 "page" 아님)
+//   - crawler = content.SourceID (없으면 base 유지)
+//
+// Kafka key 는 job.ID — 기존 crawl 토픽 발행 패턴과 일관 (scheduler/emitter.go, fetcher/rule/upgrader.go).
+//
+// timeout 은 원본 timeout_ms 헤더 계승 (gemini 반영). 부재 시 reparseJobTimeoutDefault.
 //
 // 호출 사전 조건 (호출자가 보장):
 //   - cfg.ReparseEnabled == true
 //   - IsReparseEligible(err) == true
 //   - currentCount < core.MaxValidateReparseCount
-func (w *Worker) republishForReparse(ctx context.Context, content *core.Content, currentCount int, reason error) error {
+func (w *Worker) republishForReparse(ctx context.Context, content *core.Content, currentCount int, reason error, orig *queue.Message) error {
 	log := logger.FromContext(ctx)
 	nextCount := currentCount + 1
+
+	// timeout — 원본 timeout_ms 헤더 계승, 부재 시 기본.
+	jobTimeout := reparseJobTimeoutDefault
+	if raw := orig.Headers[core.HeaderTimeoutMs]; raw != "" {
+		if ms, perr := strconv.Atoi(raw); perr == nil && ms > 0 {
+			jobTimeout = time.Duration(ms) * time.Millisecond
+		}
+	}
 
 	job := core.CrawlJob{
 		ID:          fmt.Sprintf("reparse-%s-%d", content.ID, nextCount),
@@ -535,7 +560,7 @@ func (w *Worker) republishForReparse(ctx context.Context, content *core.Content,
 		},
 		Priority:    core.PriorityNormal,
 		ScheduledAt: time.Now(),
-		Timeout:     30 * time.Second, // fetcher 기본값 — entrypoint 가 scheduler timeout 헤더 없으면 기본
+		Timeout:     jobTimeout,
 		RetryCount:  0,
 		MaxRetries:  3,
 	}
@@ -544,16 +569,24 @@ func (w *Worker) republishForReparse(ctx context.Context, content *core.Content,
 		return fmt.Errorf("marshal reparse crawl job: %w", err)
 	}
 
+	// 원본 헤더 base 복사 + reparse 전용 키 덮어쓰기 (gemini 반영).
+	headers := make(map[string]string, len(orig.Headers)+4)
+	for k, v := range orig.Headers {
+		headers[k] = v
+	}
+	headers[core.HeaderTargetType] = string(core.TargetTypeArticle) // wire 포맷 (Copilot 반영)
+	if content.SourceID != "" {
+		headers[core.HeaderCrawler] = content.SourceID
+	}
+	headers[core.HeaderTimeoutMs] = strconv.FormatInt(jobTimeout.Milliseconds(), 10)
+	headers[core.HeaderValidateReparseCount] = strconv.Itoa(nextCount)
+	headers[core.HeaderValidateReparseReason] = reason.Error()
+
 	reparseMsg := queue.Message{
-		Topic: queue.TopicCrawlNormal,
-		Key:   []byte(content.URL),
-		Value: payload,
-		Headers: map[string]string{
-			core.HeaderTargetType:            "page",
-			core.HeaderCrawler:               content.SourceID,
-			core.HeaderValidateReparseCount:  strconv.Itoa(nextCount),
-			core.HeaderValidateReparseReason: reason.Error(),
-		},
+		Topic:   queue.TopicCrawlNormal,
+		Key:     []byte(job.ID), // 기존 crawl 토픽 패턴 일관 (Copilot 반영)
+		Value:   payload,
+		Headers: headers,
 	}
 
 	pubErr := w.producer.Publish(ctx, reparseMsg)

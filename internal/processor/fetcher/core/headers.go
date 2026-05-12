@@ -5,8 +5,9 @@ package core
 // 헤더 채택 이유: payload (CrawlJob / RawContentRef / ContentRef) 스키마 변경 없이 메타데이터
 // 만 전달. JSON 마이그레이션 비용 회피 + 헤더는 wire-level 에서 항상 접근 가능.
 const (
-	// HeaderTargetType: 처리 대상 타입 — "list" / "page" / "search".
-	// fetcher 가 host 별 chain handler 분기 + parser 가 ParseLinks vs ParsePage 분기.
+	// HeaderTargetType: 처리 대상 타입 — core.TargetType 문자열 ("article"/"category"/"search"/"sitemap").
+	// fetcher 의 chain handler 가 본 헤더로 분기 (예: domain/general/chain_handler.go).
+	// storage 의 TargetType 은 별도 분류 ("list"/"page") — fetcher wire 포맷과 다름 (parser 단에서 변환).
 	HeaderTargetType = "target_type"
 
 	// HeaderCrawler: source crawler 식별자 (예: "naver", "cnn"). 로깅 + 재큐 시 보존용.

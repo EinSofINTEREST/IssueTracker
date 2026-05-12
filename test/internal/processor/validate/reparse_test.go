@@ -150,13 +150,18 @@ func TestWorker_Reparse_FirstAttempt_PublishesCrawlJob(t *testing.T) {
 		"first reparse 의 count 헤더는 1 이어야 함")
 	assert.NotEmpty(t, publishedCrawlJob.Headers[core.HeaderValidateReparseReason],
 		"reason 헤더 비어 있으면 안 됨")
-	assert.Equal(t, "page", publishedCrawlJob.Headers[core.HeaderTargetType])
+	// target_type 헤더는 fetcher chain handler 가 분기에 사용하는 wire 포맷 (core.TargetType 문자열).
+	assert.Equal(t, string(core.TargetTypeArticle), publishedCrawlJob.Headers[core.HeaderTargetType])
 	assert.Equal(t, content.SourceID, publishedCrawlJob.Headers[core.HeaderCrawler])
+	// timeout_ms 헤더 — 원본 부재 시 reparseJobTimeoutDefault (30s = 30000ms)
+	assert.Equal(t, "30000", publishedCrawlJob.Headers[core.HeaderTimeoutMs])
 
 	var job core.CrawlJob
 	require.NoError(t, json.Unmarshal(publishedCrawlJob.Value, &job))
 	assert.Equal(t, content.URL, job.Target.URL)
 	assert.Equal(t, content.SourceID, job.CrawlerName)
+	// Key 는 job.ID 패턴 (기존 crawl 토픽 발행과 일관)
+	assert.Equal(t, []byte(job.ID), publishedCrawlJob.Key)
 
 	// content 가 삭제됐는지 확인 (reparse cycle 의 사전조건)
 	contentSvc.AssertCalled(t, "Delete", mock.Anything, content.ID)
@@ -167,6 +172,44 @@ func TestWorker_Reparse_FirstAttempt_PublishesCrawlJob(t *testing.T) {
 			assert.NotEqual(t, queue.TopicDLQ, m.Topic, "reparse 분기에서 DLQ 발행 X")
 		}
 	}
+}
+
+// TestWorker_Reparse_PropagatesOriginalHeaders 는 원본 메시지의 timeout_ms 등 trace 헤더가
+// reparse CrawlJob 에 propagate 되는지 검증합니다 (gemini 반영).
+func TestWorker_Reparse_PropagatesOriginalHeaders(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := new(mockContentService)
+	content := invalidNewsContent()
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	contentSvc.On("Delete", mock.Anything, content.ID).Return(nil)
+
+	cfg := config.DefaultValidateConfig()
+	cfg.ReparseEnabled = true
+
+	var publishedCrawlJob queue.Message
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicCrawlNormal
+	})).Run(func(args mock.Arguments) {
+		publishedCrawlJob = args.Get(1).(queue.Message)
+	}).Return(nil)
+
+	msg := makeContentMsgWithReparseHeader(t, content, 0)
+	msg.Headers[core.HeaderTimeoutMs] = "60000" // 60s — 원본 timeout
+	msg.Headers["x-trace-id"] = "trace-abc-123"
+
+	w := validate.NewWorker(consumer, producer, contentSvc, locks.NewNoopStageGate(), 1, cfg)
+	runProcessOnce(t, consumer, w, msg)
+
+	// 원본 timeout_ms 가 그대로 reparse 메시지에 계승됨
+	assert.Equal(t, "60000", publishedCrawlJob.Headers[core.HeaderTimeoutMs])
+	// 임의 trace 헤더도 보존됨 (observability)
+	assert.Equal(t, "trace-abc-123", publishedCrawlJob.Headers["x-trace-id"])
+
+	// CrawlJob.Timeout 도 60s 로 설정됨
+	var job core.CrawlJob
+	require.NoError(t, json.Unmarshal(publishedCrawlJob.Value, &job))
+	assert.Equal(t, 60*time.Second, job.Timeout)
 }
 
 // TestWorker_Reparse_MaxCount_NoCrawlJob 은 count == max 도달 시 reparse cycle 자체가
