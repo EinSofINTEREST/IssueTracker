@@ -142,18 +142,21 @@ func (NoopStageGate) Acquire(_ context.Context, _ string) (func(), bool, error) 
 	return func() {}, true, nil
 }
 
-// BuildStageGate 는 (stage, workerCount, configuredCap, procLock, log) 입력으로 StageGate
-// 를 합성하는 wiring 헬퍼입니다 (이슈 #356 — DRY).
+// BuildStageGate 는 (stage, capacity, procLock, log) 입력으로 StageGate 를 합성하는 wiring
+// 헬퍼입니다 (이슈 #356 — DRY).
+//
+// 시그니처 의도:
+//   - capacity 는 이미 계산된 Semaphore 용량을 받습니다. 호출자가 pkg/config.CapPerStage
+//     (worker_count/2 + min(configured) 정책) 로 사전 계산 후 본 헬퍼에 전달.
+//   - 본 헬퍼는 단순히 그 capacity 로 NewSemaphore 를 만들고 NewStageGate 로 합성.
 //
 // 동작:
 //   - procLock 이 nil → NoopStageGate 반환 (Redis 부재 등 graceful degrade)
-//   - capacity = config.CapPerStage(workerCount, configuredCap) — 0 이하면 workerCount/2 자동.
-//     semaphore 최소 1 보장.
-//   - 정상 wiring 시 NewStageGate(stage, NewSemaphore(cap), procLock, log) 반환
+//   - capacity < 1 → 1 로 보정 (semaphore.NewSemaphore 의 capacity >= 1 보장)
+//   - 정상 wiring 시 NewStageGate(stage, NewSemaphore(capacity), procLock, log) 반환
 //
-// fetcher / parser / validator wiring 시 동일 헬퍼 사용 — capacity 정책 일관성.
-// capacity 계산은 pkg/config.CapPerStage 의 정책을 호출자가 적용한 뒤 본 헬퍼에 전달:
-// 본 헬퍼는 그 값으로 직접 semaphore 를 생성합니다.
+// fetcher / parser / validator wiring 모두 동일 헬퍼 사용 — capacity 계산 정책의
+// 단일 소스를 pkg/config.CapPerStage 로 일원화.
 func BuildStageGate(stage string, capacity int, procLock ProcessingLock, log *logger.Logger) StageGate {
 	if procLock == nil {
 		return NewNoopStageGate()

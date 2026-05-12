@@ -339,12 +339,17 @@ func main() {
 		RetryScheduler:        retryScheduler,
 		MaxConcurrentPerStage: stageGateCfg.FetcherMaxConcurrentPerStage,
 	}
+	// per-pool 실제 capacity 를 함께 로깅 — env 양수 override 시 min(configured, worker_count/2) 가
+	// 적용되므로 단순 "worker_count/2" 문구는 부정확. 운영자가 실제 cap 을 즉답 가능하도록.
 	log.WithFields(map[string]interface{}{
 		"configured": stageGateCfg.FetcherMaxConcurrentPerStage,
 		"high":       managerCfg.High.WorkerCount,
 		"normal":     managerCfg.Normal.WorkerCount,
 		"low":        managerCfg.Low.WorkerCount,
-	}).Info("fetcher stage gate config loaded (per-pool cap = worker_count/2)")
+		"high_cap":   config.CapPerStage(managerCfg.High.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
+		"normal_cap": config.CapPerStage(managerCfg.Normal.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
+		"low_cap":    config.CapPerStage(managerCfg.Low.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
+	}).Info("fetcher stage gate config loaded (per-pool cap = min(configured, worker_count/2))")
 
 	// chromedp 전용 worker pool — semaphore 로 Chrome 동시 호출 제한.
 	// chromedpPoolCfg 는 사이트 등록 단계에서 미리 로드됨 (RemoteURLs 가 사이트
