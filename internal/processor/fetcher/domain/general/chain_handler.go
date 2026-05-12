@@ -347,6 +347,10 @@ func (h *ChainHandler) republishToChromedpQueue(ctx context.Context, job *core.C
 
 // publishFetchedRef 는 RawContentRef 를 TopicFetched 에 발행합니다.
 // 헤더에 target_type 을 포함하여 parser worker 가 Article/Category 분기에 사용.
+//
+// validator → parser 재학습 cycle (이슈 #366): 호출자 ctx 의 inbox headers 에서
+// validate_reparse_count / validate_reparse_reason 를 propagate — parser worker 가 받아서
+// LLM 호출 시 ctx 에 reason 주입 + 다음 stage 전파.
 func (h *ChainHandler) publishFetchedRef(ctx context.Context, job *core.CrawlJob, raw *core.RawContent, rawID string) error {
 	ref := core.RawContentRef{
 		ID:         rawID,
@@ -359,18 +363,29 @@ func (h *ChainHandler) publishFetchedRef(ctx context.Context, job *core.CrawlJob
 		return fmt.Errorf("marshal raw content ref: %w", err)
 	}
 
+	headers := map[string]string{
+		"source":              raw.SourceInfo.Name,
+		"country":             raw.SourceInfo.Country,
+		core.HeaderCrawler:    job.CrawlerName,
+		"job_id":              job.ID,
+		core.HeaderTargetType: string(job.Target.Type),
+		core.HeaderTimeoutMs:  fmt.Sprintf("%d", job.Timeout.Milliseconds()),
+	}
+	// reparse 헤더 propagation — incoming msg 의 reparse_* 값을 fetched 메시지로 전파.
+	if inbox := core.InboxHeadersFromContext(ctx); inbox != nil {
+		if v := inbox[core.HeaderValidateReparseCount]; v != "" {
+			headers[core.HeaderValidateReparseCount] = v
+		}
+		if v := inbox[core.HeaderValidateReparseReason]; v != "" {
+			headers[core.HeaderValidateReparseReason] = v
+		}
+	}
+
 	msg := queue.Message{
-		Topic: queue.TopicFetched,
-		Key:   []byte(rawID),
-		Value: payload,
-		Headers: map[string]string{
-			"source":      raw.SourceInfo.Name,
-			"country":     raw.SourceInfo.Country,
-			"crawler":     job.CrawlerName,
-			"job_id":      job.ID,
-			"target_type": string(job.Target.Type),
-			"timeout_ms":  fmt.Sprintf("%d", job.Timeout.Milliseconds()),
-		},
+		Topic:   queue.TopicFetched,
+		Key:     []byte(rawID),
+		Value:   payload,
+		Headers: headers,
 	}
 	return h.Producer.Publish(ctx, msg)
 }
