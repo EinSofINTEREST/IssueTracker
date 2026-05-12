@@ -32,7 +32,8 @@ CHROME_PORT=9222
 CHROME_CONTAINER=issuetracker-chrome
 
 # Chrome compose-based 변수 (단일 docker run → docker compose --scale 전환)
-# CHROME_WORKER_COUNT 는 deployments/docker/.env 의 FETCHER_CHROMEDP_WORKER_COUNT 사용 — 미설정 시 2.
+# CHROME_WORKER_COUNT 는 루트 .env 의 FETCHER_CHROMEDP_WORKER_COUNT 사용 — 미설정 시 2.
+# (이슈 #378: 두 .env 파일 → 단일 source 통합)
 # CHROME_PROJECT_NAME: compose project 명시 고정 (Copilot 피드백) — working dir 에 무관하게
 # 동일 project 의 chrome replica 를 일관 인식. 기본값 'docker' 는 compose-file 디렉토리 basename
 # (deployments/docker) 과 일치하여 운영 환경에 이미 떠 있는 docker-chrome-{N} 컨테이너와 정합.
@@ -48,7 +49,7 @@ COMPOSE_FILE=deployments/docker/docker-compose.yml
 COMPOSE=docker compose
 KAFKA_DATA_DIR=/data/ELArchive/issuetracker/kafka
 KAFKA_CONTAINER=issuetracker-kafka
-KAFKA_ENV_FILE=deployments/docker/.env
+KAFKA_ENV_FILE=.env
 # .env가 없으면 .env.example 기본값 사용
 KAFKA_ENV_ARGS=$(shell [ -f $(KAFKA_ENV_FILE) ] && echo "--env-file $(KAFKA_ENV_FILE)")
 
