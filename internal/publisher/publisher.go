@@ -107,8 +107,14 @@ func crawlTopic(p core.Priority) string {
 }
 
 // newJobID 는 crypto/rand 기반의 고유 Job ID (32자 hex) 를 생성합니다.
+//
+// rand.Read 실패는 매우 드물지만 발생 시 all-zero ID → Kafka partition 충돌 / 다운스트림
+// dedup 깨짐 → 데이터 정합성 심각. 운영 fail-fast 가 silent 데이터 손상보다 안전 (gemini
+// security-medium PR #394 피드백).
 func newJobID() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Errorf("publisher: crypto/rand failure generating job ID: %w", err))
+	}
 	return hex.EncodeToString(b)
 }

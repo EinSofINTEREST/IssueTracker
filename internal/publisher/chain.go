@@ -100,6 +100,9 @@ func (p *Publisher) buildJobMessages(
 	timeout time.Duration,
 ) ([]queue.Message, error) {
 	msgs := make([]queue.Message, 0, len(urls))
+	// gemini PR #394 피드백 — time.Now() loop 외부 1회 호출 (system call 감소).
+	// 같은 batch 의 모든 job 은 동일 발견 시점이므로 ScheduledAt 동기.
+	now := time.Now()
 	for _, url := range urls {
 		job := &core.CrawlJob{
 			ID:          newJobID(),
@@ -108,7 +111,7 @@ func (p *Publisher) buildJobMessages(
 				URL:  url,
 				Type: targetType,
 			},
-			ScheduledAt: time.Now(),
+			ScheduledAt: now,
 			Timeout:     timeout,
 			MaxRetries:  DefaultMaxRetries,
 		}
@@ -153,27 +156,50 @@ func (p *Publisher) normalizeURLs(urls []string, n *links.Normalizer, crawlerNam
 	return out
 }
 
-// acquireViaGuard 는 PipelineGuard 로 target type 별 TTL 정책을 적용하여 진입 marker 를 잡습니다.
+// acquireFunc 는 단일 URL 의 진입 marker 획득 시도를 추상화합니다.
+// acquireViaGuard / acquireIngestion 공통 흐름 (filterByAcquire) 에서 사용 — gemini PR #394
+// 피드백 (중복 제거).
+type acquireFunc func(ctx context.Context, url string) (acquired bool, err error)
+
+// filterByAcquire 는 ctx 취소 / fail-open / 로깅 공통 패턴으로 acquire 시도하여 marker 를
+// 잡은 URL 만 반환합니다.
 //
-// 동작 정책은 acquireIngestion 과 동일 — fail-open / ctx 취소 / 정규화 가정 등.
-// 차이점: lock.Acquire 대신 guard.CheckAndAcquire(targetType) 호출 — Category 는 단명 TTL 적용.
-func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerName string, guard PipelineGuard, targetType core.TargetType) []string {
+//   - acquired=true  : 신규 진입 marker 획득 → 결과 포함
+//   - acquired=false : 이미 다른 publisher 가 점유 → DEBUG 로그 + 제외
+//   - err            : fail-open (결과 포함) + WARN 로그 — Redis 일시 장애 시 publish 영구 차단 회피
+//   - ctx 취소       : 즉시 종료 + 남은 URL fail-open 통과 — 후속 PublishBatch 가 ctx 에러로 자연 실패
+//
+// 결과 슬라이스는 입력과 다른 underlying array 로 새 할당 (입력 mutate 없음).
+//
+// failOpenMsg / cancelledMsg 는 호출자가 acquire 의미에 맞게 지정 — "pipeline guard" / "ingestion lock" 구분.
+// extraFields 는 acquireViaGuard 의 target_type 같은 추가 컨텍스트.
+func (p *Publisher) filterByAcquire(
+	ctx context.Context,
+	urls []string,
+	crawlerName string,
+	op acquireFunc,
+	failOpenMsg, cancelledMsg string,
+	extraFields map[string]interface{},
+) []string {
 	out := make([]string, 0, len(urls))
-	l := p.log.WithFields(map[string]interface{}{
-		"crawler":     crawlerName,
-		"stage":       "publisher",
-		"target_type": string(targetType),
-	})
+	fields := map[string]interface{}{
+		"crawler": crawlerName,
+		"stage":   "publisher",
+	}
+	for k, v := range extraFields {
+		fields[k] = v
+	}
+	l := p.log.WithFields(fields)
 
 	for i, url := range urls {
 		if err := ctx.Err(); err != nil {
-			l.WithError(err).Warn("context cancelled during pipeline guard acquire, allowing remaining URLs")
+			l.WithError(err).Warn(cancelledMsg)
 			return append(out, urls[i:]...)
 		}
 
-		acquired, err := guard.CheckAndAcquire(ctx, url, targetType)
+		acquired, err := op(ctx, url)
 		if err != nil {
-			l.WithField("url", url).WithError(err).Warn("pipeline guard check failed, allowing publish")
+			l.WithField("url", url).WithError(err).Warn(failOpenMsg)
 			out = append(out, url)
 			continue
 		}
@@ -186,46 +212,32 @@ func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerN
 	return out
 }
 
+// acquireViaGuard 는 PipelineGuard 로 target type 별 TTL 정책을 적용하여 진입 marker 를 잡습니다.
+//
+// 동작 정책은 acquireIngestion 과 동일 — fail-open / ctx 취소 / 정규화 가정 등.
+// 차이점: lock.Acquire 대신 guard.CheckAndAcquire(targetType) 호출 — Category 는 단명 TTL 적용.
+func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerName string, guard PipelineGuard, targetType core.TargetType) []string {
+	op := func(ctx context.Context, url string) (bool, error) {
+		return guard.CheckAndAcquire(ctx, url, targetType)
+	}
+	return p.filterByAcquire(
+		ctx, urls, crawlerName, op,
+		"pipeline guard check failed, allowing publish",
+		"context cancelled during pipeline guard acquire, allowing remaining URLs",
+		map[string]interface{}{"target_type": string(targetType)},
+	)
+}
+
 // acquireIngestion 은 IngestionLock 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
 // 반환합니다.
-//
-//   - acquired=true  : 신규 진입 marker 획득 — 결과 슬라이스에 포함
-//   - acquired=false : 이미 다른 publisher 또는 재배달이 marker 점유 — DEBUG 로그 후 제외
-//   - 조회 실패      : fail-open (결과 슬라이스에 포함) + WARN 로그 — Redis 일시 장애가
-//     publish 를 영구 차단하지 않도록
-//   - ctx 취소       : 즉시 종료하고 남은 URL 은 fail-open 으로 그대로 통과 — 셧다운 중
-//     무의미한 lock 호출/WARN 누적 회피. 후속 PublishBatch 가 ctx 에러로 자연 실패.
-//
-// 결과 슬라이스는 입력과 다른 underlying array 로 새로 할당됩니다 (입력 mutate 없음).
-//
-// 성능: crawler/stage sub-logger 를 루프 외부에서 1회 생성하여 재사용.
 //
 // Deprecated: SetPipelineGuard 사용 시 acquireViaGuard 가 우선 — 본 메소드는
 // guard 미주입 환경의 backward compat fallback.
 func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionLock) []string {
-	out := make([]string, 0, len(urls))
-	l := p.log.WithFields(map[string]interface{}{
-		"crawler": crawlerName,
-		"stage":   "publisher",
-	})
-
-	for i, url := range urls {
-		if err := ctx.Err(); err != nil {
-			l.WithError(err).Warn("context cancelled during ingestion lock acquire, allowing remaining URLs")
-			return append(out, urls[i:]...)
-		}
-
-		acquired, err := lock.Acquire(ctx, url)
-		if err != nil {
-			l.WithField("url", url).WithError(err).Warn("ingestion lock acquire failed, allowing publish")
-			out = append(out, url)
-			continue
-		}
-		if !acquired {
-			l.WithField("url", url).Debug("url already in pipeline, skipping publish")
-			continue
-		}
-		out = append(out, url)
-	}
-	return out
+	return p.filterByAcquire(
+		ctx, urls, crawlerName, lock.Acquire,
+		"ingestion lock acquire failed, allowing publish",
+		"context cancelled during ingestion lock acquire, allowing remaining URLs",
+		nil,
+	)
 }
