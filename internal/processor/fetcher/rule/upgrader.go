@@ -58,13 +58,13 @@ const (
 //   - max 20 cap: 단일 사이클 republish 폭주 회피
 //   - 모든 단계 실패는 non-fatal — best-effort. 다음 카운팅 사이클이 자연스러운 retry.
 type Upgrader struct {
-	repo      storage.FetcherRuleRepository
-	resolver  Resolver
-	tracker   storage.RawIDTracker
-	rawSvc    service.RawContentService
-	publisher publisher.UpgradePublisher
-	redis     *goredis.Client // SETNX in-flight lock 용. nil 이면 lock 비활성 (단일 인스턴스 환경).
-	log       *logger.Logger
+	repo       storage.FetcherRuleRepository
+	resolver   Resolver
+	tracker    storage.RawIDTracker
+	rawSvc     service.RawContentService
+	upgradePub publisher.UpgradePublisher // gemini PR #398 — `publisher` package import 와 shadow 회피.
+	redis      *goredis.Client            // SETNX in-flight lock 용. nil 이면 lock 비활성 (단일 인스턴스 환경).
+	log        *logger.Logger
 }
 
 // NewUpgrader 는 Upgrader 를 생성합니다 (이슈 #388 — producer queue.Producer →
@@ -96,14 +96,17 @@ func NewUpgrader(
 	if pub == nil {
 		return nil, errors.New("rule: NewUpgrader requires non-nil UpgradePublisher")
 	}
+	if log == nil {
+		return nil, errors.New("rule: NewUpgrader requires non-nil Logger")
+	}
 	return &Upgrader{
-		repo:      repo,
-		resolver:  resolver,
-		tracker:   tracker,
-		rawSvc:    rawSvc,
-		publisher: pub,
-		redis:     redisClient,
-		log:       log,
+		repo:       repo,
+		resolver:   resolver,
+		tracker:    tracker,
+		rawSvc:     rawSvc,
+		upgradePub: pub,
+		redis:      redisClient,
+		log:        log,
 	}, nil
 }
 
@@ -250,7 +253,7 @@ func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []stri
 		return
 	}
 
-	if err := u.publisher.PublishUpgrade(ctx, host, msgs); err != nil {
+	if err := u.upgradePub.PublishUpgrade(ctx, host, msgs); err != nil {
 		// Kafka 실패 — 모든 ID 잔존 (다음 trigger 가 자연 retry).
 		u.logWarn("upgrader republish PublishUpgrade failed, all ids retained for retry", host, err)
 		return

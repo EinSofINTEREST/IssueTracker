@@ -43,9 +43,12 @@ func (p *Publisher) PublishUpgrade(ctx context.Context, host string, msgs []queu
 	if err := p.producer.PublishBatch(ctx, msgs); err != nil {
 		return fmt.Errorf("upgrade publish batch (host=%s, count=%d): %w", host, len(msgs), err)
 	}
-	p.log.WithFields(map[string]interface{}{
-		"host":            host,
-		"republish_count": len(msgs),
-	}).Info("upgrade republish published")
+	// gemini PR #398 — defensive nil check (publisher.New 가 log 검증 안 하므로 caller 보호).
+	if p.log != nil {
+		p.log.WithFields(map[string]interface{}{
+			"host":            host,
+			"republish_count": len(msgs),
+		}).Info("upgrade republish published")
+	}
 	return nil
 }
