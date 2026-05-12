@@ -254,7 +254,14 @@ func (w *ParserWorker) runWorker(ctx context.Context, idx int) {
 			continue
 		}
 
-		if err := w.processMessage(ctx, msg); err != nil {
+		if err := w.ProcessMessage(ctx, msg); err != nil {
+			// StageGate not-acquired sentinel — commit 없이 다음 메시지로. 다른 worker 가 처리 중이므로
+			// 시끄러운 Warn 대신 Debug. Kafka 가 같은 partition 의 다음 offset 으로 fetch 진행 — 같은
+			// msg 재배달은 lock 해제 + 재시도 stream 에서 발생 (이슈 #355 PR #358 리뷰 반영).
+			if errors.Is(err, ErrStageGateNotAcquired) {
+				wlog.WithField("offset", msg.Offset).Debug("stage gate not acquired by this worker, uncommitted")
+				continue
+			}
 			// processMessage 가 commit 안 한 경우 — 재시도 위해 commit skip (Kafka 가 redeliver).
 			wlog.WithError(err).WithField("offset", msg.Offset).Warn("process message failed, will be redelivered")
 			continue
@@ -268,14 +275,29 @@ func (w *ParserWorker) runWorker(ctx context.Context, idx int) {
 	}
 }
 
-// processMessage 는 단일 메시지 처리 흐름. 성공 시 nil, 재시도 필요 시 error 반환.
+// ErrStageGateNotAcquired 는 parser stage 의 ProcessingLock 이 다른 worker 에 점유 중이라
+// 본 worker 가 스킵해야 함을 나타내는 sentinel. runWorker 가 본 에러를 감지하면 Warn 대신
+// Debug 로 처리하여 정상 dedup 경로를 시끄럽게 만들지 않습니다 (PR #358 리뷰 반영).
+//
+// commit 정책: 본 sentinel 반환 시 호출자는 commit 하지 않음 — 같은 partition 의 다음 msg
+// 처리로 진행하고, 본 offset 의 commit 은 실제 처리 담당 worker 가 수행 (또는 재배달 stream
+// 에서 다시 결정).
+//
+// exported 이유: 외부 테스트 / 모니터링 코드에서 errors.Is 매칭으로 dedup-skip 을 일반 실패와
+// 구분할 수 있도록.
+var ErrStageGateNotAcquired = errors.New("parser stage gate not acquired by this worker")
+
+// ProcessMessage 는 단일 메시지 처리 흐름. 성공 시 nil, 재시도 필요 시 error 반환.
 //
 // Commit 정책:
 //   - 정상 처리 → 호출자가 commit
 //   - rule.Error (parse 실패) → commit (raw 잔존, 재시도 X)
 //   - payload 손상 → commit (DLQ 발행 후, 재시도 무의미)
 //   - 기타 transient → commit 안 함 (재시도)
-func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) error {
+//
+// 일반적으로 runWorker 가 내부에서 호출하지만, 외부 테스트가 분기별 행동을 black-box 로
+// 검증할 수 있도록 exported. consumer 가 nil 인 worker 도 본 메소드는 호출 가능.
+func (w *ParserWorker) ProcessMessage(ctx context.Context, msg *queue.Message) error {
 	var ref core.RawContentRef
 	if err := json.Unmarshal(msg.Value, &ref); err != nil {
 		w.log.WithError(err).Error("malformed RawContentRef payload, dropping")
@@ -294,11 +316,20 @@ func (w *ParserWorker) processMessage(ctx context.Context, msg *queue.Message) e
 	// ref.URL 은 fetcher 가 정규화한 URL — Ingestion Lock 키와 같은 정규형 사용.
 	release, acquired, gateErr := w.gate.Acquire(ctx, ref.URL)
 	if gateErr != nil {
+		// ctx cancel / deadline — shutdown 또는 semaphore 대기 timeout. fail-open 으로 진행하면
+		// 취소된 ctx 로 쓸데없는 작업 + per-stage cap 무력화 위험 (PR #358 gemini / Copilot 반영).
+		// commit 안 하고 종료 → Kafka redeliver 보장.
+		// SoT: ctx.Err() != nil (errors.Is(ctx.Canceled) 대비 정확 — 종료 사유 단일화).
+		if ctx.Err() != nil {
+			return fmt.Errorf("stage gate acquire aborted by ctx: %w", gateErr)
+		}
+		// 그 외 인프라 에러 (예: Redis 장애) — fail-open. 다른 worker 와의 dedup 만 일시 비활성화.
 		mlog.WithError(gateErr).Warn("failed to acquire parser stage gate, proceeding without gate")
 	} else if !acquired {
 		mlog.Debug("parser processing lock already held by another worker, skipping")
-		// 다른 parser worker 가 처리 중 — commit 없이 종료. 처리 담당 worker 의 commit 에 의존.
-		return nil
+		// 다른 parser worker 가 처리 중 — sentinel 반환으로 commit skip. runWorker 가 Warn 대신
+		// Debug 로 처리. 처리 담당 worker 가 commit 책임 (PR #358 CodeRabbit 반영).
+		return ErrStageGateNotAcquired
 	} else {
 		defer release()
 	}
