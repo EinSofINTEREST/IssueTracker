@@ -42,13 +42,6 @@ import (
 	"issuetracker/pkg/redis"
 )
 
-const (
-	validateWorkerCount = 8
-	// parserWorkerCount: TopicFetched consumer group (issuetracker-parsers) 의 worker 수.
-	// fetcher worker 와 독립 — chromedp/LLM 등으로 parser 가 무거워질 때 별도 스케일.
-	parserWorkerCount = 6
-)
-
 func main() {
 	log := logger.New(logger.DefaultConfig())
 
@@ -71,6 +64,20 @@ func main() {
 		"shutdown_timeout":           shutdownCfg.Timeout.String(),
 		"claudegen_shutdown_timeout": shutdownCfg.ClaudegenTimeout.String(),
 	}).Info("shutdown timeouts loaded")
+
+	// 모든 stage 의 worker goroutine 수를 env 로 노출 (이슈 #376).
+	// default 는 기존 hardcoded 값과 동일 — env 미설정 시 동작 100% 보존.
+	workerCountsCfg, err := config.LoadWorkerCounts()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load worker counts config")
+	}
+	log.WithFields(map[string]interface{}{
+		"fetcher_high":   workerCountsCfg.FetcherHigh,
+		"fetcher_normal": workerCountsCfg.FetcherNormal,
+		"fetcher_low":    workerCountsCfg.FetcherLow,
+		"parser":         workerCountsCfg.Parser,
+		"validate":       workerCountsCfg.Validate,
+	}).Info("worker counts loaded")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -339,9 +346,9 @@ func main() {
 	}
 
 	managerCfg := crawlerWorker.ManagerConfig{
-		High:                  crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
-		Normal:                crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
-		Low:                   crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
+		High:                  crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: workerCountsCfg.FetcherHigh},
+		Normal:                crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: workerCountsCfg.FetcherNormal},
+		Low:                   crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: workerCountsCfg.FetcherLow},
 		ProcessingLock:        procLock,
 		RetryScheduler:        retryScheduler,
 		MaxConcurrentPerStage: stageGateCfg.FetcherMaxConcurrentPerStage,
@@ -544,11 +551,11 @@ func main() {
 	// Parser StageGate (이슈 #355) — ProcessingLock + per-stage Semaphore 합성.
 	// Semaphore capacity 는 PARSER_MAX_CONCURRENT_PER_STAGE 와 worker_count/2 의 min.
 	// stageGateCfg 는 fetcher managerCfg 직전 (위쪽) 에서 이미 로드.
-	parserCap := config.CapPerStage(parserWorkerCount, stageGateCfg.ParserMaxConcurrentPerStage)
+	parserCap := config.CapPerStage(workerCountsCfg.Parser, stageGateCfg.ParserMaxConcurrentPerStage)
 	parserGate := locks.BuildStageGate(locks.StageParser, parserCap, procLock, log)
 	if procLock != nil {
 		log.WithFields(map[string]interface{}{
-			"worker_count": parserWorkerCount,
+			"worker_count": workerCountsCfg.Parser,
 			"capacity":     parserCap,
 			"configured":   stageGateCfg.ParserMaxConcurrentPerStage,
 		}).Info("parser stage gate enabled (ProcessingLock + Semaphore)")
@@ -572,7 +579,7 @@ func main() {
 		fetcherUpgrader, // 임계값 도달 시 chromedp 자동 전환 + republish
 		fetcherUpgradeCfg.EmptyBodyTitleMin,
 		fetcherUpgradeCfg.EmptyBodyContentMin,
-		parserWorkerCount,
+		workerCountsCfg.Parser,
 		log,
 	)
 
@@ -788,11 +795,11 @@ func main() {
 	defer validateProducer.Close()
 
 	// Validate StageGate (이슈 #356) — ProcessingLock + per-stage Semaphore 합성.
-	validateCap := config.CapPerStage(validateWorkerCount, stageGateCfg.ValidateMaxConcurrentPerStage)
+	validateCap := config.CapPerStage(workerCountsCfg.Validate, stageGateCfg.ValidateMaxConcurrentPerStage)
 	validateGate := locks.BuildStageGate(locks.StageValidator, validateCap, procLock, log)
 	if procLock != nil {
 		log.WithFields(map[string]interface{}{
-			"worker_count": validateWorkerCount,
+			"worker_count": workerCountsCfg.Validate,
 			"capacity":     validateCap,
 			"configured":   stageGateCfg.ValidateMaxConcurrentPerStage,
 		}).Info("validate stage gate enabled (ProcessingLock + Semaphore)")
@@ -800,10 +807,10 @@ func main() {
 		log.Warn("processing lock unavailable, validate stage gate falls back to noop")
 	}
 
-	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, validateGate, validateWorkerCount, validateCfg)
+	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, validateGate, workerCountsCfg.Validate, validateCfg)
 
 	log.WithFields(map[string]interface{}{
-		"worker_count": validateWorkerCount,
+		"worker_count": workerCountsCfg.Validate,
 		"input_topic":  queue.TopicNormalized,
 		"output_topic": queue.TopicValidated,
 	}).Info("validate worker constructed")
