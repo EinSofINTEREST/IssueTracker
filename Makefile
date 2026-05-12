@@ -105,7 +105,7 @@ run-processor: build ## Validate processor 실행
 	./$(PROCESSOR_BINARY)
 
 run-issuetracker: build ## Crawler + Processor 통합 실행 (chrome 실제 포트 자동 매핑 — 이슈 #348)
-	@urls=$$($(MAKE) -s chrome-remote-urls 2>/tmp/chrome-urls.err); \
+	@raw=$$($(MAKE) --no-print-directory -s chrome-remote-urls 2>/tmp/chrome-urls.err); \
 	rc=$$?; \
 	if [ $$rc -ne 0 ]; then \
 	  echo "ERROR: chrome-remote-urls failed (rc=$$rc):" >&2; \
@@ -114,6 +114,7 @@ run-issuetracker: build ## Crawler + Processor 통합 실행 (chrome 실제 포�
 	  exit $$rc; \
 	fi; \
 	rm -f /tmp/chrome-urls.err; \
+	urls=$$(printf '%s' "$$raw" | grep -oE 'ws://[^,[:space:]]+(,ws://[^,[:space:]]+)*' | tail -1); \
 	if [ -z "$$urls" ]; then \
 	  echo "No chrome compose containers running — falling back to .env FETCHER_CHROMEDP_REMOTE_URLS"; \
 	  echo "Running issuetracker (crawler + processor)..."; \
