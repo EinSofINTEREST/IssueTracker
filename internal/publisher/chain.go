@@ -72,29 +72,9 @@ func (p *Publisher) PublishChained(
 		}
 	}
 
-	msgs := make([]queue.Message, 0, len(urls))
-
-	for _, url := range urls {
-		job := &core.CrawlJob{
-			ID:          newJobID(),
-			CrawlerName: crawlerName,
-			Target: core.Target{
-				URL:  url,
-				Type: targetType,
-			},
-			ScheduledAt: time.Now(),
-			Timeout:     timeout,
-			MaxRetries:  3,
-		}
-
-		job.Priority = p.resolver.Resolve(job)
-
-		msg, err := p.buildMessage(job)
-		if err != nil {
-			return fmt.Errorf("build message for %s: %w", url, err)
-		}
-
-		msgs = append(msgs, msg)
+	msgs, err := p.buildJobMessages(crawlerName, urls, targetType, timeout)
+	if err != nil {
+		return err
 	}
 
 	if err := p.producer.PublishBatch(ctx, msgs); err != nil {
@@ -107,6 +87,42 @@ func (p *Publisher) PublishChained(
 	}).Debug("chained jobs batch published to kafka")
 
 	return nil
+}
+
+// buildJobMessages 는 url 목록을 CrawlJob 으로 변환하여 priority resolve 후 Kafka Message
+// 슬라이스로 반환합니다 (CodeRabbit PR #394 피드백 — PublishChained 함수 분리).
+//
+// MaxRetries 는 publisher.DefaultMaxRetries 상수 사용.
+func (p *Publisher) buildJobMessages(
+	crawlerName string,
+	urls []string,
+	targetType core.TargetType,
+	timeout time.Duration,
+) ([]queue.Message, error) {
+	msgs := make([]queue.Message, 0, len(urls))
+	for _, url := range urls {
+		job := &core.CrawlJob{
+			ID:          newJobID(),
+			CrawlerName: crawlerName,
+			Target: core.Target{
+				URL:  url,
+				Type: targetType,
+			},
+			ScheduledAt: time.Now(),
+			Timeout:     timeout,
+			MaxRetries:  DefaultMaxRetries,
+		}
+
+		job.Priority = p.resolver.Resolve(job)
+
+		msg, err := p.buildMessage(job)
+		if err != nil {
+			return nil, fmt.Errorf("build message for %s: %w", url, err)
+		}
+
+		msgs = append(msgs, msg)
+	}
+	return msgs, nil
 }
 
 // normalizeURLs 는 입력 URL 슬라이스를 정규화하여 새 슬라이스로 반환합니다.

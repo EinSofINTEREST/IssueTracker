@@ -29,6 +29,10 @@ import (
 	"issuetracker/pkg/urlguard"
 )
 
+// DefaultMaxRetries 는 PublishX 메소드들이 생성하는 CrawlJob 의 기본 재시도 횟수입니다
+// (CodeRabbit PR #394 피드백 — magic number 상수화).
+const DefaultMaxRetries = 3
+
 // PriorityResolver 는 CrawlJob 의 우선순위를 결정하는 인터페이스입니다.
 // worker.CompositeResolver 등이 이를 구현합니다.
 //
