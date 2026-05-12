@@ -142,6 +142,29 @@ func (NoopStageGate) Acquire(_ context.Context, _ string) (func(), bool, error) 
 	return func() {}, true, nil
 }
 
+// BuildStageGate 는 (stage, workerCount, configuredCap, procLock, log) 입력으로 StageGate
+// 를 합성하는 wiring 헬퍼입니다 (이슈 #356 — DRY).
+//
+// 동작:
+//   - procLock 이 nil → NoopStageGate 반환 (Redis 부재 등 graceful degrade)
+//   - capacity = config.CapPerStage(workerCount, configuredCap) — 0 이하면 workerCount/2 자동.
+//     semaphore 최소 1 보장.
+//   - 정상 wiring 시 NewStageGate(stage, NewSemaphore(cap), procLock, log) 반환
+//
+// fetcher / parser / validator wiring 시 동일 헬퍼 사용 — capacity 정책 일관성.
+// capacity 계산은 pkg/config.CapPerStage 의 정책을 호출자가 적용한 뒤 본 헬퍼에 전달:
+// 본 헬퍼는 그 값으로 직접 semaphore 를 생성합니다.
+func BuildStageGate(stage string, capacity int, procLock ProcessingLock, log *logger.Logger) StageGate {
+	if procLock == nil {
+		return NewNoopStageGate()
+	}
+	if capacity < 1 {
+		capacity = 1
+	}
+	sem := NewSemaphore(capacity)
+	return NewStageGate(stage, sem, procLock, log)
+}
+
 // ErrStageGateNil 은 nil StageGate 가 의도치 않게 사용될 때 식별용.
 var ErrStageGateNil = errors.New("locks: nil stage gate")
 

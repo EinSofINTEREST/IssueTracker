@@ -8,9 +8,16 @@ import (
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage/service"
+	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
+
+// buildStageCap 은 fetcher pool 의 Semaphore capacity 를 계산합니다.
+// pkg/config.CapPerStage 의 정책을 본 패키지에서도 사용 — 동일 규칙 (worker_count/2 floor, min cap).
+func buildStageCap(workerCount, configured int) int {
+	return config.CapPerStage(workerCount, configured)
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // 설정 구조체
@@ -43,6 +50,11 @@ type ManagerConfig struct {
 	Low            PoolConfig
 	ProcessingLock locks.ProcessingLock
 	RetryScheduler RetryScheduler
+
+	// MaxConcurrentPerStage: fetcher stage 의 Semaphore capacity 설정값 (이슈 #356).
+	// 0 이하 → 각 pool 의 WorkerCount/2 (floor) 자동.
+	// 양수 → min(value, WorkerCount/2). pool 별 (high/normal/low/chromedp) 동일 cap 정책 적용.
+	MaxConcurrentPerStage int
 
 	// Chromedp 는 chromedp 전용 pool 의 Consumer + WorkerCount.
 	// Consumer.nil 이면 chromedp pool 비활성.
@@ -88,19 +100,22 @@ func NewPoolManager(
 	log *logger.Logger,
 ) *PoolManager {
 	procLock := cfg.ProcessingLock
-	if procLock == nil {
-		procLock = locks.NoopProcessingLock{}
-	}
-
 	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여
 	// 소스별 실패 카운팅이 우선순위 경계 없이 누적됩니다.
 	// log 주입 — CB state 전이마다 INFO/WARN 로그.
 	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, log)
 
+	// per-pool StageGate 합성 (이슈 #356) — pool 별 WorkerCount/2 cap.
+	// procLock nil 시 BuildStageGate 가 NoopStageGate 반환 → dedup+cap 자동 비활성.
+	buildGate := func(workerCount int) locks.StageGate {
+		capacity := buildStageCap(workerCount, cfg.MaxConcurrentPerStage)
+		return locks.BuildStageGate(locks.StageFetcher, capacity, procLock, log)
+	}
+
 	newPool := func(pc PoolConfig, priorityName string) *KafkaConsumerPool {
 		pool := NewKafkaConsumerPoolWithOptions(
 			pc.Consumer, producer, handler, contentSvc, pc.WorkerCount,
-			cbRegistry, procLock,
+			cbRegistry, buildGate(pc.WorkerCount),
 		)
 		// heartbeat 식별자 주입 (DEBUG 레벨에서 worker pool status 출력 활성)
 		pool.SetPriority(priorityName)
@@ -127,7 +142,7 @@ func NewPoolManager(
 	if cfg.Chromedp.Consumer != nil && cfg.ChromedpHandler != nil {
 		chromedpPool := NewKafkaConsumerPoolWithOptions(
 			cfg.Chromedp.Consumer, producer, cfg.ChromedpHandler, contentSvc, cfg.Chromedp.WorkerCount,
-			cbRegistry, procLock,
+			cbRegistry, buildGate(cfg.Chromedp.WorkerCount),
 		)
 		chromedpPool.SetPriority("chromedp")
 		if cfg.RetryScheduler != nil {

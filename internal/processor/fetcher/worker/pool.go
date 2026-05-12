@@ -69,7 +69,7 @@ type KafkaConsumerPool struct {
 	jobs        chan jobItem
 	wg          sync.WaitGroup
 	cbRegistry  *CircuitBreakerRegistry
-	procLock    locks.ProcessingLock
+	stageGate   locks.StageGate // nil 허용 → NoopStageGate (이슈 #356)
 	// normalizer는 URL 정규화기입니다.
 	// 미설정(nil) 이면 정규화가 적용되지 않으며, 기존 동작이 유지됩니다.
 	// atomic.Pointer 를 사용하여 polling/worker goroutine 의 동시 Load 와
@@ -120,7 +120,7 @@ func NewKafkaConsumerPool(
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
 		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, nil),
-		locks.NoopProcessingLock{},
+		locks.NewNoopStageGate(),
 	)
 }
 
@@ -137,12 +137,15 @@ func NewKafkaConsumerPoolWithCB(
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, producer, handler, contentSvc, workerCount,
 		cbRegistry,
-		locks.NoopProcessingLock{},
+		locks.NewNoopStageGate(),
 	)
 }
 
 // NewKafkaConsumerPoolWithOptions는 모든 의존성을 외부에서 주입하는 생성자입니다.
-// 테스트에서 circuit breaker, processing lock 을 개별 제어할 때 사용합니다.
+// 테스트에서 circuit breaker, stage gate 를 개별 제어할 때 사용합니다.
+//
+// gate 는 nil 허용 — nil 이면 NoopStageGate 로 fallback (단일 인스턴스 환경에서 dedup + cap 비활성).
+// 이슈 #356 — fetcher / parser / validator 가 동일 StageGate 패턴 사용.
 func NewKafkaConsumerPoolWithOptions(
 	consumer queue.Consumer,
 	producer queue.Producer,
@@ -150,12 +153,12 @@ func NewKafkaConsumerPoolWithOptions(
 	contentSvc service.ContentService,
 	workerCount int,
 	cbRegistry *CircuitBreakerRegistry,
-	procLock locks.ProcessingLock,
+	gate locks.StageGate,
 ) *KafkaConsumerPool {
 	// nil guard — NewParserWorker / validate.NewWorker 와 일관성 보장.
-	// 외부 호출자가 nil 을 전달해도 panic 없이 dedup 비활성으로 동작.
-	if procLock == nil {
-		procLock = locks.NoopProcessingLock{}
+	// 외부 호출자가 nil 을 전달해도 panic 없이 dedup + cap 비활성으로 동작.
+	if gate == nil {
+		gate = locks.NewNoopStageGate()
 	}
 	return &KafkaConsumerPool{
 		consumer:    consumer,
@@ -164,7 +167,7 @@ func NewKafkaConsumerPoolWithOptions(
 		contentSvc:  contentSvc,
 		workerCount: workerCount,
 		cbRegistry:  cbRegistry,
-		procLock:    procLock,
+		stageGate:   gate,
 		// 버퍼 크기: worker 수의 2배로 polling과 처리 사이의 지연을 흡수
 		jobs:     make(chan jobItem, workerCount*2),
 		pollDone: make(chan struct{}),
@@ -452,57 +455,48 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		}
 	}
 
-	// 동일 URL 이 여러 worker 에서 동시 처리되는 것을 ProcessingLock (stage=fetcher) 로 차단.
+	// fetcher 단계 StageGate (ProcessingLock + Semaphore 합성, 이슈 #356) —
+	// 같은 URL 의 동시 fetch 차단 + per-stage 동시 슬롯 cap.
 	// Kafka rebalance/재시작으로 동일 메시지가 중복 소비될 때 + 같은 URL 의 다른 jobID 가 동시 처리될 때
-	// 모두 흡수. backoff 대기 이후에 Acquire 하여 락 점유 시간을 실제 처리 구간으로 최소화합니다.
-	procKey := locks.ProcessingKey(locks.StageFetcher, item.job.Target.URL)
-	acquired, err := p.procLock.Acquire(ctx, procKey)
-	if err != nil {
-		// 락 획득 오류 시 처리를 건너뛰지 않고 경고 후 진행합니다 (graceful degrade).
-		// ProcessingLock 장애가 크롤링 전체를 중단시키지 않도록 합니다.
+	// 모두 흡수. backoff 대기 이후에 Acquire 하여 슬롯 점유 시간을 실제 처리 구간으로 최소화합니다.
+	release, acquired, gateErr := p.stageGate.Acquire(ctx, item.job.Target.URL)
+	if gateErr != nil {
+		// ctx cancel / deadline → fail-open 시 취소된 ctx 로 불필요 작업 + per-stage cap 무력화 위험.
+		// commit 안 하고 종료 → Kafka redeliver 보장 (PR #358 패턴).
+		if ctx.Err() != nil {
+			return fmt.Errorf("fetcher stage gate acquire aborted by ctx: %w", gateErr)
+		}
+		// 그 외 인프라 에러 — 처리를 건너뛰지 않고 경고 후 진행 (graceful degrade).
+		// StageGate 장애가 크롤링 전체를 중단시키지 않도록 합니다.
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
 			"url":     item.job.Target.URL,
-		}).WithError(err).Warn("failed to acquire processing lock, proceeding without lock")
+		}).WithError(gateErr).Warn("failed to acquire fetcher stage gate, proceeding without gate")
 	} else if !acquired {
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
 			"url":     item.job.Target.URL,
-		}).Debug("processing lock already held by another worker, skipping")
+		}).Debug("fetcher processing lock already held by another worker, skipping")
 		// 다른 워커가 처리 중이므로 commit 없이 종료합니다.
 		// 처리 담당 워커의 commit 에 의존하여, 해당 워커 장애 시 재처리가 보장되도록 합니다.
 		return nil
 	} else {
-		// 운영자가 lock 획득 흐름을 추적할 수 있도록 DEBUG 로 success 기록.
-		// ttl_ms 는 ProcessingLock 인스턴스가 custom TTL 로 생성될 수 있어 인터페이스로 노출하지 않으면
-		// 정확치 않으므로 로그에서 제외.
+		// 운영자가 gate 획득 흐름을 추적할 수 있도록 DEBUG 로 success 기록.
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,
 			"url":     item.job.Target.URL,
-		}).Debug("processing lock acquired")
+		}).Debug("fetcher stage gate acquired")
 
 		defer func() {
-			// 셧다운 시 ctx 가 취소되어도 락 해제는 반드시 수행되어야 합니다.
-			// context.WithoutCancel(ctx) 로 trace ID / logger 메타데이터 보존.
-			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			if releaseErr := p.procLock.Release(releaseCtx, procKey); releaseErr != nil {
-				log.WithFields(map[string]interface{}{
-					"job_id":  item.job.ID,
-					"crawler": item.job.CrawlerName,
-					"url":     item.job.Target.URL,
-				}).WithError(releaseErr).Warn("failed to release processing lock")
-				return
-			}
-			// release 성공도 DEBUG 로 짝을 맞춰 lifecycle 완성.
+			release() // semaphore + lock 정리, internal 에서 shutdown ctx 보존.
 			log.WithFields(map[string]interface{}{
 				"job_id":  item.job.ID,
 				"crawler": item.job.CrawlerName,
 				"url":     item.job.Target.URL,
-			}).Debug("processing lock released")
+			}).Debug("fetcher stage gate released")
 		}()
 	}
 

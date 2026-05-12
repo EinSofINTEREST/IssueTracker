@@ -346,3 +346,53 @@ func TestNewStageGate_PanicsOnInvalidArgs(t *testing.T) {
 	assert.Panics(t, func() { locks.NewStageGate(locks.StageFetcher, sem, typedNilLock, log) },
 		"typed-nil ProcessingLock 도 constructor 에서 panic 으로 감지")
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BuildStageGate (이슈 #356 — wiring 헬퍼)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestBuildStageGate_NilProcLock_ReturnsNoop(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	gate := locks.BuildStageGate(locks.StageFetcher, 3, nil, log)
+	require.NotNil(t, gate)
+
+	// Noop 는 항상 (release, true, nil) 반환 + release 안전.
+	release, acquired, err := gate.Acquire(context.Background(), "https://example.com")
+	assert.NoError(t, err)
+	assert.True(t, acquired)
+	require.NotNil(t, release)
+	release() // panic 없어야 함
+}
+
+func TestBuildStageGate_ValidProcLock_ReturnsRealGate(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	lock := newStubLock(true)
+	gate := locks.BuildStageGate(locks.StageParser, 2, lock, log)
+	require.NotNil(t, gate)
+
+	release, acquired, err := gate.Acquire(context.Background(), "https://example.com")
+	assert.NoError(t, err)
+	assert.True(t, acquired)
+	require.NotNil(t, release)
+
+	// stub lock 의 Acquire 가 1회 호출됐는지 확인.
+	acq, _ := lock.callCounts()
+	assert.Equal(t, 1, acq)
+
+	release()
+	_, rel := lock.callCounts()
+	assert.Equal(t, 1, rel)
+}
+
+func TestBuildStageGate_CapacityFloor(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	lock := newStubLock(true)
+
+	// capacity < 1 → 내부에서 1 로 보정 (semaphore.NewSemaphore 의 panic 회피)
+	gate := locks.BuildStageGate(locks.StageValidator, 0, lock, log)
+	require.NotNil(t, gate)
+	release, acquired, err := gate.Acquire(context.Background(), "https://example.com")
+	assert.NoError(t, err)
+	assert.True(t, acquired)
+	release()
+}

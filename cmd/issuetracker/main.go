@@ -324,13 +324,27 @@ func main() {
 		}).Info("publisher pipeline guard enabled (Article 24h / Category 단명)")
 	}
 
-	managerCfg := crawlerWorker.ManagerConfig{
-		High:           crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
-		Normal:         crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
-		Low:            crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
-		ProcessingLock: procLock,
-		RetryScheduler: retryScheduler,
+	// StageGate 설정 (이슈 #353/#355/#356) — fetcher / parser / validator 의 per-stage Semaphore cap.
+	// 환경변수로 명시 cap 제공, 미지정 시 각 stage 의 worker_count/2 자동.
+	stageGateCfg, err := config.LoadStageGate()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load stage gate config")
 	}
+
+	managerCfg := crawlerWorker.ManagerConfig{
+		High:                  crawlerWorker.PoolConfig{Consumer: highConsumer, WorkerCount: 3},
+		Normal:                crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: 6},
+		Low:                   crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: 2},
+		ProcessingLock:        procLock,
+		RetryScheduler:        retryScheduler,
+		MaxConcurrentPerStage: stageGateCfg.FetcherMaxConcurrentPerStage,
+	}
+	log.WithFields(map[string]interface{}{
+		"configured": stageGateCfg.FetcherMaxConcurrentPerStage,
+		"high":       managerCfg.High.WorkerCount,
+		"normal":     managerCfg.Normal.WorkerCount,
+		"low":        managerCfg.Low.WorkerCount,
+	}).Info("fetcher stage gate config loaded (per-pool cap = worker_count/2)")
 
 	// chromedp 전용 worker pool — semaphore 로 Chrome 동시 호출 제한.
 	// chromedpPoolCfg 는 사이트 등록 단계에서 미리 로드됨 (RemoteURLs 가 사이트
@@ -517,22 +531,16 @@ func main() {
 
 	// Parser StageGate (이슈 #355) — ProcessingLock + per-stage Semaphore 합성.
 	// Semaphore capacity 는 PARSER_MAX_CONCURRENT_PER_STAGE 와 worker_count/2 의 min.
-	stageGateCfg, err := config.LoadStageGate()
-	if err != nil {
-		log.WithError(err).Fatal("failed to load stage gate config")
-	}
+	// stageGateCfg 는 fetcher managerCfg 직전 (위쪽) 에서 이미 로드.
 	parserCap := config.CapPerStage(parserWorkerCount, stageGateCfg.ParserMaxConcurrentPerStage)
-	parserSem := locks.NewSemaphore(parserCap)
-	var parserGate locks.StageGate
+	parserGate := locks.BuildStageGate(locks.StageParser, parserCap, procLock, log)
 	if procLock != nil {
-		parserGate = locks.NewStageGate(locks.StageParser, parserSem, procLock, log)
 		log.WithFields(map[string]interface{}{
 			"worker_count": parserWorkerCount,
 			"capacity":     parserCap,
 			"configured":   stageGateCfg.ParserMaxConcurrentPerStage,
 		}).Info("parser stage gate enabled (ProcessingLock + Semaphore)")
 	} else {
-		parserGate = locks.NewNoopStageGate()
 		log.Warn("processing lock unavailable, parser stage gate falls back to noop")
 	}
 
@@ -763,7 +771,20 @@ func main() {
 	validateProducer := queue.NewProducer(validateKafkaCfg)
 	defer validateProducer.Close()
 
-	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, procLock, validateWorkerCount, validateCfg)
+	// Validate StageGate (이슈 #356) — ProcessingLock + per-stage Semaphore 합성.
+	validateCap := config.CapPerStage(validateWorkerCount, stageGateCfg.ValidateMaxConcurrentPerStage)
+	validateGate := locks.BuildStageGate(locks.StageValidator, validateCap, procLock, log)
+	if procLock != nil {
+		log.WithFields(map[string]interface{}{
+			"worker_count": validateWorkerCount,
+			"capacity":     validateCap,
+			"configured":   stageGateCfg.ValidateMaxConcurrentPerStage,
+		}).Info("validate stage gate enabled (ProcessingLock + Semaphore)")
+	} else {
+		log.Warn("processing lock unavailable, validate stage gate falls back to noop")
+	}
+
+	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, validateGate, validateWorkerCount, validateCfg)
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": validateWorkerCount,
