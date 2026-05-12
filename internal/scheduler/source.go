@@ -33,7 +33,3 @@ type ScheduleEntry struct {
 	// Timeout은 개별 크롤 Job의 최대 실행 시간입니다.
 	Timeout time.Duration
 }
-
-// SeedPublisher interface 는 이슈 #396 으로 publisher 패키지로 이동.
-// scheduler 는 publisher.SeedPublisher 를 import 하여 사용 — 메타 #385 의 단일 책임
-// 원칙 (Kafka I/O 책임 인터페이스는 publisher 측 정의).
