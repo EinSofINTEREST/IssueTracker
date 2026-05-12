@@ -290,9 +290,16 @@ func main() {
 			// Delayed retry queue: retry 를 Redis ZSET 에 보관하고 별도
 			// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
 			// Redis 부재 시 worker 가 lazy 로 KafkaImmediateRetryScheduler 를 사용 (기존 동작).
+			retryCfg := crawlerWorker.DefaultRedisRetrySchedulerConfig()
+			// idle heartbeat 압축 (이슈 #370) — pkg/config 로 env 로드 일관성 유지.
+			retrySchedCfg, retrySchedErr := config.LoadRetryScheduler()
+			if retrySchedErr != nil {
+				log.WithError(retrySchedErr).Fatal("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS 로드 실패")
+			}
+			retryCfg.HeartbeatEveryNIdleTicks = retrySchedCfg.HeartbeatEveryNIdleTicks
 			redisRetry := crawlerWorker.NewRedisDelayedRetryScheduler(
 				redisClient, crawlerProducer,
-				crawlerWorker.DefaultRedisRetrySchedulerConfig(),
+				retryCfg,
 				log,
 			)
 			runCtx, cancelRun := context.WithCancel(ctx)

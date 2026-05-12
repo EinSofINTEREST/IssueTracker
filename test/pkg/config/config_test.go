@@ -833,3 +833,62 @@ func TestLoadPrompt_SetValue(t *testing.T) {
 		t.Errorf("Dir: got %q, want /custom/path", cfg.Dir)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RetrySchedulerConfig (이슈 #370)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestLoadRetryScheduler_DefaultValues(t *testing.T) {
+	t.Setenv("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS", "")
+
+	cfg, err := config.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+
+	def := config.DefaultRetrySchedulerConfig()
+	if cfg.HeartbeatEveryNIdleTicks != def.HeartbeatEveryNIdleTicks {
+		t.Errorf("HeartbeatEveryNIdleTicks: got %d, want %d (default)",
+			cfg.HeartbeatEveryNIdleTicks, def.HeartbeatEveryNIdleTicks)
+	}
+}
+
+func TestLoadRetryScheduler_EnvOverride(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want int
+	}{
+		{"explicit 60", "60", 60},
+		{"compressed 120", "120", 120},
+		{"legacy 0", "0", 0}, // 0 = legacy 매 tick 모드, 유효한 값
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS", tt.env)
+
+			cfg, err := config.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
+			require.NoError(t, err)
+			if cfg.HeartbeatEveryNIdleTicks != tt.want {
+				t.Errorf("HeartbeatEveryNIdleTicks: got %d, want %d", cfg.HeartbeatEveryNIdleTicks, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadRetryScheduler_InvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+	}{
+		{"negative", "-1"},
+		{"non-numeric", "abc"},
+		{"float", "1.5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS", tt.env)
+
+			_, err := config.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
+			require.Error(t, err, "%q 는 에러여야 함", tt.env)
+		})
+	}
+}

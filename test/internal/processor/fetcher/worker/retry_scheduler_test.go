@@ -1,9 +1,11 @@
 package worker_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -578,4 +580,165 @@ func TestRedisDelayedRetryScheduler_DefaultConfigBoundary(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Run 이 ctx cancel 후 즉시 종료되어야 함")
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heartbeat 압축 (이슈 #370) — idle tick 마다 1줄 → N tick 마다 1줄
+// ─────────────────────────────────────────────────────────────────────────────
+
+// safeBuffer 는 bytes.Buffer 에 mutex 를 씌워 concurrent write/read 안전성을 제공한다.
+// retry scheduler 의 Run goroutine 이 로그를 쓰는 동안 테스트가 동시 read 하므로 필요.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// captureDebugLogger 는 DEBUG 레벨 JSON 로그를 buf 에 캡처하는 logger 를 만든다.
+func captureDebugLogger(buf *safeBuffer) *logger.Logger {
+	return logger.New(logger.Config{
+		Level:      logger.LevelDebug,
+		Output:     buf,
+		TimeFormat: time.RFC3339,
+	})
+}
+
+func countLines(buf *safeBuffer, substr string) int {
+	n := 0
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRedisDelayedRetryScheduler_IdleHeartbeat_CompressedEveryN 는
+// HeartbeatEveryNIdleTicks=N 설정 시 N tick 마다 1회만 heartbeat 로그가 나오는지 검증.
+//
+// CI 부하 / 스케줄링 지연에서도 안정적으로 통과하도록 Eventually 로 최소 heartbeat
+// 도달까지 대기한 뒤 끊는다 (Sleep 으로 tick 수를 '대략' 맞추는 방식은 flaky 위험).
+func TestRedisDelayedRetryScheduler_IdleHeartbeat_CompressedEveryN(t *testing.T) {
+	q := newFakeRetryQueue() // 비어있음 — 항상 idle
+	prod := new(mockProducer)
+	buf := &safeBuffer{}
+
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+	cfg.HeartbeatEveryNIdleTicks = 5
+	sched := worker.NewRedisDelayedRetryScheduler(q, prod, cfg, captureDebugLogger(buf))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sched.Run(ctx); close(done) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	// 최소 2회 heartbeat 가 emit 될 때까지 대기 — CI 지연에도 deterministic.
+	// 부하 환경에서 ticker 가 지연되더라도 결국 heartbeat 가 발생함.
+	require.Eventually(t, func() bool {
+		return countLines(buf, "retry pipeline idle heartbeat") >= 2
+	}, 3*time.Second, 5*time.Millisecond, "최소 2회 heartbeat emit 되어야 함")
+
+	// 핵심 검증: 매 tick 로깅이 아니라는 것 — 압축이 동작하는가.
+	// peek 호출 횟수 대비 heartbeat 횟수가 ~1/N 이어야 함.
+	peekCount := int(q.peekCallCount.Load())
+	heartbeats := countLines(buf, "retry pipeline idle heartbeat")
+	require.Greater(t, peekCount, heartbeats,
+		"peek 호출 횟수가 heartbeat 보다 많아야 함 (압축 동작)")
+	// 압축 비율: N=5 기준 heartbeat 는 peek 의 약 1/5 — 여유롭게 1/2 이하만 검증
+	assert.LessOrEqual(t, heartbeats*2, peekCount,
+		"heartbeat 가 peek 의 절반 이하 (N=5 압축 확인) — heartbeats=%d peeks=%d",
+		heartbeats, peekCount)
+	// 메시지 명 변경 — 구 메시지가 남아있으면 안 됨
+	assert.Equal(t, 0, countLines(buf, "retry peek returned no due items"),
+		"구 메시지는 더 이상 emit 되지 않아야 함")
+}
+
+// TestRedisDelayedRetryScheduler_IdleHeartbeat_LegacyEveryTick 는
+// HeartbeatEveryNIdleTicks=0 시 legacy 동작 (매 tick 1줄) 이 유지되는지 검증.
+func TestRedisDelayedRetryScheduler_IdleHeartbeat_LegacyEveryTick(t *testing.T) {
+	q := newFakeRetryQueue()
+	prod := new(mockProducer)
+	buf := &safeBuffer{}
+
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+	cfg.HeartbeatEveryNIdleTicks = 0 // legacy
+	sched := worker.NewRedisDelayedRetryScheduler(q, prod, cfg, captureDebugLogger(buf))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sched.Run(ctx); close(done) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	// 5 회 heartbeat 도달까지 deterministic 하게 대기 — Sleep 으로 tick 수 추정하지 않음.
+	require.Eventually(t, func() bool {
+		return countLines(buf, "retry pipeline idle heartbeat") >= 5
+	}, 3*time.Second, 5*time.Millisecond, "legacy 모드는 매 tick heartbeat — 5회 도달")
+
+	// legacy 동작: heartbeat 수가 peek 수와 같아야 함 (매 idle peek 마다 emit).
+	// timing race 로 마지막 peek 직후 cancel 되면 ±1 차이 가능.
+	peekCount := int(q.peekCallCount.Load())
+	heartbeats := countLines(buf, "retry pipeline idle heartbeat")
+	assert.InDelta(t, peekCount, heartbeats, 1,
+		"legacy 모드는 heartbeat 가 peek 와 거의 1:1 — heartbeats=%d peeks=%d",
+		heartbeats, peekCount)
+}
+
+// TestRedisDelayedRetryScheduler_IdleTicksResetOnDue 는 due 항목 처리 시 idleTicks 가
+// 0 으로 reset 되고 previous_idle_ticks 필드로 직전 idle 지속이 노출됨을 검증.
+func TestRedisDelayedRetryScheduler_IdleTicksResetOnDue(t *testing.T) {
+	q := newFakeRetryQueue()
+	prod := new(mockProducer)
+	buf := &safeBuffer{}
+
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+	cfg.HeartbeatEveryNIdleTicks = 100 // 사실상 idle heartbeat 안 찍히도록
+	sched := worker.NewRedisDelayedRetryScheduler(q, prod, cfg, captureDebugLogger(buf))
+
+	prod.On("Publish", mock.Anything, mock.Anything).Return(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sched.Run(ctx); close(done) }()
+
+	// idle 상태 ~5 tick
+	time.Sleep(55 * time.Millisecond)
+
+	// due 항목 추가 — 다음 tick 에서 처리
+	job := retryTestJob(core.PriorityNormal)
+	job.ScheduledAt = time.Now().Add(-time.Second)
+	require.NoError(t, sched.Enqueue(context.Background(), job, errors.New("err")))
+
+	// 처리 완료까지 대기
+	require.Eventually(t, func() bool {
+		return countLines(buf, "retry peek returned due items") >= 1
+	}, time.Second, 5*time.Millisecond, "due 항목이 처리되어야 함")
+
+	cancel()
+	<-done
+
+	// due 로그에 previous_idle_ticks 필드가 포함됐는지 확인 — 0 이 아닌 양수값.
+	// 정규식 `[1-9][0-9]*` 로 두 자릿수 이상 idle (sleep 오버슈트 시) 도 매칭.
+	require.Contains(t, buf.String(), "previous_idle_ticks", "due 로그에 previous_idle_ticks 필드 노출")
+	assert.Regexp(t, `"previous_idle_ticks":[1-9][0-9]*`, buf.String(),
+		"previous_idle_ticks 가 양수여야 함 (직전 idle window 존재)")
 }
