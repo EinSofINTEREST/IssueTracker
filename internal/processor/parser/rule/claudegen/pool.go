@@ -93,9 +93,10 @@ func NewPoolFromEnv(loader prompt.Loader, log *logger.Logger) (*ClaudeWorkerPool
 	if err != nil {
 		return nil, err
 	}
+	// 생성 시점 — 아직 컨테이너 기동 전. Start() 가 성공해야 warm container 상태가 됨.
 	log.WithFields(map[string]interface{}{
 		"worker_count": count,
-	}).Info("claudegen worker pool constructed (warm containers)")
+	}).Info("claudegen worker pool constructed (containers not started yet)")
 	return pool, nil
 }
 
@@ -166,23 +167,31 @@ func (p *ClaudeWorkerPool) Start(ctx context.Context) error {
 		}
 	}
 	if failedAny {
-		// 이미 성공한 워커들을 best-effort 로 Stop (cleanup ctx 새로 만들어 부모 ctx cancel 영향 회피).
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultSessionTimeout)
-		defer cleanupCancel()
+		// 이미 성공한 워커들을 병렬 best-effort 로 Stop — 직렬 cleanup 시 앞 worker 의 timeout 이
+		// 단일 cleanupCtx 를 소진하여 뒤 worker cleanup 이 ctx.Done 으로 실패하는 누수 회피 (Copilot 반영).
+		// worker 별로 독립 timeout 부여.
+		var cwg sync.WaitGroup
 		for i, w := range p.workers {
 			if errs[i] == nil {
-				if stopErr := w.Stop(cleanupCtx); stopErr != nil {
-					p.log.WithFields(map[string]interface{}{
-						"worker_idx": i,
-					}).WithError(stopErr).Warn("partial-start cleanup: worker stop failed")
-				}
+				cwg.Add(1)
+				go func(idx int, worker *ClaudeWorker) {
+					defer cwg.Done()
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultSessionTimeout)
+					defer cleanupCancel()
+					if stopErr := worker.Stop(cleanupCtx); stopErr != nil {
+						p.log.WithFields(map[string]interface{}{
+							"worker_idx": idx,
+						}).WithError(stopErr).Warn("partial-start cleanup: worker stop failed")
+					}
+				}(i, w)
 			}
 		}
+		cwg.Wait()
 		return firstErr
 	}
 	p.log.WithFields(map[string]interface{}{
 		"worker_count": len(p.workers),
-	}).Info("claudegen worker pool started")
+	}).Info("claudegen worker pool started (warm containers)")
 	return nil
 }
 

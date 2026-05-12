@@ -176,16 +176,28 @@ func TestPool_Extract_RoundRobin(t *testing.T) {
 	require.NoError(t, pool.Start(context.Background()))
 	t.Cleanup(func() { _ = pool.Stop(context.Background()) })
 
-	// concurrent Extract 호출
+	// concurrent Extract 호출 — 각 호출 결과 / err 도 검증하여 실패 silent skip 회피 (Copilot 반영).
 	var wg sync.WaitGroup
+	errCh := make(chan error, callCount)
+	resCh := make(chan storage.SelectorMap, callCount)
 	for i := 0; i < callCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = pool.Extract(context.Background(), "example.com", storage.TargetTypePage, "<html></html>")
+			sm, err := pool.Extract(context.Background(), "example.com", storage.TargetTypePage, "<html></html>")
+			errCh <- err
+			resCh <- sm
 		}()
 	}
 	wg.Wait()
+	close(errCh)
+	close(resCh)
+	for err := range errCh {
+		require.NoError(t, err, "concurrent Extract must succeed")
+	}
+	for sm := range resCh {
+		require.NotNil(t, sm.Title, "Extract result must include parsed selectors")
+	}
 
 	// 각 worker 가 정확히 callCount/poolSize = 3 번 호출 (round-robin 균등 분배).
 	for i, r := range runners {
@@ -209,7 +221,9 @@ func TestPool_Extract_SequentialDistributesRoundRobin(t *testing.T) {
 	t.Cleanup(func() { _ = pool.Stop(context.Background()) })
 
 	for i := 0; i < 4; i++ {
-		_, _ = pool.Extract(context.Background(), "example.com", storage.TargetTypePage, "<html></html>")
+		sm, err := pool.Extract(context.Background(), "example.com", storage.TargetTypePage, "<html></html>")
+		require.NoError(t, err, "sequential Extract must succeed (call %d)", i)
+		require.NotNil(t, sm.Title, "Extract result must include parsed selectors (call %d)", i)
 	}
 
 	// 정확히 2회씩 분배.
