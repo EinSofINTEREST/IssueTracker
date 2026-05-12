@@ -1,4 +1,4 @@
-package worker
+package publisher
 
 import (
 	"context"
@@ -14,13 +14,22 @@ import (
 	pkgredis "issuetracker/pkg/redis"
 )
 
-// retrySchedulerHolder 는 atomic.Pointer 가 인터페이스를 직접 저장하지 못하므로
+// retryDrainTimeout 은 graceful shutdown 으로 ctx 가 canceled 된 뒤에도 Redis enqueue
+// 같은 cleanup 작업을 잠깐 더 허용하기 위한 별도 timeout 입니다 (이슈 #389 — 구
+// fetcher/worker 의 drainTimeout 동등 값).
+const retryDrainTimeout = 5 * time.Second
+
+// RetrySchedulerHolder 는 atomic.Pointer 가 인터페이스를 직접 저장하지 못하므로
 // RetryScheduler 인터페이스 값을 감싸 atomic 교체를 지원하는 wrapper 입니다.
-type retrySchedulerHolder struct {
-	s RetryScheduler
+//
+// 호출자 (fetcher/worker pool) 가 atomic.Pointer[RetrySchedulerHolder] 필드로 보유 후
+// SetRetryScheduler / 조회 시 사용.
+type RetrySchedulerHolder struct {
+	S RetryScheduler
 }
 
 // RetryScheduler 는 처리 실패한 CrawlJob 의 재시도 발행 시점을 관리하는 인터페이스입니다
+// (이슈 #389 — 메타 #385 의 Kafka I/O 단일 책임 원칙에 따라 publisher 패키지에서 정의).
 //
 // 두 가지 구현 전략을 추상화합니다:
 //   - KafkaImmediateRetryScheduler: 즉시 Kafka 에 재발행하고 worker 가 ScheduledAt 까지
@@ -28,7 +37,7 @@ type retrySchedulerHolder struct {
 //   - RedisDelayedRetryScheduler: Redis ZSET 에 보관하고 별도 goroutine 이 ScheduledAt
 //     도달 시 Kafka 에 발행 — worker 슬롯 점유 회피
 //
-// 호출자 (worker pool) 는 ScheduledAt 과 RetryCount 를 미리 셋팅한 job 을 전달합니다.
+// 호출자 (fetcher/worker pool) 는 ScheduledAt 과 RetryCount 를 미리 셋팅한 job 을 전달합니다.
 // 구현체는 lastErr 의 메시지를 last-error 헤더로 보존해야 합니다.
 type RetryScheduler interface {
 	Enqueue(ctx context.Context, job *core.CrawlJob, lastErr error) error
@@ -61,7 +70,7 @@ func (s *KafkaImmediateRetryScheduler) Enqueue(ctx context.Context, job *core.Cr
 	}
 
 	msg := queue.Message{
-		Topic:   topicForPriority(job.Priority),
+		Topic:   crawlTopic(job.Priority),
 		Key:     []byte(job.ID),
 		Value:   data,
 		Headers: retryHeaders(job, lastErr),
@@ -329,7 +338,7 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 	}
 
 	msg := queue.Message{
-		Topic:   topicForPriority(job.Priority),
+		Topic:   crawlTopic(job.Priority),
 		Key:     []byte(item.JobID),
 		Value:   entry.JobBytes,
 		Headers: retryHeaders(&job, lastErr),
@@ -353,7 +362,7 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 		enqueueCtx := ctx
 		var cancelDrain context.CancelFunc
 		if ctx.Err() != nil {
-			enqueueCtx, cancelDrain = context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+			enqueueCtx, cancelDrain = context.WithTimeout(context.WithoutCancel(ctx), retryDrainTimeout)
 			defer cancelDrain()
 		}
 		if reErr := s.client.EnqueueRetry(enqueueCtx, item.JobID, item.Payload, retryAt); reErr != nil {
