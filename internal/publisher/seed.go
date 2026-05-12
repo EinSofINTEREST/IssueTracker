@@ -30,6 +30,12 @@ var ErrPublishSkipped = errors.New("publish skipped — url already in pipeline"
 // 안 함 — 본 메소드는 단일 job 발행 + guard 책임만 흡수. resolver chain 통합은 메타 #385
 // Sub 6 에서.
 func (p *Publisher) PublishSeed(ctx context.Context, job *core.CrawlJob) error {
+	// gemini PR #395 피드백 — exported method 의 nil 입력 방어. caller 가 nil 전달 시
+	// 즉시 fail-fast (panic 회피 + 디버깅 가시성).
+	if job == nil {
+		return errors.New("publish seed: nil job")
+	}
+
 	// guard 키 일관성: chained publish 도 동일 normalizer 적용 후 CheckAndAcquire 함.
 	// 시드에서도 같은 정규형으로 marker 잡아야 동일 URL 이 두 입구에서 같은 키 사용.
 	// 정규화 실패는 fail-open — 원본으로 fallback.
@@ -64,13 +70,16 @@ func (p *Publisher) PublishSeed(ctx context.Context, job *core.CrawlJob) error {
 
 	msg, err := p.buildMessage(job)
 	if err != nil {
-		p.releaseGuardOnFailure(ctx, guardURL, guardAcquired, job)
+		// gemini PR #395 피드백 — release 는 ctx cancel 와 무관하게 수행되어야 함
+		// (shutdown 중에도 marker 해제 필수 — 안 그러면 다음 cycle silent skip).
+		p.releaseGuardOnFailure(context.WithoutCancel(ctx), guardURL, guardAcquired, job)
 		return err
 	}
 
 	if err := p.producer.Publish(ctx, msg); err != nil {
 		// publish 실패 시 marker 즉시 해제 — 다음 retry 가 false acquired 로 silent skip 되지 않도록.
-		p.releaseGuardOnFailure(ctx, guardURL, guardAcquired, job)
+		// ctx cancel 로 publish 실패 시에도 release 는 수행 (context.WithoutCancel).
+		p.releaseGuardOnFailure(context.WithoutCancel(ctx), guardURL, guardAcquired, job)
 		return fmt.Errorf("publish seed job %s to %s: %w", job.ID, msg.Topic, err)
 	}
 
