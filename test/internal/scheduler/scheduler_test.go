@@ -20,13 +20,13 @@ import (
 // Mock Publisher
 // ─────────────────────────────────────────────────────────────────────────────
 
-type mockEmitter struct {
+type mockPublisher struct {
 	mu   sync.Mutex
 	jobs []*core.CrawlJob
 	err  error
 }
 
-func (m *mockEmitter) Emit(_ context.Context, job *core.CrawlJob) error {
+func (m *mockPublisher) PublishSeed(_ context.Context, job *core.CrawlJob) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -36,14 +36,14 @@ func (m *mockEmitter) Emit(_ context.Context, job *core.CrawlJob) error {
 	return nil
 }
 
-func (m *mockEmitter) count() int {
+func (m *mockPublisher) count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.jobs)
 }
 
 // snapshot 은 jobs 슬라이스의 race-safe 복사본을 반환합니다 — 호출자가 lock 없이 순회 가능.
-func (m *mockEmitter) snapshot() []*core.CrawlJob {
+func (m *mockPublisher) snapshot() []*core.CrawlJob {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]*core.CrawlJob, len(m.jobs))
@@ -51,11 +51,11 @@ func (m *mockEmitter) snapshot() []*core.CrawlJob {
 	return out
 }
 
-type countEmitter struct {
+type countPublisher struct {
 	n atomic.Int32
 }
 
-func (c *countEmitter) Emit(_ context.Context, _ *core.CrawlJob) error {
+func (c *countPublisher) PublishSeed(_ context.Context, _ *core.CrawlJob) error {
 	c.n.Add(1)
 	return nil
 }
@@ -86,7 +86,7 @@ func testEntry(url string, interval time.Duration) scheduler.ScheduleEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestScheduler_PublishesJobOnStart(t *testing.T) {
-	pub := &mockEmitter{}
+	pub := &mockPublisher{}
 	entry := testEntry("https://example.com/feed/start", 10*time.Minute)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,7 +102,7 @@ func TestScheduler_PublishesJobOnStart(t *testing.T) {
 }
 
 func TestScheduler_PublishesRepeatedly(t *testing.T) {
-	pub := &mockEmitter{}
+	pub := &mockPublisher{}
 	entry := testEntry("https://example.com/feed/repeat", 100*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -119,7 +119,7 @@ func TestScheduler_PublishesRepeatedly(t *testing.T) {
 }
 
 func TestScheduler_LogsPublishError(t *testing.T) {
-	pub := &mockEmitter{err: errors.New("kafka unavailable")}
+	pub := &mockPublisher{err: errors.New("kafka unavailable")}
 	entry := testEntry("https://example.com/feed/fail", 10*time.Minute)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,7 +135,7 @@ func TestScheduler_LogsPublishError(t *testing.T) {
 }
 
 func TestScheduler_StopsOnContextCancel(t *testing.T) {
-	pub := &mockEmitter{}
+	pub := &mockPublisher{}
 	entry := testEntry("https://example.com/feed/cancel", 50*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -160,7 +160,7 @@ func TestScheduler_StopsOnContextCancel(t *testing.T) {
 }
 
 func TestScheduler_MultipleEntries(t *testing.T) {
-	pub := &countEmitter{}
+	pub := &countPublisher{}
 	entries := []scheduler.ScheduleEntry{
 		testEntry("https://example.com/feed/a", 10*time.Minute),
 		testEntry("https://example.com/feed/b", 10*time.Minute),
@@ -181,7 +181,7 @@ func TestScheduler_MultipleEntries(t *testing.T) {
 }
 
 func TestScheduler_JobFieldsAreCorrect(t *testing.T) {
-	pub := &mockEmitter{}
+	pub := &mockPublisher{}
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
 		URL:         "https://rss.cnn.com/rss/cnn_topstories.rss",

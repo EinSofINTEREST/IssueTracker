@@ -9,6 +9,19 @@ import (
 	"issuetracker/pkg/queue"
 )
 
+// crawlTopic 은 Priority 에 대응하는 Kafka crawl 토픽 이름을 반환합니다.
+// 이슈 #387 — 구 emitter.go 에서 throttle.go 의 backlog 조회용 helper 만 잔존.
+func crawlTopic(p core.Priority) string {
+	switch p {
+	case core.PriorityHigh:
+		return queue.TopicCrawlHigh
+	case core.PriorityLow:
+		return queue.TopicCrawlLow
+	default:
+		return queue.TopicCrawlNormal
+	}
+}
+
 // Throttler 는 publish 직전에 호출되어 throttle 여부를 결정합니다.
 // true 반환 시 Scheduler 는 emit 호출 없이 silent drop 합니다.
 //

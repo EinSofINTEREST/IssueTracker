@@ -25,8 +25,13 @@ type IngestionLock interface {
 //
 // publisher 가 internal/locks 를 직접 import 하지 않도록 별도 정의 — 구조적 타이핑으로
 // locks.PipelineGuard 가 그대로 만족.
+//
+// Release: CheckAndAcquire 가 marker 를 잡았으나 후속 producer.Publish 가 실패한 경우 marker 를
+// 즉시 해제 — 다음 retry 가 silent skip 으로 잃어버리지 않도록. 본 메소드는 시드 발행에서
+// 사용 (이슈 #387). chained 발행은 batch 라 release 단위가 모호하여 적용 안 함.
 type PipelineGuard interface {
 	CheckAndAcquire(ctx context.Context, url string, targetType core.TargetType) (bool, error)
+	Release(ctx context.Context, url string) error
 }
 
 // ingestionLockRef 는 atomic.Pointer 가 인터페이스 값을 직접 저장하지 못하므로

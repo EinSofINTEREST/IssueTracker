@@ -36,7 +36,7 @@ func makeEntry(host, url string, interval time.Duration) scheduler.ScheduleEntry
 }
 
 func TestScheduler_Refresh_AddsNewEntry(t *testing.T) {
-	pub := &mockEmitter{}
+	pub := &mockPublisher{}
 	resolver := &staticEntryResolver{
 		entries: []scheduler.ScheduleEntry{
 			makeEntry("a.com", "https://a.com", 100*time.Millisecond),
@@ -68,7 +68,7 @@ func TestScheduler_Refresh_AddsNewEntry(t *testing.T) {
 }
 
 func TestScheduler_Refresh_RemovesEntry(t *testing.T) {
-	pub := &mockEmitter{}
+	pub := &mockPublisher{}
 	resolver := &staticEntryResolver{
 		entries: []scheduler.ScheduleEntry{
 			makeEntry("a.com", "https://a.com", 100*time.Millisecond),
@@ -113,7 +113,7 @@ func TestScheduler_Refresh_RemovesEntry(t *testing.T) {
 }
 
 func TestScheduler_Refresh_IntervalChange_RespawnsGoroutine(t *testing.T) {
-	pub := &mockEmitter{}
+	pub := &mockPublisher{}
 	resolver := &staticEntryResolver{
 		entries: []scheduler.ScheduleEntry{
 			makeEntry("a.com", "https://a.com", time.Hour), // 매우 긴 interval — 첫 emit 1회만 발생
@@ -144,7 +144,7 @@ func TestScheduler_Refresh_IntervalChange_RespawnsGoroutine(t *testing.T) {
 }
 
 func TestScheduler_Refresh_NoResolver_NoOp(t *testing.T) {
-	pub := &mockEmitter{}
+	pub := &mockPublisher{}
 	sched := scheduler.New(nil, pub, logger.New(logger.DefaultConfig()), 1)
 	// SetEntryResolver 미호출 — resolver=nil.
 

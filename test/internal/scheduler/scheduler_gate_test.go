@@ -18,14 +18,14 @@ import (
 	"issuetracker/pkg/urlguard"
 )
 
-// gateMockEmitter 는 Emit 호출 인자를 기록하는 테스트 더블입니다.
-type gateMockEmitter struct {
+// gateMockPublisher 는 PublishSeed 호출 인자를 기록하는 SeedPublisher 테스트 더블입니다.
+type gateMockPublisher struct {
 	mu    sync.Mutex
 	jobs  []*core.CrawlJob
 	calls int
 }
 
-func (m *gateMockEmitter) Emit(_ context.Context, job *core.CrawlJob) error {
+func (m *gateMockPublisher) PublishSeed(_ context.Context, job *core.CrawlJob) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.jobs = append(m.jobs, job)
@@ -33,7 +33,7 @@ func (m *gateMockEmitter) Emit(_ context.Context, job *core.CrawlJob) error {
 	return nil
 }
 
-func (m *gateMockEmitter) callCount() int {
+func (m *gateMockPublisher) callCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.calls
@@ -94,7 +94,7 @@ func hasBlockLog(buf *safeBuffer, url string) bool {
 // Gate 가 차단 WARN 로그를 남기는지 확인 — 단순 callCount==0 만 확인하면
 // 스케줄러가 한 번도 안 돌았는지 차단됐는지 구분 불가하므로 로그 신호로 검증.
 func TestScheduler_Gate_BlocksRSSEntry(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 	gateLogBuf := &safeBuffer{}
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
@@ -126,7 +126,7 @@ func TestScheduler_Gate_BlocksRSSEntry(t *testing.T) {
 // TestScheduler_Gate_AllowsCategoryEntry:
 // 카테고리 URL entry 는 가드를 통과하여 정상 emit 되어야 함.
 func TestScheduler_Gate_AllowsCategoryEntry(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
 		URL:         "https://edition.cnn.com/health",
@@ -150,7 +150,7 @@ func TestScheduler_Gate_AllowsCategoryEntry(t *testing.T) {
 // TestScheduler_NoGate_LegacyBehavior:
 // SetGate 미호출 시 모든 URL emit (기존 동작 유지).
 func TestScheduler_NoGate_LegacyBehavior(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
 		URL:         "https://rss.cnn.com/rss/cnn_health.rss",
@@ -173,7 +173,7 @@ func TestScheduler_NoGate_LegacyBehavior(t *testing.T) {
 // TestScheduler_Gate_AllowAllGuard_DelegatesAll:
 // AllowAllGuard 로 명시적 비활성화 시 모든 URL emit.
 func TestScheduler_Gate_AllowAllGuard_DelegatesAll(t *testing.T) {
-	pub := &gateMockEmitter{}
+	pub := &gateMockPublisher{}
 	entry := scheduler.ScheduleEntry{
 		CrawlerName: "cnn",
 		URL:         "https://rss.cnn.com/rss/cnn_health.rss",

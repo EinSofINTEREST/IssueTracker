@@ -11,25 +11,26 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/publisher"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/urlguard"
 )
 
 // Scheduler는 등록된 ScheduleEntry 목록을 기반으로 주기적으로 시드 CrawlJob을 생성하고
-// Emitter를 통해 Kafka crawl 토픽에 발행합니다.
-// 체이닝 Job(크롤된 페이지에서 발견된 URL)은 internal/publisher 패키지가 담당합니다.
+// SeedPublisher (= publisher.Publisher.PublishSeed) 를 통해 Kafka crawl 토픽에 발행합니다 (이슈 #387).
+// 체이닝 Job(크롤된 페이지에서 발견된 URL)은 동일 publisher 의 PublishChained 가 담당합니다.
 //
 // URL 가드:
 //   - SetGate 로 urlguard.Gate 를 설정하면 publish 직전에 entry.URL 검사
-//   - 차단된 URL 은 Emit 호출 없이 silent drop + WARN 로그
+//   - 차단된 URL 은 PublishSeed 호출 없이 silent drop + WARN 로그
 //   - 미설정 시 가드 비활성 (기존 동작 유지)
 //   - atomic.Pointer 로 race-safe 한 lock-free 설정/조회 — Start 이후 변경에도 race 없음
 //
 // Backlog throttle:
-//   - SetThrottler 로 Throttler 를 설정하면 emit 직전에 ShouldThrottle 검사
-//   - throttle 결정 시 emit 호출 없이 silent drop (구현체가 WARN 로그 책임)
+//   - SetThrottler 로 Throttler 를 설정하면 publish 직전에 ShouldThrottle 검사
+//   - throttle 결정 시 PublishSeed 호출 없이 silent drop (구현체가 WARN 로그 책임)
 //   - 미설정 시 throttle 비활성 (기존 동작 유지)
-//   - URL 가드와 직렬 적용: gate(질적 차단) → throttle(양적 차단) → emit
+//   - URL 가드와 직렬 적용: gate(질적 차단) → throttle(양적 차단) → publish
 //
 // 동적 Refresh (이슈 #328):
 //   - SetEntryResolver + StartRefreshLoop 로 DB 기반 entries 운영 중 변경 반영
@@ -37,7 +38,7 @@ import (
 //     사라진 / 변경된 entry 는 cancel + (변경의 경우) respawn
 //   - SetEntryResolver 미사용 시 기존 정적 entries (생성자 인자) 가 유지되며 Refresh 비활성
 type Scheduler struct {
-	emitter    Emitter
+	publisher  SeedPublisher
 	gate       atomic.Pointer[urlguard.Gate]
 	throttler  atomic.Pointer[throttlerRef]
 	log        *logger.Logger
@@ -89,12 +90,12 @@ type throttlerRef struct {
 // 부팅 직후 ListEnabled 로 첫 snapshot 을 채워 동일 역할 수행).
 func New(
 	entries []ScheduleEntry,
-	emitter Emitter,
+	pub SeedPublisher,
 	log *logger.Logger,
 	maxRetries int,
 ) *Scheduler {
 	return &Scheduler{
-		emitter:       emitter,
+		publisher:     pub,
 		log:           log,
 		maxRetries:    maxRetries,
 		running:       make(map[string]*entryHandle),
@@ -388,10 +389,10 @@ func (s *Scheduler) publish(ctx context.Context, entry ScheduleEntry) {
 		return
 	}
 
-	if err := s.emitter.Emit(ctx, job); err != nil {
-		// ErrEmitSkipped: PipelineGuard 가 cycle 진행 중 판단으로 skip — non-fatal.
+	if err := s.publisher.PublishSeed(ctx, job); err != nil {
+		// ErrPublishSkipped: PipelineGuard 가 cycle 진행 중 판단으로 skip — non-fatal.
 		// "scheduled" / "failed" 양쪽 로그 모두 생략 (실제 발행 안 된 job 이 발행된 것처럼 보이지 않게).
-		if errors.Is(err, ErrEmitSkipped) {
+		if errors.Is(err, publisher.ErrPublishSkipped) {
 			return
 		}
 		s.log.WithFields(map[string]interface{}{
