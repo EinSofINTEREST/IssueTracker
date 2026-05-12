@@ -301,11 +301,16 @@ func (s *Scheduler) Refresh(parent context.Context) error {
 }
 
 // sameEntry 는 두 entry 가 lifecycle 영향이 있는 필드 (Interval / Priority / TargetType /
-// Timeout) 가 모두 동일한지 확인합니다. CrawlerName / URL 은 entryKey 로 이미 동등.
+// Category / Timeout) 가 모두 동일한지 확인합니다. CrawlerName / URL 은 entryKey 로 이미 동등.
+//
+// Category 비교 (이슈 #381 — Copilot PR #384 피드백): 본 필드는 발행되는 CrawlJob 의
+// Target.Metadata 에 주입되어 다운스트림 CategoryBasedResolver 가 priority 결정에 사용.
+// 비교 누락 시 DB/설정에서 카테고리 변경되어도 goroutine 미 respawn → 변경 사항 미반영.
 func sameEntry(a, b ScheduleEntry) bool {
 	return a.Interval == b.Interval &&
 		a.Priority == b.Priority &&
 		a.TargetType == b.TargetType &&
+		a.Category == b.Category &&
 		a.Timeout == b.Timeout
 }
 

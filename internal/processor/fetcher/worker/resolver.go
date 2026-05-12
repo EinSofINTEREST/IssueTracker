@@ -249,7 +249,13 @@ func NewCategoryBasedResolver() *CategoryBasedResolver {
 }
 
 // extractCategory 는 Target.Metadata 에서 카테고리 hint 를 추출합니다.
-// 값이 string 이 아니거나 부재면 CategoryUnknown 반환.
+//
+// 허용 타입 (Copilot PR #384 피드백 — Metadata 가 map[string]interface{} 라 호출자가
+// string / categories.Category 어느 쪽으로든 주입 가능):
+//   - string                — 일반 케이스 (scheduler 가 string(entry.Category) 로 주입)
+//   - categories.Category   — 호출자가 typed value 직접 주입한 경우 (방어)
+//
+// 그 외 타입 / 부재 / nil 은 CategoryUnknown 반환.
 func (r *CategoryBasedResolver) extractCategory(job *core.CrawlJob) categories.Category {
 	if job.Target.Metadata == nil {
 		return categories.CategoryUnknown
@@ -258,11 +264,14 @@ func (r *CategoryBasedResolver) extractCategory(job *core.CrawlJob) categories.C
 	if !ok {
 		return categories.CategoryUnknown
 	}
-	s, ok := v.(string)
-	if !ok {
+	switch x := v.(type) {
+	case string:
+		return categories.Category(x)
+	case categories.Category:
+		return x
+	default:
 		return categories.CategoryUnknown
 	}
-	return categories.Category(s)
 }
 
 // isTraversalType 은 TargetType 이 광범위 traverse 류 (sitemap / category / search_results) 인지 반환합니다.

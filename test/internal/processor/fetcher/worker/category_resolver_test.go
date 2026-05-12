@@ -103,6 +103,35 @@ func TestCategoryBasedResolver_Article_ByCategory(t *testing.T) {
 	}
 }
 
+// TestCategoryBasedResolver_AcceptsTypedCategory 는 Target.Metadata 의 값이
+// categories.Category 타입 (= string alias) 으로 직접 주입돼도 정상 매핑되는지 검증
+// (Copilot PR #384 피드백 — string 단언만 하면 typed value 가 미분류로 새는 버그 방지).
+func TestCategoryBasedResolver_AcceptsTypedCategory(t *testing.T) {
+	r := worker.NewCategoryBasedResolver()
+
+	tests := []struct {
+		name string
+		val  interface{}
+		want core.Priority
+	}{
+		{"string politics → High", "politics", core.PriorityHigh},
+		{"typed Category politics → High", categories.CategoryPolitics, core.PriorityHigh},
+		{"typed Category sports → Normal", categories.CategorySports, core.PriorityNormal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := &core.CrawlJob{
+				Target: core.Target{
+					Type:     core.TargetTypeArticle,
+					Metadata: map[string]interface{}{categories.MetadataKey: tt.val},
+				},
+			}
+			assert.True(t, r.CanResolve(job), "유효한 카테고리는 결정 가능")
+			assert.Equal(t, tt.want, r.Resolve(job))
+		})
+	}
+}
+
 func TestCategoryBasedResolver_Article_UnknownCategory_Delegates(t *testing.T) {
 	r := worker.NewCategoryBasedResolver()
 
