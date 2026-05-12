@@ -9,21 +9,41 @@ import (
 )
 
 func TestLoadStageGate_DefaultValues(t *testing.T) {
+	t.Setenv("FETCHER_MAX_CONCURRENT_PER_STAGE", "")
 	t.Setenv("PARSER_MAX_CONCURRENT_PER_STAGE", "")
+	t.Setenv("VALIDATE_MAX_CONCURRENT_PER_STAGE", "")
 	cfg, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
+	require.Equal(t, 0, cfg.FetcherMaxConcurrentPerStage)
 	require.Equal(t, 0, cfg.ParserMaxConcurrentPerStage)
+	require.Equal(t, 0, cfg.ValidateMaxConcurrentPerStage)
 }
 
 func TestLoadStageGate_EnvOverride(t *testing.T) {
+	t.Setenv("FETCHER_MAX_CONCURRENT_PER_STAGE", "2")
 	t.Setenv("PARSER_MAX_CONCURRENT_PER_STAGE", "4")
+	t.Setenv("VALIDATE_MAX_CONCURRENT_PER_STAGE", "5")
 	cfg, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
+	require.Equal(t, 2, cfg.FetcherMaxConcurrentPerStage)
 	require.Equal(t, 4, cfg.ParserMaxConcurrentPerStage)
+	require.Equal(t, 5, cfg.ValidateMaxConcurrentPerStage)
 }
 
 func TestLoadStageGate_InvalidValue(t *testing.T) {
 	t.Setenv("PARSER_MAX_CONCURRENT_PER_STAGE", "not-a-number")
+	_, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
+	require.Error(t, err)
+}
+
+func TestLoadStageGate_InvalidFetcherValue(t *testing.T) {
+	t.Setenv("FETCHER_MAX_CONCURRENT_PER_STAGE", "abc")
+	_, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
+	require.Error(t, err)
+}
+
+func TestLoadStageGate_InvalidValidateValue(t *testing.T) {
+	t.Setenv("VALIDATE_MAX_CONCURRENT_PER_STAGE", "xyz")
 	_, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.Error(t, err)
 }

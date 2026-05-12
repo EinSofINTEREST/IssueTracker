@@ -255,20 +255,31 @@ func LoadValidate(envFiles ...string) (ValidateConfig, error) {
 	return cfg, nil
 }
 
-// StageGateConfig 는 stage 별 StageGate 의 동시 처리 슬롯 상한을 나타냅니다 (이슈 #355).
+// StageGateConfig 는 stage 별 StageGate 의 동시 처리 슬롯 상한을 나타냅니다 (이슈 #353/#355/#356).
 //
 // 각 stage 의 Semaphore capacity 는 worker_count/2 를 넘지 않아야 함 — 이슈 #353 설계 제약.
 // 환경변수로 명시적 cap 을 받아 worker_count/2 와 비교 후 작은 값을 채택.
 type StageGateConfig struct {
+	// FetcherMaxConcurrentPerStage: fetcher stage 의 Semaphore capacity 상한.
+	// 0 이하면 worker_count/2 (floor) 사용. 양수면 min(value, worker_count/2) 채택.
+	// fetcher 는 priority pool (high/normal/low) 별 worker 수가 다르므로 pool 별로 동일 cap 적용.
+	FetcherMaxConcurrentPerStage int
+
 	// ParserMaxConcurrentPerStage: parser stage 의 Semaphore capacity 상한.
 	// 0 이하면 worker_count/2 (floor) 사용. 양수면 min(value, worker_count/2) 채택.
 	ParserMaxConcurrentPerStage int
+
+	// ValidateMaxConcurrentPerStage: validate stage 의 Semaphore capacity 상한.
+	// 0 이하면 worker_count/2 (floor) 사용. 양수면 min(value, worker_count/2) 채택.
+	ValidateMaxConcurrentPerStage int
 }
 
-// DefaultStageGateConfig 는 0 (worker_count/2 자동) 기본값을 반환합니다.
+// DefaultStageGateConfig 는 모든 stage 가 0 (worker_count/2 자동) 인 기본값을 반환합니다.
 func DefaultStageGateConfig() StageGateConfig {
 	return StageGateConfig{
-		ParserMaxConcurrentPerStage: 0,
+		FetcherMaxConcurrentPerStage:  0,
+		ParserMaxConcurrentPerStage:   0,
+		ValidateMaxConcurrentPerStage: 0,
 	}
 }
 
@@ -282,12 +293,24 @@ func LoadStageGate(envFiles ...string) (StageGateConfig, error) {
 	}
 
 	cfg := DefaultStageGateConfig()
-	if v := os.Getenv("PARSER_MAX_CONCURRENT_PER_STAGE"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return StageGateConfig{}, fmt.Errorf("parse PARSER_MAX_CONCURRENT_PER_STAGE %q: %w", v, err)
+	parseInt := func(key string, dest *int) error {
+		if v := os.Getenv(key); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("parse %s %q: %w", key, v, err)
+			}
+			*dest = n
 		}
-		cfg.ParserMaxConcurrentPerStage = n
+		return nil
+	}
+	for _, op := range []error{
+		parseInt("FETCHER_MAX_CONCURRENT_PER_STAGE", &cfg.FetcherMaxConcurrentPerStage),
+		parseInt("PARSER_MAX_CONCURRENT_PER_STAGE", &cfg.ParserMaxConcurrentPerStage),
+		parseInt("VALIDATE_MAX_CONCURRENT_PER_STAGE", &cfg.ValidateMaxConcurrentPerStage),
+	} {
+		if op != nil {
+			return StageGateConfig{}, op
+		}
 	}
 	return cfg, nil
 }
