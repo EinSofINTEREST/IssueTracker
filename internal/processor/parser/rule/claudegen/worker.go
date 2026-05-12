@@ -372,7 +372,10 @@ func (w *ClaudeWorker) ExtractEnriched(ctx context.Context, host string, targetT
 	runCtx, cancel := context.WithTimeout(ctx, w.sessionTimeout)
 	defer cancel()
 
-	promptText, err := buildPrompt(w.loader, host, targetType, sessionContainerPath)
+	// validator → parser 재학습 cycle (이슈 #365): ctx 에서 reject reason 추출 →
+	// prompt 에 컨텍스트 블록으로 주입. 부재 시 빈 문자열 → placeholder 영향 없음.
+	rejectReason, _ := llmgen.RejectReasonFromContext(ctx)
+	promptText, err := buildPrompt(w.loader, host, targetType, sessionContainerPath, rejectReason)
 	if err != nil {
 		return nil, fmt.Errorf("build claudegen prompt: %w", err)
 	}
