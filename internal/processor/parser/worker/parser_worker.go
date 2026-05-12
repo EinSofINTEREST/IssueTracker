@@ -305,10 +305,25 @@ func (w *ParserWorker) ProcessMessage(ctx context.Context, msg *queue.Message) e
 		return nil
 	}
 
+	// validator → parser 재학습 cycle (이슈 #366):
+	//   1. inbox headers 를 ctx 에 첨부 — publishContents 가 reparse_* 를 normalized 메시지로 전파
+	//   2. validate_reparse_reason 헤더가 있으면 ctx 에 llmgen.WithRejectReason 으로 주입 —
+	//      claudegen.ExtractEnriched 가 prompt 에 reason context 포함 (Sub B #365 메커니즘)
+	ctx = core.WithInboxHeaders(ctx, msg.Headers)
+	if reason := msg.Headers[core.HeaderValidateReparseReason]; reason != "" {
+		ctx = llmgen.WithRejectReason(ctx, reason)
+	}
+
 	mlog := w.log.WithFields(map[string]interface{}{
 		"raw_id": ref.ID,
 		"url":    ref.URL,
 	})
+	if reparseCount := msg.Headers[core.HeaderValidateReparseCount]; reparseCount != "" {
+		mlog = mlog.WithFields(map[string]interface{}{
+			"validate_reparse_count": reparseCount,
+		})
+		mlog.Info("parser processing reparse cycle message")
+	}
 
 	// parser 단계 StageGate (ProcessingLock + Semaphore 합성, 이슈 #355) —
 	// 같은 URL 의 동시 파싱 차단 + parser stage 의 동시 처리 슬롯 cap.
@@ -755,15 +770,20 @@ func (w *ParserWorker) publishContents(ctx context.Context, contents []*core.Con
 			partitionKey = c.URL
 		}
 
+		headers := map[string]string{
+			"source":           c.SourceID,
+			"country":          c.Country,
+			core.HeaderCrawler: crawlerName,
+		}
+		// reparse / trace 헤더 propagation — 화이트리스트 기반 (이슈 #366 gemini 반영).
+		// validate worker 가 reparse_count 헤더로 retry 한도 enforce — 미전파 시 무한 루프 위험.
+		core.PropagateInboxHeaders(ctx, headers)
+
 		msg := queue.Message{
-			Topic: queue.TopicNormalized,
-			Key:   []byte(partitionKey),
-			Value: pmBytes,
-			Headers: map[string]string{
-				"source":  c.SourceID,
-				"country": c.Country,
-				"crawler": crawlerName,
-			},
+			Topic:   queue.TopicNormalized,
+			Key:     []byte(partitionKey),
+			Value:   pmBytes,
+			Headers: headers,
 		}
 		if err := w.producer.Publish(ctx, msg); err != nil {
 			return fmt.Errorf("publish normalized: %w", err)

@@ -534,7 +534,10 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 		return cbErr
 	}
 
-	contents, err := p.handler.Handle(ctx, item.job)
+	// incoming msg.Headers 를 ctx 에 첨부 — chain_handler.publishFetchedRef 가 reparse_*
+	// 등 헤더를 TopicFetched 발행 메시지로 전파할 수 있도록 (이슈 #366).
+	handleCtx := core.WithInboxHeaders(ctx, item.msg.Headers)
+	contents, err := p.handler.Handle(handleCtx, item.job)
 	if err != nil {
 		cb.RecordFailure()
 
