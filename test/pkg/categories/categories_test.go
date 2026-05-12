@@ -5,43 +5,42 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/categories"
 )
 
-func TestCategory_Priority(t *testing.T) {
+func TestCategory_Tier(t *testing.T) {
 	tests := []struct {
 		name string
 		cat  categories.Category
-		want core.Priority
+		want categories.Tier
 	}{
 		// High tier
-		{"politics → High", categories.CategoryPolitics, core.PriorityHigh},
-		{"economy → High", categories.CategoryEconomy, core.PriorityHigh},
-		{"society → High", categories.CategorySociety, core.PriorityHigh},
-		{"current_affairs → High", categories.CategoryCurrentAffairs, core.PriorityHigh},
-		{"breaking_news → High", categories.CategoryBreakingNews, core.PriorityHigh},
+		{"politics → High", categories.CategoryPolitics, categories.TierHigh},
+		{"economy → High", categories.CategoryEconomy, categories.TierHigh},
+		{"society → High", categories.CategorySociety, categories.TierHigh},
+		{"current_affairs → High", categories.CategoryCurrentAffairs, categories.TierHigh},
+		{"breaking_news → High", categories.CategoryBreakingNews, categories.TierHigh},
 
 		// Normal tier
-		{"sports → Normal", categories.CategorySports, core.PriorityNormal},
-		{"culture → Normal", categories.CategoryCulture, core.PriorityNormal},
-		{"tech → Normal", categories.CategoryTech, core.PriorityNormal},
-		{"business → Normal", categories.CategoryBusiness, core.PriorityNormal},
-		{"entertainment → Normal", categories.CategoryEntertainment, core.PriorityNormal},
-		{"lifestyle → Normal", categories.CategoryLifestyle, core.PriorityNormal},
-		{"international → Normal", categories.CategoryInternational, core.PriorityNormal},
-		{"health → Normal", categories.CategoryHealth, core.PriorityNormal},
-		{"climate → Normal", categories.CategoryClimate, core.PriorityNormal},
-		{"column → Normal", categories.CategoryColumn, core.PriorityNormal},
-		{"community → Normal", categories.CategoryCommunity, core.PriorityNormal},
+		{"sports → Normal", categories.CategorySports, categories.TierNormal},
+		{"culture → Normal", categories.CategoryCulture, categories.TierNormal},
+		{"tech → Normal", categories.CategoryTech, categories.TierNormal},
+		{"business → Normal", categories.CategoryBusiness, categories.TierNormal},
+		{"entertainment → Normal", categories.CategoryEntertainment, categories.TierNormal},
+		{"lifestyle → Normal", categories.CategoryLifestyle, categories.TierNormal},
+		{"international → Normal", categories.CategoryInternational, categories.TierNormal},
+		{"health → Normal", categories.CategoryHealth, categories.TierNormal},
+		{"climate → Normal", categories.CategoryClimate, categories.TierNormal},
+		{"column → Normal", categories.CategoryColumn, categories.TierNormal},
+		{"community → Normal", categories.CategoryCommunity, categories.TierNormal},
 
 		// Unknown / 미등록 → Low
-		{"unknown empty → Low", categories.CategoryUnknown, core.PriorityLow},
-		{"미등록 hint → Low", categories.Category("foobar"), core.PriorityLow},
+		{"unknown empty → Low", categories.CategoryUnknown, categories.TierLow},
+		{"미등록 hint → Low", categories.Category("foobar"), categories.TierLow},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, tt.cat.Priority())
+			assert.Equal(t, tt.want, tt.cat.Tier())
 		})
 	}
 }

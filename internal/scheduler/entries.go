@@ -88,9 +88,14 @@ func DefaultEntries(cfg config.SchedulerConfig) []ScheduleEntry {
 				URL:         cu.URL,
 				TargetType:  core.TargetTypeCategory,
 				Interval:    cfg.CategoryInterval,
-				Priority:    core.PriorityNormal,
-				Category:    cu.Category,
-				Timeout:     cfg.JobTimeout,
+				// 이슈 #381 — TargetTypeCategory 는 traversal 류 (CategoryBasedResolver 가
+				// 항상 Low 로 분류) 이므로 시드 priority 도 Low 로 일치 (gemini PR #384 피드백).
+				// scheduler.JobEmitter 는 resolver 를 거치지 않고 entry.Priority 로 직접 topic
+				// 결정 — 본 필드를 Low 로 두지 않으면 시드 job 이 Normal 큐로 가서 traversal
+				// 의도가 깨짐.
+				Priority: core.PriorityLow,
+				Category: cu.Category,
+				Timeout:  cfg.JobTimeout,
 			})
 		}
 	}

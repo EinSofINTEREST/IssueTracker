@@ -7,9 +7,11 @@
 //   - High   : 시의성 + 사회적 영향 高 — 정치 / 경제 / 사회 / 시사 / 속보
 //   - Normal : 일반 갱신 — 스포츠 / 문화 / IT / 연예 / 라이프 / 국제 / 커뮤니티
 //   - Low    : 광범위 탐색 — 사이트맵 / 카테고리 hub / 백필 / 미분류
+//
+// 의존성 방향: 본 패키지는 self-contained — internal/ 패키지를 import 하지 않습니다.
+// caller (internal/processor/fetcher/worker 등) 가 Tier 문자열을 core.Priority 로
+// 매핑합니다 (CodeRabbit PR #384 피드백 — pkg/ → internal/ 역의존 차단).
 package categories
-
-import "issuetracker/internal/processor/fetcher/core"
 
 // Category 는 콘텐츠의 도메인 분류입니다.
 type Category string
@@ -68,17 +70,29 @@ var normalCategories = map[Category]struct{}{
 	CategoryCommunity:     {},
 }
 
-// Priority 는 본 카테고리가 매핑되는 crawl 우선순위 tier 를 반환합니다.
+// Tier 는 carrousel 우선순위 분류 문자열입니다 (high / normal / low).
 //
-// 매핑되지 않은 카테고리 (CategoryUnknown 포함) 는 Low 반환 — cold-start / 미분류 처리.
-func (c Category) Priority() core.Priority {
+// pkg/categories 가 self-contained 유지를 위해 core.Priority 대신 string 반환 — caller
+// (internal/processor/fetcher/worker 의 resolver) 가 Tier → core.Priority 매핑.
+type Tier string
+
+const (
+	TierHigh   Tier = "high"
+	TierNormal Tier = "normal"
+	TierLow    Tier = "low"
+)
+
+// Tier 는 본 카테고리가 매핑되는 우선순위 tier 를 반환합니다.
+//
+// 매핑되지 않은 카테고리 (CategoryUnknown 포함) 는 TierLow 반환 — cold-start / 미분류 처리.
+func (c Category) Tier() Tier {
 	if _, ok := highCategories[c]; ok {
-		return core.PriorityHigh
+		return TierHigh
 	}
 	if _, ok := normalCategories[c]; ok {
-		return core.PriorityNormal
+		return TierNormal
 	}
-	return core.PriorityLow
+	return TierLow
 }
 
 // IsKnown 은 본 카테고리가 enum 에 등록되어 있는지 반환합니다.

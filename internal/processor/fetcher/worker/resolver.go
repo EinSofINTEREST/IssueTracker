@@ -276,12 +276,27 @@ func (r *CategoryBasedResolver) isTraversalType(t core.TargetType) bool {
 	}
 }
 
+// tierToPriority 는 pkg/categories.Tier 문자열을 core.Priority 로 매핑합니다.
+//
+// pkg/categories 가 internal/ 를 import 하지 않도록 매핑은 caller (본 resolver) 에서 수행
+// (CodeRabbit PR #384 피드백 — 의존성 방향 pkg → internal 차단).
+func tierToPriority(t categories.Tier) core.Priority {
+	switch t {
+	case categories.TierHigh:
+		return core.PriorityHigh
+	case categories.TierNormal:
+		return core.PriorityNormal
+	default:
+		return core.PriorityLow
+	}
+}
+
 // Resolve 는 traversal 류면 Low, 그 외엔 카테고리 매핑된 tier 를 반환합니다.
 func (r *CategoryBasedResolver) Resolve(job *core.CrawlJob) core.Priority {
 	if r.isTraversalType(job.Target.Type) {
 		return core.PriorityLow
 	}
-	return r.extractCategory(job).Priority()
+	return tierToPriority(r.extractCategory(job).Tier())
 }
 
 // CanResolve 는 결정 가능 여부를 반환합니다:
