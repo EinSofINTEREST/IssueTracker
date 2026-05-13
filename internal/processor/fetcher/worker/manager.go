@@ -12,6 +12,7 @@ import (
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
+	"issuetracker/pkg/resilience"
 )
 
 // buildStageCap 은 fetcher pool 의 Semaphore capacity 를 계산합니다.
@@ -107,7 +108,7 @@ func NewPoolManager(
 	// 세 개 Pool이 동일한 CircuitBreakerRegistry를 공유하여
 	// 소스별 실패 카운팅이 우선순위 경계 없이 누적됩니다.
 	// log 주입 — CB state 전이마다 INFO/WARN 로그.
-	cbRegistry := NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, log)
+	cbRegistry := resilience.NewCircuitBreakerRegistry(resilience.DefaultCircuitBreakerConfig, log)
 
 	// per-pool StageGate 합성 (이슈 #356) — pool 별 WorkerCount/2 cap.
 	// procLock nil 시 BuildStageGate 가 NoopStageGate 반환 → dedup+cap 자동 비활성.

@@ -17,6 +17,7 @@ import (
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
+	"issuetracker/pkg/resilience"
 )
 
 // newTestPublisher 는 pool/manager 가 publisher facade 만 의존하도록 변경된 후 (이슈 #390)
@@ -413,7 +414,7 @@ func TestKafkaConsumerPool_ProcessJob_CircuitOpen_SendsToDLQ(t *testing.T) {
 	contentSvc := new(mockContentService)
 
 	// MaxFailures=1로 설정하여 즉시 circuit open 유도
-	cbRegistry := worker.NewCircuitBreakerRegistry(worker.CircuitBreakerConfig{
+	cbRegistry := resilience.NewCircuitBreakerRegistry(resilience.CircuitBreakerConfig{
 		MaxFailures: 1,
 		OpenTimeout: time.Minute,
 	}, nil)
