@@ -163,35 +163,21 @@ func NewPoolManager(
 // Publish resolves the job's priority via the configured PriorityResolver,
 // updates job.Priority in-place, and publishes to the correct crawl topic
 // (crawl.high / crawl.normal / crawl.low).
+//
+// gemini PR #400 피드백 — marshal/topic/headers 구성은 publisher.PublishJob 에 위임.
+// manager 는 priority 결정 + 로깅만 책임 (priority resolver chain 통합은 Sub 6 에서).
 func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 	priority := m.resolver.Resolve(job)
 	job.Priority = priority
-
-	data, err := job.Marshal()
-	if err != nil {
-		return fmt.Errorf("marshal job %s: %w", job.ID, err)
-	}
-
-	topic := publisher.CrawlTopic(priority)
-
-	msg := queue.Message{
-		Topic: topic,
-		Key:   []byte(job.ID),
-		Value: data,
-		Headers: map[string]string{
-			"crawler":  job.CrawlerName,
-			"priority": fmt.Sprintf("%d", int(priority)),
-		},
-	}
 
 	m.log.WithFields(map[string]interface{}{
 		"job_id":   job.ID,
 		"crawler":  job.CrawlerName,
 		"priority": priority,
-		"topic":    topic,
+		"topic":    publisher.CrawlTopic(priority),
 	}).Info("publishing crawl job")
 
-	return m.pub.Forward(ctx, msg)
+	return m.pub.PublishJob(ctx, job)
 }
 
 // Start는 high/normal/low 모든 Pool의 goroutine을 시작합니다.

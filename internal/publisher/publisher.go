@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -35,9 +36,16 @@ import (
 // fetcher/worker 등 다운스트림 모듈이 queue 패키지에 직접 의존하지 않도록 — Kafka I/O
 // 단일 책임 원칙 (메타 #385) 의 일환. queue.Consumer 와 100% 동일 시그니처 (type alias).
 //
-// 본 인터페이스를 만족하는 인스턴스는 publisher 가 SubscribeCrawlTopic 등 factory 메소드로
-// 제공하거나, 외부 wiring 에서 queue.NewConsumer 로 생성한 *KafkaConsumer 를 그대로 사용 가능.
+// 호출자는 publisher 가 제공하는 인스턴스나 외부 wiring 에서 queue.NewConsumer 로 생성한
+// *KafkaConsumer 를 그대로 사용. 본 패키지가 별도 factory 메소드를 제공하기 전까지는
+// queue.NewConsumer wiring 을 caller 측에서 직접 수행.
 type Consumer = queue.Consumer
+
+// Message 는 Kafka 메시지 구조체의 publisher-측 별칭입니다 (이슈 #390 피드백 — gemini).
+//
+// Consumer 별칭과 마찬가지로 다운스트림 모듈이 queue 패키지에 직접 의존하지 않고 publisher
+// API 만으로 Forward 호출 시 메시지 구성을 완성할 수 있도록 별칭화. queue.Message 와 동일.
+type Message = queue.Message
 
 // DefaultMaxRetries 는 PublishX 메소드들이 생성하는 CrawlJob 의 기본 재시도 횟수입니다
 // (CodeRabbit PR #394 피드백 — magic number 상수화).
@@ -86,16 +94,44 @@ func New(producer queue.Producer, resolver PriorityResolver, log *logger.Logger)
 // 공통 Kafka helpers (모든 PublishX 메소드가 공유)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Forward 는 미리 구성된 queue.Message 를 내부 producer 로 그대로 발행합니다 (이슈 #390).
+// Forward 는 미리 구성된 Message 를 내부 producer 로 그대로 발행합니다 (이슈 #390).
 //
 // 사용처 — fetcher/worker 가 Kafka I/O 책임을 publisher 로 위임하면서도 worker-특수
 // 메시지 (normalized contentRef / DLQ 등) 의 구성 / 라우팅은 worker 측에 잔존하는 경우의
 // thin pass-through. publisher 가 자체 Marshal/Topic 결정을 책임지는 PublishX 와 달리 본
 // 메소드는 호출자가 완성된 Message 를 만들어 전달합니다.
 //
+// nil guard — coderabbit PR #400 피드백. 본 메소드가 retry / worker hot path 에서 호출되므로
+// p 또는 p.producer 가 nil 일 때 panic 대신 에러 반환 (silent crash 보다 명시적 fail).
+//
 // Kafka I/O 자체는 publisher 가 단일 출처 — 호출자는 queue.Producer 를 직접 보유하지 않음.
-func (p *Publisher) Forward(ctx context.Context, msg queue.Message) error {
+func (p *Publisher) Forward(ctx context.Context, msg Message) error {
+	if p == nil {
+		return errors.New("publisher: Forward called on nil *Publisher")
+	}
+	if p.producer == nil {
+		return errors.New("publisher: producer not wired")
+	}
 	return p.producer.Publish(ctx, msg)
+}
+
+// PublishJob 은 CrawlJob 을 marshal 하여 우선순위 토픽으로 발행합니다 (이슈 #390 피드백 — gemini).
+//
+// 구 manager.Publish 가 직접 수행하던 marshal / 토픽 결정 / 헤더 구성 로직을 publisher 측
+// buildMessage 헬퍼로 일원화하여 코드 중복 제거. 호출자는 priority 가 미리 결정된 job 을
+// 전달합니다 (priority resolver chain 통합은 Sub 6 에서).
+func (p *Publisher) PublishJob(ctx context.Context, job *core.CrawlJob) error {
+	if p == nil {
+		return errors.New("publisher: PublishJob called on nil *Publisher")
+	}
+	if job == nil {
+		return errors.New("publisher: PublishJob called with nil job")
+	}
+	msg, err := p.buildMessage(job)
+	if err != nil {
+		return err
+	}
+	return p.Forward(ctx, msg)
 }
 
 // buildMessage 는 CrawlJob 을 Kafka Message 로 변환합니다.

@@ -10,7 +10,6 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/logger"
-	"issuetracker/pkg/queue"
 	pkgredis "issuetracker/pkg/redis"
 )
 
@@ -65,18 +64,15 @@ func NewKafkaImmediateRetryScheduler(pub *Publisher) *KafkaImmediateRetrySchedul
 }
 
 // Enqueue 는 job 을 priority 토픽에 즉시 publish 합니다.
+//
+// gemini PR #400 피드백 — buildMessage 를 재사용하여 crawler / priority 기본 헤더 누락 + 코드
+// 중복을 한꺼번에 해소. retry 전용 헤더 (retry-count / last-error) 는 그 위에 덮어쓰기.
 func (s *KafkaImmediateRetryScheduler) Enqueue(ctx context.Context, job *core.CrawlJob, lastErr error) error {
-	data, err := job.Marshal()
+	msg, err := s.pub.buildMessage(job)
 	if err != nil {
-		return fmt.Errorf("marshal job for retry: %w", err)
+		return fmt.Errorf("build retry message: %w", err)
 	}
-
-	msg := queue.Message{
-		Topic:   CrawlTopic(job.Priority),
-		Key:     []byte(job.ID),
-		Value:   data,
-		Headers: retryHeaders(job, lastErr),
-	}
+	applyRetryHeaders(msg.Headers, job, lastErr)
 
 	if err := s.pub.Forward(ctx, msg); err != nil {
 		return fmt.Errorf("publish retry job %s: %w", job.ID, err)
@@ -84,15 +80,13 @@ func (s *KafkaImmediateRetryScheduler) Enqueue(ctx context.Context, job *core.Cr
 	return nil
 }
 
-// retryHeaders 는 retry-count / last-error 표준 헤더를 구성합니다 — 두 구현체가 공유.
-func retryHeaders(job *core.CrawlJob, lastErr error) map[string]string {
-	h := map[string]string{
-		"retry-count": fmt.Sprintf("%d", job.RetryCount),
-	}
+// applyRetryHeaders 는 buildMessage 가 부착한 기본 헤더 위에 retry 전용 헤더를 덮어씁니다 —
+// 두 RetryScheduler 구현체가 공유.
+func applyRetryHeaders(h map[string]string, job *core.CrawlJob, lastErr error) {
+	h["retry-count"] = fmt.Sprintf("%d", job.RetryCount)
 	if lastErr != nil {
 		h["last-error"] = lastErr.Error()
 	}
-	return h
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -340,12 +334,18 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 		lastErr = errors.New(entry.LastErr)
 	}
 
-	msg := queue.Message{
-		Topic:   CrawlTopic(job.Priority),
-		Key:     []byte(item.JobID),
-		Value:   entry.JobBytes,
-		Headers: retryHeaders(&job, lastErr),
+	// gemini PR #400 피드백 — buildMessage 재사용으로 crawler/priority 기본 헤더 부착.
+	// Value 는 이미 Redis 에 보관된 entry.JobBytes 를 그대로 사용 (re-marshal 회피).
+	msg, err := s.pub.buildMessage(&job)
+	if err != nil {
+		s.log.WithFields(map[string]interface{}{
+			"job_id": item.JobID,
+		}).WithError(err).Error("failed to build retry message, dropping")
+		s.ackOrLog(ctx, item.JobID, "drop on build message failure")
+		return
 	}
+	msg.Value = entry.JobBytes
+	applyRetryHeaders(msg.Headers, &job, lastErr)
 
 	if err := s.pub.Forward(ctx, msg); err != nil {
 		// Kafka publish 실패 — backoff 적용한 ScheduledAt 으로 EnqueueRetry 재호출하여
