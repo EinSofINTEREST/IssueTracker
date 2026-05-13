@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/worker"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	pkgredis "issuetracker/pkg/redis"
 )

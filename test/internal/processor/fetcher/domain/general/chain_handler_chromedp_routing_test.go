@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
 	"issuetracker/internal/storage"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/fetcher"
@@ -30,7 +31,6 @@ import (
 	pgstore "issuetracker/internal/storage/postgres"
 	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/internal/storage/service"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/llm/prompt"

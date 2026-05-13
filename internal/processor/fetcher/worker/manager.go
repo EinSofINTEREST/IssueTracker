@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sync"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage/service"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"

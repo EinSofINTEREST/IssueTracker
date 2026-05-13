@@ -1,4 +1,4 @@
-package worker_test
+package bus_test
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -118,9 +118,9 @@ func seedTestJob(url string) *core.CrawlJob {
 	}
 }
 
-func newSeedPublisher() (*worker.Publisher, *seedFakeProducer) {
+func newSeedPublisher() (*bus.Publisher, *seedFakeProducer) {
 	prod := &seedFakeProducer{}
-	pub := worker.New(prod, seedFakeResolver{}, logger.New(logger.DefaultConfig()))
+	pub := bus.New(prod, seedFakeResolver{}, logger.New(logger.DefaultConfig()))
 	return pub, prod
 }
 
@@ -156,7 +156,7 @@ func TestPublishSeed_GuardDeny_ReturnsErrPublishSkipped(t *testing.T) {
 	err := pub.PublishSeed(context.Background(), job)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, worker.ErrPublishSkipped)
+	assert.ErrorIs(t, err, bus.ErrPublishSkipped)
 	assert.Empty(t, prod.snapshot(), "guard 가 deny 했으므로 publish 호출 X")
 	assert.Equal(t, 0, guard.releaseCount(), "deny 케이스는 release 호출 안 함 (acquire 안 됨)")
 }

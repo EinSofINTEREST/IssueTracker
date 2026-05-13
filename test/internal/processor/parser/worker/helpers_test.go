@@ -3,8 +3,8 @@ package worker_test
 // helpers_test.go — 테스트 공통 헬퍼
 
 import (
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/parser/worker"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )

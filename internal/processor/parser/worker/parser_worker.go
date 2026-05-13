@@ -27,6 +27,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
@@ -36,7 +37,6 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )

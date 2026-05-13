@@ -1,4 +1,4 @@
-// Package worker 는 Kafka crawl 토픽 발행 책임을 단일 hub 로 통합합니다 (이슈 #385).
+// Package bus 는 Kafka crawl 토픽 발행 책임을 단일 hub 로 통합합니다 (이슈 #385).
 //
 // 역할 (메타 #385 — Publisher 통합 모듈화):
 //   - PublishChained : 크롤된 페이지에서 발견된 URL 을 다음 CrawlJob 으로 연결 (chain.go)
@@ -14,7 +14,7 @@
 // 의존 관계 (이슈 #385 책임 분리 원칙):
 //   - 본 패키지 = Kafka I/O + 라우팅 (priority resolver) + guard/lock 책임
 //   - caller 의 stage 핵심 로직 (parsing rule / validation / fetch decision) 은 본 패키지 의존성 없음
-package worker
+package bus
 
 import (
 	"context"

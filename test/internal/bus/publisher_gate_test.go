@@ -1,4 +1,4 @@
-package worker_test
+package bus_test
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 	"issuetracker/pkg/urlguard"
@@ -58,7 +58,7 @@ func gateLog() *logger.Logger { return logger.New(logger.DefaultConfig()) }
 // urls 슬라이스에서 차단 대상이 사전 필터링되고 통과분만 batch publish.
 func TestPublisher_Gate_FiltersBlockedURLs(t *testing.T) {
 	prod := &gateMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	gate, _ := urlguard.NewGate(urlguard.Default(), gateLog())
 	pub.SetGate(gate)
 
@@ -78,7 +78,7 @@ func TestPublisher_Gate_FiltersBlockedURLs(t *testing.T) {
 // 모두 차단되면 PublishBatch 호출 없이 nil 반환.
 func TestPublisher_Gate_AllBlocked_NoPublish(t *testing.T) {
 	prod := &gateMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	gate, _ := urlguard.NewGate(urlguard.Default(), gateLog())
 	pub.SetGate(gate)
 
@@ -97,7 +97,7 @@ func TestPublisher_Gate_AllBlocked_NoPublish(t *testing.T) {
 // SetGate 미호출 시 모든 URL publish (기존 동작 유지).
 func TestPublisher_NoGate_LegacyBehavior(t *testing.T) {
 	prod := &gateMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	// SetGate 호출 없음
 
 	urls := []string{
@@ -113,7 +113,7 @@ func TestPublisher_NoGate_LegacyBehavior(t *testing.T) {
 // AllowAllGuard 명시 사용 시 차단 없이 전체 publish.
 func TestPublisher_Gate_AllowAllGuard_NoFiltering(t *testing.T) {
 	prod := &gateMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	gate, _ := urlguard.NewGate(urlguard.AllowAllGuard{}, gateLog())
 	pub.SetGate(gate)
 

@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"net/url"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/rule"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )

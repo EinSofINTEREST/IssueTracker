@@ -1,4 +1,4 @@
-package worker
+package bus
 
 import (
 	"context"

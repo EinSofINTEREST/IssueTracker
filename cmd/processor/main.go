@@ -6,11 +6,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/validate"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/metrics"

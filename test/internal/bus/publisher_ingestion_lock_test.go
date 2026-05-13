@@ -1,4 +1,4 @@
-package worker_test
+package bus_test
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/worker"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/queue"
 )
@@ -76,7 +76,7 @@ func (m *lockMockProducer) urls() []string {
 // 첫 publish 는 모든 URL 통과, 두 번째 동일 URL 은 lock 차단.
 func TestPublisher_IngestionLock_BlocksDuplicateOnSecondPublish(t *testing.T) {
 	prod := &lockMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	// SetIngestionLock 은 1회만 호출 — 같은 lock 인스턴스가 두 Publish 호출 모두에 적용됨.
 	pub.SetIngestionLock(newFakeLock())
 
@@ -91,7 +91,7 @@ func TestPublisher_IngestionLock_BlocksDuplicateOnSecondPublish(t *testing.T) {
 // TargetTypeCategory 는 Ingestion Lock 적용 안 됨 (매 주기 새 기사 추출 필요).
 func TestPublisher_IngestionLock_SkippedForCategory(t *testing.T) {
 	prod := &lockMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	pub.SetIngestionLock(newFakeLock())
 
 	urls := []string{"https://example.com/category/news"}
@@ -105,7 +105,7 @@ func TestPublisher_IngestionLock_SkippedForCategory(t *testing.T) {
 // Lock 조회 실패 시 fail-open — 해당 URL 통과 + 다른 URL 도 통과.
 func TestPublisher_IngestionLock_FailOpenOnError(t *testing.T) {
 	prod := &lockMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 
 	lock := newFakeLock()
 	lock.failOnce = errors.New("redis timeout")
@@ -121,7 +121,7 @@ func TestPublisher_IngestionLock_FailOpenOnError(t *testing.T) {
 // SetIngestionLock(nil) 후 publish 는 dedup 미적용 — 동일 URL 두 번 모두 통과.
 func TestPublisher_IngestionLock_NilDisablesDedup(t *testing.T) {
 	prod := &lockMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	pub.SetIngestionLock(newFakeLock())
 	pub.SetIngestionLock(nil) // 비활성화
 
@@ -135,7 +135,7 @@ func TestPublisher_IngestionLock_NilDisablesDedup(t *testing.T) {
 // Normalizer 는 publish 직전 정규화 — fragment / 쿼리 stripping 후 lock 키 일관 동작.
 func TestPublisher_Normalizer_AppliedBeforeLock(t *testing.T) {
 	prod := &lockMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	pub.SetNormalizer(links.NewNormalizer())
 	pub.SetIngestionLock(newFakeLock())
 
@@ -154,7 +154,7 @@ func TestPublisher_Normalizer_AppliedBeforeLock(t *testing.T) {
 // 정규화 결과 모두 빈 문자열이면 PublishBatch 호출 없이 early return (PR #179 CodeRabbit 피드백).
 func TestPublisher_Normalizer_EarlyReturnOnAllEmpty(t *testing.T) {
 	prod := &lockMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	pub.SetNormalizer(links.NewNormalizer())
 
 	// 빈 문자열 / 상대 URL — 정규화 후 모두 빈 슬라이스 또는 host 없음
@@ -167,7 +167,7 @@ func TestPublisher_Normalizer_EarlyReturnOnAllEmpty(t *testing.T) {
 // Normalizer 미설정 시 URL 원본 그대로 publish.
 func TestPublisher_Normalizer_DisabledByDefault(t *testing.T) {
 	prod := &lockMockProducer{}
-	pub := worker.New(prod, noopResolver{}, gateLog())
+	pub := bus.New(prod, noopResolver{}, gateLog())
 	// Normalizer 미설정
 
 	urls := []string{"https://EXAMPLE.com/X#frag"}

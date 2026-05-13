@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
-	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/urlguard"
 )
