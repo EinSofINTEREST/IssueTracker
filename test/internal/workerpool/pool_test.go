@@ -234,6 +234,40 @@ func TestPool_ShutdownOrder_NoSendOnClosed(t *testing.T) {
 	// panic 없이 도달하면 성공.
 }
 
+// TestPool_Stop_Idempotent 는 Stop 2회 호출 시 panic 없이 idempotent 동작.
+// (close on closed channel 회피 — gemini PR #413 피드백.)
+func TestPool_Stop_Idempotent(t *testing.T) {
+	consumer := new(mockConsumer)
+	handler := &captureHandler{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	consumer.On("FetchMessage", mock.Anything).
+		Run(func(_ mock.Arguments) { cancel() }).
+		Return(nil, context.Canceled)
+	consumer.On("Close").Return(nil).Once()
+
+	pool := workerpool.New(workerpool.Config{
+		Consumer:    consumer,
+		Handler:     handler,
+		WorkerCount: 1,
+		Log:         testLog(),
+		Name:        "test",
+	})
+
+	pool.Start(ctx)
+	<-ctx.Done()
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+	err1 := pool.Stop(stopCtx)
+	require.NoError(t, err1)
+	// 2회차 호출 — panic 없이 nil 반환
+	err2 := pool.Stop(stopCtx)
+	require.NoError(t, err2)
+	// consumer.Close 는 1회만 호출됨 (Once 매처 확인)
+	consumer.AssertExpectations(t)
+}
+
 // TestPool_Stop_DrainTimeout 은 worker 가 처리 중 (handler block) 일 때 ctx 만료로 force
 // progress 하는지 검증.
 func TestPool_Stop_DrainTimeout(t *testing.T) {
@@ -271,7 +305,9 @@ func TestPool_Stop_DrainTimeout(t *testing.T) {
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer stopCancel()
 	stopErr := pool.Stop(stopCtx)
-	require.NoError(t, stopErr) // consumer.Close 는 무사 호출됨
+	// drain timeout → errors.Join 으로 ctx.Err() 포함 — 호출자가 errors.Is 로 timeout 분기 가능.
+	require.Error(t, stopErr)
+	assert.ErrorIs(t, stopErr, context.DeadlineExceeded)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

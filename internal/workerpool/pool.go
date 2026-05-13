@@ -76,6 +76,11 @@ type ConsumerPool struct {
 	wg         sync.WaitGroup
 	pollWg     sync.WaitGroup
 	pollCancel context.CancelFunc
+	// stopOnce 는 Stop 다중 호출 안전성 보장 (gemini PR #413 피드백 — close on closed
+	// channel panic 회피). 2회차 이후 Stop 은 nil 반환 — idempotent.
+	stopOnce sync.Once
+	// stopErr 는 첫 Stop 호출의 에러를 보존 — 2회차 호출은 동일 에러를 참조하지 않고 nil 반환.
+	stopErr error
 }
 
 // New 는 새 ConsumerPool 을 생성합니다.
@@ -121,11 +126,25 @@ func (p *ConsumerPool) Start(ctx context.Context) {
 	go p.poll(pollCtx)
 }
 
-// Stop 은 worker pool 을 정상 종료합니다.
+// Stop 은 worker pool 을 정상 종료합니다 — 다중 호출 안전 (gemini PR #413).
 //
 // ctx 는 worker drain timeout 으로 활용 — 만료 시 force close 로 진행 (commit 안 된 메시지는
 // 다음 기동에서 재소비). consumer.Close 는 항상 호출됩니다.
+//
+// 반환 정책:
+//   - drain graceful + consumer.Close OK → nil
+//   - drain timeout (ctx canceled 으로 worker 미완) → errors.Join(ctx.Err(), closeErr)
+//   - drain OK + consumer.Close 실패 → closeErr
+//
+// 2회차 이후 호출은 nil 반환 (idempotent).
 func (p *ConsumerPool) Stop(ctx context.Context) error {
+	p.stopOnce.Do(func() {
+		p.stopErr = p.stopImpl(ctx)
+	})
+	return p.stopErr
+}
+
+func (p *ConsumerPool) stopImpl(ctx context.Context) error {
 	log := p.logger(ctx)
 
 	// 1. poll 중단 — 새 메시지 fetch 안 함 + ctx.Err() 로 즉시 반환
@@ -144,15 +163,22 @@ func (p *ConsumerPool) Stop(ctx context.Context) error {
 		close(done)
 	}()
 
+	var drainErr error
 	select {
 	case <-done:
 		log.Info("worker pool drained gracefully")
 	case <-ctx.Done():
+		// ctx.Err() 를 단일 진실 공급원 (SoT) 으로 — 호출자가 errors.Is 로 분기 가능 (gemini PR #413).
+		drainErr = fmt.Errorf("worker drain timeout: %w", ctx.Err())
 		log.Warn("worker pool shutdown timeout, forcing close")
 	}
 
-	// 4. consumer close
-	return p.cfg.Consumer.Close()
+	// 4. consumer close (drainErr 있어도 항상 호출 — Kafka 리소스 정리 보장)
+	closeErr := p.cfg.Consumer.Close()
+	if drainErr != nil {
+		return errors.Join(drainErr, closeErr) // closeErr 가 nil 이면 errors.Join 이 drainErr 만 반환
+	}
+	return closeErr
 }
 
 // poll 은 Kafka 에서 메시지를 한 건씩 fetch 하여 jobs 채널에 dispatch 합니다.
