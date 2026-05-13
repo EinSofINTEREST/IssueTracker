@@ -217,7 +217,13 @@ func (w *ParserWorker) SetStaleCounter(c storage.StaleCounter, threshold int) {
 // harness 가 N 개 worker goroutine + poll goroutine 을 관리하며, 각 메시지마다 본 worker 의
 // Handle 메소드를 호출합니다. ctx 에는 worker_pool 필드 logger 가 주입되어 Handle 내부에서
 // FromContext 로 접근 가능.
+//
+// 단일 호출 contract — 인스턴스당 1회만 호출 (gemini PR #415 피드백). 2회차 호출은 이전 pool
+// 의 reference 가 손실되어 자원 누수 위험이라 fail-fast panic.
 func (w *ParserWorker) Start(ctx context.Context) {
+	if w.pool != nil {
+		panic("parser worker: Start called more than once on the same instance")
+	}
 	w.log.WithFields(map[string]interface{}{
 		"worker_count": w.workerCount,
 		"input_topic":  queue.TopicFetched,
@@ -241,9 +247,12 @@ func (w *ParserWorker) Start(ctx context.Context) {
 
 // Stop 은 workerpool harness 의 정상 종료를 수행합니다.
 // 호출 전 ctx 가 cancel 되어야 함 (외부 책임 — graceful shutdown).
+//
+// pool 이 미기동 (Start 미호출) 상태에서 Stop 호출 시 consumer.Close 만 수행 — Kafka 연결
+// 자원 누수 방지 (gemini PR #415 피드백).
 func (w *ParserWorker) Stop(ctx context.Context) error {
 	if w.pool == nil {
-		return nil
+		return w.consumer.Close()
 	}
 	err := w.pool.Stop(ctx)
 	if err == nil {
