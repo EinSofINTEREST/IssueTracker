@@ -34,9 +34,9 @@ func NewParserRuleRepository(pool *pgxpool.Pool, log *logger.Logger) storage.Par
 
 const sqlInsertParserRule = `
 INSERT INTO parser_rules (
-  source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type
+  source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
 RETURNING id, created_at, updated_at
 `
@@ -68,7 +68,7 @@ func (r *pgParserRuleRepository) Insert(ctx context.Context, rec *storage.Parser
 	}
 	row := r.pool.QueryRow(ctx, sqlInsertParserRule,
 		rec.SourceName, rec.HostPattern, rec.PathPattern, string(rec.TargetType), rec.Version,
-		rec.Enabled, selectors, confidence, rec.Description, rec.PageType,
+		rec.Enabled, selectors, confidence, rec.Description, rec.PageType, rec.Article,
 	)
 	if err := row.Scan(&rec.ID, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 		var pgErr *pgconn.PgError
@@ -82,7 +82,7 @@ func (r *pgParserRuleRepository) Insert(ctx context.Context, rec *storage.Parser
 
 const sqlUpdateParserRule = `
 UPDATE parser_rules
-SET selectors = $2, confidence = $3, enabled = $4, description = $5
+SET selectors = $2, confidence = $3, enabled = $4, description = $5, article = $6
 WHERE id = $1
 RETURNING updated_at
 `
@@ -93,6 +93,8 @@ RETURNING updated_at
 // confidence 도 함께 갱신 — selectors 만 바뀌고 confidence 가 stale
 // 로 남으면 하류 validator 가 잘못된 신뢰도로 판단. 호출자는 selectors 변경 시 confidence 도
 // 같이 채워서 전달 (또는 nil/빈 map 으로 reset).
+//
+// 갱신 가능 필드: Selectors, Confidence, Enabled, Description, Article (자연키 + PageType 은 변경 불가).
 func (r *pgParserRuleRepository) Update(ctx context.Context, rec *storage.ParserRuleRecord) error {
 	selectors, err := json.Marshal(rec.Selectors)
 	if err != nil {
@@ -102,7 +104,7 @@ func (r *pgParserRuleRepository) Update(ctx context.Context, rec *storage.Parser
 	if err != nil {
 		return fmt.Errorf("marshal confidence: %w", err)
 	}
-	row := r.pool.QueryRow(ctx, sqlUpdateParserRule, rec.ID, selectors, confidence, rec.Enabled, rec.Description)
+	row := r.pool.QueryRow(ctx, sqlUpdateParserRule, rec.ID, selectors, confidence, rec.Enabled, rec.Description, rec.Article)
 	if err := row.Scan(&rec.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return storage.ErrNotFound
@@ -151,7 +153,7 @@ func (r *pgParserRuleRepository) UpdatePathPattern(ctx context.Context, id int64
 }
 
 const sqlGetParserRuleByID = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, created_at, updated_at
 FROM parser_rules
 WHERE id = $1
 `
@@ -170,7 +172,7 @@ func (r *pgParserRuleRepository) GetByID(ctx context.Context, id int64) (*storag
 }
 
 const sqlFindParserRuleByNaturalKey = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, created_at, updated_at
 FROM parser_rules
 WHERE source_name  = $1
   AND host_pattern = $2
@@ -261,7 +263,7 @@ func (r *pgParserRuleRepository) HasAnyRule(ctx context.Context, hostPattern str
 //   - LENGTH(path_pattern) DESC : 더 구체적인 (긴) regex 패턴 우선 (path_pattern=” 은 길이 0 으로 마지막)
 //   - version DESC             : 같은 패턴 안에서 최신 버전 우선
 const sqlFindActiveCandidates = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, created_at, updated_at
 FROM parser_rules
 WHERE host_pattern = $1
   AND target_type  = $2
@@ -318,7 +320,7 @@ func (r *pgParserRuleRepository) List(ctx context.Context, f storage.ParserRuleF
 	}
 
 	query := `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, created_at, updated_at
 FROM parser_rules
 WHERE 1=1`
 	args := make([]any, 0, 4)
@@ -341,6 +343,11 @@ WHERE 1=1`
 	}
 	if f.OnlyEnabled {
 		query += " AND enabled = TRUE"
+	}
+	if f.Article != nil {
+		query += fmt.Sprintf(" AND article = $%d", idx)
+		args = append(args, *f.Article)
+		idx++
 	}
 
 	query += fmt.Sprintf(" ORDER BY source_name, host_pattern, target_type, version DESC LIMIT $%d OFFSET $%d", idx, idx+1)
@@ -384,7 +391,7 @@ func scanParserRule(s scanner) (*storage.ParserRuleRecord, error) {
 	var targetType string
 	if err := s.Scan(
 		&rec.ID, &rec.SourceName, &rec.HostPattern, &rec.PathPattern, &targetType, &rec.Version,
-		&rec.Enabled, &selectorsRaw, &confidenceRaw, &rec.Description, &rec.PageType,
+		&rec.Enabled, &selectorsRaw, &confidenceRaw, &rec.Description, &rec.PageType, &rec.Article,
 		&rec.CreatedAt, &rec.UpdatedAt,
 	); err != nil {
 		return nil, err
