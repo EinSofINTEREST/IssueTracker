@@ -112,6 +112,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 		Tags:        extractFieldMulti(doc, rule.Selectors.Tags),
 		Images:      extractFieldMulti(doc, rule.Selectors.Images),
 		PublishedAt: p.extractDate(doc, rule.Selectors.PublishedAt),
+		Article:     rule.Article,
 	}
 
 	// Title 도 MainContent 와 동등한 필수 — selector 는 있지만 추출 결과 빈 경우도 stale 진단.

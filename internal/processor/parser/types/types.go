@@ -46,6 +46,10 @@ type Page struct {
 	Tags        []string
 	Images      []string          // optional — page 내 핵심 이미지 URL
 	Metadata    map[string]string // 확장 — canonical_url / og:* / twitter:* 등 임의 메타
+
+	// Article 은 적용된 parser_rule 의 article 플래그 (이슈 #423). 다운스트림 validator 가
+	// PublishedAt 강제 여부를 결정. 기본 false — 룰이 명시적으로 article=true 인 경우만 true.
+	Article bool
 }
 
 // LinkItem 은 목록/링크-허브 페이지에서 추출한 단일 링크입니다.

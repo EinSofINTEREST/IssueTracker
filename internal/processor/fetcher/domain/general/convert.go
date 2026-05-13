@@ -39,6 +39,7 @@ func ConvertPage(page *types.Page, raw *core.RawContent) *core.Content {
 		ImageURLs:    page.Images,
 		WordCount:    len(strings.Fields(page.MainContent)),
 		ContentHash:  ContentHash(page.MainContent),
+		Article:      page.Article,
 		CreatedAt:    time.Now(),
 	}
 }
