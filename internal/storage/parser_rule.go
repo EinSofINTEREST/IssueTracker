@@ -156,6 +156,17 @@ type ParserRuleRecord struct {
 	// (별도 후속 이슈) 의 1차 입력.
 	PageType string
 
+	// Article 은 룰이 적용되는 페이지가 뉴스 기사 본문인지 표시합니다 (이슈 #421).
+	//
+	//   - true  : 순수 뉴스 기사 본문 페이지 — title + main_content + published_at 추출 대상.
+	//             validate / classifier 가 strict 검증 / 분류 적용.
+	//   - false : 뉴스 인덱스 / 이미지 / 멀티미디어 / 기타 비-article 페이지. 다운스트림이
+	//             해당 룰에 대해 검증 완화 또는 처리 분기.
+	//
+	// 기본값 false — operator 명시적 opt-in. PageType 과 직교 (예: PageType=news + article=true
+	// 가 \"기사 본문\", PageType=news + article=false 가 \"뉴스 인덱스\").
+	Article bool
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
