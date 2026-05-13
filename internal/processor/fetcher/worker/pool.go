@@ -213,18 +213,32 @@ func (p *KafkaConsumerPool) SetPriority(name string) {
 //
 // harness 가 N 개 worker goroutine + poll goroutine 을 관리하며, 각 메시지마다 본 pool 의
 // Handle 메소드를 호출합니다. heartbeat goroutine 은 priority 설정 시 별도 시작.
+//
+// 로깅 — worker_pool 필드 단일 책임 (gemini PR #414 피드백):
+//   - Name 은 priority 가 설정된 경우만 "fetcher-<priority>", 빈 경우 "fetcher" (trailing
+//     hyphen 회피).
+//   - worker_pool 필드는 workerpool.Config.Name 으로 한 번만 설정 → harness 가 자체 logger 에
+//     주입 (중복 회피).
+//   - Handler / processJob / heartbeatLoop 가 FromContext(ctx) 로 로거를 얻을 때도 동일 필드를
+//     보도록 ctx 에 worker_pool 필드 logger 주입 (observability 보존).
 func (p *KafkaConsumerPool) Start(ctx context.Context) {
-	log := logger.FromContext(ctx)
+	name := "fetcher"
 	if p.priority != "" {
-		log = log.WithField("worker_pool", "fetcher-"+p.priority)
+		name = "fetcher-" + p.priority
 	}
+	// plain logger 를 workerpool.Config.Log 로 전달 — harness 가 Name 으로 worker_pool 필드
+	// 단독 주입 (중복 회피). 동일 필드를 Handle/processJob/heartbeatLoop 의 ctx logger 에도
+	// 보존하기 위해 ctx 에 별도 ToContext 로 주입.
+	plainLog := logger.FromContext(ctx)
+	ctx = plainLog.WithField("worker_pool", name).ToContext(ctx)
+
 	p.pool = workerpool.New(workerpool.Config{
 		Consumer:     p.consumer,
 		Handler:      p,
 		WorkerCount:  p.workerCount,
 		DrainTimeout: drainTimeout,
-		Log:          log,
-		Name:         "fetcher-" + p.priority,
+		Log:          plainLog, // harness 가 자체 worker_pool 필드 주입 (Name 으로 1회)
+		Name:         name,
 	})
 	p.pool.Start(ctx)
 
