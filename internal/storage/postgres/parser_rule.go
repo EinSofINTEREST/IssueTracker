@@ -82,7 +82,7 @@ func (r *pgParserRuleRepository) Insert(ctx context.Context, rec *storage.Parser
 
 const sqlUpdateParserRule = `
 UPDATE parser_rules
-SET selectors = $2, confidence = $3, enabled = $4, description = $5
+SET selectors = $2, confidence = $3, enabled = $4, description = $5, article = $6
 WHERE id = $1
 RETURNING updated_at
 `
@@ -93,6 +93,8 @@ RETURNING updated_at
 // confidence 도 함께 갱신 — selectors 만 바뀌고 confidence 가 stale
 // 로 남으면 하류 validator 가 잘못된 신뢰도로 판단. 호출자는 selectors 변경 시 confidence 도
 // 같이 채워서 전달 (또는 nil/빈 map 으로 reset).
+//
+// 갱신 가능 필드: Selectors, Confidence, Enabled, Description, Article (자연키 + PageType 은 변경 불가).
 func (r *pgParserRuleRepository) Update(ctx context.Context, rec *storage.ParserRuleRecord) error {
 	selectors, err := json.Marshal(rec.Selectors)
 	if err != nil {
@@ -102,7 +104,7 @@ func (r *pgParserRuleRepository) Update(ctx context.Context, rec *storage.Parser
 	if err != nil {
 		return fmt.Errorf("marshal confidence: %w", err)
 	}
-	row := r.pool.QueryRow(ctx, sqlUpdateParserRule, rec.ID, selectors, confidence, rec.Enabled, rec.Description)
+	row := r.pool.QueryRow(ctx, sqlUpdateParserRule, rec.ID, selectors, confidence, rec.Enabled, rec.Description, rec.Article)
 	if err := row.Scan(&rec.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return storage.ErrNotFound
@@ -341,6 +343,11 @@ WHERE 1=1`
 	}
 	if f.OnlyEnabled {
 		query += " AND enabled = TRUE"
+	}
+	if f.Article != nil {
+		query += fmt.Sprintf(" AND article = $%d", idx)
+		args = append(args, *f.Article)
+		idx++
 	}
 
 	query += fmt.Sprintf(" ORDER BY source_name, host_pattern, target_type, version DESC LIMIT $%d OFFSET $%d", idx, idx+1)

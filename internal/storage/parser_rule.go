@@ -164,7 +164,7 @@ type ParserRuleRecord struct {
 	//             해당 룰에 대해 검증 완화 또는 처리 분기.
 	//
 	// 기본값 false — operator 명시적 opt-in. PageType 과 직교 (예: PageType=news + article=true
-	// 가 \"기사 본문\", PageType=news + article=false 가 \"뉴스 인덱스\").
+	// 가 "기사 본문", PageType=news + article=false 가 "뉴스 인덱스").
 	Article bool
 
 	CreatedAt time.Time
@@ -188,8 +188,14 @@ type ParserRuleFilter struct {
 	HostPattern string     // 빈 문자열이면 전체
 	TargetType  TargetType // 빈 문자열이면 전체
 	OnlyEnabled bool       // true 면 enabled=true 만
-	Limit       int        // 0 이면 기본값 (50)
-	Offset      int
+
+	// Article: nil 이면 미적용 (article 무관 전체).
+	// 비-nil 이면 *Article 값과 동일한 행만 (true → article=TRUE, false → article=FALSE).
+	// tri-state 필요 — bool zero-value 가 "미적용" 인지 "false 매칭" 인지 구분되어야 함 (이슈 #421).
+	Article *bool
+
+	Limit  int // 0 이면 기본값 (50)
+	Offset int
 }
 
 // ParserRuleRepository 는 parser_rules 테이블에 대한 데이터 접근 인터페이스입니다.
@@ -202,7 +208,7 @@ type ParserRuleRepository interface {
 	Insert(ctx context.Context, r *ParserRuleRecord) error
 
 	// Update 는 ID 로 규칙을 갱신합니다. 존재하지 않으면 ErrNotFound 반환.
-	// 갱신 가능 필드: Selectors, Enabled, Description (자연키는 변경 불가).
+	// 갱신 가능 필드: Selectors, Confidence, Enabled, Description, Article (자연키 + PageType 은 변경 불가).
 	Update(ctx context.Context, r *ParserRuleRecord) error
 
 	// UpdatePathPattern 은 정밀화 워크플로 에서 호출 — path_pattern + description 갱신.
