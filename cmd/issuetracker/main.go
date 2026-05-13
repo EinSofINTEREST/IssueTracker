@@ -568,7 +568,7 @@ func main() {
 		log.Warn("processing lock unavailable, parser stage gate falls back to noop")
 	}
 
-	pw := parserWorker.NewWorker(
+	w := parserWorker.NewWorker(
 		parserConsumer,
 		jobPublisher, // 이슈 #392 — 구 producer + JobPublisher 두 인자 통합 (bus.Publisher 가 Forward + PublishChained 모두 제공)
 		rawSvc,
@@ -590,14 +590,14 @@ func main() {
 	// ── Pipeline Guard release ─────────────────────────────────────
 	// Category cycle 종료 시 marker release — scheduler 다음 주기에 즉시 진입 가능.
 	if pipelineGuard != nil {
-		pw.SetPipelineGuard(pipelineGuard)
+		w.SetPipelineGuard(pipelineGuard)
 	}
 
 	// ── Page-parse 블랙리스트 ───────────────────────────────────────
 	// 카테고리에서 추출된 article URL 중 blacklist 매칭은 bus.Publish 직전 drop.
 	// Matcher 가 nil (BLACKLIST_ENABLED=false) 이면 setter noop — 모든 링크 그대로 발행.
 	if blacklistMatcher != nil {
-		pw.SetBlacklist(blacklistMatcher)
+		w.SetBlacklist(blacklistMatcher)
 	}
 
 	// ── Stale rule 재학습 카운터 ───────────────────────────────────
@@ -619,7 +619,7 @@ func main() {
 		if scErr != nil {
 			log.WithError(scErr).Warn("failed to construct redis stale counter, stale relearn disabled at runtime")
 		} else {
-			pw.SetStaleCounter(sc, staleRelearnCfg.Threshold)
+			w.SetStaleCounter(sc, staleRelearnCfg.Threshold)
 			log.WithFields(map[string]interface{}{
 				"threshold": staleRelearnCfg.Threshold,
 				"window":    staleRelearnCfg.Window.String(),
@@ -637,7 +637,7 @@ func main() {
 	// selector 검증 실패 시 raw 를 issuetracker.fetched 에 재발행 — 룰 생성 성공 후 재파싱 기회 부여.
 	// llmGen 이 nil(LLM 비활성) 이면 wiring 불필요.
 	if llmGen != nil {
-		llmGen.SetValidateFailureHandler(pw.RequeueForLLMRetry)
+		llmGen.SetValidateFailureHandler(w.RequeueForLLMRetry)
 	}
 
 	// ── Pending URL 큐 ────────────────────────────────────────────
@@ -649,7 +649,7 @@ func main() {
 		if pqErr != nil {
 			log.WithError(pqErr).Fatal("failed to construct redis pending queue")
 		}
-		llmGen.SetPendingQueue(pq, pw.RequeueParsing)
+		llmGen.SetPendingQueue(pq, w.RequeueParsing)
 		log.Info("llmgen: Redis 기반 pending URL 큐 활성화")
 	}
 
@@ -827,7 +827,7 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct fetcher stage")
 	}
-	parserStg, err := parser.NewStage(pw, cleaner, llmGen, pathRefiner, log)
+	parserStg, err := parser.NewStage(w, cleaner, llmGen, pathRefiner, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct parser stage")
 	}

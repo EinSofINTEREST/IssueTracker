@@ -49,13 +49,13 @@ type Stage struct {
 // NewStage 는 component 들을 받아 parser.Stage 를 반환합니다.
 // worker / cleaner / log 는 필수 (nil 이면 error), llmGen / refiner 는 nil 허용.
 func NewStage(
-	pw *worker.Worker,
+	w *worker.Worker,
 	cleaner *worker.RawContentCleaner,
 	llmGen *llmgen.Generator,
 	pathRefiner *refiner.Refiner,
 	log *logger.Logger,
 ) (*Stage, error) {
-	if pw == nil {
+	if w == nil {
 		return nil, errors.New("parser: NewStage requires non-nil Worker")
 	}
 	if cleaner == nil {
@@ -65,7 +65,7 @@ func NewStage(
 		return nil, errors.New("parser: NewStage requires non-nil logger")
 	}
 	return &Stage{
-		worker:  pw,
+		worker:  w,
 		cleaner: cleaner,
 		llmGen:  llmGen,
 		refiner: pathRefiner,
