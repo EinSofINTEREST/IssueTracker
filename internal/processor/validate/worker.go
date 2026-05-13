@@ -11,6 +11,7 @@ import (
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -32,8 +33,8 @@ const drainTimeout = 5 * time.Second
 // validates it, and publishes ContentRef to issuetracker.validated.
 // On failure, deletes the contents record and routes to DLQ.
 type Worker struct {
-	consumer    queue.Consumer
-	producer    queue.Producer
+	consumer    publisher.Consumer
+	pub         *publisher.Publisher
 	contentSvc  service.ContentService
 	gate        locks.StageGate // nil 허용 → NoopStageGate 로 fallback (이슈 #356)
 	cfg         config.ValidateConfig
@@ -54,20 +55,30 @@ type Worker struct {
 // StageGate (ProcessingLock + Semaphore 합성, 이슈 #353/#354/#356) 로 fetcher / parser / validator
 // 가 동일 인터페이스로 단계별 dedup + per-stage 동시성 cap. validator 단계는 ContentRef.URL 단위로
 // acquire — Kafka rebalance 시 같은 ref 가 두 worker 에 도달해도 1회만 검증.
+//
+// 이슈 #393 — 구 queue.Consumer / queue.Producer 직접 주입 → publisher facade 주입으로 변경.
+// Kafka 구현체에 직접 의존하지 않음 (consumer 는 publisher.Consumer 별칭, publish 는 pub.Forward).
 func NewWorker(
-	consumer queue.Consumer,
-	producer queue.Producer,
+	consumer publisher.Consumer,
+	pub *publisher.Publisher,
 	contentSvc service.ContentService,
 	gate locks.StageGate,
 	workerCount int,
 	cfg config.ValidateConfig,
 ) *Worker {
+	// pub 은 4 publish 사이트 (validated / dlq / requeue / reparse) 가 dereference 하는 hard
+	// dependency. nil 주입 시 첫 publish 에서 publisher.Forward 가 error 를 반환하지만, validate
+	// worker 는 publish 실패 시 commit skip → Kafka 무한 재배달 — 운영 진단이 매우 어려워짐.
+	// Fail-fast 가 silent failure 보다 안전 (coderabbit PR #408 피드백).
+	if pub == nil {
+		panic("validate.NewWorker: pub must not be nil")
+	}
 	if gate == nil {
 		gate = locks.NewNoopStageGate()
 	}
 	return &Worker{
 		consumer:    consumer,
-		producer:    producer,
+		pub:         pub,
 		contentSvc:  contentSvc,
 		gate:        gate,
 		cfg:         cfg,
@@ -381,7 +392,7 @@ func (w *Worker) publishValidatedRef(ctx context.Context, ref *core.ContentRef, 
 		},
 	}
 
-	return w.producer.Publish(ctx, outMsg)
+	return w.pub.Forward(ctx, outMsg)
 }
 
 // recordValidationRejected 는 validator 영구 실패 시 news_articles 에 reject 메타데이터를
@@ -461,11 +472,11 @@ func (w *Worker) sendToDLQ(ctx context.Context, msg *queue.Message, reason error
 		Headers: headers,
 	}
 
-	err := w.producer.Publish(ctx, dlqMsg)
+	err := w.pub.Forward(ctx, dlqMsg)
 	if err != nil && errors.Is(err, context.Canceled) {
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 		defer cancel()
-		err = w.producer.Publish(drainCtx, dlqMsg)
+		err = w.pub.Forward(drainCtx, dlqMsg)
 	}
 	if err != nil {
 		log.WithError(err).Error("failed to send message to dlq")
@@ -501,11 +512,11 @@ func (w *Worker) requeue(ctx context.Context, msg *queue.Message, pm *core.Proce
 		},
 	}
 
-	err = w.producer.Publish(ctx, requeueMsg)
+	err = w.pub.Forward(ctx, requeueMsg)
 	if err != nil && errors.Is(err, context.Canceled) {
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 		defer cancel()
-		err = w.producer.Publish(drainCtx, requeueMsg)
+		err = w.pub.Forward(drainCtx, requeueMsg)
 	}
 	if err != nil {
 		log.WithFields(map[string]interface{}{
@@ -589,11 +600,11 @@ func (w *Worker) republishForReparse(ctx context.Context, content *core.Content,
 		Headers: headers,
 	}
 
-	pubErr := w.producer.Publish(ctx, reparseMsg)
+	pubErr := w.pub.Forward(ctx, reparseMsg)
 	if pubErr != nil && errors.Is(pubErr, context.Canceled) {
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 		defer cancel()
-		pubErr = w.producer.Publish(drainCtx, reparseMsg)
+		pubErr = w.pub.Forward(drainCtx, reparseMsg)
 	}
 	if pubErr != nil {
 		log.WithFields(map[string]interface{}{

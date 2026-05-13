@@ -789,6 +789,10 @@ func main() {
 	validateProducer := queue.NewProducer(validateKafkaCfg)
 	defer validateProducer.Close()
 
+	// 이슈 #393 — validate worker 가 publisher facade 의존. validate 전용 producer 를
+	// thin publisher 로 wrap (resolver/guard 불필요 — validate 는 Forward 만 사용).
+	validatePublisher := publisher.New(validateProducer, nil, log)
+
 	// Validate StageGate (이슈 #356) — ProcessingLock + per-stage Semaphore 합성.
 	validateCap := config.CapPerStage(workerCountsCfg.Validate, stageGateCfg.ValidateMaxConcurrentPerStage)
 	validateGate := locks.BuildStageGate(locks.StageValidator, validateCap, procLock, log)
@@ -802,7 +806,7 @@ func main() {
 		log.Warn("processing lock unavailable, validate stage gate falls back to noop")
 	}
 
-	validateWorker := validate.NewWorker(validateConsumer, validateProducer, contentSvc, validateGate, workerCountsCfg.Validate, validateCfg)
+	validateWorker := validate.NewWorker(validateConsumer, validatePublisher, contentSvc, validateGate, workerCountsCfg.Validate, validateCfg)
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": workerCountsCfg.Validate,
