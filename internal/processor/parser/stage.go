@@ -7,7 +7,7 @@
 // 사이클 없음.
 //
 // 본 stage 는 단일 worker 가 아닌 **여러 background goroutine 의 묶음** 입니다:
-//   - worker.ParserWorker (Kafka consume + 파싱 + content 저장)
+//   - worker.Worker (Kafka consume + 파싱 + content 저장)
 //   - worker.RawContentCleaner (잔존 raw_contents purge cron)
 //   - llmgen.Generator (ErrNoRule 시 async LLM 호출, optional)
 //   - refiner.Refiner (path_pattern 정밀화 polling, optional)
@@ -33,13 +33,13 @@ const stageName = "parser"
 // Stage 는 parser 단계의 모든 background goroutine 을 묶어 processor.Stage 로 노출합니다.
 //
 // component 의존 order (Stop 시 역순 처리):
-//  1. ParserWorker — Kafka consumer + 파싱 (필수)
+//  1. Worker — Kafka consumer + 파싱 (필수)
 //  2. RawContentCleaner — janitor (필수, Stop 은 ctx 무시)
-//  3. llmgen.Generator (선택) — ErrNoRule async LLM 호출. ParserWorker 가 유일 Enqueue source 이므로
-//     ParserWorker.Stop 후에 Stop 해야 in-flight LLM 호출 완료 보장.
+//  3. llmgen.Generator (선택) — ErrNoRule async LLM 호출. Worker 가 유일 Enqueue source 이므로
+//     Worker.Stop 후에 Stop 해야 in-flight LLM 호출 완료 보장.
 //  4. refiner.Refiner (선택) — interval polling. ctx cancel 시 cycle 즉시 종료.
 type Stage struct {
-	worker  *worker.ParserWorker
+	worker  *worker.Worker
 	cleaner *worker.RawContentCleaner
 	llmGen  *llmgen.Generator // nil 허용
 	refiner *refiner.Refiner  // nil 허용
@@ -49,14 +49,14 @@ type Stage struct {
 // NewStage 는 component 들을 받아 parser.Stage 를 반환합니다.
 // worker / cleaner / log 는 필수 (nil 이면 error), llmGen / refiner 는 nil 허용.
 func NewStage(
-	pw *worker.ParserWorker,
+	pw *worker.Worker,
 	cleaner *worker.RawContentCleaner,
 	llmGen *llmgen.Generator,
 	pathRefiner *refiner.Refiner,
 	log *logger.Logger,
 ) (*Stage, error) {
 	if pw == nil {
-		return nil, errors.New("parser: NewStage requires non-nil ParserWorker")
+		return nil, errors.New("parser: NewStage requires non-nil Worker")
 	}
 	if cleaner == nil {
 		return nil, errors.New("parser: NewStage requires non-nil RawContentCleaner")
@@ -78,7 +78,7 @@ func (s *Stage) Name() string { return stageName }
 
 // Start 는 parser 단계의 모든 background goroutine 을 기동합니다.
 //
-//   - ParserWorker: consumer pool start
+//   - Worker: consumer pool start
 //   - RawContentCleaner: cron start
 //   - refiner: polling goroutine start (있으면)
 //
@@ -94,7 +94,7 @@ func (s *Stage) Start(ctx context.Context) {
 // Stop 은 parser 단계의 graceful shutdown 을 수행합니다.
 //
 // 처리 순서가 중요:
-//  1. ParserWorker 먼저 — llmGen 의 유일 Enqueue source 차단
+//  1. Worker 먼저 — llmGen 의 유일 Enqueue source 차단
 //  2. llmGen — in-flight LLM 호출 완료 대기
 //  3. refiner — in-flight polling cycle 완료 대기
 //  4. RawContentCleaner — janitor 마지막
@@ -103,7 +103,7 @@ func (s *Stage) Start(ctx context.Context) {
 func (s *Stage) Stop(ctx context.Context) error {
 	var firstErr error
 
-	// 1. ParserWorker — Enqueue source 차단. 에러는 호출자 (main) 에서 stage 별로 일괄 로깅하므로
+	// 1. Worker — Enqueue source 차단. 에러는 호출자 (main) 에서 stage 별로 일괄 로깅하므로
 	// 본 위치에서는 중복 로그 회피 — 단순 first-error 보존만.
 	if err := s.worker.Stop(ctx); err != nil {
 		firstErr = err

@@ -47,9 +47,9 @@ func (g *fakeStageGate) Acquire(_ context.Context, _ string) (func(), bool, erro
 	return func() { atomic.AddInt64(&g.releaseCalls, 1) }, true, nil
 }
 
-// newGatedWorker 는 gate + rawSvc 를 주입한 ParserWorker 를 생성합니다.
-func newGatedWorker(gate locks.StageGate, rawSvc *fakeRawSvc, log *logger.Logger) *parserWorker.ParserWorker {
-	return parserWorker.NewParserWorker(
+// newGatedWorker 는 gate + rawSvc 를 주입한 Worker 를 생성합니다.
+func newGatedWorker(gate locks.StageGate, rawSvc *fakeRawSvc, log *logger.Logger) *parserWorker.Worker {
+	return parserWorker.NewWorker(
 		nil,    // consumer
 		nil,    // pub
 		rawSvc, // rawSvc

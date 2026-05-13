@@ -329,7 +329,7 @@ func main() {
 	}
 
 	// URL dedup — Ingestion Lock → Pipeline Guard 통합:
-	// Publisher / Scheduler / ParserWorker 가 동일 guard 를 공유하여 target type 별 정책 적용:
+	// Publisher / Scheduler / Worker 가 동일 guard 를 공유하여 target type 별 정책 적용:
 	//   - Article: 24h TTL (기존 IngestionLock 정책 유지)
 	//   - Category: 단명 TTL (default 60s) — cycle 종료 시 명시적 release + TTL fallback
 	jobPublisher.SetNormalizer(links.NewNormalizer())
@@ -568,7 +568,7 @@ func main() {
 		log.Warn("processing lock unavailable, parser stage gate falls back to noop")
 	}
 
-	pw := parserWorker.NewParserWorker(
+	pw := parserWorker.NewWorker(
 		parserConsumer,
 		jobPublisher, // 이슈 #392 — 구 producer + JobPublisher 두 인자 통합 (bus.Publisher 가 Forward + PublishChained 모두 제공)
 		rawSvc,
