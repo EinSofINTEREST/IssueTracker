@@ -1,4 +1,4 @@
-package validate_test
+package community_test
 
 import (
 	"context"

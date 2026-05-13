@@ -1,4 +1,4 @@
-package validate_test
+package news_test
 
 import (
 	"context"
