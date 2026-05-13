@@ -14,6 +14,7 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/worker"
 	"issuetracker/pkg/queue"
+	"issuetracker/pkg/resilience"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,7 +74,7 @@ func TestKafkaConsumerPool_StageGate_AlreadyAcquired_SkipsWithoutCommit(t *testi
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, newTestPublisher(producer), handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
+		resilience.NewCircuitBreakerRegistry(resilience.DefaultCircuitBreakerConfig, nil),
 		gate,
 	)
 
@@ -104,7 +105,7 @@ func TestKafkaConsumerPool_StageGate_Acquired_ReleasedAfterProcessing(t *testing
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, newTestPublisher(producer), handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
+		resilience.NewCircuitBreakerRegistry(resilience.DefaultCircuitBreakerConfig, nil),
 		gate,
 	)
 
@@ -142,7 +143,7 @@ func TestKafkaConsumerPool_StageGate_AcquireError_ProceedsWithoutGate(t *testing
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
 		consumer, newTestPublisher(producer), handler, contentSvc, 1,
-		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
+		resilience.NewCircuitBreakerRegistry(resilience.DefaultCircuitBreakerConfig, nil),
 		gate,
 	)
 

@@ -20,6 +20,7 @@ import (
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
+	"issuetracker/pkg/resilience"
 	"issuetracker/pkg/urlguard"
 )
 
@@ -69,7 +70,7 @@ type KafkaConsumerPool struct {
 	workerCount int
 	jobs        chan jobItem
 	wg          sync.WaitGroup
-	cbRegistry  *CircuitBreakerRegistry
+	cbRegistry  *resilience.CircuitBreakerRegistry
 	stageGate   locks.StageGate // nil 허용 → NoopStageGate (이슈 #356)
 	// normalizer는 URL 정규화기입니다.
 	// 미설정(nil) 이면 정규화가 적용되지 않으며, 기존 동작이 유지됩니다.
@@ -120,7 +121,7 @@ func NewKafkaConsumerPool(
 	// 본 헬퍼는 단순 호출용 (테스트/예제) 이라 logger 주입 안 함 — nil 이면 state 전이 로그 skip.
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, pub, handler, contentSvc, workerCount,
-		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, nil),
+		resilience.NewCircuitBreakerRegistry(resilience.DefaultCircuitBreakerConfig, nil),
 		locks.NewNoopStageGate(),
 	)
 }
@@ -133,7 +134,7 @@ func NewKafkaConsumerPoolWithCB(
 	handler JobHandler,
 	contentSvc service.ContentService,
 	workerCount int,
-	cbRegistry *CircuitBreakerRegistry,
+	cbRegistry *resilience.CircuitBreakerRegistry,
 ) *KafkaConsumerPool {
 	return NewKafkaConsumerPoolWithOptions(
 		consumer, pub, handler, contentSvc, workerCount,
@@ -153,7 +154,7 @@ func NewKafkaConsumerPoolWithOptions(
 	handler JobHandler,
 	contentSvc service.ContentService,
 	workerCount int,
-	cbRegistry *CircuitBreakerRegistry,
+	cbRegistry *resilience.CircuitBreakerRegistry,
 	gate locks.StageGate,
 ) *KafkaConsumerPool {
 	// nil guard — NewParserWorker / validate.NewWorker 와 일관성 보장.
@@ -513,7 +514,7 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, item jobItem) (err e
 	// 소스 복구 후 운영자가 DLQ에서 재처리합니다.
 	cb := p.cbRegistry.Get(item.job.CrawlerName)
 	if !cb.Allow() {
-		cbErr := &ErrCircuitOpen{Source: item.job.CrawlerName}
+		cbErr := &resilience.ErrCircuitOpen{Source: item.job.CrawlerName}
 		log.WithFields(map[string]interface{}{
 			"job_id":  item.job.ID,
 			"crawler": item.job.CrawlerName,

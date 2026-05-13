@@ -1,4 +1,4 @@
-package worker_test
+package resilience_test
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/processor/fetcher/worker"
+	"issuetracker/pkg/resilience"
 )
 
 // cbPollTimeout은 OpenTimeout 경과를 기다리는 require.Eventually 상한입니다.
@@ -17,8 +17,8 @@ const (
 	cbPollTick    = 2 * time.Millisecond
 )
 
-func newTestCBConfig(maxFailures int, openTimeout time.Duration) worker.CircuitBreakerConfig {
-	return worker.CircuitBreakerConfig{
+func newTestCBConfig(maxFailures int, openTimeout time.Duration) resilience.CircuitBreakerConfig {
+	return resilience.CircuitBreakerConfig{
 		MaxFailures: maxFailures,
 		OpenTimeout: openTimeout,
 	}
@@ -27,7 +27,7 @@ func newTestCBConfig(maxFailures int, openTimeout time.Duration) worker.CircuitB
 // TestCircuitBreaker_InitialState_AllowsRequests는
 // 초기 Closed 상태에서 요청을 허용하는지 검증합니다.
 func TestCircuitBreaker_InitialState_AllowsRequests(t *testing.T) {
-	registry := worker.NewCircuitBreakerRegistry(newTestCBConfig(3, time.Minute), nil)
+	registry := resilience.NewCircuitBreakerRegistry(newTestCBConfig(3, time.Minute), nil)
 	cb := registry.Get("cnn")
 
 	assert.True(t, cb.Allow())
@@ -37,7 +37,7 @@ func TestCircuitBreaker_InitialState_AllowsRequests(t *testing.T) {
 // TestCircuitBreaker_ExceedsMaxFailures_OpensCircuit는
 // MaxFailures 연속 실패 후 Open 상태로 전환되는지 검증합니다.
 func TestCircuitBreaker_ExceedsMaxFailures_OpensCircuit(t *testing.T) {
-	registry := worker.NewCircuitBreakerRegistry(newTestCBConfig(3, time.Minute), nil)
+	registry := resilience.NewCircuitBreakerRegistry(newTestCBConfig(3, time.Minute), nil)
 	cb := registry.Get("cnn")
 
 	cb.RecordFailure()
@@ -53,7 +53,7 @@ func TestCircuitBreaker_ExceedsMaxFailures_OpensCircuit(t *testing.T) {
 // TestCircuitBreaker_SuccessResetFailures_StaysClosed는
 // 성공 기록 시 실패 카운터가 초기화되는지 검증합니다.
 func TestCircuitBreaker_SuccessResetFailures_StaysClosed(t *testing.T) {
-	registry := worker.NewCircuitBreakerRegistry(newTestCBConfig(3, time.Minute), nil)
+	registry := resilience.NewCircuitBreakerRegistry(newTestCBConfig(3, time.Minute), nil)
 	cb := registry.Get("cnn")
 
 	cb.RecordFailure()
@@ -68,7 +68,7 @@ func TestCircuitBreaker_SuccessResetFailures_StaysClosed(t *testing.T) {
 // TestCircuitBreaker_OpenTimeout_TransitionsToHalfOpen는
 // OpenTimeout 경과 후 HalfOpen으로 전환되어 probe를 허용하는지 검증합니다.
 func TestCircuitBreaker_OpenTimeout_TransitionsToHalfOpen(t *testing.T) {
-	registry := worker.NewCircuitBreakerRegistry(newTestCBConfig(1, 10*time.Millisecond), nil)
+	registry := resilience.NewCircuitBreakerRegistry(newTestCBConfig(1, 10*time.Millisecond), nil)
 	cb := registry.Get("naver")
 
 	cb.RecordFailure() // 1회 실패 → Open
@@ -89,7 +89,7 @@ func TestCircuitBreaker_OpenTimeout_TransitionsToHalfOpen(t *testing.T) {
 // TestCircuitBreaker_HalfOpenProbeSuccess_ClosesCircuit는
 // HalfOpen probe 성공 시 Closed로 전환되는지 검증합니다.
 func TestCircuitBreaker_HalfOpenProbeSuccess_ClosesCircuit(t *testing.T) {
-	registry := worker.NewCircuitBreakerRegistry(newTestCBConfig(1, 10*time.Millisecond), nil)
+	registry := resilience.NewCircuitBreakerRegistry(newTestCBConfig(1, 10*time.Millisecond), nil)
 	cb := registry.Get("naver")
 
 	cb.RecordFailure()
@@ -103,7 +103,7 @@ func TestCircuitBreaker_HalfOpenProbeSuccess_ClosesCircuit(t *testing.T) {
 // TestCircuitBreaker_HalfOpenProbeFailure_ReopensCircuit는
 // HalfOpen probe 실패 시 다시 Open으로 전환되는지 검증합니다.
 func TestCircuitBreaker_HalfOpenProbeFailure_ReopensCircuit(t *testing.T) {
-	registry := worker.NewCircuitBreakerRegistry(newTestCBConfig(1, 10*time.Millisecond), nil)
+	registry := resilience.NewCircuitBreakerRegistry(newTestCBConfig(1, 10*time.Millisecond), nil)
 	cb := registry.Get("naver")
 
 	cb.RecordFailure()
@@ -117,7 +117,7 @@ func TestCircuitBreaker_HalfOpenProbeFailure_ReopensCircuit(t *testing.T) {
 // TestCircuitBreakerRegistry_IsolatesPerSource는
 // 소스별로 독립적인 circuit breaker가 관리되는지 검증합니다.
 func TestCircuitBreakerRegistry_IsolatesPerSource(t *testing.T) {
-	registry := worker.NewCircuitBreakerRegistry(newTestCBConfig(2, time.Minute), nil)
+	registry := resilience.NewCircuitBreakerRegistry(newTestCBConfig(2, time.Minute), nil)
 
 	cnn := registry.Get("cnn")
 	naver := registry.Get("naver")
@@ -137,7 +137,7 @@ func TestCircuitBreakerRegistry_IsolatesPerSource(t *testing.T) {
 // TestCircuitBreakerRegistry_GetReturnsSameInstance는
 // 동일 소스에 대해 동일 인스턴스를 반환하는지 검증합니다.
 func TestCircuitBreakerRegistry_GetReturnsSameInstance(t *testing.T) {
-	registry := worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil)
+	registry := resilience.NewCircuitBreakerRegistry(resilience.DefaultCircuitBreakerConfig, nil)
 
 	cb1 := registry.Get("cnn")
 	cb2 := registry.Get("cnn")
