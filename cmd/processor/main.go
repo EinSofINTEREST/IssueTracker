@@ -8,6 +8,7 @@ import (
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/validate"
+	"issuetracker/internal/publisher"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -94,11 +95,15 @@ func main() {
 	producer := queue.NewProducer(kafkaCfg)
 	defer producer.Close()
 
+	// 이슈 #393 — validate worker 가 publisher facade 의존으로 변경. processor 단독 실행은
+	// resolver / guard 가 필요 없으므로 nil resolver 로 thin publisher 만 생성.
+	pub := publisher.New(producer, nil, log)
+
 	// ── 5. Validate Worker 시작 ───────────────────────────────────────────────
 	// validator 결과 (passed/rejected) 는 contentSvc.UpdateValidationStatus 로 contents 에 기록.
 	// processor 단독 실행은 dev/test 시나리오 — Redis wiring 없이 NoopStageGate 사용 (dedup + cap 비활성).
 	// 다중 인스턴스 운영은 cmd/issuetracker 통합 바이너리에서 Redis 기반 ProcessingLock 합성된 StageGate 공유.
-	worker := validate.NewWorker(consumer, producer, contentSvc, locks.NewNoopStageGate(), validateWorkerCount, validateCfg)
+	worker := validate.NewWorker(consumer, pub, contentSvc, locks.NewNoopStageGate(), validateWorkerCount, validateCfg)
 	worker.Start(ctx)
 
 	log.WithFields(map[string]interface{}{

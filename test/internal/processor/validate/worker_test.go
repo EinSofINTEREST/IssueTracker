@@ -14,11 +14,21 @@ import (
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
+	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
+
+// newTestPublisher 는 validate worker 가 publisher facade 의존으로 변경된 후 (이슈 #393)
+// 기존 mockProducer 검증 흐름을 유지하기 위한 thin helper 입니다.
+// 실제 *publisher.Publisher 를 생성하되 내부 producer 로 mockProducer 를 주입 — worker 가
+// pub.Forward → producer.Publish 로 위임하므로 mock expectations 그대로 작동.
+func newTestPublisher(producer queue.Producer) *publisher.Publisher {
+	return publisher.New(producer, nil, logger.New(logger.DefaultConfig()))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock 구현체
@@ -155,7 +165,7 @@ func makeProcessingMessage(content *core.Content, retryCount int) *queue.Message
 }
 
 func newWorker(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService) *validate.Worker {
-	return validate.NewWorker(consumer, producer, contentSvc, locks.NewNoopStageGate(), 1, config.DefaultValidateConfig())
+	return validate.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, config.DefaultValidateConfig())
 }
 
 func runWorker(t *testing.T, consumer *mockConsumer, w *validate.Worker, msg *queue.Message) {
