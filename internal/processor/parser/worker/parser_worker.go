@@ -285,7 +285,7 @@ func (w *ParserWorker) Handle(ctx context.Context, msg *queue.Message) {
 }
 
 // ErrStageGateNotAcquired 는 parser stage 의 ProcessingLock 이 다른 worker 에 점유 중이라
-// 본 worker 가 스킵해야 함을 나타내는 sentinel. runWorker 가 본 에러를 감지하면 Warn 대신
+// 본 worker 가 스킵해야 함을 나타내는 sentinel. Handle 메소드가 본 에러를 감지하면 Warn 대신
 // Debug 로 처리하여 정상 dedup 경로를 시끄럽게 만들지 않습니다 (PR #358 리뷰 반영).
 //
 // commit 정책: 본 sentinel 반환 시 호출자는 commit 하지 않음 — 같은 partition 의 다음 msg
