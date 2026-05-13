@@ -53,7 +53,9 @@ const (
 // ParserWorker 는 TopicFetched consumer group 의 worker pool 입니다.
 //
 // 이슈 #392 — Kafka I/O (consume + 3 종 publish + chained job publish) 모두 publisher
-// facade 로 위임. queue 패키지에 직접 의존하지 않음 (consumer 는 publisher.Consumer 별칭).
+// facade 로 위임. Kafka 구현체 (*queue.KafkaConsumer, queue.Producer) 에 직접 의존하지 않음.
+// queue 패키지 자체는 토픽 상수 (TopicFetched / TopicNormalized) 와 데이터 타입
+// (queue.Message) 사용을 위해 그대로 import — I/O 구현체 직접 호출만 publisher 위임.
 type ParserWorker struct {
 	consumer   publisher.Consumer
 	pub        *publisher.Publisher
@@ -116,9 +118,11 @@ type PipelineGuard interface {
 
 // NewParserWorker 는 ParserWorker 를 생성합니다.
 //
-//   - pub 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 / Forward 모두 건너뜀
-//     (이런 모드는 보통 운영 금지, 테스트 fallback). 이슈 #392 — 구 publisher / producer 두
-//     필드 통합.
+//   - pub 는 운영 환경에서 **필수 wiring** — nil 이면 Forward / PublishChained 호출이
+//     `publisher: Forward called on nil *Publisher` 등 error 를 반환하고, 호출 사이트가
+//     ProcessMessage 실패로 분류 → commit skip → Kafka 가 동일 메시지를 무한 재배달 가능.
+//     nil 은 publish 경로에 도달하지 않는 단위 테스트 (예: stage gate 격리 검증) 에만 허용.
+//     이슈 #392 — 구 publisher / producer 두 필드 통합 + Copilot 피드백 반영.
 //   - gate 는 nil 허용 — nil 이면 NoopStageGate 로 fallback (단일 인스턴스 환경에서 dedup + cap 비활성)
 //   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 //   - resolver / sampleSvc 는 nil 허용 — nil 이면 sample 누적 skip
