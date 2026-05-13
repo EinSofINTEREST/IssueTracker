@@ -66,6 +66,13 @@ func NewWorker(
 	workerCount int,
 	cfg config.ValidateConfig,
 ) *Worker {
+	// pub 은 4 publish 사이트 (validated / dlq / requeue / reparse) 가 dereference 하는 hard
+	// dependency. nil 주입 시 첫 publish 에서 publisher.Forward 가 error 를 반환하지만, validate
+	// worker 는 publish 실패 시 commit skip → Kafka 무한 재배달 — 운영 진단이 매우 어려워짐.
+	// Fail-fast 가 silent failure 보다 안전 (coderabbit PR #408 피드백).
+	if pub == nil {
+		panic("validate.NewWorker: pub must not be nil")
+	}
 	if gate == nil {
 		gate = locks.NewNoopStageGate()
 	}
