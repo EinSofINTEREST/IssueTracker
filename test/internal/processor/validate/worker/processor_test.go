@@ -1,4 +1,4 @@
-package validate_test
+package worker_test
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	core "issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/validate"
 	"issuetracker/internal/processor/validate/types"
+	"issuetracker/internal/processor/validate/worker"
 )
 
 // stubValidator는 입력에 관계없이 고정된 ValidationResult 를 반환합니다.
@@ -82,7 +82,7 @@ func TestContentProcessor_Process_AssignsCodeFromFirstRule(t *testing.T) {
 				},
 			}
 			content := &core.Content{ID: "test-id"}
-			out, err := validate.RunValidation(context.Background(), v, content)
+			out, err := worker.RunValidation(context.Background(), v, content)
 
 			assert.Nil(t, out)
 			require.Error(t, err)
@@ -106,7 +106,7 @@ func TestContentProcessor_Process_SuccessSetsReliability(t *testing.T) {
 		},
 	}
 	content := &core.Content{ID: "ok-id"}
-	out, err := validate.RunValidation(context.Background(), v, content)
+	out, err := worker.RunValidation(context.Background(), v, content)
 
 	require.NoError(t, err)
 	assert.Equal(t, content, out)

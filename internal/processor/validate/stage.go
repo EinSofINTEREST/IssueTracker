@@ -1,6 +1,8 @@
 // 본 파일은 validate 단계의 processor.Stage 래퍼를 제공합니다.
 //
 // validate 는 단일 worker 만 갖는 단순 stage — Worker.Start/Stop 을 그대로 위임.
+// 패키지 구조 (이슈 #417): stage.go (top) + worker/ (worker pool 구현 + 부속 helpers) +
+// types/ (cyclic-free 인터페이스) + community/ + news/.
 
 package validate
 
@@ -9,27 +11,25 @@ import (
 	"errors"
 
 	"issuetracker/internal/processor"
+	"issuetracker/internal/processor/validate/worker"
 )
 
-// stageName 은 validate 단계의 식별자입니다 (locks.StageValidator 와 일치).
-const stageName = "validate"
-
-// Stage 는 validate.Worker 를 processor.Stage 인터페이스로 wrapping 합니다.
+// Stage 는 worker.Worker 를 processor.Stage 인터페이스로 wrapping 합니다.
 type Stage struct {
-	worker *Worker
+	worker *worker.Worker
 }
 
 // NewStage 는 wired Worker 를 받아 validate.Stage 를 반환합니다.
 // worker 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
-func NewStage(worker *Worker) (*Stage, error) {
-	if worker == nil {
+func NewStage(w *worker.Worker) (*Stage, error) {
+	if w == nil {
 		return nil, errors.New("validate: NewStage requires non-nil Worker")
 	}
-	return &Stage{worker: worker}, nil
+	return &Stage{worker: w}, nil
 }
 
 // Name 은 stage 식별자 ("validate") 를 반환합니다.
-func (s *Stage) Name() string { return stageName }
+func (s *Stage) Name() string { return worker.StageName }
 
 // Start 는 validate worker pool 을 기동합니다.
 func (s *Stage) Start(ctx context.Context) {

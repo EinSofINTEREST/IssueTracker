@@ -3,7 +3,7 @@
 // Package validate implements the content validation stage of the processing pipeline.
 // It dispatches to source-type-specific validators (news, community) via NewValidator.
 // Worker 가 Validator 결과를 직접 사용 — 별도 ContentProcessor 어댑터 없음.
-package validate
+package worker
 
 import (
 	"context"

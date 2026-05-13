@@ -1,4 +1,4 @@
-package validate_test
+package worker_test
 
 // reparse_test.go — Sub A (#364) 의 단위 테스트.
 //
@@ -24,7 +24,7 @@ import (
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/validate"
+	"issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -48,7 +48,7 @@ func TestIsReparseEligible(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, validate.IsReparseEligible(tt.err))
+			require.Equal(t, tt.want, worker.IsReparseEligible(tt.err))
 		})
 	}
 }
@@ -106,7 +106,7 @@ func invalidNewsContent() *core.Content {
 }
 
 // runProcessOnce 는 ConsumerPool 의 consumer→processor→commit loop 1회를 trigger 합니다.
-func runProcessOnce(t *testing.T, consumer *mockConsumer, w *validate.Worker, msg *queue.Message) {
+func runProcessOnce(t *testing.T, consumer *mockConsumer, w *worker.Worker, msg *queue.Message) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	consumer.On("FetchMessage", mock.Anything).Return(msg, nil).Once()
@@ -142,7 +142,7 @@ func TestWorker_Reparse_FirstAttempt_PublishesCrawlJob(t *testing.T) {
 		publishedCrawlJob = args.Get(1).(queue.Message)
 	}).Return(nil)
 
-	w := validate.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, cfg)
+	w := worker.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, cfg)
 	runProcessOnce(t, consumer, w, makeContentMsgWithReparseHeader(t, content, 0))
 
 	require.Equal(t, queue.TopicCrawlNormal, publishedCrawlJob.Topic)
@@ -198,7 +198,7 @@ func TestWorker_Reparse_PropagatesOriginalHeaders(t *testing.T) {
 	msg.Headers[core.HeaderTimeoutMs] = "60000" // 60s — 원본 timeout
 	msg.Headers["x-trace-id"] = "trace-abc-123"
 
-	w := validate.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, cfg)
+	w := worker.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, cfg)
 	runProcessOnce(t, consumer, w, msg)
 
 	// 원본 timeout_ms 가 그대로 reparse 메시지에 계승됨
@@ -233,7 +233,7 @@ func TestWorker_Reparse_MaxCount_NoCrawlJob(t *testing.T) {
 		return true
 	})).Return(nil)
 
-	w := validate.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, cfg)
+	w := worker.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, cfg)
 	runProcessOnce(t, consumer, w, makeContentMsgWithReparseHeader(t, content, core.MaxValidateReparseCount))
 
 	assert.False(t, crawlPublished, "max 도달 시 reparse CrawlJob 발행 X (기존 DLQ/requeue 흐름으로 폴스루)")
@@ -260,7 +260,7 @@ func TestWorker_Reparse_Disabled_NoCrawlJob(t *testing.T) {
 		return true
 	})).Return(nil)
 
-	w := validate.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, cfg)
+	w := worker.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, cfg)
 	runProcessOnce(t, consumer, w, makeContentMsgWithReparseHeader(t, content, 0))
 
 	assert.False(t, crawlPublished, "ReparseEnabled=false 시 reparse CrawlJob 발행 X")

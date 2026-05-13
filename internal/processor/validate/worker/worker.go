@@ -1,4 +1,4 @@
-package validate
+package worker
 
 import (
 	"context"
@@ -18,6 +18,10 @@ import (
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
+
+// StageName 은 validate 단계의 식별자입니다 (locks.StageValidator 와 일치).
+// stage.go 의 Stage.Name() 과 worker.go 의 workerpool.Config.Name 가 공유 (이슈 #417).
+const StageName = "validate"
 
 // drainTimeout 은 graceful shutdown 으로 ctx 가 canceled 된 뒤 Kafka publish 를 한 번 더
 // 시도할 때 사용하는 별도 context 의 타임아웃입니다.
@@ -98,10 +102,10 @@ func (w *Worker) Start(ctx context.Context) {
 	if w.pool != nil {
 		panic("validate worker: Start called more than once on the same instance")
 	}
-	// stageName ("validate") 사용 — locks.StageValidator / stage.go / 로그 메시지 전반과
+	// StageName ("validate") 사용 — locks.StageValidator / stage.go / 로그 메시지 전반과
 	// 일관성 유지 (gemini PR #416 피드백).
 	plainLog := logger.FromContext(ctx)
-	ctx = plainLog.WithField("worker_pool", stageName).ToContext(ctx)
+	ctx = plainLog.WithField("worker_pool", StageName).ToContext(ctx)
 
 	w.pool = workerpool.New(workerpool.Config{
 		Consumer:     w.consumer,
@@ -109,7 +113,7 @@ func (w *Worker) Start(ctx context.Context) {
 		WorkerCount:  w.workerCount,
 		DrainTimeout: drainTimeout,
 		Log:          plainLog,
-		Name:         stageName,
+		Name:         StageName,
 	})
 	w.pool.Start(ctx)
 }

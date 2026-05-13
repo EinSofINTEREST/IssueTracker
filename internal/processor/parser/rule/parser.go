@@ -11,7 +11,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/parser"
+	"issuetracker/internal/processor/parser/types"
 	"issuetracker/internal/storage"
 )
 
@@ -23,7 +23,7 @@ const resolveTimeout = 5 * time.Second
 
 // Parser 는 DB 기반 파싱 규칙으로 동작하는 단일 page parser engine 입니다.
 //
-// Parser implements both parser.ContentParser and parser.LinkListParser, driven by
+// Parser implements both types.ContentParser and types.LinkListParser, driven by
 // storage.ParserRuleRecord resolved per request via Resolver. 사이트별 hardcode 파서
 // (NaverParser/DaumParser/...) 를 대체 — 새 사이트 지원 = parser_rules row 추가.
 //
@@ -66,14 +66,14 @@ func defaultDateLayouts() []string {
 	}
 }
 
-// ParsePage 는 RawContent 를 DB rule 기반으로 Page 로 파싱합니다 (parser.ContentParser 구현).
+// ParsePage 는 RawContent 를 DB rule 기반으로 Page 로 파싱합니다 (types.ContentParser 구현).
 //
 // 흐름:
 //  1. raw.URL 의 host 로 active page rule lookup (Resolver — cache hit 핫패스)
 //  2. rule.Selectors 에 따라 각 필드 (Title/MainContent/Author/PublishedAt/...) 추출
 //  3. Title selector 누락 → ErrEmptySelector (필수 필드)
 //  4. MainContent 매칭 0건 → ErrParseFailure (selector 는 있지만 매칭 0건 = stale rule 진단)
-func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.Page, error) {
+func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Page, error) {
 	if err := validateRaw(raw); err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.P
 		return nil, &Error{Code: ErrParseFailure, Message: "goquery parse failed", URL: raw.URL, Err: err}
 	}
 
-	page := &parser.Page{
+	page := &types.Page{
 		URL:         raw.URL,
 		Title:       extractField(doc, rule.Selectors.Title),
 		MainContent: extractField(doc, rule.Selectors.MainContent),
@@ -127,7 +127,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.P
 }
 
 // ParseLinks 는 RawContent 의 링크-허브 페이지를 LinkItem 슬라이스로 파싱합니다
-// (parser.LinkListParser 구현).
+// (types.LinkListParser 구현).
 //
 // 모드 분기:
 //   - rule.Selectors.LinkDiscovery.ArticleURLPattern 이 설정 → full-page discovery
@@ -141,7 +141,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*parser.P
 //  4. 상대 URL 은 raw.URL base 로 절대 URL 화
 //
 // LinkDiscovery 경로 흐름은 PageLinkDiscovery.Discover 에 위임.
-func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser.LinkItem, error) {
+func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.LinkItem, error) {
 	if err := validateRaw(raw); err != nil {
 		return nil, err
 	}
@@ -194,7 +194,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 		}
 	}
 
-	var items []parser.LinkItem
+	var items []types.LinkItem
 	containers.Each(func(_ int, container *goquery.Selection) {
 		link := extractFieldFromSelection(container, rule.Selectors.ItemLink)
 		if link == "" {
@@ -206,7 +206,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]parser
 				absURL = abs
 			}
 		}
-		items = append(items, parser.LinkItem{
+		items = append(items, types.LinkItem{
 			URL:     absURL,
 			Title:   extractFieldFromSelection(container, rule.Selectors.ItemTitle),
 			Snippet: extractFieldFromSelection(container, rule.Selectors.ItemSnippet),
@@ -342,6 +342,6 @@ func absoluteURL(base *url.URL, link string) (string, error) {
 
 // 컴파일 시 인터페이스 구현 검증 — 두 인터페이스 모두 만족해야 함.
 var (
-	_ parser.ContentParser  = (*Parser)(nil)
-	_ parser.LinkListParser = (*Parser)(nil)
+	_ types.ContentParser  = (*Parser)(nil)
+	_ types.LinkListParser = (*Parser)(nil)
 )
