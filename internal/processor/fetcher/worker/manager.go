@@ -81,7 +81,7 @@ type ManagerConfig struct {
 //  4. 종료 시 Stop(ctx) 호출
 type PoolManager struct {
 	pools    map[core.Priority]*KafkaConsumerPool
-	producer queue.Producer
+	pub      *publisher.Publisher
 	resolver PriorityResolver
 	log      *logger.Logger
 
@@ -92,9 +92,12 @@ type PoolManager struct {
 // NewPoolManager는 설정에 따라 우선순위별 KafkaConsumerPool을 생성하고 PoolManager를 반환합니다.
 //
 // NewPoolManager creates one KafkaConsumerPool per priority level (high/normal/low).
+//
+// 이슈 #390 — 구 queue.Producer 직접 주입 → publisher facade 주입으로 변경. fetcher/worker
+// 는 더 이상 queue.Producer 를 직접 보유하지 않음 (Kafka I/O 단일 출처 = publisher).
 func NewPoolManager(
 	cfg ManagerConfig,
-	producer queue.Producer,
+	pub *publisher.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
 	resolver PriorityResolver,
@@ -115,7 +118,7 @@ func NewPoolManager(
 
 	newPool := func(pc PoolConfig, priorityName string) *KafkaConsumerPool {
 		pool := NewKafkaConsumerPoolWithOptions(
-			pc.Consumer, producer, handler, contentSvc, pc.WorkerCount,
+			pc.Consumer, pub, handler, contentSvc, pc.WorkerCount,
 			cbRegistry, buildGate(pc.WorkerCount),
 		)
 		// heartbeat 식별자 주입 (DEBUG 레벨에서 worker pool status 출력 활성)
@@ -134,7 +137,7 @@ func NewPoolManager(
 			core.PriorityNormal: newPool(cfg.Normal, "normal"),
 			core.PriorityLow:    newPool(cfg.Low, "low"),
 		},
-		producer: producer,
+		pub:      pub,
 		resolver: resolver,
 		log:      log,
 	}
@@ -142,7 +145,7 @@ func NewPoolManager(
 	// chromedp 전용 pool wiring (Consumer + Handler 둘 다 있을 때만 활성).
 	if cfg.Chromedp.Consumer != nil && cfg.ChromedpHandler != nil {
 		chromedpPool := NewKafkaConsumerPoolWithOptions(
-			cfg.Chromedp.Consumer, producer, cfg.ChromedpHandler, contentSvc, cfg.Chromedp.WorkerCount,
+			cfg.Chromedp.Consumer, pub, cfg.ChromedpHandler, contentSvc, cfg.Chromedp.WorkerCount,
 			cbRegistry, buildGate(cfg.Chromedp.WorkerCount),
 		)
 		chromedpPool.SetPriority("chromedp")
@@ -188,7 +191,7 @@ func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 		"topic":    topic,
 	}).Info("publishing crawl job")
 
-	return m.producer.Publish(ctx, msg)
+	return m.pub.Forward(ctx, msg)
 }
 
 // Start는 high/normal/low 모든 Pool의 goroutine을 시작합니다.

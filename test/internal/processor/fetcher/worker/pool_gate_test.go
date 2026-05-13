@@ -21,7 +21,7 @@ func TestKafkaConsumerPool_Gate_BlocksRSSURL_CommitsAndSkipsHandler(t *testing.T
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 	gate, _ := urlguard.NewGate(urlguard.Default(), logger.New(logger.DefaultConfig()))
 	pool.SetGate(gate)
 
@@ -49,7 +49,7 @@ func TestKafkaConsumerPool_Gate_AllowsArticleURL_DelegatesToHandler(t *testing.T
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 	gate, _ := urlguard.NewGate(urlguard.Default(), logger.New(logger.DefaultConfig()))
 	pool.SetGate(gate)
 
@@ -77,7 +77,7 @@ func TestKafkaConsumerPool_NoGate_LegacyBehavior(t *testing.T) {
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 	// SetGate 호출 없음
 
 	job := newTestJob()
@@ -104,7 +104,7 @@ func TestKafkaConsumerPool_Gate_AllowAllGuard_DelegatesAll(t *testing.T) {
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 	gate, _ := urlguard.NewGate(urlguard.AllowAllGuard{}, logger.New(logger.DefaultConfig()))
 	pool.SetGate(gate)
 
@@ -132,7 +132,7 @@ func TestKafkaConsumerPool_Gate_RaceFreeUpdate(t *testing.T) {
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	// 동시에 여러 번 SetGate 호출 — atomic.Pointer 가 보장
 	g1, _ := urlguard.NewGate(urlguard.Default(), nil)

@@ -54,12 +54,14 @@ type RetryScheduler interface {
 // 본 구현은 지적한 처리량 급감을 그대로 갖지만, Redis 미설정 환경 (단일 인스턴스
 // 개발/테스트, 통합 redis 장애) 에서 retry 자체는 동작하도록 보존합니다.
 type KafkaImmediateRetryScheduler struct {
-	producer queue.Producer
+	pub *Publisher
 }
 
-// NewKafkaImmediateRetryScheduler 는 KafkaImmediateRetryScheduler 를 생성합니다.
-func NewKafkaImmediateRetryScheduler(producer queue.Producer) *KafkaImmediateRetryScheduler {
-	return &KafkaImmediateRetryScheduler{producer: producer}
+// NewKafkaImmediateRetryScheduler 는 KafkaImmediateRetryScheduler 를 생성합니다 (이슈 #390 —
+// 구 queue.Producer 직접 주입 → publisher facade 주입으로 변경. Kafka I/O 단일 책임 원칙
+// 일관성 보장).
+func NewKafkaImmediateRetryScheduler(pub *Publisher) *KafkaImmediateRetryScheduler {
+	return &KafkaImmediateRetryScheduler{pub: pub}
 }
 
 // Enqueue 는 job 을 priority 토픽에 즉시 publish 합니다.
@@ -76,7 +78,7 @@ func (s *KafkaImmediateRetryScheduler) Enqueue(ctx context.Context, job *core.Cr
 		Headers: retryHeaders(job, lastErr),
 	}
 
-	if err := s.producer.Publish(ctx, msg); err != nil {
+	if err := s.pub.Forward(ctx, msg); err != nil {
 		return fmt.Errorf("publish retry job %s: %w", job.ID, err)
 	}
 	return nil
@@ -150,24 +152,25 @@ func DefaultRedisRetrySchedulerConfig() RedisRetrySchedulerConfig {
 //
 // 라이프사이클: New → Run(ctx) (별도 goroutine) → ctx cancel → goroutine 정리 → Stop 대기.
 type RedisDelayedRetryScheduler struct {
-	client   retryQueueClient
-	producer queue.Producer
-	cfg      RedisRetrySchedulerConfig
-	log      *logger.Logger
-	wg       sync.WaitGroup
+	client retryQueueClient
+	pub    *Publisher
+	cfg    RedisRetrySchedulerConfig
+	log    *logger.Logger
+	wg     sync.WaitGroup
 
 	// idleTicks: 연속 idle (due 0) tick 수. due 발견 시 0 으로 reset.
 	// pollOnce 만 접근 — goroutine 단일 진입이라 race 없음.
 	idleTicks int
 }
 
-// NewRedisDelayedRetryScheduler 는 RedisDelayedRetryScheduler 를 생성합니다.
+// NewRedisDelayedRetryScheduler 는 RedisDelayedRetryScheduler 를 생성합니다 (이슈 #390 —
+// 구 queue.Producer 직접 주입 → publisher facade 주입으로 변경).
 //
 // 보정 규칙:
 //   - PollInterval / BatchSize / RepublishFailureBackoff: 0 또는 음수 → default 적용.
 //   - HeartbeatEveryNIdleTicks: **0 은 legacy (매 tick 로깅) 로 유효한 값** 이므로
 //     음수일 때만 default (60) 로 보정. 따라서 0 을 명시하면 default 가 적용되지 않음.
-func NewRedisDelayedRetryScheduler(client retryQueueClient, producer queue.Producer, cfg RedisRetrySchedulerConfig, log *logger.Logger) *RedisDelayedRetryScheduler {
+func NewRedisDelayedRetryScheduler(client retryQueueClient, pub *Publisher, cfg RedisRetrySchedulerConfig, log *logger.Logger) *RedisDelayedRetryScheduler {
 	def := DefaultRedisRetrySchedulerConfig()
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = def.PollInterval
@@ -182,10 +185,10 @@ func NewRedisDelayedRetryScheduler(client retryQueueClient, producer queue.Produ
 		cfg.HeartbeatEveryNIdleTicks = def.HeartbeatEveryNIdleTicks
 	}
 	return &RedisDelayedRetryScheduler{
-		client:   client,
-		producer: producer,
-		cfg:      cfg,
-		log:      log,
+		client: client,
+		pub:    pub,
+		cfg:    cfg,
+		log:    log,
 	}
 }
 
@@ -344,7 +347,7 @@ func (s *RedisDelayedRetryScheduler) republish(ctx context.Context, item pkgredi
 		Headers: retryHeaders(&job, lastErr),
 	}
 
-	if err := s.producer.Publish(ctx, msg); err != nil {
+	if err := s.pub.Forward(ctx, msg); err != nil {
 		// Kafka publish 실패 — backoff 적용한 ScheduledAt 으로 EnqueueRetry 재호출하여
 		// 같은 jobID 의 score 를 미래로 overwrite (즉시 재peek 회피).
 		// EnqueueRetry 가 실패해도 ZSET 의 원본 항목이 남아있어 다음 폴에 재peek + 재시도.
