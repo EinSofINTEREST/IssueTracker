@@ -154,7 +154,9 @@ type Content struct {
 	Summary string `json:"summary"`
 
 	// Metadata
-	Author      string     `json:"author"`
+	Author string `json:"author"`
+	// PublishedAt: 컨텐츠 발행 시각. zero-value (time.Time{}) 는 "미상" — DB 저장 시 NULL 로 매핑됩니다.
+	// parser_rules.article=TRUE 룰로 파싱된 page 만 news validator 가 PublishedAt 필수 강제 (이슈 #423).
 	PublishedAt time.Time  `json:"published_at"`
 	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 	Category    string     `json:"category"`
@@ -169,6 +171,16 @@ type Content struct {
 	ContentHash string  `json:"content_hash"`
 	WordCount   int     `json:"word_count"`  // content_bodies 테이블
 	Reliability float32 `json:"reliability"` // 신뢰도 0.0~1.0 (0.0: 미검증)
+
+	// Article: 적용된 parser_rule 의 article 플래그를 컨텐츠로 전파 (이슈 #423).
+	//
+	//   - true  : 순수 뉴스 기사 본문 페이지 — news validator 가 PublishedAt 필수 강제.
+	//             누락 시 VAL_001 → 기존 reparse 로직 (#364) 트리거.
+	//   - false : 뉴스 인덱스 / 이미지 / 멀티미디어 / 비-article 페이지 — PublishedAt 누락 허용.
+	//
+	// JSON 직렬화 / DB 저장 (content_meta 또는 별도 컬럼) 은 별도 후속 — 본 시점에서는 in-flight
+	// pipeline 컨텍스트 (parser → validate) 전파 용도. 영속화는 추후 필요 시 추가.
+	Article bool `json:"article,omitempty"`
 
 	// Extension (content_meta 테이블)
 	Extra map[string]interface{} `json:"extra,omitempty"` // 유형별 메타데이터 (JSONB)

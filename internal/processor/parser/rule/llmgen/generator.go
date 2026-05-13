@@ -551,6 +551,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		selectors storage.SelectorMap
 		modelName string
 		pageType  string // EnrichedExtractor 모드에서 채워짐. legacy 경로는 "" (미분류).
+		article   bool   // EnrichedExtractor 가 분류한 article body 여부 (이슈 #423). 기본 false.
 	)
 
 	if g.extractor != nil {
@@ -569,6 +570,11 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 			}
 			selectors = res.Selectors
 			pageType = string(res.PageType)
+			// list (target_type=list) 룰은 정의상 article body 가 아님 — 안전성을 위해 article=false 강제.
+			// page 룰만 LLM 의 article 분류를 반영 (#423).
+			if targetType == storage.TargetTypePage {
+				article = res.Article
+			}
 			if mn, ok := g.extractor.(modelNamer); ok {
 				modelName = mn.ModelName()
 			} else {
@@ -649,6 +655,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 		Confidence:  confidence,
 		Description: fmt.Sprintf("%s (sample url: %s, model: %s)", llmAutoDescription, sampleURL, modelName),
 		PageType:    pageType, // EnrichedExtractor 모드에서만 채워짐 — legacy 경로는 "" (미분류, #326).
+		Article:     article,  // EnrichedExtractor 의 article 분류 — page rule 만 반영, list 는 항상 false (#423).
 	}
 	var insertErr error
 	if stale {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,6 +15,18 @@ import (
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 )
+
+// nullablePublishedAt 은 zero time 을 SQL NULL 로 매핑합니다 (이슈 #423).
+//
+// contents.published_at 가 nullable 화 (migration 028) 된 이후, parser_rules.article=FALSE
+// 룰로 파싱된 컨텐츠는 PublishedAt 이 zero-value 일 수 있음. pgx 는 time.Time zero 를
+// '0001-01-01 00:00:00+00' 로 INSERT 하므로, 명시적 nil 변환이 필요합니다.
+func nullablePublishedAt(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
 
 // pgContentRepository는 pgx/v5 기반 ContentRepository 구현체입니다.
 // 3개 테이블(contents, content_bodies, content_meta)을 투명하게 관리합니다.
@@ -293,7 +306,7 @@ func saveContentTx(ctx context.Context, tx pgx.Tx, c *core.Content) error {
 
 	_, err := tx.Exec(ctx, upsertContentCTE,
 		c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
-		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, tags,
+		c.Title, c.Author, nullablePublishedAt(c.PublishedAt), c.UpdatedAt, c.Category, tags,
 		c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
 		c.Body, c.Summary, c.WordCount,
 		imageURLs, mustMarshalJSON(buildContentMetaExtra(c)),
@@ -330,7 +343,7 @@ func queueContentBatch(batch *pgx.Batch, c *core.Content) {
 	}
 	batch.Queue(upsertContentCTE,
 		c.ID, c.SourceID, string(c.SourceType), c.Country, c.Language,
-		c.Title, c.Author, c.PublishedAt, c.UpdatedAt, c.Category, tags,
+		c.Title, c.Author, nullablePublishedAt(c.PublishedAt), c.UpdatedAt, c.Category, tags,
 		c.URL, c.CanonicalURL, c.ContentHash, c.Reliability, c.CreatedAt,
 		c.Body, c.Summary, c.WordCount,
 		imageURLs, mustMarshalJSON(buildContentMetaExtra(c)),
@@ -339,15 +352,17 @@ func queueContentBatch(batch *pgx.Batch, c *core.Content) {
 
 // scanContent는 pgx Row를 core.Content로 스캔합니다 (3테이블 JOIN 결과).
 // extra는 JSONB → []byte → map[string]interface{} 로 변환합니다.
+// published_at NULL (migration 028, 이슈 #423) 은 PublishedAt zero-value 로 복원됩니다.
 func scanContent(row pgx.Row) (*core.Content, error) {
 	var c core.Content
 	var sourceType string
+	var publishedAt *time.Time
 	var extraJSON []byte
 
 	err := row.Scan(
 		&c.ID, &c.SourceID, &sourceType, &c.Country, &c.Language,
 		&c.Title, &c.Body, &c.Summary,
-		&c.Author, &c.PublishedAt, &c.UpdatedAt, &c.Category, &c.Tags,
+		&c.Author, &publishedAt, &c.UpdatedAt, &c.Category, &c.Tags,
 		&c.URL, &c.CanonicalURL, &c.ImageURLs,
 		&c.ContentHash, &c.WordCount, &c.Reliability, &c.CreatedAt,
 		&extraJSON,
@@ -357,6 +372,9 @@ func scanContent(row pgx.Row) (*core.Content, error) {
 	}
 
 	c.SourceType = core.SourceType(sourceType)
+	if publishedAt != nil {
+		c.PublishedAt = *publishedAt
+	}
 	if extraJSON != nil {
 		if err := json.Unmarshal(extraJSON, &c.Extra); err != nil {
 			c.Extra = make(map[string]interface{})
@@ -381,14 +399,16 @@ const listSelectQuery = `
 
 // scanContentList는 List 쿼리 결과를 core.Content로 스캔합니다.
 // body, image_urls, extra는 빈 값으로 반환됩니다.
+// published_at NULL (migration 028, 이슈 #423) 은 PublishedAt zero-value 로 복원됩니다.
 func scanContentList(row pgx.Row) (*core.Content, error) {
 	var c core.Content
 	var sourceType string
+	var publishedAt *time.Time
 
 	err := row.Scan(
 		&c.ID, &c.SourceID, &sourceType, &c.Country, &c.Language,
 		&c.Title, &c.Summary,
-		&c.Author, &c.PublishedAt, &c.UpdatedAt, &c.Category, &c.Tags,
+		&c.Author, &publishedAt, &c.UpdatedAt, &c.Category, &c.Tags,
 		&c.URL, &c.CanonicalURL,
 		&c.ContentHash, &c.WordCount, &c.Reliability, &c.CreatedAt,
 	)
@@ -397,6 +417,9 @@ func scanContentList(row pgx.Row) (*core.Content, error) {
 	}
 
 	c.SourceType = core.SourceType(sourceType)
+	if publishedAt != nil {
+		c.PublishedAt = *publishedAt
+	}
 	// 목록 조회이므로 body, image_urls, extra는 기본값 유지
 	return &c, nil
 }
@@ -416,7 +439,7 @@ func buildContentListQuery(filter storage.ContentFilter) (string, []any) {
 	}
 
 	query := listSelectQuery + where +
-		fmt.Sprintf(" ORDER BY c.published_at DESC LIMIT %d OFFSET %d", limit, offset)
+		fmt.Sprintf(" ORDER BY c.published_at DESC NULLS LAST LIMIT %d OFFSET %d", limit, offset)
 
 	return query, args
 }
