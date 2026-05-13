@@ -222,6 +222,9 @@ func (p *KafkaConsumerPool) SetPriority(name string) {
 //   - Handler / processJob / heartbeatLoop 가 FromContext(ctx) 로 로거를 얻을 때도 동일 필드를
 //     보도록 ctx 에 worker_pool 필드 logger 주입 (observability 보존).
 func (p *KafkaConsumerPool) Start(ctx context.Context) {
+	if p.pool != nil {
+		panic("fetcher worker pool: Start called more than once on the same instance")
+	}
 	name := "fetcher"
 	if p.priority != "" {
 		name = "fetcher-" + p.priority
@@ -249,9 +252,12 @@ func (p *KafkaConsumerPool) Start(ctx context.Context) {
 }
 
 // Stop 은 workerpool harness 를 정상 종료합니다 — graceful shutdown 순서 + drain timeout 위임.
+//
+// pool 이 미기동 (Start 미호출) 상태에서 Stop 호출 시 consumer.Close 만 수행 — Kafka 연결
+// 자원 누수 방지 (gemini PR #415 피드백 — 동일 패턴이 parser 와 일치).
 func (p *KafkaConsumerPool) Stop(ctx context.Context) error {
 	if p.pool == nil {
-		return nil
+		return p.consumer.Close()
 	}
 	return p.pool.Stop(ctx)
 }
