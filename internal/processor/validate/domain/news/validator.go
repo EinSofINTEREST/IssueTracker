@@ -105,12 +105,22 @@ func (v *Validator) validateBody(c *core.Content) []types.ValidationError {
 	return nil
 }
 
+// validatePublishedAt 은 article=true 룰로 파싱된 뉴스 기사 본문 페이지에만 PublishedAt 을
+// 필수로 강제합니다 (이슈 #423).
+//
+//   - c.Article=true  : 순수 뉴스 기사 본문 — PublishedAt 누락 시 VAL_001 reject →
+//     기존 selector 재학습 reparse 로직 (이슈 #364) 트리거.
+//   - c.Article=false : 뉴스 인덱스 / 이미지 / 멀티미디어 / 비-article 페이지 —
+//     PublishedAt 누락 허용 (parser_rules.article=FALSE 운영자 opt-out 의미).
 func (v *Validator) validatePublishedAt(c *core.Content) []types.ValidationError {
+	if !c.Article {
+		return nil
+	}
 	if c.PublishedAt.IsZero() {
 		return []types.ValidationError{{
 			Field:   "PublishedAt",
 			Rule:    "required",
-			Message: "published_at is required for news content",
+			Message: "published_at is required for news article content (article=true rule)",
 		}}
 	}
 	return nil

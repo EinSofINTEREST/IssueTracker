@@ -88,6 +88,7 @@ func makeContentMsgWithReparseHeader(t *testing.T, content *core.Content, repars
 }
 
 // invalidNewsContent 는 PublishedAt 부재로 VAL_001 을 일으키는 news content 입니다.
+// Article=true 로 설정 — news validator 가 article 룰일 때만 PublishedAt 필수 강제 (이슈 #423).
 func invalidNewsContent() *core.Content {
 	return &core.Content{
 		ID:    "ref-001",
@@ -102,6 +103,7 @@ func invalidNewsContent() *core.Content {
 		Country:     "KR",
 		Language:    "ko",
 		PublishedAt: time.Time{}, // zero → VAL_001
+		Article:     true,        // article 룰 컨텍스트 — PublishedAt 필수 강제 트리거 (이슈 #423)
 	}
 }
 
