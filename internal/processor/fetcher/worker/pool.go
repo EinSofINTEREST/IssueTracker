@@ -150,7 +150,7 @@ func NewKafkaConsumerPoolWithOptions(
 	cbRegistry *resilience.CircuitBreakerRegistry,
 	gate locks.StageGate,
 ) *KafkaConsumerPool {
-	// nil guard — NewParserWorker / validate.NewWorker 와 일관성 보장.
+	// nil guard — NewWorker / validate.NewWorker 와 일관성 보장.
 	if gate == nil {
 		gate = locks.NewNoopStageGate()
 	}

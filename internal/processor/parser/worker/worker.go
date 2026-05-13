@@ -50,13 +50,13 @@ const (
 	defaultJobTimeout = 30 * time.Second
 )
 
-// ParserWorker 는 TopicFetched consumer group 의 worker pool 입니다.
+// Worker 는 TopicFetched consumer group 의 worker pool 입니다.
 //
 // 이슈 #392 — Kafka I/O (consume + 3 종 publish + chained job publish) 모두 publisher
 // facade 로 위임. Kafka 구현체 (*queue.KafkaConsumer, queue.Producer) 에 직접 의존하지 않음.
 // queue 패키지 자체는 토픽 상수 (TopicFetched / TopicNormalized) 와 데이터 타입
 // (queue.Message) 사용을 위해 그대로 import — I/O 구현체 직접 호출만 publisher 위임.
-type ParserWorker struct {
+type Worker struct {
 	consumer   bus.Consumer
 	pub        *bus.Publisher
 	rawSvc     service.RawContentService
@@ -118,7 +118,7 @@ type PipelineGuard interface {
 	Release(ctx context.Context, url string) error
 }
 
-// NewParserWorker 는 ParserWorker 를 생성합니다.
+// NewWorker 는 Worker 를 생성합니다.
 //
 //   - pub 는 운영 환경에서 **필수 wiring** — nil 이면 Forward / PublishChained 호출이
 //     `publisher: Forward called on nil *Publisher` 등 error 를 반환하고, 호출 사이트가
@@ -137,7 +137,7 @@ type PipelineGuard interface {
 // StageGate (ProcessingLock + Semaphore 합성, 이슈 #353/#354) 로 fetcher / parser / validator
 // 가 동일 패턴으로 stage 별 동시성 cap + URL 중복 처리 차단을 단일 API 로 적용 — parser 단계는
 // raw.URL 단위로 acquire, Kafka rebalance 시 같은 raw 가 두 worker 에 도달해도 1회만 파싱.
-func NewParserWorker(
+func NewWorker(
 	consumer bus.Consumer,
 	pub *bus.Publisher,
 	rawSvc service.RawContentService,
@@ -154,7 +154,7 @@ func NewParserWorker(
 	emptyBodyContentMin int,
 	workerCount int,
 	log *logger.Logger,
-) *ParserWorker {
+) *Worker {
 	if workerCount <= 0 {
 		workerCount = 1
 	}
@@ -167,7 +167,7 @@ func NewParserWorker(
 	if rawIDTracker == nil {
 		rawIDTracker = storage.NewNoopRawIDTracker()
 	}
-	return &ParserWorker{
+	return &Worker{
 		consumer:            consumer,
 		pub:                 pub,
 		rawSvc:              rawSvc,
@@ -189,7 +189,7 @@ func NewParserWorker(
 
 // SetPipelineGuard 는 Category cycle 완료 시 marker release 용 PipelineGuard 를 주입합니다.
 // nil 주입 시 release 비활성 (TTL fallback). Start 호출 전 wiring 단계에서 1회 설정.
-func (w *ParserWorker) SetPipelineGuard(g PipelineGuard) {
+func (w *Worker) SetPipelineGuard(g PipelineGuard) {
 	w.guard = g
 }
 
@@ -197,7 +197,7 @@ func (w *ParserWorker) SetPipelineGuard(g PipelineGuard) {
 //
 // nil 주입 시 차단 비활성 (모든 카테고리 링크가 그대로 article job 으로 발행).
 // Start 호출 전 wiring 단계에서 1회 설정.
-func (w *ParserWorker) SetBlacklist(b *rule.BlacklistMatcher) {
+func (w *Worker) SetBlacklist(b *rule.BlacklistMatcher) {
 	w.blacklist = b
 }
 
@@ -207,7 +207,7 @@ func (w *ParserWorker) SetBlacklist(b *rule.BlacklistMatcher) {
 // threshold <= 0 이면 threshold-crossing gate 비활성 — counter.Record 의 thresholdReached 만으로 트리거
 // (window 내 매 후속 호출마다 enqueue 가능, 호환 fallback).
 // Start 호출 전 wiring 단계에서 1회 설정.
-func (w *ParserWorker) SetStaleCounter(c storage.StaleCounter, threshold int) {
+func (w *Worker) SetStaleCounter(c storage.StaleCounter, threshold int) {
 	w.staleCounter = c
 	w.staleThreshold = threshold
 }
@@ -220,7 +220,7 @@ func (w *ParserWorker) SetStaleCounter(c storage.StaleCounter, threshold int) {
 //
 // 단일 호출 contract — 인스턴스당 1회만 호출 (gemini PR #415 피드백). 2회차 호출은 이전 pool
 // 의 reference 가 손실되어 자원 누수 위험이라 fail-fast panic.
-func (w *ParserWorker) Start(ctx context.Context) {
+func (w *Worker) Start(ctx context.Context) {
 	if w.pool != nil {
 		panic("parser worker: Start called more than once on the same instance")
 	}
@@ -250,7 +250,7 @@ func (w *ParserWorker) Start(ctx context.Context) {
 //
 // pool 이 미기동 (Start 미호출) 상태에서 Stop 호출 시 consumer.Close 만 수행 — Kafka 연결
 // 자원 누수 방지 (gemini PR #415 피드백).
-func (w *ParserWorker) Stop(ctx context.Context) error {
+func (w *Worker) Stop(ctx context.Context) error {
 	if w.pool == nil {
 		return w.consumer.Close()
 	}
@@ -271,7 +271,7 @@ func (w *ParserWorker) Stop(ctx context.Context) error {
 //   - 기타 transient 에러 → commit skip (Warn — Kafka 가 redeliver)
 //
 // commit 실패는 ctx cancel 인 경우 강등하지 않으면 셧다운 시점에 noise. Warn 으로 가시성 유지.
-func (w *ParserWorker) Handle(ctx context.Context, msg *queue.Message) {
+func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 	log := logger.FromContext(ctx)
 
 	if err := w.ProcessMessage(ctx, msg); err != nil {
@@ -315,7 +315,7 @@ var ErrStageGateNotAcquired = errors.New("parser stage gate not acquired by this
 //
 // 일반적으로 runWorker 가 내부에서 호출하지만, 외부 테스트가 분기별 행동을 black-box 로
 // 검증할 수 있도록 exported. consumer 가 nil 인 worker 도 본 메소드는 호출 가능.
-func (w *ParserWorker) ProcessMessage(ctx context.Context, msg *queue.Message) error {
+func (w *Worker) ProcessMessage(ctx context.Context, msg *queue.Message) error {
 	var ref core.RawContentRef
 	if err := json.Unmarshal(msg.Value, &ref); err != nil {
 		w.log.WithError(err).Error("malformed RawContentRef payload, dropping")
@@ -394,7 +394,7 @@ func (w *ParserWorker) ProcessMessage(ctx context.Context, msg *queue.Message) e
 	return w.processArticlePage(ctx, raw, ref.ID, crawlerName, ref.LLMRetryCount, mlog)
 }
 
-func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, jobTimeout time.Duration, llmRetryCount int, mlog *logger.Logger) error {
+func (w *Worker) processCategoryPage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, jobTimeout time.Duration, llmRetryCount int, mlog *logger.Logger) error {
 	// Category cycle 종료 시 PipelineGuard marker release — defer 로 어떤 경로
 	// (성공 / handleRuleError / 0 links / publish 실패) 든 release 보장. Release 실패는 non-fatal
 	// (TTL fallback 으로 자동 회수).
@@ -469,7 +469,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 //
 // guard 미설정 시 noop. Release 실패는 non-fatal — TTL 만료 fallback 으로 자동 회수.
 // ctx.WithoutCancel 로 parent ctx 취소 신호 분리 — shutdown 중에도 release 시도 보장.
-func (w *ParserWorker) releaseCategoryMarker(ctx context.Context, url string, mlog *logger.Logger) {
+func (w *Worker) releaseCategoryMarker(ctx context.Context, url string, mlog *logger.Logger) {
 	if w.guard == nil {
 		return
 	}
@@ -482,7 +482,7 @@ func (w *ParserWorker) releaseCategoryMarker(ctx context.Context, url string, ml
 	}
 }
 
-func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, llmRetryCount int, mlog *logger.Logger) error {
+func (w *Worker) processArticlePage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, llmRetryCount int, mlog *logger.Logger) error {
 	if w.parser == nil {
 		mlog.Debug("parser not configured, skipping article")
 		w.deleteRaw(ctx, rawID, mlog)
@@ -521,7 +521,7 @@ func (w *ParserWorker) processArticlePage(ctx context.Context, raw *core.RawCont
 // rule.ErrParseFailure / rule.ErrEmptySelector 는 host 단위 카운터로
 // 누적 — 임계값 도달 시 단계 3 (#221) 의 chromedp 자동 전환 트리거 입력. ErrNoRule 은 LLM 자동
 // rule 생성 의 책임 영역이라 카운팅 제외 (다른 정책으로 처리됨).
-func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) error {
+func (w *Worker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
 		mlog.WithFields(map[string]interface{}{
@@ -593,7 +593,7 @@ func (w *ParserWorker) handleRuleError(ctx context.Context, raw *core.RawContent
 //
 // rawID 는 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상으로 사용. 빈 문자열이면
 // Tracker 가 noop.
-func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string, reason storage.FailureReason, mlog *logger.Logger) {
+func (w *Worker) recordHostFailure(ctx context.Context, host, rawID string, reason storage.FailureReason, mlog *logger.Logger) {
 	if w.failureCounter == nil {
 		return
 	}
@@ -640,7 +640,7 @@ func (w *ParserWorker) recordHostFailure(ctx context.Context, host, rawID string
 //
 // 카운팅 / lookup 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지. 임계 도달 후 EnqueueStale
 // 은 비동기 (Generator 내부 goroutine) 라 본 함수 latency 영향 없음.
-func (w *ParserWorker) recordStaleAndMaybeRelearn(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) {
+func (w *Worker) recordStaleAndMaybeRelearn(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) {
 	if w.staleCounter == nil || w.llmGen == nil {
 		return
 	}
@@ -718,7 +718,7 @@ func hostOf(rawURL string) string {
 // 임계값이 0 이면 해당 필드 검증 비활성 (운영 옵션).
 //
 // rawID 도 host 별 추적 — 단계 3 의 republish 대상 수집.
-func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawContent, rawID string, page *types.Page, mlog *logger.Logger) {
+func (w *Worker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawContent, rawID string, page *types.Page, mlog *logger.Logger) {
 	if w.emptyBodyTitleMin <= 0 && w.emptyBodyContentMin <= 0 {
 		return
 	}
@@ -745,7 +745,7 @@ func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *cor
 }
 
 // publishContents 는 *core.Content 슬라이스를 contents 저장 + ContentRef 발행 (TopicNormalized).
-func (w *ParserWorker) publishContents(ctx context.Context, contents []*core.Content, crawlerName string) error {
+func (w *Worker) publishContents(ctx context.Context, contents []*core.Content, crawlerName string) error {
 	for _, c := range contents {
 		storedID, _, err := w.contentSvc.Store(ctx, c)
 		if err != nil {
@@ -823,7 +823,7 @@ const (
 // targetType, crawlerName 은 Kafka 메시지 헤더로 설정 — 재큐 후 processMessage 가 올바른
 // 파싱 경로 (category vs article) 로 분기할 수 있도록 보존합니다 (gemini/Copilot/CodeRabbit 피드백).
 // 재발행 실패는 non-fatal — raw 는 TTL cleanup 으로 최종 정리됩니다.
-func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawContentRef, llmRetryCount int, targetType storage.TargetType, crawlerName string) {
+func (w *Worker) RequeueForLLMRetry(ctx context.Context, ref core.RawContentRef, llmRetryCount int, targetType storage.TargetType, crawlerName string) {
 	nextCount := llmRetryCount + 1
 	if nextCount > maxLLMRetries {
 		w.log.WithFields(map[string]interface{}{
@@ -887,7 +887,7 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 //
 // 룰 생성 완료 후 호출 — 대기 중이던 URL 이 새 룰로 재파싱될 수 있도록 TopicFetched 에 투입.
 // Kafka 발행에 실패한 항목을 반환 — Generator 가 pending queue 에 재적재.
-func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.PendingItem) (failed []llmgen.PendingItem) {
+func (w *Worker) RequeueParsing(ctx context.Context, items []llmgen.PendingItem) (failed []llmgen.PendingItem) {
 	// WithoutCancel 은 루프 외부에서 1회 — 루프마다 새 컨텍스트 파생 불필요 (Gemini 피드백).
 	baseCtx := context.WithoutCancel(ctx)
 	for _, item := range items {
@@ -929,7 +929,7 @@ func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.Pendin
 
 // deleteRaw 는 처리 완료된 raw_contents row 를 즉시 정리합니다.
 // 실패는 non-fatal — cleanup cron 이 안전망으로 동작.
-func (w *ParserWorker) deleteRaw(ctx context.Context, rawID string, mlog *logger.Logger) {
+func (w *Worker) deleteRaw(ctx context.Context, rawID string, mlog *logger.Logger) {
 	if err := w.rawSvc.Delete(ctx, rawID); err != nil {
 		mlog.WithError(err).Warn("raw delete failed (non-fatal — cleanup cron will catch)")
 	}
@@ -946,7 +946,7 @@ func (w *ParserWorker) deleteRaw(ctx context.Context, rawID string, mlog *logger
 // 모든 실패 (lookup 실패 / Insert 에러 / cap 도달) 는 정상 흐름 차단 X — DEBUG/WARN 로그만.
 //
 // 변수명 matchedRule: import 된 rule 패키지와의 shadowing 회피.
-func (w *ParserWorker) accumulateSample(ctx context.Context, raw *core.RawContent, mlog *logger.Logger) {
+func (w *Worker) accumulateSample(ctx context.Context, raw *core.RawContent, mlog *logger.Logger) {
 	if w.resolver == nil || w.sampleSvc == nil {
 		return
 	}
