@@ -1,4 +1,4 @@
-package validate_test
+package worker_test
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/validate"
+	"issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -164,11 +164,11 @@ func makeProcessingMessage(content *core.Content, retryCount int) *queue.Message
 	}
 }
 
-func newWorker(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService) *validate.Worker {
-	return validate.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, config.DefaultValidateConfig())
+func newWorker(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService) *worker.Worker {
+	return worker.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, config.DefaultValidateConfig())
 }
 
-func runWorker(t *testing.T, consumer *mockConsumer, w *validate.Worker, msg *queue.Message) {
+func runWorker(t *testing.T, consumer *mockConsumer, w *worker.Worker, msg *queue.Message) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -364,7 +364,7 @@ func TestValidateWorker_NewValidator_DispatchesBySourceType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := validate.NewValidator(tt.sourceType, config.DefaultValidateConfig())
+			v := worker.NewValidator(tt.sourceType, config.DefaultValidateConfig())
 			assert.NotNil(t, v)
 		})
 	}

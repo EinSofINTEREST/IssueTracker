@@ -18,14 +18,15 @@ import (
 	"issuetracker/internal/processor/fetcher/handler"
 	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
+	"issuetracker/internal/processor/parser"
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/claudegen"
 	llmgenwiring "issuetracker/internal/processor/parser/rule/llmgen/wiring"
 	refinerwiring "issuetracker/internal/processor/parser/rule/refiner/wiring"
 	"issuetracker/internal/processor/parser/rule/validator"
-	parserStage "issuetracker/internal/processor/parser/stage"
 	parserWorker "issuetracker/internal/processor/parser/worker"
 	"issuetracker/internal/processor/validate"
+	validateWorkerPkg "issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/scheduler"
 	"issuetracker/internal/storage"
 	pgstore "issuetracker/internal/storage/postgres"
@@ -810,7 +811,7 @@ func main() {
 		log.Warn("processing lock unavailable, validate stage gate falls back to noop")
 	}
 
-	validateWorker := validate.NewWorker(validateConsumer, validatePublisher, contentSvc, validateGate, workerCountsCfg.Validate, validateCfg)
+	validateWorker := validateWorkerPkg.NewWorker(validateConsumer, validatePublisher, contentSvc, validateGate, workerCountsCfg.Validate, validateCfg)
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": workerCountsCfg.Validate,
@@ -826,7 +827,7 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct fetcher stage")
 	}
-	parserStg, err := parserStage.NewStage(pw, cleaner, llmGen, pathRefiner, log)
+	parserStg, err := parser.NewStage(pw, cleaner, llmGen, pathRefiner, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct parser stage")
 	}

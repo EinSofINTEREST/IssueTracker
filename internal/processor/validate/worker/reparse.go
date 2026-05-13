@@ -1,4 +1,4 @@
-package validate
+package worker
 
 // reparse.go — validate 실패 시 parser 재학습 트리거 정책 (이슈 #364).
 //

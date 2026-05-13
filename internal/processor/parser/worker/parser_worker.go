@@ -31,9 +31,9 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
 	fetcherRule "issuetracker/internal/processor/fetcher/rule"
-	"issuetracker/internal/processor/parser"
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
+	"issuetracker/internal/processor/parser/types"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/internal/workerpool"
@@ -718,7 +718,7 @@ func hostOf(rawURL string) string {
 // 임계값이 0 이면 해당 필드 검증 비활성 (운영 옵션).
 //
 // rawID 도 host 별 추적 — 단계 3 의 republish 대상 수집.
-func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawContent, rawID string, page *parser.Page, mlog *logger.Logger) {
+func (w *ParserWorker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawContent, rawID string, page *types.Page, mlog *logger.Logger) {
 	if w.emptyBodyTitleMin <= 0 && w.emptyBodyContentMin <= 0 {
 		return
 	}
@@ -977,7 +977,7 @@ func (w *ParserWorker) accumulateSample(ctx context.Context, raw *core.RawConten
 }
 
 // uniqueURLs 는 LinkItem 슬라이스에서 빈 URL 제거 + limit 까지의 unique URL 반환.
-func uniqueURLs(items []parser.LinkItem, limit int) []string {
+func uniqueURLs(items []types.LinkItem, limit int) []string {
 	seen := make(map[string]struct{}, len(items))
 	urls := make([]string, 0)
 	for _, item := range items {

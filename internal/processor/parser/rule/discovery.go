@@ -7,7 +7,7 @@ import (
 	"regexp"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/parser"
+	"issuetracker/internal/processor/parser/types"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/links"
 )
@@ -47,7 +47,7 @@ func NewPageLinkDiscovery() *PageLinkDiscovery { return &PageLinkDiscovery{} }
 // 반환 LinkItem 의 Title 은 anchor text 로 채움 (ItemContainer 모드 와 달리 별도 selector
 // 가 없음). Snippet 은 비워둠 — full-page discovery 는 list 페이지의 컨텍스트가 없으므로
 // snippet 추출이 불가능. 호출자 (worker / publisher) 는 Title 빈 케이스를 허용해야 함.
-func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDiscoveryConfig) ([]parser.LinkItem, error) {
+func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDiscoveryConfig) ([]types.LinkItem, error) {
 	if err := validateRaw(raw); err != nil {
 		return nil, err
 	}
@@ -113,13 +113,13 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 	maxOut := cfg.MaxLinksPerPage
 	pageHost := hostOf(raw.URL)
 
-	sameOrigin := make([]parser.LinkItem, 0, len(candidates))
-	crossOrigin := make([]parser.LinkItem, 0)
+	sameOrigin := make([]types.LinkItem, 0, len(candidates))
+	crossOrigin := make([]types.LinkItem, 0)
 	for _, l := range candidates {
 		if pattern != nil && !pattern.MatchString(l.URL) {
 			continue
 		}
-		item := parser.LinkItem{URL: l.URL, Title: l.Text}
+		item := types.LinkItem{URL: l.URL, Title: l.Text}
 		if pageHost != "" && hostOf(l.URL) == pageHost {
 			sameOrigin = append(sameOrigin, item)
 		} else {
@@ -127,7 +127,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 		}
 	}
 
-	out := append(make([]parser.LinkItem, 0, len(sameOrigin)+len(crossOrigin)), sameOrigin...)
+	out := append(make([]types.LinkItem, 0, len(sameOrigin)+len(crossOrigin)), sameOrigin...)
 
 	switch {
 	case len(crossOrigin) == 0:

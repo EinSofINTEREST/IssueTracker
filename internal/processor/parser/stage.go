@@ -1,8 +1,10 @@
-// Package stage 는 parser 단계의 processor.Stage 래퍼를 제공합니다.
+// Package parser 는 parser 단계의 processor.Stage 래퍼를 제공합니다.
 //
-// 본 wrapper 는 별도 sub-package 에 위치 — internal/processor/parser/parser.go 의 Page 타입을
-// rule/* 가 import 하므로, parser 부모 패키지가 rule/* 를 import 하면 import cycle 발생.
-// stage 를 sub-package 로 분리하여 cycle 회피.
+// 패키지 구조 (이슈 #417): stage.go (top, 본 파일) + worker/ + types/ + rule/.
+// 핵심 도메인 인터페이스 (ContentParser / LinkListParser / Page / LinkItem) 는
+// parser/types/ leaf sub-package 에 위치하여 cyclic dependency 회피 — rule/* 가
+// parser/types 만 import 하면 되므로 parser 부모 패키지 (본 파일) 가 rule/* 를 import 해도
+// 사이클 없음.
 //
 // 본 stage 는 단일 worker 가 아닌 **여러 background goroutine 의 묶음** 입니다:
 //   - worker.ParserWorker (Kafka consume + 파싱 + content 저장)
@@ -12,7 +14,7 @@
 //
 // 모든 component 의 lifecycle 을 본 wrapper 가 단일 Start/Stop 으로 통합.
 // llmGen / refiner 는 nil 허용 (LLM 비활성 / REFINEMENT_ENABLED=false 환경 cover).
-package stage
+package parser
 
 import (
 	"context"

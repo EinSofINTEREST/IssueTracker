@@ -7,15 +7,15 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/parser"
+	"issuetracker/internal/processor/parser/types"
 )
 
-// ConvertPage 는 parser.Page + RawContent 를 core.Content 로 변환합니다.
+// ConvertPage 는 types.Page + RawContent 를 core.Content 로 변환합니다.
 // URL 우선순위: page.URL → raw.URL.
 //
-// ConvertPage converts a parser.Page and RawContent into a core.Content.
-// 기존 ConvertArticle 의 도메인 일반화 — Article DTO 대신 parser.Page 를 직접 입력으로 받음.
-func ConvertPage(page *parser.Page, raw *core.RawContent) *core.Content {
+// ConvertPage converts a types.Page and RawContent into a core.Content.
+// 기존 ConvertArticle 의 도메인 일반화 — Article DTO 대신 types.Page 를 직접 입력으로 받음.
+func ConvertPage(page *types.Page, raw *core.RawContent) *core.Content {
 	url := page.URL
 	if url == "" {
 		url = raw.URL

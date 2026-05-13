@@ -1,17 +1,17 @@
-// Package validate 는 Content 검증 처리 단계를 구현합니다.
+// Package worker 는 Content 검증 처리 단계를 구현합니다.
 //
-// Package validate implements the content validation stage of the processing pipeline.
+// Package worker implements the content validation stage of the processing pipeline.
 // It dispatches to source-type-specific validators (news, community) via NewValidator.
 // Worker 가 Validator 결과를 직접 사용 — 별도 ContentProcessor 어댑터 없음.
-package validate
+package worker
 
 import (
 	"context"
 	"fmt"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/validate/community"
-	"issuetracker/internal/processor/validate/news"
+	"issuetracker/internal/processor/validate/domain/community"
+	"issuetracker/internal/processor/validate/domain/news"
 	"issuetracker/internal/processor/validate/types"
 	"issuetracker/pkg/config"
 )

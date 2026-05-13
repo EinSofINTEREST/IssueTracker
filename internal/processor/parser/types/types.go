@@ -1,7 +1,7 @@
-// Package parser 은 모든 웹페이지 (뉴스 / 블로그 / 일반 문서) 의 핵심 내용을
+// Package types 은 모든 웹페이지 (뉴스 / 블로그 / 일반 문서) 의 핵심 내용을
 // 추출하기 위한 도메인 중립 인터페이스와 모델을 제공합니다.
 //
-// Package parser defines domain-agnostic interfaces and models for extracting
+// Package types defines domain-agnostic interfaces and models for extracting
 // the main content of any web page. 사이트별 hardcode 파서를 대체하여, DB 기반 rule
 // (storage.ParserRuleRecord) 만 다른 단일 engine 이 모든 웹페이지를 처리합니다.
 //
@@ -11,7 +11,7 @@
 //
 // 뉴스 도메인의 NewsArticleParser/NewsListParser 는 본 인터페이스의 도메인 어댑터로
 // 표현 가능합니다 (Page → NewsArticle 변환은 호출자 책임).
-package parser
+package types
 
 import (
 	"context"
