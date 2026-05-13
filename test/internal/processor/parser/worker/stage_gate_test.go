@@ -51,10 +51,9 @@ func (g *fakeStageGate) Acquire(_ context.Context, _ string) (func(), bool, erro
 func newGatedWorker(gate locks.StageGate, rawSvc *fakeRawSvc, log *logger.Logger) *parserWorker.ParserWorker {
 	return parserWorker.NewParserWorker(
 		nil,    // consumer
-		nil,    // producer
+		nil,    // pub
 		rawSvc, // rawSvc
 		nil,    // contentSvc
-		nil,    // publisher
 		nil,    // parser
 		nil,    // resolver
 		nil,    // sampleSvc

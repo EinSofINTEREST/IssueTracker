@@ -13,6 +13,7 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -71,13 +72,17 @@ func newRoutingHandler(t *testing.T, chains []general.Handler) *general.ChainHan
 	t.Helper()
 	log := logger.New(logger.DefaultConfig())
 	defaultChain := &fakeChain{id: "default"} // 본 테스트에서는 호출되지 않음
+	// 이슈 #392 — chain_handler 가 *publisher.Publisher 의존으로 변경됨.
+	// 본 테스트는 republish 경로 자체에 도달하지 않으므로 stubProducer 가 publisher 안에서
+	// 호출되지 않음 — publish 발생 시 stubProducer.Publish 의 panic 으로 invariant 위반 감지.
+	pub := publisher.New(stubProducer{}, nil, log)
 	return general.NewChainHandler(
 		nil, // SourceCrawler — HandleChromedpOnly 경로에서 사용 X
 		defaultChain,
 		chains,
 		nil,
 		stubRawSvc{},
-		stubProducer{},
+		pub,
 		log,
 	)
 }

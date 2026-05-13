@@ -223,7 +223,7 @@ func main() {
 	}
 
 	// fetcher 측 등록: fetcher_rules DB 에서 모든 source 를 읽어 일괄 등록.
-	if err := sources.RegisterAll(ctx, registry, fetcherRuleRepo, core.DefaultConfig(), rawSvc, crawlerProducer, fetcherResolver, chromedpRemoteURLs, log); err != nil {
+	if err := sources.RegisterAll(ctx, registry, fetcherRuleRepo, core.DefaultConfig(), rawSvc, jobPublisher, fetcherResolver, chromedpRemoteURLs, log); err != nil {
 		log.WithError(err).Fatal("failed to register crawlers from db")
 	}
 
@@ -565,10 +565,9 @@ func main() {
 
 	pw := parserWorker.NewParserWorker(
 		parserConsumer,
-		crawlerProducer, // normalized 토픽 발행 + chained article jobs 발행 시 publisher 가 동일 producer 사용
+		jobPublisher, // 이슈 #392 — 구 producer + JobPublisher 두 인자 통합 (publisher.Publisher 가 Forward + PublishChained 모두 제공)
 		rawSvc,
 		contentSvc,
-		jobPublisher,
 		ruleParser,
 		ruleResolver, // sample 누적 시 매칭 rule lookup
 		sampleRepo,
