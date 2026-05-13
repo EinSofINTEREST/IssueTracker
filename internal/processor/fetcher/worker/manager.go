@@ -167,8 +167,14 @@ func NewPoolManager(
 //
 // 로깅을 위해 동일 resolver 를 한 번 더 평가 — ExplicitPriorityResolver 가 1순위라
 // 이후 buildMessage 의 평가와 같은 결과를 보장 (resolver 는 stateless · idempotent).
+//
+// m.resolver 가 nil 인 경우 (테스트 wiring) 는 job.Priority 를 그대로 사용 — coderabbit
+// PR #409 피드백. publisher.buildMessage 가 nil resolver 를 fail-safe 로 허용하는 정책과 일관.
 func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
-	priority := m.resolver.Resolve(job)
+	priority := job.Priority
+	if m.resolver != nil {
+		priority = m.resolver.Resolve(job)
+	}
 
 	m.log.WithFields(map[string]interface{}{
 		"job_id":   job.ID,
