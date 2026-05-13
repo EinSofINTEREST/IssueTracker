@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/validate/news"
+	"issuetracker/internal/processor/validate/domain/news"
 	"issuetracker/pkg/config"
 )
 

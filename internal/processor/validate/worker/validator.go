@@ -10,8 +10,8 @@ import (
 	"fmt"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/validate/community"
-	"issuetracker/internal/processor/validate/news"
+	"issuetracker/internal/processor/validate/domain/community"
+	"issuetracker/internal/processor/validate/domain/news"
 	"issuetracker/internal/processor/validate/types"
 	"issuetracker/pkg/config"
 )

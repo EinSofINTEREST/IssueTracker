@@ -2,7 +2,8 @@
 //
 // validate 는 단일 worker 만 갖는 단순 stage — Worker.Start/Stop 을 그대로 위임.
 // 패키지 구조 (이슈 #417): stage.go (top) + worker/ (worker pool 구현 + 부속 helpers) +
-// types/ (cyclic-free 인터페이스) + community/ + news/.
+// types/ (cyclic-free 인터페이스) + domain/{community,news}/ (source-type 별 검증 — fetcher 의
+// domain/* 패턴과 동일).
 
 package validate
 
