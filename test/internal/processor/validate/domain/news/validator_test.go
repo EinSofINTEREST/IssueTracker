@@ -106,6 +106,9 @@ func TestNewsValidator_Validate_MissingPublishedAt_ReturnsError(t *testing.T) {
 // TestNewsValidator_Validate_MissingPublishedAt_NonArticle_Passes 는 article=false 룰로
 // 파싱된 비-article 페이지 (뉴스 인덱스 / 이미지) 에서 PublishedAt 누락이 통과되는지 검증합니다
 // (이슈 #423).
+//
+// newNewsContent() 는 다른 모든 검증을 통과하는 유효 컨텐츠이므로 IsValid 가 true 여야 함 —
+// 단순 PublishedAt 필드 부재 체크보다 IsValid 직접 단언이 견고 (gemini PR #424 피드백).
 func TestNewsValidator_Validate_MissingPublishedAt_NonArticle_Passes(t *testing.T) {
 	v := news.NewValidator(config.DefaultValidateConfig())
 	content := newNewsContent()
@@ -114,9 +117,8 @@ func TestNewsValidator_Validate_MissingPublishedAt_NonArticle_Passes(t *testing.
 
 	result := v.Validate(context.Background(), content)
 
-	for _, e := range result.Errors {
-		assert.NotEqual(t, "PublishedAt", e.Field, "비-article 컨텐츠는 PublishedAt 누락 통과 (이슈 #423)")
-	}
+	assert.True(t, result.IsValid, "비-article 컨텐츠는 PublishedAt 누락 시에도 유효해야 합니다 (이슈 #423)")
+	assert.Empty(t, result.Errors, "비-article 컨텐츠는 PublishedAt 누락 시 에러가 없어야 합니다 (이슈 #423)")
 }
 
 func TestNewsValidator_Validate_ExcessiveCaps_ReturnsSpamError(t *testing.T) {
