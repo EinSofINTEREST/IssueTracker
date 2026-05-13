@@ -55,6 +55,26 @@ func (e *ErrCircuitOpen) Error() string {
 	return fmt.Sprintf("circuit breaker open for source %q", e.Source)
 }
 
+// Is 는 errors.Is 정밀 매칭을 지원합니다 (gemini PR #410 피드백).
+//
+// target 의 비어 있지 않은 필드에 대해 AND 비교 — Source 가 비어있으면 "임의 CB-open"
+// 으로 매칭, 명시되어 있으면 동일 Source 만 매칭. 부분 매칭으로 인한 오탐 회피.
+//
+// 사용 예:
+//
+//	errors.Is(err, &resilience.ErrCircuitOpen{})              // 임의 CB-open
+//	errors.Is(err, &resilience.ErrCircuitOpen{Source: "cnn"}) // cnn 소스만
+func (e *ErrCircuitOpen) Is(target error) bool {
+	t, ok := target.(*ErrCircuitOpen)
+	if !ok {
+		return false
+	}
+	if t.Source != "" && t.Source != e.Source {
+		return false
+	}
+	return true
+}
+
 // CircuitBreakerConfig는 circuit breaker 설정입니다.
 type CircuitBreakerConfig struct {
 	// MaxFailures: Open 전환 기준 연속 실패 횟수
