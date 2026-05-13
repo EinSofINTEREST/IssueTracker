@@ -98,9 +98,10 @@ func (w *Worker) Start(ctx context.Context) {
 	if w.pool != nil {
 		panic("validate worker: Start called more than once on the same instance")
 	}
-	const name = "validator"
+	// stageName ("validate") 사용 — locks.StageValidator / stage.go / 로그 메시지 전반과
+	// 일관성 유지 (gemini PR #416 피드백).
 	plainLog := logger.FromContext(ctx)
-	ctx = plainLog.WithField("worker_pool", name).ToContext(ctx)
+	ctx = plainLog.WithField("worker_pool", stageName).ToContext(ctx)
 
 	w.pool = workerpool.New(workerpool.Config{
 		Consumer:     w.consumer,
@@ -108,7 +109,7 @@ func (w *Worker) Start(ctx context.Context) {
 		WorkerCount:  w.workerCount,
 		DrainTimeout: drainTimeout,
 		Log:          plainLog,
-		Name:         name,
+		Name:         stageName,
 	})
 	w.pool.Start(ctx)
 }
