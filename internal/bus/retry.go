@@ -1,4 +1,4 @@
-package publisher
+package bus
 
 import (
 	"context"

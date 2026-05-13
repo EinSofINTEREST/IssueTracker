@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/worker"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
@@ -22,10 +22,10 @@ import (
 
 // newTestPublisher 는 pool/manager 가 publisher facade 만 의존하도록 변경된 후 (이슈 #390)
 // 기존 mockProducer 검증 흐름을 유지하기 위한 thin helper 입니다.
-// 실제 *publisher.Publisher 를 생성하되 내부 producer 로 mockProducer 를 주입 — pool 이
+// 실제 *bus.Publisher 를 생성하되 내부 producer 로 mockProducer 를 주입 — pool 이
 // pub.Forward → producer.Publish 로 위임하므로 mock 의 expectations 가 그대로 작동.
-func newTestPublisher(producer queue.Producer) *publisher.Publisher {
-	return publisher.New(producer, nil, logger.New(logger.DefaultConfig()))
+func newTestPublisher(producer queue.Producer) *bus.Publisher {
+	return bus.New(producer, nil, logger.New(logger.DefaultConfig()))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

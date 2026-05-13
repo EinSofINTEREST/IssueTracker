@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -78,10 +78,10 @@ func newCaptureHandler(t *testing.T, raw *core.RawContent, rawID string) (*gener
 	log := logger.New(logger.DefaultConfig())
 	rawSvc := &captureRawSvc{returnID: rawID}
 	prod := &captureProducer{}
-	// 이슈 #392 — chain_handler 가 *publisher.Publisher 의존으로 변경됨에 따라 mock producer 를
+	// 이슈 #392 — chain_handler 가 *bus.Publisher 의존으로 변경됨에 따라 mock producer 를
 	// 실제 publisher 로 wrap (Sub 5/7 동일 패턴). captureProducer.published 는 pub.Forward 위임
 	// 경로로 그대로 트리거됨.
-	pub := publisher.New(prod, nil, log)
+	pub := bus.New(prod, nil, log)
 	h := general.NewChainHandler(
 		nil, // SourceCrawler — fast path 에서 사용 X
 		&successChain{raw: raw},

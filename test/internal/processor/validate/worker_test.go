@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -24,10 +24,10 @@ import (
 
 // newTestPublisher 는 validate worker 가 publisher facade 의존으로 변경된 후 (이슈 #393)
 // 기존 mockProducer 검증 흐름을 유지하기 위한 thin helper 입니다.
-// 실제 *publisher.Publisher 를 생성하되 내부 producer 로 mockProducer 를 주입 — worker 가
+// 실제 *bus.Publisher 를 생성하되 내부 producer 로 mockProducer 를 주입 — worker 가
 // pub.Forward → producer.Publish 로 위임하므로 mock expectations 그대로 작동.
-func newTestPublisher(producer queue.Producer) *publisher.Publisher {
-	return publisher.New(producer, nil, logger.New(logger.DefaultConfig()))
+func newTestPublisher(producer queue.Producer) *bus.Publisher {
+	return bus.New(producer, nil, logger.New(logger.DefaultConfig()))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

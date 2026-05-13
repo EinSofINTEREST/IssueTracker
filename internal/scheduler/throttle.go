@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/publisher"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -70,7 +70,7 @@ func (t *BacklogThrottler) ShouldThrottle(ctx context.Context, job *core.CrawlJo
 		return false
 	}
 
-	topic := publisher.CrawlTopic(job.Priority)
+	topic := bus.CrawlTopic(job.Priority)
 
 	checkCtx := ctx
 	if t.timeout > 0 {

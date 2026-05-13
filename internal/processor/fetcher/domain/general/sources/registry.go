@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
 	"issuetracker/internal/processor/fetcher/domain/general/fetcher"
@@ -19,7 +20,6 @@ import (
 	"issuetracker/internal/processor/fetcher/implementation/goquery"
 	"issuetracker/internal/processor/fetcher/rate_limiter"
 	"issuetracker/internal/processor/fetcher/rule"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
@@ -55,7 +55,7 @@ func RegisterAll(
 	fetcherRuleRepo storage.FetcherRuleRepository,
 	baseConfig core.Config,
 	rawSvc service.RawContentService,
-	pub *publisher.Publisher,
+	pub *bus.Publisher,
 	resolver rule.Resolver,
 	chromedpRemoteURLs []string,
 	log *logger.Logger,
@@ -138,7 +138,7 @@ func buildHandler(
 	rec *storage.FetcherRuleRecord,
 	baseConfig core.Config,
 	rawSvc service.RawContentService,
-	pub *publisher.Publisher,
+	pub *bus.Publisher,
 	resolver rule.Resolver,
 	chromedpRemoteURLs []string,
 	dnsResolver core.IPResolver,

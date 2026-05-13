@@ -1,4 +1,4 @@
-package publisher
+package bus
 
 import (
 	"context"
@@ -92,7 +92,7 @@ func (p *Publisher) PublishChained(
 // buildJobMessages 는 url 목록을 CrawlJob 으로 변환하여 priority resolve 후 Kafka Message
 // 슬라이스로 반환합니다 (CodeRabbit PR #394 피드백 — PublishChained 함수 분리).
 //
-// MaxRetries 는 publisher.DefaultMaxRetries 상수 사용.
+// MaxRetries 는 bus.DefaultMaxRetries 상수 사용.
 func (p *Publisher) buildJobMessages(
 	crawlerName string,
 	urls []string,

@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -33,8 +33,8 @@ const drainTimeout = 5 * time.Second
 // validates it, and publishes ContentRef to issuetracker.validated.
 // On failure, deletes the contents record and routes to DLQ.
 type Worker struct {
-	consumer    publisher.Consumer
-	pub         *publisher.Publisher
+	consumer    bus.Consumer
+	pub         *bus.Publisher
 	contentSvc  service.ContentService
 	gate        locks.StageGate // nil 허용 → NoopStageGate 로 fallback (이슈 #356)
 	cfg         config.ValidateConfig
@@ -57,17 +57,17 @@ type Worker struct {
 // acquire — Kafka rebalance 시 같은 ref 가 두 worker 에 도달해도 1회만 검증.
 //
 // 이슈 #393 — 구 queue.Consumer / queue.Producer 직접 주입 → publisher facade 주입으로 변경.
-// Kafka 구현체에 직접 의존하지 않음 (consumer 는 publisher.Consumer 별칭, publish 는 pub.Forward).
+// Kafka 구현체에 직접 의존하지 않음 (consumer 는 bus.Consumer 별칭, publish 는 pub.Forward).
 func NewWorker(
-	consumer publisher.Consumer,
-	pub *publisher.Publisher,
+	consumer bus.Consumer,
+	pub *bus.Publisher,
 	contentSvc service.ContentService,
 	gate locks.StageGate,
 	workerCount int,
 	cfg config.ValidateConfig,
 ) *Worker {
 	// pub 은 4 publish 사이트 (validated / dlq / requeue / reparse) 가 dereference 하는 hard
-	// dependency. nil 주입 시 첫 publish 에서 publisher.Forward 가 error 를 반환하지만, validate
+	// dependency. nil 주입 시 첫 publish 에서 bus.Forward 가 error 를 반환하지만, validate
 	// worker 는 publish 실패 시 commit skip → Kafka 무한 재배달 — 운영 진단이 매우 어려워짐.
 	// Fail-fast 가 silent failure 보다 안전 (coderabbit PR #408 피드백).
 	if pub == nil {

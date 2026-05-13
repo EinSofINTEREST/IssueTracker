@@ -3,8 +3,8 @@ package worker_test
 // helpers_test.go — 테스트 공통 헬퍼
 
 import (
+	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/parser/worker"
-	"issuetracker/internal/publisher"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -13,9 +13,9 @@ import (
 // nil 허용 필드는 전부 nil 로 전달합니다.
 //
 // 이슈 #392 — parser_worker 가 publisher facade 의존으로 변경됨에 따라 mock producer 를
-// 실제 *publisher.Publisher 로 wrap (Sub 5/7 동일 패턴, newTestPublisher 와 등가).
+// 실제 *bus.Publisher 로 wrap (Sub 5/7 동일 패턴, newTestPublisher 와 등가).
 func newMinimalWorker(prod queue.Producer, log *logger.Logger) *worker.ParserWorker {
-	pub := publisher.New(prod, nil, log)
+	pub := bus.New(prod, nil, log)
 	return worker.NewParserWorker(
 		nil, // consumer
 		pub, // pub — RequeueForLLMRetry/Forward 가 사용
