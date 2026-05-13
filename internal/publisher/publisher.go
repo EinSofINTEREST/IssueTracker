@@ -52,10 +52,13 @@ type Message = queue.Message
 const DefaultMaxRetries = 3
 
 // PriorityResolver 는 CrawlJob 의 우선순위를 결정하는 인터페이스입니다.
-// worker.CompositeResolver 등이 이를 구현합니다.
+// 구현체 — ExplicitPriorityResolver / SourcePriorityResolver / RuleBasedPriorityResolver /
+// DefaultPriorityResolver / CompositeResolver (chain) — 모두 publisher 패키지의
+// [resolver.go](resolver.go) 에 위치 (이슈 #391 — 메타 #385 Sub 6).
 //
-// 메타 #385 Sub 6 에서 본 인터페이스 및 chain 구현이 publisher 측으로 이동될 예정 —
-// 그 시점에 본 인터페이스가 모든 PublishX 메소드의 priority 결정 단일 진입점이 됩니다.
+// 모든 PublishX 메소드의 priority 결정 단일 진입점 — 운영자가 한 곳에만 resolver 룰 추가하면
+// seed / chained / retry / upgrade 모든 경로에 일관 적용. ExplicitPriorityResolver 를 chain
+// 1순위 로 등록하면 발행자가 사전 명시한 priority 가 보존됨.
 type PriorityResolver interface {
 	Resolve(job *core.CrawlJob) core.Priority
 }
@@ -135,7 +138,18 @@ func (p *Publisher) PublishJob(ctx context.Context, job *core.CrawlJob) error {
 }
 
 // buildMessage 는 CrawlJob 을 Kafka Message 로 변환합니다.
+//
+// 이슈 #391 — 메타 #385 Sub 6: resolver chain 통과를 본 헬퍼에 흡수. 모든 PublishX
+// (Chained / Seed / Job / Retry / Redis retry republish) 가 buildMessage 를 거치므로
+// priority 결정이 단일 출처. 발행자가 job.Priority 를 사전 명시한 경우, chain 1순위로
+// 등록된 ExplicitPriorityResolver 가 그 값을 통과시켜 explicit 우선이 보존됩니다.
+//
+// resolver 가 nil 인 경우 (테스트 등) 는 기존 job.Priority 를 그대로 사용 — fail-safe.
 func (p *Publisher) buildMessage(job *core.CrawlJob) (queue.Message, error) {
+	if p.resolver != nil {
+		job.Priority = p.resolver.Resolve(job)
+	}
+
 	data, err := job.Marshal()
 	if err != nil {
 		return queue.Message{}, fmt.Errorf("marshal job %s: %w", job.ID, err)
