@@ -234,6 +234,13 @@ func (p *ConsumerPool) Commit(ctx context.Context, msg *queue.Message) error {
 	return CommitWithDrain(ctx, p.cfg.Consumer, msg, p.cfg.DrainTimeout)
 }
 
+// JobsBuffered 는 현재 jobs 채널에 대기 중인 메시지 수를 반환합니다 (운영 진단 / heartbeat 용).
+//
+// goroutine-safe — len(chan) 은 atomic snapshot. 호출 직후의 값일 수 있음.
+func (p *ConsumerPool) JobsBuffered() int {
+	return len(p.jobs)
+}
+
 // CommitWithDrain 은 메시지 commit + drain context retry 를 수행하는 stateless 헬퍼입니다.
 //
 // 첫 commit 시도 → ctx canceled 면 context.WithoutCancel + drainTimeout 으로 재시도 →
