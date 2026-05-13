@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"sync"
 	"time"
 
 	"issuetracker/internal/bus"
@@ -14,15 +13,16 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
+	"issuetracker/internal/workerpool"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
 
-// drainTimeout은 graceful shutdown 으로 ctx 가 canceled 된 뒤 Kafka commit 또는 publish 를
-// 한 번 더 시도할 때 사용하는 별도 context 의 타임아웃입니다.
-// at-least-once 시맨틱 보장을 위해 ctx canceled 직후 메시지 커밋·발행을 마무리할 시간을 확보합니다.
-const drainTimeout = 5 * time.Second
+// drainTimeout 은 graceful shutdown 으로 ctx 가 canceled 된 뒤 Kafka publish 를 한 번 더
+// 시도할 때 사용하는 별도 context 의 타임아웃입니다.
+// at-least-once 시맨틱 보장 — workerpool harness 와 동일 값.
+const drainTimeout = workerpool.DefaultDrainTimeout
 
 // Worker는 issuetracker.normalized 토픽을 소비하여 검증 후 issuetracker.validated에 발행합니다.
 // ProcessingMessage.Data는 ContentRef를 담고 있으며, Worker는 ref.ID로 contents DB에서
@@ -39,10 +39,10 @@ type Worker struct {
 	gate        locks.StageGate // nil 허용 → NoopStageGate 로 fallback (이슈 #356)
 	cfg         config.ValidateConfig
 	workerCount int
-	jobs        chan *queue.Message
-	wg          sync.WaitGroup
-	pollWg      sync.WaitGroup
-	pollCancel  context.CancelFunc
+
+	// pool 은 workerpool harness — Start 에서 lazy 생성. lifecycle (poll / dispatch / shutdown /
+	// commit-with-drain) 위임 (이슈 #407 — 메타 #403 Sub 4).
+	pool *workerpool.ConsumerPool
 }
 
 // NewWorker는 새로운 Worker를 생성합니다.
@@ -83,90 +83,60 @@ func NewWorker(
 		gate:        gate,
 		cfg:         cfg,
 		workerCount: workerCount,
-		jobs:        make(chan *queue.Message, workerCount*2),
 	}
 }
 
-// Start는 worker goroutine들과 message polling goroutine을 시작합니다.
+// Start 는 workerpool harness 를 기동합니다 (이슈 #407 — 메타 #403 Sub 4).
+//
+// harness 가 N 개 worker goroutine + poll goroutine 을 관리하며, 각 메시지마다 본 worker 의
+// Handle 메소드를 호출합니다. ctx 에 worker_pool 필드 logger 가 주입되어 Handle 내부에서
+// FromContext 로 접근 가능.
+//
+// 단일 호출 contract — 인스턴스당 1회만 호출 (gemini PR #415 패턴). 2회차 호출은 이전 pool 의
+// reference 가 손실되어 자원 누수 위험이라 fail-fast panic.
 func (w *Worker) Start(ctx context.Context) {
-	for i := 0; i < w.workerCount; i++ {
-		w.wg.Add(1)
-		go w.work(ctx)
+	if w.pool != nil {
+		panic("validate worker: Start called more than once on the same instance")
 	}
+	const name = "validator"
+	plainLog := logger.FromContext(ctx)
+	ctx = plainLog.WithField("worker_pool", name).ToContext(ctx)
 
-	pollCtx, cancel := context.WithCancel(ctx)
-	w.pollCancel = cancel
-	w.pollWg.Add(1)
-	go w.poll(pollCtx)
+	w.pool = workerpool.New(workerpool.Config{
+		Consumer:     w.consumer,
+		Handler:      w,
+		WorkerCount:  w.workerCount,
+		DrainTimeout: drainTimeout,
+		Log:          plainLog,
+		Name:         name,
+	})
+	w.pool.Start(ctx)
 }
 
-// Stop은 Worker를 정상 종료합니다.
-// poll goroutine이 닫힌 jobs 채널에 송신하여 패닉이 발생하는 것을 방지하기 위해,
-// poll 종료를 먼저 보장한 뒤 jobs 채널을 닫습니다.
+// Stop 은 workerpool harness 의 정상 종료를 수행합니다.
+//
+// pool 이 미기동 (Start 미호출) 상태에서 Stop 호출 시 consumer.Close 만 수행 — Kafka 연결
+// 자원 누수 방지 (gemini PR #415 패턴).
 func (w *Worker) Stop(ctx context.Context) error {
-	// poll goroutine의 FetchMessage 루프를 중단시켜 jobs 송신이 완전히 멈추도록 보장
-	w.pollCancel()
-	w.pollWg.Wait()
-
-	close(w.jobs)
-
-	done := make(chan struct{})
-	go func() {
-		w.wg.Wait()
-		close(done)
-	}()
-
-	log := logger.FromContext(ctx)
-
-	select {
-	case <-done:
-		log.Info("all validate workers finished gracefully")
-	case <-ctx.Done():
-		log.Warn("validate worker shutdown timeout, forcing close")
+	if w.pool == nil {
+		return w.consumer.Close()
 	}
-
-	return w.consumer.Close()
+	return w.pool.Stop(ctx)
 }
 
-func (w *Worker) poll(ctx context.Context) {
-	defer w.pollWg.Done()
-
+// Handle 은 workerpool.Handler 구현 — 각 메시지마다 호출됩니다.
+//
+// process 의 결과에 따른 로깅:
+//   - nil → 성공 (process 내부에서 commit 이미 수행)
+//   - context.Canceled → graceful shutdown 으로 인한 정상 종료 흐름 (DEBUG 강등)
+//   - 그 외 → process 실패 (ERROR). commit 안 된 메시지는 재기동 시 재소비.
+func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 	log := logger.FromContext(ctx)
-
-	for {
-		msg, err := w.consumer.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			log.WithError(err).Error("failed to receive kafka message")
-			continue
-		}
-
-		select {
-		case w.jobs <- msg:
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (w *Worker) work(ctx context.Context) {
-	defer w.wg.Done()
-
-	log := logger.FromContext(ctx)
-
-	for msg := range w.jobs {
-		if err := w.process(ctx, msg); err != nil {
-			// graceful shutdown 으로 발생한 context.Canceled 는 운영 장애가 아니라 정상 종료 흐름이므로
-			// DEBUG 로 강등하여 알림·대시보드에서 오탐을 만들지 않도록 합니다.
-			// drain context 로 재시도해도 실패한 경우(드물게 broker 다운 등)도 함께 강등되며,
-			// 이 경우 offset 은 commit 되지 않아 다음 기동에서 재소비되므로 메시지 유실은 발생하지 않습니다.
-			if errors.Is(err, context.Canceled) {
-				log.WithError(err).Debug("validate worker canceled during shutdown")
-			} else {
-				log.WithError(err).Error("validate worker failed to process message")
-			}
+	if err := w.process(ctx, msg); err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.WithError(err).Debug("validate worker canceled during shutdown")
+		} else {
+			log.WithError(err).Error("validate worker failed to process message")
 		}
 	}
 }
@@ -634,24 +604,12 @@ func (w *Worker) republishForReparse(ctx context.Context, content *core.Content,
 // commit 되지 않은 offset 은 다음 worker 기동 시 재소비되어 동일 메시지가 다시 처리됩니다
 // (at-least-once 의 정상 동작).
 func (w *Worker) commit(ctx context.Context, msg *queue.Message) error {
-	err := w.consumer.CommitMessages(ctx, msg)
-	if err == nil {
-		return nil
+	// pool 이 미기동 (Start 미호출) 케이스 — 단위 테스트가 process / commit 만 격리 호출 시
+	// fallback. 실제 운영 경로에서는 Start 이후라 pool 항상 set.
+	if w.pool == nil {
+		return workerpool.CommitWithDrain(ctx, w.consumer, msg, drainTimeout)
 	}
-
-	// graceful shutdown 으로 ctx 가 canceled 된 경우, drain context 로 한 번 더 시도.
-	// context.WithoutCancel 로 cancellation 만 분리하고 trace ID·logger 필드 등 메타데이터는 보존.
-	if errors.Is(err, context.Canceled) {
-		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
-		defer cancel()
-		if retryErr := w.consumer.CommitMessages(drainCtx, msg); retryErr == nil {
-			return nil
-		} else {
-			return fmt.Errorf("commit offset (drain retry failed): %w", retryErr)
-		}
-	}
-
-	return fmt.Errorf("commit offset: %w", err)
+	return w.pool.Commit(ctx, msg)
 }
 
 // maxRetries는 메시지 헤더에서 최대 재시도 횟수를 결정합니다.
