@@ -1,4 +1,4 @@
-package publisher
+package worker
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 // 인터페이스입니다 (이슈 #388 — 메타 #385 의 Kafka I/O 단일 책임 원칙에 따라 publisher
 // 패키지에서 계약을 정의 / 이슈 #396 의 원칙 적용).
 //
-// publisher.Publisher 가 본 인터페이스를 만족하며, 외부 모듈은 본 인터페이스를 통해 upgrade
+// worker.Publisher 가 본 인터페이스를 만족하며, 외부 모듈은 본 인터페이스를 통해 upgrade
 // 발행 기능을 주입받아 사용합니다.
 //
 // UpgradePublisher dispatches a batch of pre-built upgrade republish messages to Kafka.
@@ -43,7 +43,7 @@ func (p *Publisher) PublishUpgrade(ctx context.Context, host string, msgs []queu
 	if err := p.producer.PublishBatch(ctx, msgs); err != nil {
 		return fmt.Errorf("upgrade publish batch (host=%s, count=%d): %w", host, len(msgs), err)
 	}
-	// gemini PR #398 — defensive nil check (publisher.New 가 log 검증 안 하므로 caller 보호).
+	// gemini PR #398 — defensive nil check (worker.New 가 log 검증 안 하므로 caller 보호).
 	if p.log != nil {
 		p.log.WithFields(map[string]interface{}{
 			"host":            host,

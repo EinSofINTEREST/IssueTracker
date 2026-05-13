@@ -15,8 +15,8 @@ import (
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage/service"
+	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -63,8 +63,8 @@ var kafkaRequeuePolicy = core.RetryPolicy{
 //  3. worker goroutine들이 jobs 드레인 후 종료
 //  4. consumer.Close()
 type KafkaConsumerPool struct {
-	consumer    publisher.Consumer
-	pub         *publisher.Publisher
+	consumer    bus.Consumer
+	pub         *bus.Publisher
 	handler     JobHandler
 	contentSvc  service.ContentService
 	workerCount int
@@ -86,7 +86,7 @@ type KafkaConsumerPool struct {
 	// 미설정(nil) 이면 lazy 로 KafkaImmediateRetryScheduler 가 사용되어 기존 동작 유지 —
 	// 즉시 priority 토픽에 publish + worker 가 ScheduledAt 까지 sleep.
 	// atomic.Pointer 로 race-safe 설정 — Start 이후 SetRetryScheduler 호출에도 안전.
-	retryScheduler atomic.Pointer[publisher.RetrySchedulerHolder]
+	retryScheduler atomic.Pointer[bus.RetrySchedulerHolder]
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -111,8 +111,8 @@ type jobItem struct {
 // issuetracker.normalized 토픽에 발행합니다.
 // workerCount는 동시에 실행되는 처리 goroutine 수를 결정합니다.
 func NewKafkaConsumerPool(
-	consumer publisher.Consumer,
-	pub *publisher.Publisher,
+	consumer bus.Consumer,
+	pub *bus.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
 	workerCount int,
@@ -129,8 +129,8 @@ func NewKafkaConsumerPool(
 // NewKafkaConsumerPoolWithCB는 외부에서 주입한 CircuitBreakerRegistry를 사용하는
 // KafkaConsumerPool을 생성합니다. 테스트에서 circuit breaker 동작을 제어할 때 사용합니다.
 func NewKafkaConsumerPoolWithCB(
-	consumer publisher.Consumer,
-	pub *publisher.Publisher,
+	consumer bus.Consumer,
+	pub *bus.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
 	workerCount int,
@@ -149,8 +149,8 @@ func NewKafkaConsumerPoolWithCB(
 // gate 는 nil 허용 — nil 이면 NoopStageGate 로 fallback (단일 인스턴스 환경에서 dedup + cap 비활성).
 // 이슈 #356 — fetcher / parser / validator 가 동일 StageGate 패턴 사용.
 func NewKafkaConsumerPoolWithOptions(
-	consumer publisher.Consumer,
-	pub *publisher.Publisher,
+	consumer bus.Consumer,
+	pub *bus.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
 	workerCount int,
@@ -179,12 +179,12 @@ func NewKafkaConsumerPoolWithOptions(
 // SetRetryScheduler 는 requeueWithRetry 시 사용할 RetryScheduler 를 설정합니다.
 // nil 전달 시 fallback 인 KafkaImmediateRetryScheduler (lazy 생성) 가 사용됩니다 —
 // 기존 동작 보존. atomic 교체로 Start 이후에도 race-safe.
-func (p *KafkaConsumerPool) SetRetryScheduler(rs publisher.RetryScheduler) {
+func (p *KafkaConsumerPool) SetRetryScheduler(rs bus.RetryScheduler) {
 	if rs == nil {
 		p.retryScheduler.Store(nil)
 		return
 	}
-	p.retryScheduler.Store(&publisher.RetrySchedulerHolder{Scheduler: rs})
+	p.retryScheduler.Store(&bus.RetrySchedulerHolder{Scheduler: rs})
 }
 
 // SetGate 는 processJob 진입 시 URL 검사에 사용할 urlguard.Gate 를 설정합니다.
@@ -764,7 +764,7 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 	job.ScheduledAt = time.Now().Add(backoffDelay)
 
 	scheduler := p.resolveRetryScheduler()
-	topic := publisher.CrawlTopic(job.Priority)
+	topic := bus.CrawlTopic(job.Priority)
 
 	log.WithFields(map[string]interface{}{
 		"job_id":   job.ID,
@@ -798,11 +798,11 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 // resolveRetryScheduler 는 SetRetryScheduler 로 주입된 구현체를 반환하고, 미설정 시
 // 기존 동작 (즉시 Kafka publish + worker sleep) 을 보존하는 KafkaImmediateRetryScheduler
 // 를 lazy 생성합니다. 매 호출마다 새 인스턴스이지만 stateless 이므로 비용 무시 가능.
-func (p *KafkaConsumerPool) resolveRetryScheduler() publisher.RetryScheduler {
+func (p *KafkaConsumerPool) resolveRetryScheduler() bus.RetryScheduler {
 	if h := p.retryScheduler.Load(); h != nil {
 		return h.Scheduler
 	}
-	return publisher.NewKafkaImmediateRetryScheduler(p.pub)
+	return bus.NewKafkaImmediateRetryScheduler(p.pub)
 }
 
 // logShutdownAware 는 graceful shutdown 으로 발생한 컨텍스트성 에러를 DEBUG 로,

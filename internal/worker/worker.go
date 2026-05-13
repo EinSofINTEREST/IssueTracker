@@ -1,4 +1,4 @@
-// Package publisher 는 Kafka crawl 토픽 발행 책임을 단일 hub 로 통합합니다 (이슈 #385).
+// Package worker 는 Kafka crawl 토픽 발행 책임을 단일 hub 로 통합합니다 (이슈 #385).
 //
 // 역할 (메타 #385 — Publisher 통합 모듈화):
 //   - PublishChained : 크롤된 페이지에서 발견된 URL 을 다음 CrawlJob 으로 연결 (chain.go)
@@ -7,14 +7,14 @@
 //   - PublishUpgrade : auto-upgrade (goquery → chromedp) republish (Sub 3 — pending)
 //
 // 외부 facade 단일화 — caller 는 *Publisher 의 메소드만 사용하면 됨. 내부 file 분리:
-//   - publisher.go : facade struct + 생성자 + 공통 Kafka helpers (buildMessage / CrawlTopic / newJobID)
+//   - worker.go : facade struct + 생성자 + 공통 Kafka helpers (buildMessage / CrawlTopic / newJobID)
 //   - chain.go     : PublishChained 메소드 + 정규화 / guard / ingestion lock helper
 //   - guard.go     : IngestionLock / PipelineGuard / atomic wrapper + Set* setters
 //
 // 의존 관계 (이슈 #385 책임 분리 원칙):
 //   - 본 패키지 = Kafka I/O + 라우팅 (priority resolver) + guard/lock 책임
 //   - caller 의 stage 핵심 로직 (parsing rule / validation / fetch decision) 은 본 패키지 의존성 없음
-package publisher
+package worker
 
 import (
 	"context"
@@ -69,7 +69,7 @@ type PriorityResolver interface {
 //
 // 사용 흐름:
 //
-//	pub := publisher.New(producer, resolver, log)
+//	pub := worker.New(producer, resolver, log)
 //	pub.SetNormalizer(...)        // 선택
 //	pub.SetPipelineGuard(...)     // 선택 (또는 SetIngestionLock fallback)
 //	pub.SetGate(...)              // 선택

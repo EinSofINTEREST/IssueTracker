@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"issuetracker/internal/processor/fetcher/worker"
-	"issuetracker/internal/publisher"
+	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	pkgredis "issuetracker/pkg/redis"
 )
@@ -52,7 +52,7 @@ func (f *poolRetryFakeQueue) snapshotLen() int {
 }
 
 // TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish 는 SetRetryScheduler 로
-// 주입한 publisher.RetryScheduler 구현체가 호출되어 inline producer.Publish 가 우회됨을 검증.
+// 주입한 bus.RetryScheduler 구현체가 호출되어 inline producer.Publish 가 우회됨을 검증.
 func TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
@@ -63,7 +63,7 @@ func TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish(t *testing.T)
 	pool := worker.NewKafkaConsumerPool(consumer, pub, handler, contentSvc, 1)
 
 	q := newPoolRetryFakeQueue()
-	customScheduler := publisher.NewRedisDelayedRetryScheduler(q, pub, publisher.RedisRetrySchedulerConfig{
+	customScheduler := bus.NewRedisDelayedRetryScheduler(q, pub, bus.RedisRetrySchedulerConfig{
 		PollInterval:            time.Hour,
 		BatchSize:               1,
 		RepublishFailureBackoff: time.Hour,

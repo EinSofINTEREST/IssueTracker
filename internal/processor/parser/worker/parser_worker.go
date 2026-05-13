@@ -6,7 +6,7 @@
 //  1. queue.TopicFetched 에서 RawContentRef consume
 //  2. RawContentService.GetByID 로 raw HTML 로드
 //  3. target_type 분기:
-//     - Category (TargetTypeCategory): rule.Parser.ParseLinks → publisher.Publish (chained jobs)
+//     - Category (TargetTypeCategory): rule.Parser.ParseLinks → bus.Publish (chained jobs)
 //     - Article (TargetTypeArticle): rule.Parser.ParsePage → ConvertPage → content store + publish normalized
 //  4. 정상 처리 후 RawContentService.Delete (raw_contents 정리)
 //
@@ -34,9 +34,9 @@ import (
 	"issuetracker/internal/processor/parser"
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
+	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -57,8 +57,8 @@ const (
 // queue 패키지 자체는 토픽 상수 (TopicFetched / TopicNormalized) 와 데이터 타입
 // (queue.Message) 사용을 위해 그대로 import — I/O 구현체 직접 호출만 publisher 위임.
 type ParserWorker struct {
-	consumer   publisher.Consumer
-	pub        *publisher.Publisher
+	consumer   bus.Consumer
+	pub        *bus.Publisher
 	rawSvc     service.RawContentService
 	contentSvc service.ContentService
 	parser     *rule.Parser
@@ -89,7 +89,7 @@ type ParserWorker struct {
 
 	// blacklist: page-parse 블랙리스트 Matcher.
 	// nil 허용 — nil 이면 차단 비활성 (모든 카테고리 링크가 그대로 발행).
-	// processCategoryPage 의 publisher.Publish 직전에 Filter 호출.
+	// processCategoryPage 의 bus.Publish 직전에 Filter 호출.
 	blacklist *rule.BlacklistMatcher
 
 	// staleCounter: stale rule 재학습 트리거 카운터.
@@ -136,8 +136,8 @@ type PipelineGuard interface {
 // 가 동일 패턴으로 stage 별 동시성 cap + URL 중복 처리 차단을 단일 API 로 적용 — parser 단계는
 // raw.URL 단위로 acquire, Kafka rebalance 시 같은 raw 가 두 worker 에 도달해도 1회만 파싱.
 func NewParserWorker(
-	consumer publisher.Consumer,
-	pub *publisher.Publisher,
+	consumer bus.Consumer,
+	pub *bus.Publisher,
 	rawSvc service.RawContentService,
 	contentSvc service.ContentService,
 	parser *rule.Parser,

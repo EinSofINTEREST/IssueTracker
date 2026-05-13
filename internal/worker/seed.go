@@ -1,4 +1,4 @@
-package publisher
+package worker
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 // ErrPublishSkipped 는 PipelineGuard 가 "이미 in-pipeline" 으로 판단해 publish 를 건너뛴 경우
 // PublishSeed 가 반환하는 sentinel error 입니다 (이슈 #387 — 구 scheduler.ErrEmitSkipped).
 //
-// 호출자는 errors.Is(err, publisher.ErrPublishSkipped) 로 분기하여 "failed to publish" /
+// 호출자는 errors.Is(err, worker.ErrPublishSkipped) 로 분기하여 "failed to publish" /
 // "scheduled" 로그를 모두 생략 — 실제로 발행되지 않은 job 이 발행된 것처럼 보이는 misleading
 // 로그 회피.
 var ErrPublishSkipped = errors.New("publish skipped — url already in pipeline")
@@ -19,7 +19,7 @@ var ErrPublishSkipped = errors.New("publish skipped — url already in pipeline"
 // SeedPublisher 는 시드 CrawlJob 발행 책임을 정의하는 인터페이스입니다
 // (이슈 #396 — 메타 #385 의 Kafka I/O 단일 책임 원칙에 따라 publisher 패키지에서 계약을 정의).
 //
-// publisher.Publisher 가 본 인터페이스를 만족하며, 외부 모듈은 본 인터페이스를 통해 시드
+// worker.Publisher 가 본 인터페이스를 만족하며, 외부 모듈은 본 인터페이스를 통해 시드
 // 발행 기능을 주입받아 사용합니다. 인터페이스 정의를 publisher 측에 두는 이유:
 //   - Kafka I/O 책임 = publisher 단일 진실 원천 — 시그니처 / 계약 변경 시 publisher 측만 갱신
 //   - 다른 sub (UpgradePublisher / RetryPublisher 등) 도 동일 원칙 적용 — 정합 일관

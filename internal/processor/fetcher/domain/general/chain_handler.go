@@ -9,9 +9,9 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/rule"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
+	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -49,7 +49,7 @@ type ChainHandler struct {
 	ChromedpChains []Handler     // worker_id 별 browser only chain
 	Resolver       rule.Resolver // optional. nil 이면 항상 DefaultChain 사용
 	RawSvc         service.RawContentService
-	Pub            *publisher.Publisher
+	Pub            *bus.Publisher
 	Log            *logger.Logger
 }
 
@@ -70,7 +70,7 @@ func NewChainHandler(
 	chromedpChains []Handler,
 	resolver rule.Resolver,
 	rawSvc service.RawContentService,
-	pub *publisher.Publisher,
+	pub *bus.Publisher,
 	log *logger.Logger,
 ) *ChainHandler {
 	return &ChainHandler{

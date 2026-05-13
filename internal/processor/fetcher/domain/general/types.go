@@ -36,7 +36,7 @@ type Fetcher interface {
 }
 
 // JobPublisher 는 카테고리/목록 페이지에서 발견된 URL 을 다음 CrawlJob 으로 연결하는 인터페이스입니다.
-// publisher.Publisher 가 본 인터페이스를 구현하며 (PublishChained 메소드 — 이슈 #386),
+// worker.Publisher 가 본 인터페이스를 구현하며 (PublishChained 메소드 — 이슈 #386),
 // ChainHandler 에 주입됩니다.
 //
 // JobPublisher dispatches CrawlJobs discovered from list/category pages.

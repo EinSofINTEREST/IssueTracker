@@ -12,9 +12,9 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
+	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -62,13 +62,13 @@ type Upgrader struct {
 	resolver   Resolver
 	tracker    storage.RawIDTracker
 	rawSvc     service.RawContentService
-	upgradePub publisher.UpgradePublisher // gemini PR #398 — `publisher` package import 와 shadow 회피.
-	redis      *goredis.Client            // SETNX in-flight lock 용. nil 이면 lock 비활성 (단일 인스턴스 환경).
+	upgradePub bus.UpgradePublisher // gemini PR #398 — `publisher` package import 와 shadow 회피.
+	redis      *goredis.Client      // SETNX in-flight lock 용. nil 이면 lock 비활성 (단일 인스턴스 환경).
 	log        *logger.Logger
 }
 
 // NewUpgrader 는 Upgrader 를 생성합니다 (이슈 #388 — producer queue.Producer →
-// publisher.UpgradePublisher 의존 교체).
+// bus.UpgradePublisher 의존 교체).
 //
 // 모든 인자는 nil 허용 안 함 (redis 만 nil 허용 — 단일 인스턴스 환경에서 lock 비활성).
 // nil 인자 발견 시 error.
@@ -77,7 +77,7 @@ func NewUpgrader(
 	resolver Resolver,
 	tracker storage.RawIDTracker,
 	rawSvc service.RawContentService,
-	pub publisher.UpgradePublisher,
+	pub bus.UpgradePublisher,
 	redisClient *goredis.Client,
 	log *logger.Logger,
 ) (*Upgrader, error) {

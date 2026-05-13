@@ -25,12 +25,12 @@ import (
 	parserStage "issuetracker/internal/processor/parser/stage"
 	parserWorker "issuetracker/internal/processor/parser/worker"
 	"issuetracker/internal/processor/validate"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/scheduler"
 	"issuetracker/internal/storage"
 	pgstore "issuetracker/internal/storage/postgres"
 	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/internal/storage/service"
+	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/llm/prompt"
@@ -108,10 +108,10 @@ func main() {
 	// 이슈 #391 — PriorityResolver chain 이 publisher 측으로 이동 + 모든 PublishX 가
 	// resolver 통과 (메타 #385 Sub 6). ExplicitPriorityResolver 를 chain 1순위 로 등록 —
 	// 발행자가 job.Priority 를 사전 명시한 경우 (seed entry / retry / upgrade) 그 값이 보존됨.
-	resolver := publisher.NewCompositeResolver(core.PriorityNormal)
-	resolver.Add(&publisher.ExplicitPriorityResolver{})
-	resolver.Add(publisher.NewSourcePriorityResolver(core.PriorityNormal))
-	resolver.Add(publisher.NewRuleBasedPriorityResolver(core.PriorityNormal))
+	resolver := bus.NewCompositeResolver(core.PriorityNormal)
+	resolver.Add(&bus.ExplicitPriorityResolver{})
+	resolver.Add(bus.NewSourcePriorityResolver(core.PriorityNormal))
+	resolver.Add(bus.NewRuleBasedPriorityResolver(core.PriorityNormal))
 
 	highConsumer := queue.NewConsumer(crawlerKafkaCfg, queue.TopicCrawlHigh)
 	defer highConsumer.Close()
@@ -133,7 +133,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	jobPublisher := publisher.New(crawlerProducer, resolver, log)
+	jobPublisher := bus.New(crawlerProducer, resolver, log)
 
 	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
@@ -278,7 +278,7 @@ func main() {
 	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade 합니다.
 	var procLock locks.ProcessingLock
 	var ingestionLock locks.IngestionLock
-	var retryScheduler publisher.RetryScheduler
+	var retryScheduler bus.RetryScheduler
 	var retrySchedulerStop func()
 	var redisClientShared *redis.Client // failure counter wiring 에서 재사용
 	redisCfg, err := config.LoadRedis()
@@ -301,14 +301,14 @@ func main() {
 			// Delayed retry queue: retry 를 Redis ZSET 에 보관하고 별도
 			// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
 			// Redis 부재 시 worker 가 lazy 로 KafkaImmediateRetryScheduler 를 사용 (기존 동작).
-			retryCfg := publisher.DefaultRedisRetrySchedulerConfig()
+			retryCfg := bus.DefaultRedisRetrySchedulerConfig()
 			// idle heartbeat 압축 (이슈 #370) — pkg/config 로 env 로드 일관성 유지.
 			retrySchedCfg, retrySchedErr := config.LoadRetryScheduler()
 			if retrySchedErr != nil {
 				log.WithError(retrySchedErr).Fatal("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS 로드 실패")
 			}
 			retryCfg.HeartbeatEveryNIdleTicks = retrySchedCfg.HeartbeatEveryNIdleTicks
-			redisRetry := publisher.NewRedisDelayedRetryScheduler(
+			redisRetry := bus.NewRedisDelayedRetryScheduler(
 				redisClient, jobPublisher,
 				retryCfg,
 				log,
@@ -530,7 +530,7 @@ func main() {
 			fetcherResolver,
 			rawIDTracker,
 			rawSvc,
-			jobPublisher, // 이슈 #388 — publisher.UpgradePublisher (단일 facade)
+			jobPublisher, // 이슈 #388 — bus.UpgradePublisher (단일 facade)
 			redisRaw,     // nil 허용 — in-flight lock 비활성 (단일 인스턴스)
 			log,
 		)
@@ -569,7 +569,7 @@ func main() {
 
 	pw := parserWorker.NewParserWorker(
 		parserConsumer,
-		jobPublisher, // 이슈 #392 — 구 producer + JobPublisher 두 인자 통합 (publisher.Publisher 가 Forward + PublishChained 모두 제공)
+		jobPublisher, // 이슈 #392 — 구 producer + JobPublisher 두 인자 통합 (bus.Publisher 가 Forward + PublishChained 모두 제공)
 		rawSvc,
 		contentSvc,
 		ruleParser,
@@ -593,7 +593,7 @@ func main() {
 	}
 
 	// ── Page-parse 블랙리스트 ───────────────────────────────────────
-	// 카테고리에서 추출된 article URL 중 blacklist 매칭은 publisher.Publish 직전 drop.
+	// 카테고리에서 추출된 article URL 중 blacklist 매칭은 bus.Publish 직전 drop.
 	// Matcher 가 nil (BLACKLIST_ENABLED=false) 이면 setter noop — 모든 링크 그대로 발행.
 	if blacklistMatcher != nil {
 		pw.SetBlacklist(blacklistMatcher)
@@ -724,7 +724,7 @@ func main() {
 		log.WithError(err).Fatal("failed to load scheduler config")
 	}
 
-	// 이슈 #387 — scheduler.JobEmitter 제거. scheduler 가 publisher.Publisher 직접 의존.
+	// 이슈 #387 — scheduler.JobEmitter 제거. scheduler 가 bus.Publisher 직접 의존.
 	// guard / normalizer 는 jobPublisher 에 이미 wiring 되어 있어 시드 / chained 둘 다 동일
 	// 정책 적용 (메타 #385 — 단일 facade).
 	// Scheduler entries 는 두 source-of-truth 중 하나에서 결정 (이슈 #328):
@@ -795,7 +795,7 @@ func main() {
 
 	// 이슈 #393 — validate worker 가 publisher facade 의존. validate 전용 producer 를
 	// thin publisher 로 wrap (resolver/guard 불필요 — validate 는 Forward 만 사용).
-	validatePublisher := publisher.New(validateProducer, nil, log)
+	validatePublisher := bus.New(validateProducer, nil, log)
 
 	// Validate StageGate (이슈 #356) — ProcessingLock + per-stage Semaphore 합성.
 	validateCap := config.CapPerStage(workerCountsCfg.Validate, stageGateCfg.ValidateMaxConcurrentPerStage)

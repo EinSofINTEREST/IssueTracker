@@ -1,4 +1,4 @@
-package publisher_test
+package worker_test
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/publisher"
+	"issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 	pkgredis "issuetracker/pkg/redis"
@@ -41,11 +41,11 @@ func (m *retryMockProducer) Close() error {
 	return args.Error(0)
 }
 
-// retryTestPub 는 RetryScheduler 가 *publisher.Publisher 의존성으로 변경된 후 (이슈 #390)
+// retryTestPub 는 RetryScheduler 가 *worker.Publisher 의존성으로 변경된 후 (이슈 #390)
 // 기존 mockProducer 검증 흐름을 유지하기 위한 thin helper 입니다.
-// retryMockProducer 를 내부 producer 로 가진 실제 *publisher.Publisher 를 생성합니다.
-func retryTestPub(producer *retryMockProducer) *publisher.Publisher {
-	return publisher.New(producer, nil, logger.New(logger.DefaultConfig()))
+// retryMockProducer 를 내부 producer 로 가진 실제 *worker.Publisher 를 생성합니다.
+func retryTestPub(producer *retryMockProducer) *worker.Publisher {
+	return worker.New(producer, nil, logger.New(logger.DefaultConfig()))
 }
 
 // retryTestJob 은 RetryScheduler 테스트 전용 fixture 입니다.
@@ -81,7 +81,7 @@ func TestKafkaImmediateRetryScheduler_PublishesToPriorityTopic(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			producer := new(retryMockProducer)
-			sched := publisher.NewKafkaImmediateRetryScheduler(retryTestPub(producer))
+			sched := worker.NewKafkaImmediateRetryScheduler(retryTestPub(producer))
 
 			job := retryTestJob(tc.priority)
 			lastErr := errors.New("upstream 503")
@@ -104,7 +104,7 @@ func TestKafkaImmediateRetryScheduler_PublishesToPriorityTopic(t *testing.T) {
 // jobID 를 포함한 wrap 된 에러가 반환되는지 검증.
 func TestKafkaImmediateRetryScheduler_PublishError_Wrapped(t *testing.T) {
 	producer := new(retryMockProducer)
-	sched := publisher.NewKafkaImmediateRetryScheduler(retryTestPub(producer))
+	sched := worker.NewKafkaImmediateRetryScheduler(retryTestPub(producer))
 
 	job := retryTestJob(core.PriorityNormal)
 	publishErr := errors.New("kafka unavailable")
@@ -120,7 +120,7 @@ func TestKafkaImmediateRetryScheduler_PublishError_Wrapped(t *testing.T) {
 // last-error 헤더가 누락됨을 검증 (운영 보호 — nil deref 회피).
 func TestKafkaImmediateRetryScheduler_NilLastErr_OmitsHeader(t *testing.T) {
 	producer := new(retryMockProducer)
-	sched := publisher.NewKafkaImmediateRetryScheduler(retryTestPub(producer))
+	sched := worker.NewKafkaImmediateRetryScheduler(retryTestPub(producer))
 
 	job := retryTestJob(core.PriorityNormal)
 
@@ -267,7 +267,7 @@ func retrySchedTestLogger() *logger.Logger { return logger.New(logger.DefaultCon
 func TestRedisDelayedRetryScheduler_Enqueue_StoresJobAndLastErr(t *testing.T) {
 	q := newFakeRetryQueue()
 	prod := new(retryMockProducer)
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), publisher.DefaultRedisRetrySchedulerConfig(), retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), worker.DefaultRedisRetrySchedulerConfig(), retrySchedTestLogger())
 
 	job := retryTestJob(core.PriorityNormal)
 	require.NoError(t, sched.Enqueue(context.Background(), job, errors.New("upstream 503")))
@@ -291,9 +291,9 @@ func TestRedisDelayedRetryScheduler_Enqueue_StoresJobAndLastErr(t *testing.T) {
 func TestRedisDelayedRetryScheduler_Run_PublishesDueItems(t *testing.T) {
 	q := newFakeRetryQueue()
 	prod := new(retryMockProducer)
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
 
 	job := retryTestJob(core.PriorityHigh)
 	job.ScheduledAt = time.Now().Add(-time.Second)
@@ -324,9 +324,9 @@ func TestRedisDelayedRetryScheduler_Run_PublishesDueItems(t *testing.T) {
 func TestRedisDelayedRetryScheduler_Run_FutureItemsNotPublished(t *testing.T) {
 	q := newFakeRetryQueue()
 	prod := new(retryMockProducer)
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
 
 	job := retryTestJob(core.PriorityNormal)
 	job.ScheduledAt = time.Now().Add(10 * time.Second)
@@ -350,10 +350,10 @@ func TestRedisDelayedRetryScheduler_Run_FutureItemsNotPublished(t *testing.T) {
 func TestRedisDelayedRetryScheduler_AckOnlyAfterSuccessfulPublish(t *testing.T) {
 	q := newFakeRetryQueue()
 	prod := new(retryMockProducer)
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
 	cfg.RepublishFailureBackoff = time.Hour
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
 
 	job := retryTestJob(core.PriorityNormal)
 	job.ScheduledAt = time.Now().Add(-time.Second)
@@ -387,9 +387,9 @@ func TestRedisDelayedRetryScheduler_AckOnlyAfterSuccessfulPublish(t *testing.T) 
 func TestRedisDelayedRetryScheduler_AckCalledAfterPublishSuccess(t *testing.T) {
 	q := newFakeRetryQueue()
 	prod := new(retryMockProducer)
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
 
 	job := retryTestJob(core.PriorityNormal)
 	job.ScheduledAt = time.Now().Add(-time.Second)
@@ -414,10 +414,10 @@ func TestRedisDelayedRetryScheduler_AckCalledAfterPublishSuccess(t *testing.T) {
 func TestRedisDelayedRetryScheduler_Run_PublishFailure_ReEnqueues(t *testing.T) {
 	q := newFakeRetryQueue()
 	prod := new(retryMockProducer)
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
 	cfg.RepublishFailureBackoff = 5 * time.Second
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
 
 	job := retryTestJob(core.PriorityNormal)
 	job.ScheduledAt = time.Now().Add(-time.Second)
@@ -447,9 +447,9 @@ func TestRedisDelayedRetryScheduler_Run_PeekError_LogsAndContinues(t *testing.T)
 	q := newFakeRetryQueue()
 	q.peekErr = errors.New("redis transient")
 	prod := new(retryMockProducer)
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -470,10 +470,10 @@ func TestRedisDelayedRetryScheduler_Run_PeekError_LogsAndContinues(t *testing.T)
 func TestRedisDelayedRetryScheduler_RepublishOnShutdown_UsesDrainCtx(t *testing.T) {
 	q := newFakeRetryQueueCapturingCtx()
 	prod := new(retryMockProducer)
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
 	cfg.RepublishFailureBackoff = 5 * time.Second
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
 
 	job := retryTestJob(core.PriorityNormal)
 	job.ScheduledAt = time.Now().Add(-time.Second)
@@ -503,9 +503,9 @@ func TestRedisDelayedRetryScheduler_RepublishOnShutdown_UsesDrainCtx(t *testing.
 func TestRedisDelayedRetryScheduler_StartStop_NoWaitGroupPanic(t *testing.T) {
 	q := newFakeRetryQueue()
 	prod := new(retryMockProducer)
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, retrySchedTestLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sched.Start(ctx)
@@ -530,7 +530,7 @@ func TestRedisDelayedRetryScheduler_StartStop_NoWaitGroupPanic(t *testing.T) {
 func TestRedisDelayedRetryScheduler_DefaultConfigBoundary(t *testing.T) {
 	q := newFakeRetryQueue()
 	prod := new(retryMockProducer)
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), publisher.RedisRetrySchedulerConfig{}, retrySchedTestLogger())
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), worker.RedisRetrySchedulerConfig{}, retrySchedTestLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -589,10 +589,10 @@ func TestRedisDelayedRetryScheduler_IdleHeartbeat_CompressedEveryN(t *testing.T)
 	prod := new(retryMockProducer)
 	buf := &safeBuffer{}
 
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
 	cfg.HeartbeatEveryNIdleTicks = 5
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, captureDebugLogger(buf))
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, captureDebugLogger(buf))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -624,10 +624,10 @@ func TestRedisDelayedRetryScheduler_IdleHeartbeat_LegacyEveryTick(t *testing.T) 
 	prod := new(retryMockProducer)
 	buf := &safeBuffer{}
 
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
 	cfg.HeartbeatEveryNIdleTicks = 0
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, captureDebugLogger(buf))
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, captureDebugLogger(buf))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -655,10 +655,10 @@ func TestRedisDelayedRetryScheduler_IdleTicksResetOnDue(t *testing.T) {
 	prod := new(retryMockProducer)
 	buf := &safeBuffer{}
 
-	cfg := publisher.DefaultRedisRetrySchedulerConfig()
+	cfg := worker.DefaultRedisRetrySchedulerConfig()
 	cfg.PollInterval = 10 * time.Millisecond
 	cfg.HeartbeatEveryNIdleTicks = 100
-	sched := publisher.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, captureDebugLogger(buf))
+	sched := worker.NewRedisDelayedRetryScheduler(q, retryTestPub(prod), cfg, captureDebugLogger(buf))
 
 	prod.On("Publish", mock.Anything, mock.Anything).Return(nil)
 

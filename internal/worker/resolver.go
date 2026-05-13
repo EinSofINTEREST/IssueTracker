@@ -1,10 +1,10 @@
-// Package publisher 의 priority resolver 모듈 (이슈 #391, 메타 #385 Sub 6).
+// Package worker 의 priority resolver 모듈 (이슈 #391, 메타 #385 Sub 6).
 //
 // 구 internal/processor/fetcher/worker/resolver.go 위치에서 이동 — Kafka I/O 단일 책임
 // 원칙에 따라 PublishX 메소드의 priority routing 도 publisher 가 단일 출처.
 //
-// publisher.go 의 PriorityResolver 인터페이스를 본 파일의 chain/impl 들이 만족.
-package publisher
+// worker.go 의 PriorityResolver 인터페이스를 본 파일의 chain/impl 들이 만족.
+package worker
 
 import (
 	"issuetracker/internal/processor/fetcher/core"
@@ -196,8 +196,8 @@ func (r *DefaultPriorityResolver) CanResolve(_ *core.CrawlJob) bool {
 //
 // 사용 예:
 //
-//	composite := publisher.NewCompositeResolver(core.PriorityNormal)
-//	composite.Add(&publisher.ExplicitPriorityResolver{})  // 1순위: 명시 priority 보존
+//	composite := worker.NewCompositeResolver(core.PriorityNormal)
+//	composite.Add(&worker.ExplicitPriorityResolver{})  // 1순위: 명시 priority 보존
 //	composite.Add(sourceResolver)                          // 2순위: 등록된 소스 매핑
 //	composite.Add(ruleResolver)                            // 3순위: 조건 규칙
 //	// 4순위 (자동): DefaultPriorityResolver → Normal

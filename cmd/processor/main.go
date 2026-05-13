@@ -8,9 +8,9 @@ import (
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/validate"
-	"issuetracker/internal/publisher"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
+	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/metrics"
@@ -97,7 +97,7 @@ func main() {
 
 	// 이슈 #393 — validate worker 가 publisher facade 의존으로 변경. processor 단독 실행은
 	// resolver / guard 가 필요 없으므로 nil resolver 로 thin publisher 만 생성.
-	pub := publisher.New(producer, nil, log)
+	pub := bus.New(producer, nil, log)
 
 	// ── 5. Validate Worker 시작 ───────────────────────────────────────────────
 	// validator 결과 (passed/rejected) 는 contentSvc.UpdateValidationStatus 로 contents 에 기록.

@@ -1,4 +1,4 @@
-package publisher_test
+package worker_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/publisher"
+	"issuetracker/internal/worker"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -48,9 +48,9 @@ type upgradeFakeResolver struct{}
 
 func (upgradeFakeResolver) Resolve(_ *core.CrawlJob) core.Priority { return core.PriorityNormal }
 
-func newUpgradePublisher() (*publisher.Publisher, *upgradeFakeProducer) {
+func newUpgradePublisher() (*worker.Publisher, *upgradeFakeProducer) {
 	prod := &upgradeFakeProducer{}
-	pub := publisher.New(prod, upgradeFakeResolver{}, logger.New(logger.DefaultConfig()))
+	pub := worker.New(prod, upgradeFakeResolver{}, logger.New(logger.DefaultConfig()))
 	return pub, prod
 }
 

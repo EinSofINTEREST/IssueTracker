@@ -1,4 +1,4 @@
-package publisher
+package worker
 
 import (
 	"context"

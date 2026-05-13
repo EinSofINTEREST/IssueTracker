@@ -7,8 +7,8 @@ import (
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage/service"
+	bus "issuetracker/internal/worker"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -51,7 +51,7 @@ type ManagerConfig struct {
 	Normal         PoolConfig
 	Low            PoolConfig
 	ProcessingLock locks.ProcessingLock
-	RetryScheduler publisher.RetryScheduler
+	RetryScheduler bus.RetryScheduler
 
 	// MaxConcurrentPerStage: fetcher stage 의 Semaphore capacity 설정값 (이슈 #356).
 	// 0 이하 → 각 pool 의 WorkerCount/2 (floor) 자동.
@@ -82,8 +82,8 @@ type ManagerConfig struct {
 //  4. 종료 시 Stop(ctx) 호출
 type PoolManager struct {
 	pools    map[core.Priority]*KafkaConsumerPool
-	pub      *publisher.Publisher
-	resolver publisher.PriorityResolver
+	pub      *bus.Publisher
+	resolver bus.PriorityResolver
 	log      *logger.Logger
 
 	// chromedpPool 은 chromedp 전용 worker pool. nil 이면 비활성.
@@ -98,10 +98,10 @@ type PoolManager struct {
 // 는 더 이상 queue.Producer 를 직접 보유하지 않음 (Kafka I/O 단일 출처 = publisher).
 func NewPoolManager(
 	cfg ManagerConfig,
-	pub *publisher.Publisher,
+	pub *bus.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
-	resolver publisher.PriorityResolver,
+	resolver bus.PriorityResolver,
 	log *logger.Logger,
 ) *PoolManager {
 	procLock := cfg.ProcessingLock
@@ -162,7 +162,7 @@ func NewPoolManager(
 // Publish는 CrawlJob을 publisher facade 로 발행합니다. priority 결정은 publisher 내부의
 // resolver chain 이 buildMessage 에서 일괄 처리합니다 (이슈 #391 — 메타 #385 Sub 6).
 //
-// Publish delegates to publisher.PublishJob. Priority resolution is handled inside the
+// Publish delegates to bus.PublishJob. Priority resolution is handled inside the
 // publisher's resolver chain via buildMessage — single source of truth across all
 // PublishX paths (seed / chained / job / retry).
 //
@@ -170,7 +170,7 @@ func NewPoolManager(
 // 이후 buildMessage 의 평가와 같은 결과를 보장 (resolver 는 stateless · idempotent).
 //
 // m.resolver 가 nil 인 경우 (테스트 wiring) 는 job.Priority 를 그대로 사용 — coderabbit
-// PR #409 피드백. publisher.buildMessage 가 nil resolver 를 fail-safe 로 허용하는 정책과 일관.
+// PR #409 피드백. bus.buildMessage 가 nil resolver 를 fail-safe 로 허용하는 정책과 일관.
 func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 	priority := job.Priority
 	if m.resolver != nil {
@@ -181,7 +181,7 @@ func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 		"job_id":   job.ID,
 		"crawler":  job.CrawlerName,
 		"priority": priority,
-		"topic":    publisher.CrawlTopic(priority),
+		"topic":    bus.CrawlTopic(priority),
 	}).Info("publishing crawl job")
 
 	return m.pub.PublishJob(ctx, job)
