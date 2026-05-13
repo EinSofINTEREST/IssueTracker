@@ -9,6 +9,7 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/rule"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
@@ -48,24 +49,28 @@ type ChainHandler struct {
 	ChromedpChains []Handler     // worker_id 별 browser only chain
 	Resolver       rule.Resolver // optional. nil 이면 항상 DefaultChain 사용
 	RawSvc         service.RawContentService
-	Producer       queue.Producer
+	Pub            *publisher.Publisher
 	Log            *logger.Logger
 }
 
 // NewChainHandler 는 새 ChainHandler 를 생성합니다.
-// DefaultChain / RawSvc / Producer / Log 모두 비-nil 필수.
+// DefaultChain / RawSvc / Pub / Log 모두 비-nil 필수.
 // ChromedpChains 가 nil/empty 이면 룰 = 'chromedp' 매칭이어도 DefaultChain fallback (warn 로그).
 // Resolver 가 nil 이면 룰 조회 없이 항상 DefaultChain — 기존 동작 100% 보존.
 //
 // chromedpChains 길이는 chromedp pool 의 WorkerCount 와 일치해야 함 (호출자 책임).
 // 단일 Chrome 운영 호환 모드 (sub-issue #229 머지 직후 시점) 에서는 길이 1 의 slice 로 호출.
+//
+// 이슈 #392 — 구 queue.Producer 직접 주입 → publisher facade 주입으로 변경. Kafka I/O 단일
+// 책임 원칙 (메타 #385) 에 따라 chain_handler 가 republish/fetched_ref 발행 시 직접
+// producer.Publish 하지 않고 pub.Forward 위임.
 func NewChainHandler(
 	crawler SourceCrawler,
 	defaultChain Handler,
 	chromedpChains []Handler,
 	resolver rule.Resolver,
 	rawSvc service.RawContentService,
-	producer queue.Producer,
+	pub *publisher.Publisher,
 	log *logger.Logger,
 ) *ChainHandler {
 	return &ChainHandler{
@@ -74,7 +79,7 @@ func NewChainHandler(
 		ChromedpChains: chromedpChains,
 		Resolver:       resolver,
 		RawSvc:         rawSvc,
-		Producer:       producer,
+		Pub:            pub,
 		Log:            log,
 	}
 }
@@ -212,7 +217,7 @@ func extractHost(rawURL string) string {
 // selectChain 이 (chain, isChromedp) tuple 반환. ChromedpChains slice 모델로
 // 변경되어 chain 포인터 비교가 부적합 → isChromedp 플래그로 분기.
 func (h *ChainHandler) Handle(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
-	if h.DefaultChain == nil || h.Log == nil || h.RawSvc == nil || h.Producer == nil {
+	if h.DefaultChain == nil || h.Log == nil || h.RawSvc == nil || h.Pub == nil {
 		return nil, fmt.Errorf("chain handler is not properly initialized")
 	}
 
@@ -289,7 +294,7 @@ func (h *ChainHandler) processFetchedRaw(ctx context.Context, job *core.CrawlJob
 // ChromedpChains 미wiring 사이트 (예: yonhap) 에 대해서는 정의상 chromedp pool 이 큐 메시지를
 // 받지 않아야 하지만, 안전장치로 empty 일 때 graceful error.
 func (h *ChainHandler) HandleChromedpOnly(ctx context.Context, job *core.CrawlJob) ([]*core.Content, error) {
-	if h.Log == nil || h.RawSvc == nil || h.Producer == nil {
+	if h.Log == nil || h.RawSvc == nil || h.Pub == nil {
 		return nil, fmt.Errorf("chain handler is not properly initialized")
 	}
 	if !h.hasChromedpChain() {
@@ -335,7 +340,7 @@ func (h *ChainHandler) republishToChromedpQueue(ctx context.Context, job *core.C
 			"original": "goquery_pool",
 		},
 	}
-	if err := h.Producer.Publish(ctx, msg); err != nil {
+	if err := h.Pub.Forward(ctx, msg); err != nil {
 		return fmt.Errorf("publish chromedp queue: %w", err)
 	}
 	h.Log.WithFields(map[string]interface{}{
@@ -380,5 +385,5 @@ func (h *ChainHandler) publishFetchedRef(ctx context.Context, job *core.CrawlJob
 		Value:   payload,
 		Headers: headers,
 	}
-	return h.Producer.Publish(ctx, msg)
+	return h.Pub.Forward(ctx, msg)
 }

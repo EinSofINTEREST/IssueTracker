@@ -34,6 +34,7 @@ import (
 	"issuetracker/internal/processor/parser"
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
@@ -50,12 +51,14 @@ const (
 )
 
 // ParserWorker 는 TopicFetched consumer group 의 worker pool 입니다.
+//
+// 이슈 #392 — Kafka I/O (consume + 3 종 publish + chained job publish) 모두 publisher
+// facade 로 위임. queue 패키지에 직접 의존하지 않음 (consumer 는 publisher.Consumer 별칭).
 type ParserWorker struct {
-	consumer   *queue.KafkaConsumer
-	producer   queue.Producer
+	consumer   publisher.Consumer
+	pub        *publisher.Publisher
 	rawSvc     service.RawContentService
 	contentSvc service.ContentService
-	publisher  general.JobPublisher
 	parser     *rule.Parser
 	resolver   *rule.Resolver              // sample 누적 시 매칭된 rule lookup
 	sampleSvc  storage.SampleURLRepository // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
@@ -113,7 +116,9 @@ type PipelineGuard interface {
 
 // NewParserWorker 는 ParserWorker 를 생성합니다.
 //
-//   - publisher 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 건너뜀 (이런 모드는 보통 운영 금지)
+//   - pub 는 nil 허용 — nil 이면 카테고리 chained jobs 발행 / Forward 모두 건너뜀
+//     (이런 모드는 보통 운영 금지, 테스트 fallback). 이슈 #392 — 구 publisher / producer 두
+//     필드 통합.
 //   - gate 는 nil 허용 — nil 이면 NoopStageGate 로 fallback (단일 인스턴스 환경에서 dedup + cap 비활성)
 //   - llmGen 은 nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 //   - resolver / sampleSvc 는 nil 허용 — nil 이면 sample 누적 skip
@@ -127,11 +132,10 @@ type PipelineGuard interface {
 // 가 동일 패턴으로 stage 별 동시성 cap + URL 중복 처리 차단을 단일 API 로 적용 — parser 단계는
 // raw.URL 단위로 acquire, Kafka rebalance 시 같은 raw 가 두 worker 에 도달해도 1회만 파싱.
 func NewParserWorker(
-	consumer *queue.KafkaConsumer,
-	producer queue.Producer,
+	consumer publisher.Consumer,
+	pub *publisher.Publisher,
 	rawSvc service.RawContentService,
 	contentSvc service.ContentService,
-	publisher general.JobPublisher,
 	parser *rule.Parser,
 	resolver *rule.Resolver,
 	sampleSvc storage.SampleURLRepository,
@@ -159,10 +163,9 @@ func NewParserWorker(
 	}
 	return &ParserWorker{
 		consumer:            consumer,
-		producer:            producer,
+		pub:                 pub,
 		rawSvc:              rawSvc,
 		contentSvc:          contentSvc,
-		publisher:           publisher,
 		parser:              parser,
 		resolver:            resolver,
 		sampleSvc:           sampleSvc,
@@ -382,7 +385,7 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 	// (TTL fallback 으로 자동 회수).
 	defer w.releaseCategoryMarker(ctx, raw.URL, mlog)
 
-	if w.parser == nil || w.publisher == nil {
+	if w.parser == nil || w.pub == nil {
 		mlog.Debug("parser or publisher not configured, skipping category job")
 		w.deleteRaw(ctx, rawID, mlog)
 		return nil
@@ -425,12 +428,12 @@ func (w *ParserWorker) processCategoryPage(ctx context.Context, raw *core.RawCon
 	}
 
 	if len(articleURLs) > 0 {
-		if err := w.publisher.PublishChained(ctx, crawlerName, articleURLs, core.TargetTypeArticle, jobTimeout); err != nil {
+		if err := w.pub.PublishChained(ctx, crawlerName, articleURLs, core.TargetTypeArticle, jobTimeout); err != nil {
 			return fmt.Errorf("publish chained article jobs: %w", err)
 		}
 	}
 	if len(listURLs) > 0 {
-		if err := w.publisher.PublishChained(ctx, crawlerName, listURLs, core.TargetTypeCategory, jobTimeout); err != nil {
+		if err := w.pub.PublishChained(ctx, crawlerName, listURLs, core.TargetTypeCategory, jobTimeout); err != nil {
 			return fmt.Errorf("publish chained list jobs (extract_links_only): %w", err)
 		}
 	}
@@ -785,7 +788,7 @@ func (w *ParserWorker) publishContents(ctx context.Context, contents []*core.Con
 			Value:   pmBytes,
 			Headers: headers,
 		}
-		if err := w.producer.Publish(ctx, msg); err != nil {
+		if err := w.pub.Forward(ctx, msg); err != nil {
 			return fmt.Errorf("publish normalized: %w", err)
 		}
 	}
@@ -846,7 +849,7 @@ func (w *ParserWorker) RequeueForLLMRetry(ctx context.Context, ref core.RawConte
 			"crawler":     crawlerName,
 		},
 	}
-	if err := w.producer.Publish(pubCtx, msg); err != nil {
+	if err := w.pub.Forward(pubCtx, msg); err != nil {
 		w.log.WithFields(map[string]interface{}{
 			"raw_id":          ref.ID,
 			"url":             ref.URL,
@@ -897,7 +900,7 @@ func (w *ParserWorker) RequeueParsing(ctx context.Context, items []llmgen.Pendin
 				"timeout_ms": strconv.FormatInt(item.TimeoutMs, 10),
 			},
 		}
-		if err := w.producer.Publish(pubCtx, msg); err != nil {
+		if err := w.pub.Forward(pubCtx, msg); err != nil {
 			w.log.WithFields(map[string]interface{}{
 				"raw_id": item.RawRef.ID,
 				"url":    item.RawRef.URL,

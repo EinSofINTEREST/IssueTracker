@@ -19,10 +19,10 @@ import (
 	"issuetracker/internal/processor/fetcher/implementation/goquery"
 	"issuetracker/internal/processor/fetcher/rate_limiter"
 	"issuetracker/internal/processor/fetcher/rule"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
-	"issuetracker/pkg/queue"
 )
 
 // dnsCacheTTL 는 fetcher rate limiter 가 사용하는 DNS resolver 의 entry TTL.
@@ -55,7 +55,7 @@ func RegisterAll(
 	fetcherRuleRepo storage.FetcherRuleRepository,
 	baseConfig core.Config,
 	rawSvc service.RawContentService,
-	producer queue.Producer,
+	pub *publisher.Publisher,
 	resolver rule.Resolver,
 	chromedpRemoteURLs []string,
 	log *logger.Logger,
@@ -89,7 +89,7 @@ func RegisterAll(
 	// CrawlerName 이 host 기반으로 통일 (#248) — source_name 키는 하위 호환 유지.
 	for sourceName, entry := range bySource {
 		h, err := buildHandler(sourceName, entry.Rec,
-			baseConfig, rawSvc, producer, resolver, chromedpRemoteURLs, dnsResolver, sourceConfigResolver, log)
+			baseConfig, rawSvc, pub, resolver, chromedpRemoteURLs, dnsResolver, sourceConfigResolver, log)
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func buildHandler(
 	rec *storage.FetcherRuleRecord,
 	baseConfig core.Config,
 	rawSvc service.RawContentService,
-	producer queue.Producer,
+	pub *publisher.Publisher,
 	resolver rule.Resolver,
 	chromedpRemoteURLs []string,
 	dnsResolver core.IPResolver,
@@ -192,7 +192,7 @@ func buildHandler(
 		return nil, err
 	}
 
-	return general.NewChainHandler(crawler, defaultChain, chromedpChains, resolver, rawSvc, producer, log), nil
+	return general.NewChainHandler(crawler, defaultChain, chromedpChains, resolver, rawSvc, pub, log), nil
 }
 
 // SourceEntry 는 source_name 별 canonical row 와 그 row 가 canonical (base_url hostname ==
