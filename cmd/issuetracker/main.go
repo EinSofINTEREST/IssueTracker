@@ -105,9 +105,13 @@ func main() {
 	crawlerProducer := queue.NewProducer(crawlerKafkaCfg)
 	defer crawlerProducer.Close()
 
-	resolver := crawlerWorker.NewCompositeResolver(core.PriorityNormal)
-	resolver.Add(crawlerWorker.NewSourcePriorityResolver(core.PriorityNormal))
-	resolver.Add(crawlerWorker.NewRuleBasedPriorityResolver(core.PriorityNormal))
+	// 이슈 #391 — PriorityResolver chain 이 publisher 측으로 이동 + 모든 PublishX 가
+	// resolver 통과 (메타 #385 Sub 6). ExplicitPriorityResolver 를 chain 1순위 로 등록 —
+	// 발행자가 job.Priority 를 사전 명시한 경우 (seed entry / retry / upgrade) 그 값이 보존됨.
+	resolver := publisher.NewCompositeResolver(core.PriorityNormal)
+	resolver.Add(&publisher.ExplicitPriorityResolver{})
+	resolver.Add(publisher.NewSourcePriorityResolver(core.PriorityNormal))
+	resolver.Add(publisher.NewRuleBasedPriorityResolver(core.PriorityNormal))
 
 	highConsumer := queue.NewConsumer(crawlerKafkaCfg, queue.TopicCrawlHigh)
 	defer highConsumer.Close()

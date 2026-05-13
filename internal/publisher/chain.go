@@ -116,8 +116,7 @@ func (p *Publisher) buildJobMessages(
 			MaxRetries:  DefaultMaxRetries,
 		}
 
-		job.Priority = p.resolver.Resolve(job)
-
+		// 이슈 #391 — resolver chain 통과는 buildMessage 가 흡수 (모든 PublishX 일관성).
 		msg, err := p.buildMessage(job)
 		if err != nil {
 			return nil, fmt.Errorf("build message for %s: %w", url, err)

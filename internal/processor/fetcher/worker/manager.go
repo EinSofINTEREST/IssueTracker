@@ -82,7 +82,7 @@ type ManagerConfig struct {
 type PoolManager struct {
 	pools    map[core.Priority]*KafkaConsumerPool
 	pub      *publisher.Publisher
-	resolver PriorityResolver
+	resolver publisher.PriorityResolver
 	log      *logger.Logger
 
 	// chromedpPool 은 chromedp 전용 worker pool. nil 이면 비활성.
@@ -100,7 +100,7 @@ func NewPoolManager(
 	pub *publisher.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
-	resolver PriorityResolver,
+	resolver publisher.PriorityResolver,
 	log *logger.Logger,
 ) *PoolManager {
 	procLock := cfg.ProcessingLock
@@ -158,17 +158,23 @@ func NewPoolManager(
 	return mgr
 }
 
-// Publish는 CrawlJob을 PriorityResolver로 우선순위를 결정한 후 해당 Kafka crawl 토픽에 발행합니다.
+// Publish는 CrawlJob을 publisher facade 로 발행합니다. priority 결정은 publisher 내부의
+// resolver chain 이 buildMessage 에서 일괄 처리합니다 (이슈 #391 — 메타 #385 Sub 6).
 //
-// Publish resolves the job's priority via the configured PriorityResolver,
-// updates job.Priority in-place, and publishes to the correct crawl topic
-// (crawl.high / crawl.normal / crawl.low).
+// Publish delegates to publisher.PublishJob. Priority resolution is handled inside the
+// publisher's resolver chain via buildMessage — single source of truth across all
+// PublishX paths (seed / chained / job / retry).
 //
-// gemini PR #400 피드백 — marshal/topic/headers 구성은 publisher.PublishJob 에 위임.
-// manager 는 priority 결정 + 로깅만 책임 (priority resolver chain 통합은 Sub 6 에서).
+// 로깅을 위해 동일 resolver 를 한 번 더 평가 — ExplicitPriorityResolver 가 1순위라
+// 이후 buildMessage 의 평가와 같은 결과를 보장 (resolver 는 stateless · idempotent).
+//
+// m.resolver 가 nil 인 경우 (테스트 wiring) 는 job.Priority 를 그대로 사용 — coderabbit
+// PR #409 피드백. publisher.buildMessage 가 nil resolver 를 fail-safe 로 허용하는 정책과 일관.
 func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
-	priority := m.resolver.Resolve(job)
-	job.Priority = priority
+	priority := job.Priority
+	if m.resolver != nil {
+		priority = m.resolver.Resolve(job)
+	}
 
 	m.log.WithFields(map[string]interface{}{
 		"job_id":   job.ID,
