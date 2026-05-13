@@ -7,7 +7,7 @@
 //   - PublishUpgrade : auto-upgrade (goquery → chromedp) republish (Sub 3 — pending)
 //
 // 외부 facade 단일화 — caller 는 *Publisher 의 메소드만 사용하면 됨. 내부 file 분리:
-//   - publisher.go : facade struct + 생성자 + 공통 Kafka helpers (buildMessage / crawlTopic / newJobID)
+//   - publisher.go : facade struct + 생성자 + 공통 Kafka helpers (buildMessage / CrawlTopic / newJobID)
 //   - chain.go     : PublishChained 메소드 + 정규화 / guard / ingestion lock helper
 //   - guard.go     : IngestionLock / PipelineGuard / atomic wrapper + Set* setters
 //
@@ -84,7 +84,7 @@ func (p *Publisher) buildMessage(job *core.CrawlJob) (queue.Message, error) {
 	}
 
 	return queue.Message{
-		Topic: crawlTopic(job.Priority),
+		Topic: CrawlTopic(job.Priority),
 		Key:   []byte(job.ID),
 		Value: data,
 		Headers: map[string]string{
@@ -94,8 +94,10 @@ func (p *Publisher) buildMessage(job *core.CrawlJob) (queue.Message, error) {
 	}, nil
 }
 
-// crawlTopic 은 Priority 에 대응하는 Kafka crawl 토픽 이름을 반환합니다.
-func crawlTopic(p core.Priority) string {
+// CrawlTopic 은 Priority 에 대응하는 Kafka crawl 토픽 이름을 반환합니다 (이슈 #389
+// 피드백 — Kafka I/O 단일 책임 원칙에 따라 publisher 가 priority → topic 매핑의
+// 유일한 출처. worker.topicForPriority / scheduler.crawlTopic 중복은 본 함수로 통합).
+func CrawlTopic(p core.Priority) string {
 	switch p {
 	case core.PriorityHigh:
 		return queue.TopicCrawlHigh

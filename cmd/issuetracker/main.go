@@ -274,7 +274,7 @@ func main() {
 	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade 합니다.
 	var procLock locks.ProcessingLock
 	var ingestionLock locks.IngestionLock
-	var retryScheduler crawlerWorker.RetryScheduler
+	var retryScheduler publisher.RetryScheduler
 	var retrySchedulerStop func()
 	var redisClientShared *redis.Client // failure counter wiring 에서 재사용
 	redisCfg, err := config.LoadRedis()
@@ -297,14 +297,14 @@ func main() {
 			// Delayed retry queue: retry 를 Redis ZSET 에 보관하고 별도
 			// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
 			// Redis 부재 시 worker 가 lazy 로 KafkaImmediateRetryScheduler 를 사용 (기존 동작).
-			retryCfg := crawlerWorker.DefaultRedisRetrySchedulerConfig()
+			retryCfg := publisher.DefaultRedisRetrySchedulerConfig()
 			// idle heartbeat 압축 (이슈 #370) — pkg/config 로 env 로드 일관성 유지.
 			retrySchedCfg, retrySchedErr := config.LoadRetryScheduler()
 			if retrySchedErr != nil {
 				log.WithError(retrySchedErr).Fatal("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS 로드 실패")
 			}
 			retryCfg.HeartbeatEveryNIdleTicks = retrySchedCfg.HeartbeatEveryNIdleTicks
-			redisRetry := crawlerWorker.NewRedisDelayedRetryScheduler(
+			redisRetry := publisher.NewRedisDelayedRetryScheduler(
 				redisClient, crawlerProducer,
 				retryCfg,
 				log,

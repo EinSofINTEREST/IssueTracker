@@ -15,6 +15,7 @@ import (
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/logger"
@@ -84,7 +85,7 @@ type KafkaConsumerPool struct {
 	// 미설정(nil) 이면 lazy 로 KafkaImmediateRetryScheduler 가 사용되어 기존 동작 유지 —
 	// 즉시 priority 토픽에 publish + worker 가 ScheduledAt 까지 sleep.
 	// atomic.Pointer 로 race-safe 설정 — Start 이후 SetRetryScheduler 호출에도 안전.
-	retryScheduler atomic.Pointer[retrySchedulerHolder]
+	retryScheduler atomic.Pointer[publisher.RetrySchedulerHolder]
 	// pollDone은 pollMessages goroutine이 완전히 종료됐음을 알리는 신호입니다.
 	// close(p.jobs) 전에 반드시 이 채널이 닫혔음을 확인해야 합니다.
 	pollDone chan struct{}
@@ -177,12 +178,12 @@ func NewKafkaConsumerPoolWithOptions(
 // SetRetryScheduler 는 requeueWithRetry 시 사용할 RetryScheduler 를 설정합니다.
 // nil 전달 시 fallback 인 KafkaImmediateRetryScheduler (lazy 생성) 가 사용됩니다 —
 // 기존 동작 보존. atomic 교체로 Start 이후에도 race-safe.
-func (p *KafkaConsumerPool) SetRetryScheduler(rs RetryScheduler) {
+func (p *KafkaConsumerPool) SetRetryScheduler(rs publisher.RetryScheduler) {
 	if rs == nil {
 		p.retryScheduler.Store(nil)
 		return
 	}
-	p.retryScheduler.Store(&retrySchedulerHolder{s: rs})
+	p.retryScheduler.Store(&publisher.RetrySchedulerHolder{Scheduler: rs})
 }
 
 // SetGate 는 processJob 진입 시 URL 검사에 사용할 urlguard.Gate 를 설정합니다.
@@ -762,7 +763,7 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 	job.ScheduledAt = time.Now().Add(backoffDelay)
 
 	scheduler := p.resolveRetryScheduler()
-	topic := topicForPriority(job.Priority)
+	topic := publisher.CrawlTopic(job.Priority)
 
 	log.WithFields(map[string]interface{}{
 		"job_id":   job.ID,
@@ -796,11 +797,11 @@ func (p *KafkaConsumerPool) requeueWithRetry(ctx context.Context, job *core.Craw
 // resolveRetryScheduler 는 SetRetryScheduler 로 주입된 구현체를 반환하고, 미설정 시
 // 기존 동작 (즉시 Kafka publish + worker sleep) 을 보존하는 KafkaImmediateRetryScheduler
 // 를 lazy 생성합니다. 매 호출마다 새 인스턴스이지만 stateless 이므로 비용 무시 가능.
-func (p *KafkaConsumerPool) resolveRetryScheduler() RetryScheduler {
+func (p *KafkaConsumerPool) resolveRetryScheduler() publisher.RetryScheduler {
 	if h := p.retryScheduler.Load(); h != nil {
-		return h.s
+		return h.Scheduler
 	}
-	return NewKafkaImmediateRetryScheduler(p.producer)
+	return publisher.NewKafkaImmediateRetryScheduler(p.producer)
 }
 
 // logShutdownAware 는 graceful shutdown 으로 발생한 컨텍스트성 에러를 DEBUG 로,
@@ -823,16 +824,4 @@ func logShutdownAware(ctx context.Context, log *logger.Logger, err error, msg st
 		return
 	}
 	log.WithError(err).Error(msg)
-}
-
-// topicForPriority는 우선순위에 맞는 Kafka 토픽 이름을 반환합니다.
-func topicForPriority(p core.Priority) string {
-	switch p {
-	case core.PriorityHigh:
-		return queue.TopicCrawlHigh
-	case core.PriorityLow:
-		return queue.TopicCrawlLow
-	default:
-		return queue.TopicCrawlNormal
-	}
 }

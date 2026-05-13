@@ -7,6 +7,7 @@ import (
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
@@ -49,7 +50,7 @@ type ManagerConfig struct {
 	Normal         PoolConfig
 	Low            PoolConfig
 	ProcessingLock locks.ProcessingLock
-	RetryScheduler RetryScheduler
+	RetryScheduler publisher.RetryScheduler
 
 	// MaxConcurrentPerStage: fetcher stage 의 Semaphore capacity 설정값 (이슈 #356).
 	// 0 이하 → 각 pool 의 WorkerCount/2 (floor) 자동.
@@ -168,7 +169,7 @@ func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 		return fmt.Errorf("marshal job %s: %w", job.ID, err)
 	}
 
-	topic := topicForPriority(priority)
+	topic := publisher.CrawlTopic(priority)
 
 	msg := queue.Message{
 		Topic: topic,
