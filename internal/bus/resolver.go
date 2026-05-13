@@ -196,8 +196,8 @@ func (r *DefaultPriorityResolver) CanResolve(_ *core.CrawlJob) bool {
 //
 // 사용 예:
 //
-//	composite := worker.NewCompositeResolver(core.PriorityNormal)
-//	composite.Add(&worker.ExplicitPriorityResolver{})  // 1순위: 명시 priority 보존
+//	composite := bus.NewCompositeResolver(core.PriorityNormal)
+//	composite.Add(&bus.ExplicitPriorityResolver{})  // 1순위: 명시 priority 보존
 //	composite.Add(sourceResolver)                          // 2순위: 등록된 소스 매핑
 //	composite.Add(ruleResolver)                            // 3순위: 조건 규칙
 //	// 4순위 (자동): DefaultPriorityResolver → Normal

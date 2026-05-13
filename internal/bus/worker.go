@@ -69,7 +69,7 @@ type PriorityResolver interface {
 //
 // 사용 흐름:
 //
-//	pub := worker.New(producer, resolver, log)
+//	pub := bus.New(producer, resolver, log)
 //	pub.SetNormalizer(...)        // 선택
 //	pub.SetPipelineGuard(...)     // 선택 (또는 SetIngestionLock fallback)
 //	pub.SetGate(...)              // 선택

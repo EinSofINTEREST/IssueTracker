@@ -6,7 +6,7 @@
 //  1. queue.TopicFetched 에서 RawContentRef consume
 //  2. RawContentService.GetByID 로 raw HTML 로드
 //  3. target_type 분기:
-//     - Category (TargetTypeCategory): rule.Parser.ParseLinks → bus.Publish (chained jobs)
+//     - Category (TargetTypeCategory): rule.Parser.ParseLinks → bus.PublishChained (chained jobs)
 //     - Article (TargetTypeArticle): rule.Parser.ParsePage → ConvertPage → content store + publish normalized
 //  4. 정상 처리 후 RawContentService.Delete (raw_contents 정리)
 //
@@ -89,7 +89,7 @@ type ParserWorker struct {
 
 	// blacklist: page-parse 블랙리스트 Matcher.
 	// nil 허용 — nil 이면 차단 비활성 (모든 카테고리 링크가 그대로 발행).
-	// processCategoryPage 의 bus.Publish 직전에 Filter 호출.
+	// processCategoryPage 의 bus.PublishChained 직전에 Filter 호출.
 	blacklist *rule.BlacklistMatcher
 
 	// staleCounter: stale rule 재학습 트리거 카운터.

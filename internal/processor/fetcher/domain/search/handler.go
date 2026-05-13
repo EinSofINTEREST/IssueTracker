@@ -15,7 +15,7 @@ import (
 
 // JobPublisher 는 SearchHandler 가 fanout chained article job 을 발행할 때 사용하는 인터페이스입니다.
 //
-// 실제 구현은 internal/worker.Publisher — host 별 batch 발행을 위해 host group 마다 호출.
+// 실제 구현은 internal/bus.Publisher — host 별 batch 발행을 위해 host group 마다 호출.
 // 이슈 #386 — Publisher.PublishChained 메소드명 일치 (구 Publish 에서 rename).
 type JobPublisher interface {
 	PublishChained(
@@ -33,7 +33,7 @@ type JobPublisher interface {
 //  1. job.Target.Metadata 에서 engine / per_query_max_results / date_range_days 추출
 //  2. SearchKeywordRepository.ListEnabled 로 enabled keyword 전체 조회
 //  3. 각 keyword 별 CSEClient.Search 호출 → URL 누적 (keyword-level 실패는 skip + warn)
-//  4. URL 들을 host 단위로 group → 각 host 별 bus.Publish(crawlerName=host, TargetTypeArticle)
+//  4. URL 들을 host 단위로 group → 각 host 별 bus.PublishChained(crawlerName=host, TargetTypeArticle)
 //     fanout — 다운스트림 fetcher 가 host-specific handler 로 라우팅
 //  5. 성공 keyword 의 last_searched_at 갱신
 //
