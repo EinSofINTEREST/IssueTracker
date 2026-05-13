@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -37,6 +36,7 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
+	"issuetracker/internal/workerpool"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -105,7 +105,9 @@ type ParserWorker struct {
 	workerCount int
 	log         *logger.Logger
 
-	wg sync.WaitGroup
+	// pool 은 workerpool harness — Start 에서 lazy 생성. lifecycle (poll / dispatch / shutdown /
+	// commit-with-drain) 을 위임 (이슈 #406 — 메타 #403 Sub 3).
+	pool *workerpool.ConsumerPool
 }
 
 // PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 최소 인터페이스입니다.
@@ -210,8 +212,11 @@ func (w *ParserWorker) SetStaleCounter(c storage.StaleCounter, threshold int) {
 	w.staleThreshold = threshold
 }
 
-// Start 는 worker goroutines 를 기동합니다 (non-blocking).
-// 호출자는 ctx cancel + Stop 으로 graceful shutdown 수행.
+// Start 는 workerpool harness 를 기동합니다 (이슈 #406 — 메타 #403 Sub 3).
+//
+// harness 가 N 개 worker goroutine + poll goroutine 을 관리하며, 각 메시지마다 본 worker 의
+// Handle 메소드를 호출합니다. ctx 에는 worker_pool 필드 logger 가 주입되어 Handle 내부에서
+// FromContext 로 접근 가능.
 func (w *ParserWorker) Start(ctx context.Context) {
 	w.log.WithFields(map[string]interface{}{
 		"worker_count": w.workerCount,
@@ -219,65 +224,62 @@ func (w *ParserWorker) Start(ctx context.Context) {
 		"output_topic": queue.TopicNormalized,
 	}).Info("parser worker started")
 
-	for i := 0; i < w.workerCount; i++ {
-		w.wg.Add(1)
-		go w.runWorker(ctx, i)
-	}
+	const name = "parser"
+	plainLog := logger.FromContext(ctx)
+	ctx = plainLog.WithField("worker_pool", name).ToContext(ctx)
+
+	w.pool = workerpool.New(workerpool.Config{
+		Consumer:     w.consumer,
+		Handler:      w,
+		WorkerCount:  w.workerCount,
+		DrainTimeout: workerpool.DefaultDrainTimeout,
+		Log:          plainLog,
+		Name:         name,
+	})
+	w.pool.Start(ctx)
 }
 
-// Stop 은 모든 worker goroutine 의 종료를 대기합니다.
-// 호출 전 ctx 가 cancel 되어야 함 (외부 책임).
+// Stop 은 workerpool harness 의 정상 종료를 수행합니다.
+// 호출 전 ctx 가 cancel 되어야 함 (외부 책임 — graceful shutdown).
 func (w *ParserWorker) Stop(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() {
-		w.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		w.log.Info("parser worker stopped")
-	case <-ctx.Done():
-		w.log.Warn("parser worker stop timeout")
+	if w.pool == nil {
+		return nil
 	}
-	return w.consumer.Close()
+	err := w.pool.Stop(ctx)
+	if err == nil {
+		w.log.Info("parser worker stopped")
+	} else {
+		w.log.WithError(err).Warn("parser worker stop returned error")
+	}
+	return err
 }
 
-func (w *ParserWorker) runWorker(ctx context.Context, idx int) {
-	defer w.wg.Done()
-	wlog := w.log.WithField("parser_worker_id", idx)
+// Handle 은 workerpool.Handler 구현 — 각 메시지마다 호출됩니다.
+//
+// 흐름:
+//   - ProcessMessage 성공 → commit
+//   - ErrStageGateNotAcquired → commit skip (Debug — 다른 worker 가 처리 중인 정상 dedup)
+//   - 기타 transient 에러 → commit skip (Warn — Kafka 가 redeliver)
+//
+// commit 실패는 ctx cancel 인 경우 강등하지 않으면 셧다운 시점에 noise. Warn 으로 가시성 유지.
+func (w *ParserWorker) Handle(ctx context.Context, msg *queue.Message) {
+	log := logger.FromContext(ctx)
 
-	for {
-		if ctx.Err() != nil {
+	if err := w.ProcessMessage(ctx, msg); err != nil {
+		// StageGate not-acquired sentinel — commit 없이 다음 메시지로. 정상 dedup 경로라
+		// Warn 대신 Debug (이슈 #355 PR #358 리뷰 반영).
+		if errors.Is(err, ErrStageGateNotAcquired) {
+			log.WithField("offset", msg.Offset).Debug("stage gate not acquired by this worker, uncommitted")
 			return
 		}
+		// ProcessMessage 가 commit 하지 않은 경우 — 재시도 위해 commit skip (Kafka 가 redeliver).
+		log.WithError(err).WithField("offset", msg.Offset).Warn("process message failed, will be redelivered")
+		return
+	}
 
-		msg, err := w.consumer.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			wlog.WithError(err).Warn("fetch message failed")
-			continue
-		}
-
-		if err := w.ProcessMessage(ctx, msg); err != nil {
-			// StageGate not-acquired sentinel — commit 없이 다음 메시지로. 다른 worker 가 처리 중이므로
-			// 시끄러운 Warn 대신 Debug. Kafka 가 같은 partition 의 다음 offset 으로 fetch 진행 — 같은
-			// msg 재배달은 lock 해제 + 재시도 stream 에서 발생 (이슈 #355 PR #358 리뷰 반영).
-			if errors.Is(err, ErrStageGateNotAcquired) {
-				wlog.WithField("offset", msg.Offset).Debug("stage gate not acquired by this worker, uncommitted")
-				continue
-			}
-			// processMessage 가 commit 안 한 경우 — 재시도 위해 commit skip (Kafka 가 redeliver).
-			wlog.WithError(err).WithField("offset", msg.Offset).Warn("process message failed, will be redelivered")
-			continue
-		}
-
-		if commitErr := w.consumer.CommitMessages(ctx, msg); commitErr != nil {
-			if ctx.Err() == nil {
-				wlog.WithError(commitErr).Warn("commit failed after success")
-			}
+	if commitErr := w.pool.Commit(ctx, msg); commitErr != nil {
+		if ctx.Err() == nil {
+			log.WithError(commitErr).Warn("commit failed after success")
 		}
 	}
 }
