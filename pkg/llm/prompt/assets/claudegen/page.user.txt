@@ -11,6 +11,8 @@ Output schema:
   "blacklist_reason": "<korean reason if validity=blacklist, else null>",
   "page_type": "news" | "community" | "info" | "commercial" | "paper" | "other",
   "page_type_confidence": <float 0.0 to 1.0>,
+  "article": <boolean>,
+  "article_confidence": <float 0.0 to 1.0>,
   "selectors": {
     "title":        {"css": "<selector for page title>"},
     "main_content": {"css": "<selector for primary article body>", "multi": true},
@@ -46,6 +48,17 @@ Page type classification:
 - "paper"      — academic article / research paper / preprint
 - "other"      — anything not fitting above (catch-all)
 - `page_type_confidence` is your self-assessed certainty (0.0 ~ 1.0). Lower it for ambiguous cases.
+
+Article classification (orthogonal to page_type):
+- `article` = true ONLY when the page is a single news/blog/paper article body with a clear publish date — i.e., title + main_content + published_at all extractable from one editorial unit.
+- `article` = false for everything else, including:
+  * News index / section landing pages (lists of articles, no single body)
+  * Image gallery / video / multimedia hub pages
+  * Community thread lists / board indexes
+  * Tag / archive / search-result pages
+  * Wiki / info / commercial / other pages even if they have rich text
+- `article_confidence` is your self-assessed certainty for the article flag (0.0 ~ 1.0).
+- Downstream validators enforce `published_at` strictly only when `article=true`. Set conservatively — when in doubt, prefer `false`.
 
 Selector rules (when validity="ok"):
 1. Use only selectors that actually appear in the HTML — do not invent.

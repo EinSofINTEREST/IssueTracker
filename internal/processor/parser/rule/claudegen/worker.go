@@ -435,6 +435,8 @@ type enrichedOutput struct {
 	BlacklistReason    string              `json:"blacklist_reason"`
 	PageType           string              `json:"page_type"`
 	PageTypeConfidence float64             `json:"page_type_confidence"`
+	Article            bool                `json:"article"`
+	ArticleConfidence  float64             `json:"article_confidence"`
 	Selectors          storage.SelectorMap `json:"selectors"`
 	// SelfCheck 는 운영 진단용 — 본 worker 는 currently 무시 (호출자가 metrics / 로그에 활용 가능).
 	// 향후 self_check.warnings 가 있으면 LLM 재시도 trigger 로 사용 가능.
@@ -471,6 +473,8 @@ func parseEnrichedOutput(output string) (*llmgen.ExtractResult, error) {
 			Selectors:          eo.Selectors,
 			PageType:           normalizePageType(eo.PageType),
 			PageTypeConfidence: eo.PageTypeConfidence,
+			Article:            eo.Article,
+			ArticleConfidence:  eo.ArticleConfidence,
 		}, nil
 	case "":
 		// Schema 가 채워지지 않았거나 LLM 이 여전히 legacy SelectorMap-only 를 반환한 경우.

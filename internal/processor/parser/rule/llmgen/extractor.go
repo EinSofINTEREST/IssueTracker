@@ -50,6 +50,16 @@ type ExtractResult struct {
 	// 사후 검토 trigger 로 사용 가능.
 	PageTypeConfidence float64
 
+	// Article: 페이지가 단일 뉴스 기사 본문 (article body) 인지 — LLM 자체 분류 (이슈 #423).
+	// PageType 과 직교 (예: PageType=news + Article=true 가 "기사 본문", PageType=news + Article=false
+	// 가 "뉴스 인덱스"). 다운스트림 validator (news 도메인) 가 Article=true 에만 PublishedAt 필수 강제.
+	// Blacklist != nil 이면 의미 없음 (zero-value false).
+	Article bool
+
+	// ArticleConfidence: 0.0 ~ 1.0 — Article 분류에 대한 LLM 자기 보고 신뢰도.
+	// 운영자 사후 검토 trigger / weight 입력으로 사용 가능.
+	ArticleConfidence float64
+
 	// Blacklist: 페이지가 파싱 부적합 (광고 / interstitial / 빈 페이지 등) 일 때 비-nil.
 	// nil 이면 정상 추출 결과로 분기.
 	Blacklist *BlacklistDecision
