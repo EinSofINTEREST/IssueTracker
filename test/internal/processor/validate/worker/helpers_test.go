@@ -15,6 +15,11 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 )
 
+// testPublishedAt 은 결정성 (determinism) 을 위해 fixture 가 공유하는 고정 timestamp 입니다 —
+// coderabbit PR #418 피드백. time.Now() 사용 시 시간-민감한 validation 분기에서 flaky test
+// 위험.
+var testPublishedAt = time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
 func newNewsContent() *core.Content {
 	return &core.Content{
 		ID:          "content-001",
@@ -26,7 +31,7 @@ func newNewsContent() *core.Content {
 		Body:        strings.Repeat("This is a test article body sentence. ", 10),
 		Summary:     "Short summary of the article.",
 		Author:      "Jane Doe",
-		PublishedAt: time.Now(),
+		PublishedAt: testPublishedAt,
 		Category:    "Politics",
 		Tags:        []string{"news", "politics"},
 		URL:         "https://cnn.com/article/123",
@@ -44,7 +49,7 @@ func newCommunityContent() *core.Content {
 		Title:       "Community post about something",
 		Body:        strings.Repeat("This is a community post body sentence. ", 5),
 		Author:      "u/testuser",
-		PublishedAt: time.Now(),
+		PublishedAt: testPublishedAt,
 		Tags:        []string{"discussion"},
 		URL:         "https://reddit.com/r/test/comments/abc",
 		WordCount:   40,
