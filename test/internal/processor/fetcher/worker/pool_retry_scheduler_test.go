@@ -59,10 +59,11 @@ func TestKafkaConsumerPool_SetRetryScheduler_BypassesInlinePublish(t *testing.T)
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pub := newTestPublisher(producer)
+	pool := worker.NewKafkaConsumerPool(consumer, pub, handler, contentSvc, 1)
 
 	q := newPoolRetryFakeQueue()
-	customScheduler := publisher.NewRedisDelayedRetryScheduler(q, producer, publisher.RedisRetrySchedulerConfig{
+	customScheduler := publisher.NewRedisDelayedRetryScheduler(q, pub, publisher.RedisRetrySchedulerConfig{
 		PollInterval:            time.Hour,
 		BatchSize:               1,
 		RepublishFailureBackoff: time.Hour,

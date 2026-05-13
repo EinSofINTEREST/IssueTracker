@@ -12,10 +12,20 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/worker"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
+	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
+
+// newTestPublisher 는 pool/manager 가 publisher facade 만 의존하도록 변경된 후 (이슈 #390)
+// 기존 mockProducer 검증 흐름을 유지하기 위한 thin helper 입니다.
+// 실제 *publisher.Publisher 를 생성하되 내부 producer 로 mockProducer 를 주입 — pool 이
+// pub.Forward → producer.Publish 로 위임하므로 mock 의 expectations 가 그대로 작동.
+func newTestPublisher(producer queue.Producer) *publisher.Publisher {
+	return publisher.New(producer, nil, logger.New(logger.DefaultConfig()))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock 구현체
@@ -186,7 +196,7 @@ func TestKafkaConsumerPool_ProcessJob_PublishesToNormalized(t *testing.T) {
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	content := newTestContent()
@@ -223,7 +233,7 @@ func TestKafkaConsumerPool_ProcessJob_MultipleContents_PublishesAll(t *testing.T
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	c1 := newTestContent()
@@ -260,7 +270,7 @@ func TestKafkaConsumerPool_ProcessJob_EmptyContents_CommitsOnly(t *testing.T) {
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	msg := marshaledJobMsg(t, job)
@@ -283,7 +293,7 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_SendsToDLQ(t *testing.T) {
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	job.RetryCount = job.MaxRetries // 이미 최대 재시도 도달
@@ -313,7 +323,7 @@ func TestKafkaConsumerPool_ProcessJob_HandlerError_RequeuesAndCommits(t *testing
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	job.RetryCount = 1 // MaxRetries(3) 미달
@@ -345,7 +355,7 @@ func TestKafkaConsumerPool_PollMessages_UnmarshalFails_DLQSuccess_Commits(t *tes
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	// 유효하지 않은 JSON을 담은 메시지로 unmarshal 실패 유발
 	malformed := &queue.Message{
@@ -375,7 +385,7 @@ func TestKafkaConsumerPool_PollMessages_UnmarshalFails_DLQFails_SkipsCommit(t *t
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	malformed := &queue.Message{
 		Topic: queue.TopicCrawlNormal,
@@ -410,7 +420,7 @@ func TestKafkaConsumerPool_ProcessJob_CircuitOpen_SendsToDLQ(t *testing.T) {
 	// 첫 번째 실패로 circuit을 미리 open 상태로 만듭니다.
 	cbRegistry.Get("test-crawler").RecordFailure()
 
-	pool := worker.NewKafkaConsumerPoolWithCB(consumer, producer, handler, contentSvc, 1, cbRegistry)
+	pool := worker.NewKafkaConsumerPoolWithCB(consumer, newTestPublisher(producer), handler, contentSvc, 1, cbRegistry)
 
 	job := newTestJob()
 	msg := marshaledJobMsg(t, job)
@@ -436,7 +446,7 @@ func TestKafkaConsumerPool_ProcessJob_DLQPublishFails_SkipsCommit(t *testing.T) 
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	job.RetryCount = job.MaxRetries // DLQ 경로
@@ -464,7 +474,7 @@ func TestKafkaConsumerPool_ProcessJob_RequeuePublishFails_SkipsCommit(t *testing
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	job.RetryCount = 1 // MaxRetries(3) 미달 → requeue 경로
@@ -492,7 +502,7 @@ func TestKafkaConsumerPool_ProcessJob_NormalizedMessageHasContentRef(t *testing.
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	content := newTestContent()
@@ -540,7 +550,7 @@ func TestKafkaConsumerPool_CommitMessage_DrainRetry_OnCanceled_Succeeds(t *testi
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	content := newTestContent()
@@ -570,7 +580,7 @@ func TestKafkaConsumerPool_SendToDLQ_DrainRetry_OnCanceled_Succeeds(t *testing.T
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	job.RetryCount = job.MaxRetries // DLQ 경로 강제
@@ -601,7 +611,7 @@ func TestKafkaConsumerPool_RequeueWithRetry_DrainRetry_OnCanceled_Succeeds(t *te
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	job.RetryCount = 1 // requeue 경로 (MaxRetries 미달)
@@ -635,7 +645,7 @@ func TestKafkaConsumerPool_CommitMessage_DrainRetry_BothFail_StillTwoCalls(t *te
 	handler := new(mockJobHandler)
 	contentSvc := new(mockContentService)
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, 1)
+	pool := worker.NewKafkaConsumerPool(consumer, newTestPublisher(producer), handler, contentSvc, 1)
 
 	job := newTestJob()
 	content := newTestContent()

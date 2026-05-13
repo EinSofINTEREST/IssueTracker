@@ -305,7 +305,7 @@ func main() {
 			}
 			retryCfg.HeartbeatEveryNIdleTicks = retrySchedCfg.HeartbeatEveryNIdleTicks
 			redisRetry := publisher.NewRedisDelayedRetryScheduler(
-				redisClient, crawlerProducer,
+				redisClient, jobPublisher,
 				retryCfg,
 				log,
 			)
@@ -407,7 +407,7 @@ func main() {
 		log.Fatal("chromedp pool disabled (FETCHER_CHROMEDP_POOL_ENABLED=false) but goquery republish path is unconditional — enable pool or fork republish behavior in chain_handler")
 	}
 
-	manager := crawlerWorker.NewPoolManager(managerCfg, crawlerProducer, registry, contentSvc, resolver, log)
+	manager := crawlerWorker.NewPoolManager(managerCfg, jobPublisher, registry, contentSvc, resolver, log)
 
 	log.WithFields(map[string]interface{}{
 		"high_workers":   managerCfg.High.WorkerCount,

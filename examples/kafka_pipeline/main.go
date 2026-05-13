@@ -14,6 +14,7 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/worker"
+	"issuetracker/internal/publisher"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
@@ -367,7 +368,8 @@ func main() {
 	handler := &testCrawlerHandler{log: log}
 	contentSvc := newMockContentService()
 
-	pool := worker.NewKafkaConsumerPool(consumer, producer, handler, contentSvc, workerCount)
+	pub := publisher.New(producer, nil, log)
+	pool := worker.NewKafkaConsumerPool(consumer, pub, handler, contentSvc, workerCount)
 
 	start := time.Now()
 	pool.Start(ctx)

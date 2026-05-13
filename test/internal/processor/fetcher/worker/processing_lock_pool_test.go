@@ -72,7 +72,7 @@ func TestKafkaConsumerPool_StageGate_AlreadyAcquired_SkipsWithoutCommit(t *testi
 	gate := new(mockStageGate)
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
-		consumer, producer, handler, contentSvc, 1,
+		consumer, newTestPublisher(producer), handler, contentSvc, 1,
 		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		gate,
 	)
@@ -103,7 +103,7 @@ func TestKafkaConsumerPool_StageGate_Acquired_ReleasedAfterProcessing(t *testing
 	gate := new(mockStageGate)
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
-		consumer, producer, handler, contentSvc, 1,
+		consumer, newTestPublisher(producer), handler, contentSvc, 1,
 		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		gate,
 	)
@@ -141,7 +141,7 @@ func TestKafkaConsumerPool_StageGate_AcquireError_ProceedsWithoutGate(t *testing
 	gate := new(mockStageGate)
 
 	pool := worker.NewKafkaConsumerPoolWithOptions(
-		consumer, producer, handler, contentSvc, 1,
+		consumer, newTestPublisher(producer), handler, contentSvc, 1,
 		worker.NewCircuitBreakerRegistry(worker.DefaultCircuitBreakerConfig, nil),
 		gate,
 	)

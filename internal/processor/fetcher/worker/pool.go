@@ -62,8 +62,8 @@ var kafkaRequeuePolicy = core.RetryPolicy{
 //  3. worker goroutine들이 jobs 드레인 후 종료
 //  4. consumer.Close()
 type KafkaConsumerPool struct {
-	consumer    queue.Consumer
-	producer    queue.Producer
+	consumer    publisher.Consumer
+	pub         *publisher.Publisher
 	handler     JobHandler
 	contentSvc  service.ContentService
 	workerCount int
@@ -110,8 +110,8 @@ type jobItem struct {
 // issuetracker.normalized 토픽에 발행합니다.
 // workerCount는 동시에 실행되는 처리 goroutine 수를 결정합니다.
 func NewKafkaConsumerPool(
-	consumer queue.Consumer,
-	producer queue.Producer,
+	consumer publisher.Consumer,
+	pub *publisher.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
 	workerCount int,
@@ -119,7 +119,7 @@ func NewKafkaConsumerPool(
 	// CircuitBreakerRegistry log 주입은 NewPoolManager 가 PoolManager 단위에서 처리.
 	// 본 헬퍼는 단순 호출용 (테스트/예제) 이라 logger 주입 안 함 — nil 이면 state 전이 로그 skip.
 	return NewKafkaConsumerPoolWithOptions(
-		consumer, producer, handler, contentSvc, workerCount,
+		consumer, pub, handler, contentSvc, workerCount,
 		NewCircuitBreakerRegistry(DefaultCircuitBreakerConfig, nil),
 		locks.NewNoopStageGate(),
 	)
@@ -128,15 +128,15 @@ func NewKafkaConsumerPool(
 // NewKafkaConsumerPoolWithCB는 외부에서 주입한 CircuitBreakerRegistry를 사용하는
 // KafkaConsumerPool을 생성합니다. 테스트에서 circuit breaker 동작을 제어할 때 사용합니다.
 func NewKafkaConsumerPoolWithCB(
-	consumer queue.Consumer,
-	producer queue.Producer,
+	consumer publisher.Consumer,
+	pub *publisher.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
 	workerCount int,
 	cbRegistry *CircuitBreakerRegistry,
 ) *KafkaConsumerPool {
 	return NewKafkaConsumerPoolWithOptions(
-		consumer, producer, handler, contentSvc, workerCount,
+		consumer, pub, handler, contentSvc, workerCount,
 		cbRegistry,
 		locks.NewNoopStageGate(),
 	)
@@ -148,8 +148,8 @@ func NewKafkaConsumerPoolWithCB(
 // gate 는 nil 허용 — nil 이면 NoopStageGate 로 fallback (단일 인스턴스 환경에서 dedup + cap 비활성).
 // 이슈 #356 — fetcher / parser / validator 가 동일 StageGate 패턴 사용.
 func NewKafkaConsumerPoolWithOptions(
-	consumer queue.Consumer,
-	producer queue.Producer,
+	consumer publisher.Consumer,
+	pub *publisher.Publisher,
 	handler JobHandler,
 	contentSvc service.ContentService,
 	workerCount int,
@@ -163,7 +163,7 @@ func NewKafkaConsumerPoolWithOptions(
 	}
 	return &KafkaConsumerPool{
 		consumer:    consumer,
-		producer:    producer,
+		pub:         pub,
 		handler:     handler,
 		contentSvc:  contentSvc,
 		workerCount: workerCount,
@@ -674,7 +674,7 @@ func (p *KafkaConsumerPool) publishNormalized(ctx context.Context, content *core
 		},
 	}
 
-	return p.producer.Publish(ctx, msg)
+	return p.pub.Forward(ctx, msg)
 }
 
 // commitMessage 는 Kafka offset 을 commit 합니다.
@@ -731,13 +731,13 @@ func (p *KafkaConsumerPool) sendToDLQ(ctx context.Context, msg *queue.Message, r
 		Headers: headers,
 	}
 
-	err := p.producer.Publish(ctx, dlqMsg)
+	err := p.pub.Forward(ctx, dlqMsg)
 	if err != nil && errors.Is(err, context.Canceled) {
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 		defer cancel()
 		// errors.Join 으로 최초 cancel 과 retryErr 를 모두 보존 — 호출자의
 		// errors.Is(err, context.Canceled) 분기가 안정적으로 매칭되도록 보장.
-		if retryErr := p.producer.Publish(drainCtx, dlqMsg); retryErr != nil {
+		if retryErr := p.pub.Forward(drainCtx, dlqMsg); retryErr != nil {
 			err = errors.Join(err, retryErr)
 		} else {
 			err = nil
@@ -801,7 +801,7 @@ func (p *KafkaConsumerPool) resolveRetryScheduler() publisher.RetryScheduler {
 	if h := p.retryScheduler.Load(); h != nil {
 		return h.Scheduler
 	}
-	return publisher.NewKafkaImmediateRetryScheduler(p.producer)
+	return publisher.NewKafkaImmediateRetryScheduler(p.pub)
 }
 
 // logShutdownAware 는 graceful shutdown 으로 발생한 컨텍스트성 에러를 DEBUG 로,
