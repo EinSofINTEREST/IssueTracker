@@ -26,8 +26,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,14 +134,14 @@ type Generator struct {
 	// nil 이면 호출 안 함.
 	validateFailureHandler func(context.Context, core.RawContentRef, int, model.TargetType, string)
 
-	locker        primitive.InflightLocker       // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
-	pendingQueue  primitive.PendingQueue         // nil 이면 pending URL 보존 비활성
-	requeueFn     RequeueFunc                    // nil 이면 재투입 비활성
-	semValidator  SelectorValidator              // nil 이면 의미 검증 건너뜀
-	blacklistRepo repository.BlacklistRepository // nil 이면 자동 blacklist 등록 skip (#326)
-	breaker       *HostBreaker                   // nil 이면 breaker 비활성 (이슈 #215)
-	wg            sync.WaitGroup
-	stopped       atomic.Bool
+	locker       primitive.InflightLocker // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
+	pendingQueue primitive.PendingQueue   // nil 이면 pending URL 보존 비활성
+	requeueFn    RequeueFunc              // nil 이면 재투입 비활성
+	semValidator SelectorValidator        // nil 이면 의미 검증 건너뜀
+	blacklistSvc BlacklistAutoRegister    // nil 이면 자동 blacklist 등록 skip (#326). 이슈 #431 — repository 직접 의존 제거, service interface 로 추상화.
+	breaker      *HostBreaker             // nil 이면 breaker 비활성 (이슈 #215)
+	wg           sync.WaitGroup
+	stopped      atomic.Bool
 }
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다.
@@ -185,13 +183,21 @@ func (g *Generator) SetExtractor(e SelectorExtractor) {
 	g.extractor = e
 }
 
-// SetBlacklistRepo 는 EnrichedExtractor 가 페이지를 blacklist 로 판정했을 때 등록할
-// repository 를 등록합니다 (#326). nil 이면 blacklist 자동 등록 skip — Generator 는 셀렉터
-// INSERT 만 skip 하고 다음 흐름 진행 (LLM retry 가능).
+// BlacklistAutoRegister 는 LLM blacklist 판정 결과를 자동 등록하는 최소 인터페이스입니다 (이슈 #431).
+//
+// storage/service.BlacklistService 가 본 인터페이스를 만족 — Generator 는 service 패키지를
+// 직접 import 하지 않고 인터페이스만 의존 (의존성 역전).
+type BlacklistAutoRegister interface {
+	HandleLLMDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, reason string) (inserted bool, err error)
+}
+
+// SetBlacklistService 는 EnrichedExtractor 가 페이지를 blacklist 로 판정했을 때 등록할
+// service 를 등록합니다 (이슈 #431, 기존 SetBlacklistRepo 대체). nil 이면 blacklist 자동 등록 skip —
+// Generator 는 셀렉터 INSERT 만 skip 하고 다음 흐름 진행 (LLM retry 가능).
 //
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
-func (g *Generator) SetBlacklistRepo(r repository.BlacklistRepository) {
-	g.blacklistRepo = r
+func (g *Generator) SetBlacklistService(svc BlacklistAutoRegister) {
+	g.blacklistSvc = svc
 }
 
 // SetBreaker 는 host 단위 LLM rate_limit circuit breaker 를 등록합니다 (이슈 #215).
@@ -764,71 +770,20 @@ func selectorMatches(doc *goquery.Document, fs *model.FieldSelector) bool {
 
 // handleBlacklistDecision 은 EnrichedExtractor 가 페이지를 blacklist 로 판정했을 때 호출됩니다.
 //
-// blacklistRepo 가 비-nil 이면 sampleURL 의 path 를 정확 일치 regex (escape + ^/$ anchor) 로
-// parser_blacklist 에 INSERT — 동일 URL 만 차단, 같은 host 의 다른 path 는 영향 없음.
-// 운영자가 후속으로 host-level catch-all 등 정책 widening 가능.
-//
-// 모든 실패 (blacklistRepo nil / Insert 에러 / ErrDuplicate) 는 non-fatal — 호출자는
-// 셀렉터 INSERT skip 만 보장하고 다음 흐름 진행. ErrDuplicate 는 같은 URL 이 이미 등록됨 — 정상.
+// blacklistSvc (BlacklistService) 가 비-nil 이면 service 에 위임 — path_pattern 변환 / INSERT /
+// ErrDuplicate 흡수 / 로그 모두 service 책임. 본 메서드는 nil 분기 + 위임만 (이슈 #431).
 func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, decision *BlacklistDecision) {
-	logFields := map[string]interface{}{
-		"host":             host,
-		"sample_url":       sampleURL,
-		"target_type":      string(targetType),
-		"blacklist_reason": decision.Reason,
-	}
-
-	if g.blacklistRepo == nil {
-		g.log.WithFields(logFields).Info("page judged as blacklist by LLM but blacklistRepo not wired — selector insert skipped only")
+	if g.blacklistSvc == nil {
+		g.log.WithFields(map[string]interface{}{
+			"host":             host,
+			"sample_url":       sampleURL,
+			"target_type":      string(targetType),
+			"blacklist_reason": decision.Reason,
+		}).Info("page judged as blacklist by LLM but blacklistSvc not wired — selector insert skipped only")
 		return
 	}
-
-	pathPattern := pathPatternFromURL(sampleURL)
-	if pathPattern == "" {
-		// URL parse 실패 — host-wide catch-all 회피 (CodeRabbit Major 반영).
-		// 빈 path_pattern 은 host 전체 차단 효과인데, 단일 malformed URL 만 보고 host 전체를
-		// 차단하는 건 over-reach. 운영자 manual 등록 경로로 위임.
-		g.log.WithFields(logFields).Warn("blacklist insert skipped — sample URL parse failed (host-wide catch-all 회피)")
-		return
-	}
-	rec := &model.BlacklistRecord{
-		HostPattern: host,
-		PathPattern: pathPattern,
-		Reason:      decision.Reason,
-		Source:      model.BlacklistSourceAuto,
-		Mode:        model.BlacklistModeDrop,
-		Enabled:     true,
-	}
-	if err := g.blacklistRepo.Insert(ctx, rec); err != nil {
-		if errors.Is(err, storage.ErrDuplicate) {
-			g.log.WithFields(logFields).Info("page already in blacklist — selector insert skipped")
-			return
-		}
-		// Insert 실패는 non-fatal — 셀렉터 INSERT 는 어쨌든 skip.
-		g.log.WithFields(logFields).WithError(err).Warn("blacklist insert failed (non-fatal — selector insert still skipped)")
-		return
-	}
-	logFields["blacklist_id"] = rec.ID
-	g.log.WithFields(logFields).Info("page auto-blacklisted by LLM, selector insert skipped")
+	// service 가 INSERT / ErrDuplicate / 로그 모두 처리 — Generator 는 결과 무시 (모든 실패 non-fatal).
+	_, _ = g.blacklistSvc.HandleLLMDecision(ctx, host, sampleURL, targetType, decision.Reason)
 }
 
-// pathPatternFromURL 은 sampleURL 의 path 부분을 RE2 regex 로 escape 한 anchor pattern 을
-// 반환합니다. parser_blacklist 의 path_pattern 컬럼에 사용 — 정확히 동일한 URL 만 매칭.
-//
-// 정책 (CodeRabbit Major 반영):
-//   - URL parse 실패 → "" 반환 (호출자가 insert skip)
-//   - 정상 parse + 빈 path (예: https://example.com) → "/" 로 normalize → "^/$" pattern
-//     (이전: "" 반환으로 host-wide catch-all 이 되어 단일 root URL blacklist 가 host 전체
-//     차단 — 의도되지 않은 over-reach)
-//   - 정상 parse + non-empty path → "^<escaped>$"
-func pathPatternFromURL(sampleURL string) string {
-	u, err := url.Parse(sampleURL)
-	if err != nil {
-		return ""
-	}
-	path := u.Path
-	if path == "" {
-		path = "/"
-	}
-	return "^" + regexp.QuoteMeta(path) + "$"
-}
+// pathPatternFromURL 은 service/blacklist.go 로 이전 (이슈 #431).
