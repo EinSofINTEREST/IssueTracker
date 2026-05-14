@@ -12,7 +12,8 @@ import (
 // CacheInvalidator 는 (host, target_type) 튜플의 cache entry 를 무효화하는 최소 인터페이스입니다.
 //
 // Resolver 가 본 인터페이스를 만족 — 구현체가 본 패키지를 import 하지 않아도 결합 가능하도록
-// 인터페이스 surface 를 storage 측에서 선언.
+// 인터페이스 surface 를 본 패키지(decorator) 측에서 선언. 향후 다른 cache 보유 컴포넌트도
+// 본 인터페이스만 구현하면 decorator 와 결합 가능.
 type CacheInvalidator interface {
 	Invalidate(host string, targetType model.TargetType)
 }
