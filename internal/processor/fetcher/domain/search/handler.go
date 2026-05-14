@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -40,7 +40,7 @@ type JobPublisher interface {
 // nil content 반환 — 실제 article 의 raw_content 는 chained article job 이 fetch 후 발행.
 type SearchHandler struct {
 	client      *CSEClient
-	keywordRepo storage.SearchKeywordRepository
+	keywordRepo repository.SearchKeywordRepository
 	publisher   JobPublisher
 	log         *logger.Logger
 
@@ -51,7 +51,7 @@ type SearchHandler struct {
 // SearchHandlerOptions 는 SearchHandler 생성 옵션입니다.
 type SearchHandlerOptions struct {
 	Client         *CSEClient
-	KeywordRepo    storage.SearchKeywordRepository
+	KeywordRepo    repository.SearchKeywordRepository
 	Publisher      JobPublisher
 	ArticleTimeout time.Duration // 0 이하면 30s
 }

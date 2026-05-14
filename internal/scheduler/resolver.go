@@ -15,7 +15,8 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -42,7 +43,7 @@ type EntryResolver interface {
 //
 // singleflight 로 thundering herd 방지 (동일 Refresh 중 여러 호출자가 들어와도 DB 1회).
 type dbEntryResolver struct {
-	repo   storage.SchedulerEntryRepository
+	repo   repository.SchedulerEntryRepository
 	cfg    EntryConverter
 	log    *logger.Logger
 	ttl    time.Duration
@@ -57,14 +58,14 @@ type dbEntryResolver struct {
 // CrawlerName 매핑 등 도메인 결정 (host 기반 vs source_name 기반) 을 호출자가 주입.
 // 기본 구현은 NewDefaultEntryConverter — host 기반 CrawlerName + storage record 의 priority 를
 // core.Priority 로 매핑.
-type EntryConverter func(rec *storage.SchedulerEntryRecord) ScheduleEntry
+type EntryConverter func(rec *model.SchedulerEntryRecord) ScheduleEntry
 
 // NewDefaultEntryConverter 는 host 기반 CrawlerName + priority 매핑 기본 구현입니다.
 //
 // jobTimeout 은 closure 로 캡처 — 전역 SCHEDULER_JOB_TIMEOUT 사용. entries 마다 다른 timeout
 // 이 필요하면 metadata JSONB 에서 추출하는 별도 converter 를 주입.
 func NewDefaultEntryConverter(jobTimeout time.Duration) EntryConverter {
-	return func(rec *storage.SchedulerEntryRecord) ScheduleEntry {
+	return func(rec *model.SchedulerEntryRecord) ScheduleEntry {
 		host := hostOf(rec.URL)
 		return ScheduleEntry{
 			CrawlerName: host,
@@ -95,7 +96,7 @@ func intToPriority(p int) core.Priority {
 //
 // repo / converter / log 모두 비-nil 필수.
 // ttl 이 0 이하면 DefaultEntryCacheTTL.
-func NewEntryResolver(repo storage.SchedulerEntryRepository, converter EntryConverter, log *logger.Logger, ttl time.Duration) (EntryResolver, error) {
+func NewEntryResolver(repo repository.SchedulerEntryRepository, converter EntryConverter, log *logger.Logger, ttl time.Duration) (EntryResolver, error) {
 	if repo == nil {
 		return nil, errors.New("scheduler: NewEntryResolver requires non-nil repo")
 	}

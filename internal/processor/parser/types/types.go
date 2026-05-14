@@ -3,7 +3,7 @@
 //
 // Package types defines domain-agnostic interfaces and models for extracting
 // the main content of any web page. 사이트별 hardcode 파서를 대체하여, DB 기반 rule
-// (storage.ParserRuleRecord) 만 다른 단일 engine 이 모든 웹페이지를 처리합니다.
+// (model.ParserRuleRecord) 만 다른 단일 engine 이 모든 웹페이지를 처리합니다.
 //
 // 두 핵심 인터페이스:
 //   - ContentParser  : 단일 웹페이지 → Page (핵심 본문 + 메타데이터)

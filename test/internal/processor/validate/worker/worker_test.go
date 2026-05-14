@@ -16,6 +16,7 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
@@ -91,12 +92,12 @@ func (m *mockContentService) GetByID(ctx context.Context, id string) (*core.Cont
 	return args.Get(0).(*core.Content), args.Error(1)
 }
 
-func (m *mockContentService) ListByCountry(ctx context.Context, country string, filter storage.ContentFilter) ([]*core.Content, error) {
+func (m *mockContentService) ListByCountry(ctx context.Context, country string, filter model.ContentFilter) ([]*core.Content, error) {
 	args := m.Called(ctx, country, filter)
 	return args.Get(0).([]*core.Content), args.Error(1)
 }
 
-func (m *mockContentService) Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
+func (m *mockContentService) Search(ctx context.Context, filter model.ContentFilter) ([]*core.Content, error) {
 	args := m.Called(ctx, filter)
 	return args.Get(0).([]*core.Content), args.Error(1)
 }
@@ -715,7 +716,7 @@ func TestValidateWorker_InvalidContent_RecordsRejectedInContents(t *testing.T) {
 	contentSvc.On("UpdateValidationStatus",
 		mock.Anything,
 		content.ID,
-		storage.ValidationStatusRejected,
+		model.ValidationStatusRejected,
 		mock.MatchedBy(func(code string) bool { return strings.HasPrefix(code, "VAL_") }),
 		mock.MatchedBy(func(detail string) bool { return detail != "" }),
 	).Return(nil).Once()
@@ -745,7 +746,7 @@ func TestValidateWorker_ValidContent_RecordsPassedInContents(t *testing.T) {
 	contentSvc.On("UpdateValidationStatus",
 		mock.Anything,
 		content.ID,
-		storage.ValidationStatusPassed,
+		model.ValidationStatusPassed,
 		"",
 		"",
 	).Return(nil).Once()
@@ -777,7 +778,7 @@ func TestValidateWorker_RecordRejectedFailure_DoesNotBlockMainFlow(t *testing.T)
 
 	// contentSvc update 실패 — best-effort 정책상 worker 메인 흐름 (Delete + DLQ) 은 그대로 진행되어야 함
 	contentSvc.On("UpdateValidationStatus",
-		mock.Anything, content.ID, storage.ValidationStatusRejected,
+		mock.Anything, content.ID, model.ValidationStatusRejected,
 		mock.Anything, mock.Anything,
 	).Return(errors.New("simulated db error")).Once()
 

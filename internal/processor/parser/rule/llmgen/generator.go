@@ -6,7 +6,7 @@
 // 흐름:
 //  1. parser_worker 가 rule.ErrNoRule 발견 → Generator.Enqueue 호출 (비동기 / 즉시 반환)
 //  2. Generator goroutine: in-flight dedup 후 LLM 프롬프트 생성 → Provider.Generate 호출
-//  3. 응답 JSON 파싱 → storage.SelectorMap 으로 변환
+//  3. 응답 JSON 파싱 → model.SelectorMap 으로 변환
 //  4. validation: 생성된 selector 로 실제 HTML 매칭 확인 (0건이면 폐기)
 //  5. ParserRuleRepository.Insert (enabled=true — CSS selector 검증 통과가 품질 게이트)
 //  6. Resolver.Invalidate 로 negative cache flush — 다음 fetch 부터 새 rule 사용 가능
@@ -38,6 +38,9 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/primitive"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
@@ -62,7 +65,7 @@ const pendingQueueOpTimeout = 2 * time.Second
 // DOM 매칭 검증 이후 추가 단계로 실행 — 추출 내용이 실제 뉴스 제목/본문인지 LLM 으로 확인.
 // nil 이면 의미 검증 건너뜀 (DOM 검증만 수행).
 type SelectorValidator interface {
-	Validate(ctx context.Context, html string, selectors storage.SelectorMap, targetType storage.TargetType) (SelectorValidatorResult, error)
+	Validate(ctx context.Context, html string, selectors model.SelectorMap, targetType model.TargetType) (SelectorValidatorResult, error)
 }
 
 // SelectorValidatorResult 는 의미 검증 결과입니다.
@@ -77,7 +80,7 @@ type SelectorValidatorResult struct {
 // 대체 구현: claudegen.ClaudeWorker (Claude Code 웜 컨테이너).
 // SetExtractor 로 교체하면 추출 단계만 대체되고 나머지 흐름 (validation, INSERT) 은 동일.
 type SelectorExtractor interface {
-	Extract(ctx context.Context, host string, targetType storage.TargetType, html string) (storage.SelectorMap, error)
+	Extract(ctx context.Context, host string, targetType model.TargetType, html string) (model.SelectorMap, error)
 }
 
 // modelNamer 는 추출기가 사용하는 모델 ID 를 반환하는 선택적 인터페이스입니다.
@@ -120,7 +123,7 @@ var errBlacklistedNoRule = errors.New("llmgen: page blacklisted, no rule generat
 type Generator struct {
 	provider     llm.Provider
 	extractor    SelectorExtractor // nil 이면 provider 로 fallback
-	repo         storage.ParserRuleRepository
+	repo         repository.ParserRuleRepository
 	resolver     *rule.Resolver
 	promptLoader prompt.Loader
 	log          *logger.Logger
@@ -131,28 +134,28 @@ type Generator struct {
 	//   - targetType, crawlerName: Kafka 메시지 헤더 복원에 필요 (gemini/Copilot/CodeRabbit 피드백).
 	// background goroutine 에서 호출 — thread-safe 책임은 핸들러에 있음.
 	// nil 이면 호출 안 함.
-	validateFailureHandler func(context.Context, core.RawContentRef, int, storage.TargetType, string)
+	validateFailureHandler func(context.Context, core.RawContentRef, int, model.TargetType, string)
 
-	locker        storage.InflightLocker      // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
-	pendingQueue  storage.PendingQueue        // nil 이면 pending URL 보존 비활성
-	requeueFn     RequeueFunc                 // nil 이면 재투입 비활성
-	semValidator  SelectorValidator           // nil 이면 의미 검증 건너뜀
-	blacklistRepo storage.BlacklistRepository // nil 이면 자동 blacklist 등록 skip (#326)
-	breaker       *HostBreaker                // nil 이면 breaker 비활성 (이슈 #215)
+	locker        primitive.InflightLocker       // 기본: memInflightLocker, Redis 활성 시: RedisInflightLocker
+	pendingQueue  primitive.PendingQueue         // nil 이면 pending URL 보존 비활성
+	requeueFn     RequeueFunc                    // nil 이면 재투입 비활성
+	semValidator  SelectorValidator              // nil 이면 의미 검증 건너뜀
+	blacklistRepo repository.BlacklistRepository // nil 이면 자동 blacklist 등록 skip (#326)
+	breaker       *HostBreaker                   // nil 이면 breaker 비활성 (이슈 #215)
 	wg            sync.WaitGroup
 	stopped       atomic.Bool
 }
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다.
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
-func (g *Generator) SetValidateFailureHandler(fn func(context.Context, core.RawContentRef, int, storage.TargetType, string)) {
+func (g *Generator) SetValidateFailureHandler(fn func(context.Context, core.RawContentRef, int, model.TargetType, string)) {
 	g.validateFailureHandler = fn
 }
 
 // SetPendingQueue 는 대기 URL 큐와 재투입 콜백을 등록합니다.
 // 둘 다 비-nil 이어야 활성화됩니다. Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로
 // 초기화 시 1회만 호출합니다.
-func (g *Generator) SetPendingQueue(pq storage.PendingQueue, fn RequeueFunc) {
+func (g *Generator) SetPendingQueue(pq primitive.PendingQueue, fn RequeueFunc) {
 	g.pendingQueue = pq
 	g.requeueFn = fn
 }
@@ -160,9 +163,9 @@ func (g *Generator) SetPendingQueue(pq storage.PendingQueue, fn RequeueFunc) {
 // SetLocker 는 분산 Lock 구현체를 교체합니다.
 // nil 이면 기본 in-process memInflightLocker 로 fallback.
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
-func (g *Generator) SetLocker(l storage.InflightLocker) {
+func (g *Generator) SetLocker(l primitive.InflightLocker) {
 	if l == nil {
-		g.locker = storage.NewMemInflightLocker()
+		g.locker = primitive.NewMemInflightLocker()
 		return
 	}
 	g.locker = l
@@ -187,7 +190,7 @@ func (g *Generator) SetExtractor(e SelectorExtractor) {
 // INSERT 만 skip 하고 다음 흐름 진행 (LLM retry 가능).
 //
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
-func (g *Generator) SetBlacklistRepo(r storage.BlacklistRepository) {
+func (g *Generator) SetBlacklistRepo(r repository.BlacklistRepository) {
 	g.blacklistRepo = r
 }
 
@@ -209,7 +212,7 @@ func (g *Generator) SetBreaker(b *HostBreaker) {
 //
 // provider / repo / resolver / promptLoader / log 모두 비-nil 필수. 하나라도 nil 이면 error —
 // 호출자 (cmd/main) 가 boot fatal 처리.
-func New(provider llm.Provider, repo storage.ParserRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, log *logger.Logger) (*Generator, error) {
+func New(provider llm.Provider, repo repository.ParserRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, log *logger.Logger) (*Generator, error) {
 	if provider == nil {
 		return nil, errors.New("llmgen: New requires non-nil provider")
 	}
@@ -231,7 +234,7 @@ func New(provider llm.Provider, repo storage.ParserRuleRepository, resolver *rul
 		resolver:     resolver,
 		promptLoader: promptLoader,
 		log:          log,
-		locker:       storage.NewMemInflightLocker(),
+		locker:       primitive.NewMemInflightLocker(),
 	}, nil
 }
 
@@ -248,7 +251,7 @@ func New(provider llm.Provider, repo storage.ParserRuleRepository, resolver *rul
 //
 // 동일 (host, type) 에 대한 in-flight 호출이 이미 있으면 즉시 skip.
 // Stop 호출 후의 Enqueue 는 즉시 noop.
-func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration) {
+func (g *Generator) Enqueue(ctx context.Context, host string, targetType model.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration) {
 	g.enqueueImpl(ctx, host, targetType, raw, llmRetryCount, crawlerName, jobTimeout, false)
 }
 
@@ -260,13 +263,13 @@ func (g *Generator) Enqueue(ctx context.Context, host string, targetType storage
 //
 // 호출 시점: parser_worker 가 ErrParseFailure / ErrEmptySelector 임계 도달 시 호출.
 // disabled 룰 잔존 host 는 운영자 의도 존중 — pre-check 에서 skip.
-func (g *Generator) EnqueueStale(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration) {
+func (g *Generator) EnqueueStale(ctx context.Context, host string, targetType model.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration) {
 	g.enqueueImpl(ctx, host, targetType, raw, llmRetryCount, crawlerName, jobTimeout, true)
 }
 
 // enqueueImpl 은 Enqueue / EnqueueStale 의 공통 구현입니다.
 // stale=true 면 InsertNextVersion 경로 (v2 추가), false 면 기존 Insert 경로 (v1).
-func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration, stale bool) {
+func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType model.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration, stale bool) {
 	if g.stopped.Load() {
 		return
 	}
@@ -504,7 +507,7 @@ func (g *Generator) Stop(ctx context.Context) {
 
 // runOnce 는 단일 추출 + validation + INSERT + cache invalidate 의 동기 실행입니다.
 // 호출자 (Enqueue 의 goroutine) 가 in-flight 슬롯 release 책임.
-func (g *Generator) runOnce(ctx context.Context, host string, targetType storage.TargetType, sampleURL, html string, stale bool) error {
+func (g *Generator) runOnce(ctx context.Context, host string, targetType model.TargetType, sampleURL, html string, stale bool) error {
 	// 사전 lookup — 동일 자연키 룰이 이미 DB 에 존재하면 LLM 호출 회피.
 	//
 	//   - enabled=true 룰 적중 시에만 skip (resolver 가 enabled=TRUE 만 조회하므로 disabled 는 사실상 부재)
@@ -548,7 +551,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 	}
 
 	var (
-		selectors storage.SelectorMap
+		selectors model.SelectorMap
 		modelName string
 		pageType  string // EnrichedExtractor 모드에서 채워짐. legacy 경로는 "" (미분류).
 		article   bool   // EnrichedExtractor 가 분류한 article body 여부 (이슈 #423). 기본 false.
@@ -572,7 +575,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 			pageType = string(res.PageType)
 			// list (target_type=list) 룰은 정의상 article body 가 아님 — 안전성을 위해 article=false 강제.
 			// page 룰만 LLM 의 article 분류를 반영 (#423).
-			if targetType == storage.TargetTypePage {
+			if targetType == model.TargetTypePage {
 				article = res.Article
 			}
 			if mn, ok := g.extractor.(modelNamer); ok {
@@ -645,7 +648,7 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 	confidence := ComputeFieldConfidence(selectors, html)
 	selectors = ApplyConfidenceFilter(selectors, confidence)
 
-	record := &storage.ParserRuleRecord{
+	record := &model.ParserRuleRecord{
 		SourceName:  LLMAutoSourceName,
 		HostPattern: host,
 		TargetType:  targetType,
@@ -708,14 +711,14 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType storage
 }
 
 // parseSelectorMap 은 LLM 응답 텍스트에서 SelectorMap JSON 을 추출 + decode 합니다.
-func parseSelectorMap(content string) (storage.SelectorMap, error) {
+func parseSelectorMap(content string) (model.SelectorMap, error) {
 	jsonStr := extractJSON(content)
 	if jsonStr == "" {
-		return storage.SelectorMap{}, errors.New("no JSON object found in response")
+		return model.SelectorMap{}, errors.New("no JSON object found in response")
 	}
-	var sm storage.SelectorMap
+	var sm model.SelectorMap
 	if err := json.Unmarshal([]byte(jsonStr), &sm); err != nil {
-		return storage.SelectorMap{}, fmt.Errorf("unmarshal selector map: %w", err)
+		return model.SelectorMap{}, fmt.Errorf("unmarshal selector map: %w", err)
 	}
 	return sm, nil
 }
@@ -726,14 +729,14 @@ func parseSelectorMap(content string) (storage.SelectorMap, error) {
 //
 //   - TargetTypePage: Title + MainContent 둘 다 1건 이상 매칭
 //   - TargetTypeList: ItemContainer + ItemLink 둘 다 1건 이상 매칭 (LinkDiscovery 모드는 미적용)
-func validateSelectors(sm storage.SelectorMap, targetType storage.TargetType, html string) error {
+func validateSelectors(sm model.SelectorMap, targetType model.TargetType, html string) error {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return fmt.Errorf("goquery parse html: %w", err)
 	}
 
 	switch targetType {
-	case storage.TargetTypeList:
+	case model.TargetTypeList:
 		if !selectorMatches(doc, sm.ItemContainer) {
 			return errors.New("ItemContainer selector matched 0 elements")
 		}
@@ -752,7 +755,7 @@ func validateSelectors(sm storage.SelectorMap, targetType storage.TargetType, ht
 }
 
 // selectorMatches 는 selector 가 nil/empty 가 아니고 1건 이상 매칭하는지 확인합니다.
-func selectorMatches(doc *goquery.Document, fs *storage.FieldSelector) bool {
+func selectorMatches(doc *goquery.Document, fs *model.FieldSelector) bool {
 	if fs == nil || strings.TrimSpace(fs.CSS) == "" {
 		return false
 	}
@@ -767,7 +770,7 @@ func selectorMatches(doc *goquery.Document, fs *storage.FieldSelector) bool {
 //
 // 모든 실패 (blacklistRepo nil / Insert 에러 / ErrDuplicate) 는 non-fatal — 호출자는
 // 셀렉터 INSERT skip 만 보장하고 다음 흐름 진행. ErrDuplicate 는 같은 URL 이 이미 등록됨 — 정상.
-func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL string, targetType storage.TargetType, decision *BlacklistDecision) {
+func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, decision *BlacklistDecision) {
 	logFields := map[string]interface{}{
 		"host":             host,
 		"sample_url":       sampleURL,
@@ -788,12 +791,12 @@ func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL
 		g.log.WithFields(logFields).Warn("blacklist insert skipped — sample URL parse failed (host-wide catch-all 회피)")
 		return
 	}
-	rec := &storage.BlacklistRecord{
+	rec := &model.BlacklistRecord{
 		HostPattern: host,
 		PathPattern: pathPattern,
 		Reason:      decision.Reason,
-		Source:      storage.BlacklistSourceAuto,
-		Mode:        storage.BlacklistModeDrop,
+		Source:      model.BlacklistSourceAuto,
+		Mode:        model.BlacklistModeDrop,
 		Enabled:     true,
 	}
 	if err := g.blacklistRepo.Insert(ctx, rec); err != nil {

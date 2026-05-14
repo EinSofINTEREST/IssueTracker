@@ -9,7 +9,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/primitive"
 	"issuetracker/pkg/logger"
 )
 
@@ -45,7 +45,7 @@ type rawIDTracker struct {
 // ttl 은 host 별 ZSET 의 자연 정리 시간 — FailureCounter 의 window 와 동기화 권장.
 //
 // 신규 wiring 은 NewRawIDTrackerWithFreshness 사용 권장 — freshness 적용으로 #299 race 차단.
-func NewRawIDTracker(client *goredis.Client, ttl time.Duration, keyPrefix string, log *logger.Logger) (storage.RawIDTracker, error) {
+func NewRawIDTracker(client *goredis.Client, ttl time.Duration, keyPrefix string, log *logger.Logger) (primitive.RawIDTracker, error) {
 	return NewRawIDTrackerWithFreshness(client, ttl, 0, keyPrefix, log)
 }
 
@@ -56,7 +56,7 @@ func NewRawIDTracker(client *goredis.Client, ttl time.Duration, keyPrefix string
 // 누설되는 것을 차단 (이슈 #299).
 //
 // freshness=0 또는 음수면 score 필터 비활성 — NewRawIDTracker 와 동일 동작.
-func NewRawIDTrackerWithFreshness(client *goredis.Client, ttl, freshness time.Duration, keyPrefix string, log *logger.Logger) (storage.RawIDTracker, error) {
+func NewRawIDTrackerWithFreshness(client *goredis.Client, ttl, freshness time.Duration, keyPrefix string, log *logger.Logger) (primitive.RawIDTracker, error) {
 	if client == nil {
 		return nil, errors.New("redisstore: raw id tracker requires non-nil redis client")
 	}

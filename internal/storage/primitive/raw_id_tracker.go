@@ -1,4 +1,4 @@
-package storage
+package primitive
 
 import "context"
 
@@ -12,9 +12,6 @@ import "context"
 //   - PeekByHost 는 최근 N 개를 조회만 — 실패 시 ID 가 손실되지 않음
 //   - 호출자 (Upgrader) 가 publish 성공 후 RemoveByHost 로 삭제
 //   - publish 실패 시 ID 가 잔존 → 다음 trigger 가 자연스럽게 재시도
-//
-// 정렬은 score=timestamp 의 DESC (최근 우선) — Set 대신 ordered 자료구조 채택해 stale 항목
-// republish 위험 회피.
 type RawIDTracker interface {
 	// Track 은 host 의 실패 raw_id 를 timestamp score 와 함께 등록합니다. ttl 만료 시 자연 정리.
 	// host 또는 rawID 가 빈 문자열이면 noop.
@@ -30,7 +27,6 @@ type RawIDTracker interface {
 	RemoveByHost(ctx context.Context, host string, rawIDs []string) error
 }
 
-// noopRawIDTracker 는 추적 비활성 시 fallback 입니다.
 type noopRawIDTracker struct{}
 
 // NewNoopRawIDTracker 는 모든 메소드가 noop 인 RawIDTracker 를 반환합니다.

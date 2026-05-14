@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -23,7 +25,7 @@ type pgBlacklistRepository struct {
 
 // NewBlacklistRepository 는 pgxpool 기반 BlacklistRepository 를 생성합니다.
 // log 인자는 향후 query latency / error log 등 운영 가시성 추가용 — 현재 미사용.
-func NewBlacklistRepository(pool *pgxpool.Pool, log *logger.Logger) storage.BlacklistRepository {
+func NewBlacklistRepository(pool *pgxpool.Pool, log *logger.Logger) repository.BlacklistRepository {
 	_ = log
 	return &pgBlacklistRepository{pool: pool}
 }
@@ -41,7 +43,7 @@ RETURNING id, created_at, updated_at
 //
 // HostPattern 을 lowercase 로 정규화 — BlacklistMatcher 가 host 를
 // lowercase 로 lookup 하므로 저장 시점에도 동일 정규화 필수 (대소문자 섞인 등록 시 미스매치 회피).
-func (r *pgBlacklistRepository) Insert(ctx context.Context, rec *storage.BlacklistRecord) error {
+func (r *pgBlacklistRepository) Insert(ctx context.Context, rec *model.BlacklistRecord) error {
 	if rec.PathPattern != "" {
 		if _, reErr := regexp.Compile(rec.PathPattern); reErr != nil {
 			return fmt.Errorf("%w: path_pattern %q is not a valid regex: %v", storage.ErrInvalid, rec.PathPattern, reErr)
@@ -49,10 +51,10 @@ func (r *pgBlacklistRepository) Insert(ctx context.Context, rec *storage.Blackli
 	}
 	rec.HostPattern = strings.ToLower(rec.HostPattern)
 	if rec.Source == "" {
-		rec.Source = storage.BlacklistSourceManual
+		rec.Source = model.BlacklistSourceManual
 	}
 	if rec.Mode == "" {
-		rec.Mode = storage.BlacklistModeDrop
+		rec.Mode = model.BlacklistModeDrop
 	}
 	row := r.pool.QueryRow(ctx, sqlInsertBlacklist,
 		rec.HostPattern, rec.PathPattern, rec.Reason, string(rec.Source), string(rec.Mode), rec.Enabled,
@@ -76,9 +78,9 @@ RETURNING updated_at
 
 // Update 는 ID 로 row 의 mutable 필드 (reason / source / mode / enabled) 만 갱신합니다.
 // 자연키 (host_pattern, path_pattern) 는 변경 불가 — 의도가 다르면 Delete + Insert.
-func (r *pgBlacklistRepository) Update(ctx context.Context, rec *storage.BlacklistRecord) error {
+func (r *pgBlacklistRepository) Update(ctx context.Context, rec *model.BlacklistRecord) error {
 	if rec.Mode == "" {
-		rec.Mode = storage.BlacklistModeDrop
+		rec.Mode = model.BlacklistModeDrop
 	}
 	row := r.pool.QueryRow(ctx, sqlUpdateBlacklist,
 		rec.ID, rec.Reason, string(rec.Source), string(rec.Mode), rec.Enabled,
@@ -109,7 +111,7 @@ WHERE id = $1
 `
 
 // GetByID 는 ID 로 row 를 조회합니다.
-func (r *pgBlacklistRepository) GetByID(ctx context.Context, id int64) (*storage.BlacklistRecord, error) {
+func (r *pgBlacklistRepository) GetByID(ctx context.Context, id int64) (*model.BlacklistRecord, error) {
 	row := r.pool.QueryRow(ctx, sqlGetBlacklistByID, id)
 	rec, err := scanBlacklist(row)
 	if err != nil {
@@ -135,14 +137,14 @@ ORDER BY LENGTH(path_pattern) DESC, id DESC
 //
 // host 는 lowercase 로 정규화된 상태 가정 (Matcher 가 lowercase 로 호출). DB 에 저장된 host_pattern
 // 도 Insert 시 lowercase 정규화 — 양쪽 일치 보장.
-func (r *pgBlacklistRepository) FindEnabledByHost(ctx context.Context, host string) ([]*storage.BlacklistRecord, error) {
+func (r *pgBlacklistRepository) FindEnabledByHost(ctx context.Context, host string) ([]*model.BlacklistRecord, error) {
 	rows, err := r.pool.Query(ctx, sqlFindEnabledBlacklistByHost, strings.ToLower(host))
 	if err != nil {
 		return nil, fmt.Errorf("query blacklist by host: %w", err)
 	}
 	defer rows.Close()
 
-	out := make([]*storage.BlacklistRecord, 0)
+	out := make([]*model.BlacklistRecord, 0)
 	for rows.Next() {
 		rec, scanErr := scanBlacklist(rows)
 		if scanErr != nil {
@@ -157,7 +159,7 @@ func (r *pgBlacklistRepository) FindEnabledByHost(ctx context.Context, host stri
 }
 
 // List 는 필터 조건에 맞는 row 들을 반환합니다 (운영 대시보드용).
-func (r *pgBlacklistRepository) List(ctx context.Context, f storage.BlacklistFilter) ([]*storage.BlacklistRecord, error) {
+func (r *pgBlacklistRepository) List(ctx context.Context, f model.BlacklistFilter) ([]*model.BlacklistRecord, error) {
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 50
@@ -181,7 +183,7 @@ LIMIT $4 OFFSET $5
 	}
 	defer rows.Close()
 
-	out := make([]*storage.BlacklistRecord, 0)
+	out := make([]*model.BlacklistRecord, 0)
 	for rows.Next() {
 		rec, scanErr := scanBlacklist(rows)
 		if scanErr != nil {
@@ -200,8 +202,8 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanBlacklist(s rowScanner) (*storage.BlacklistRecord, error) {
-	rec := &storage.BlacklistRecord{}
+func scanBlacklist(s rowScanner) (*model.BlacklistRecord, error) {
+	rec := &model.BlacklistRecord{}
 	var source, mode string
 	if err := s.Scan(
 		&rec.ID,
@@ -216,10 +218,10 @@ func scanBlacklist(s rowScanner) (*storage.BlacklistRecord, error) {
 	); err != nil {
 		return nil, err
 	}
-	rec.Source = storage.BlacklistSource(source)
-	rec.Mode = storage.BlacklistMode(mode)
+	rec.Source = model.BlacklistSource(source)
+	rec.Mode = model.BlacklistMode(mode)
 	return rec, nil
 }
 
 // 컴파일 타임 인터페이스 만족 검증.
-var _ storage.BlacklistRepository = (*pgBlacklistRepository)(nil)
+var _ repository.BlacklistRepository = (*pgBlacklistRepository)(nil)

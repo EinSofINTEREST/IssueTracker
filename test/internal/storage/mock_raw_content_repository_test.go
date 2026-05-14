@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // MockRawContentRepository는 RawContentRepository 인터페이스의 mock 구현체입니다.
@@ -36,7 +36,7 @@ func (m *MockRawContentRepository) GetByURL(ctx context.Context, url string) (*c
 	return args.Get(0).(*core.RawContent), args.Error(1)
 }
 
-func (m *MockRawContentRepository) List(ctx context.Context, filter storage.RawContentFilter) ([]*core.RawContent, error) {
+func (m *MockRawContentRepository) List(ctx context.Context, filter model.RawContentFilter) ([]*core.RawContent, error) {
 	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

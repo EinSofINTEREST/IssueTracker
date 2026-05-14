@@ -16,6 +16,7 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -48,7 +49,7 @@ func (*captureRawSvc) GetByID(_ context.Context, _ string) (*core.RawContent, er
 	return nil, storage.ErrNotFound
 }
 func (*captureRawSvc) Delete(_ context.Context, _ string) error { return nil }
-func (*captureRawSvc) List(_ context.Context, _ storage.RawContentFilter) ([]*core.RawContent, error) {
+func (*captureRawSvc) List(_ context.Context, _ model.RawContentFilter) ([]*core.RawContent, error) {
 	return nil, nil
 }
 func (*captureRawSvc) PurgeOlderThan(_ context.Context, _ time.Time) (int64, error) { return 0, nil }

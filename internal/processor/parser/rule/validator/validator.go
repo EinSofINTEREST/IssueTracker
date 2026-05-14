@@ -12,10 +12,10 @@ package validator
 
 import (
 	"context"
+	"issuetracker/internal/storage/model"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"issuetracker/internal/storage"
 )
 
 // Result 는 의미 검증 결과입니다.
@@ -30,7 +30,7 @@ type Result struct {
 type Validator interface {
 	// Validate 는 HTML 과 SelectorMap 을 받아 추출 내용의 의미 적합성을 검증합니다.
 	// 검증 API 오류는 error 로 반환 (호출자가 best-effort 처리) — semantic reject 는 Result.Valid=false.
-	Validate(ctx context.Context, html string, selectors storage.SelectorMap, targetType storage.TargetType) (Result, error)
+	Validate(ctx context.Context, html string, selectors model.SelectorMap, targetType model.TargetType) (Result, error)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ type extractedContent struct {
 }
 
 // extractContent 는 SelectorMap 의 각 셀렉터로 HTML 에서 텍스트를 추출합니다.
-func extractContent(html string, sm storage.SelectorMap) (extractedContent, error) {
+func extractContent(html string, sm model.SelectorMap) (extractedContent, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return extractedContent{}, err

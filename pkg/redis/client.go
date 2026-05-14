@@ -7,8 +7,9 @@ import (
 	"context"
 	"fmt"
 
-	goredis "github.com/redis/go-redis/v9"
 	"issuetracker/pkg/config"
+
+	goredis "github.com/redis/go-redis/v9"
 )
 
 // Client는 Redis 연결 래퍼입니다.

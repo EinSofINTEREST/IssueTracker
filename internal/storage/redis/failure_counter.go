@@ -11,7 +11,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/primitive"
 	"issuetracker/pkg/logger"
 )
 
@@ -53,7 +53,7 @@ type failureCounter struct {
 //
 // client 가 nil 이거나 threshold/window 가 비정상이면 error 반환.
 // keyPrefix 는 멀티 환경 분리용 ("dev", "prod" 등). 빈 문자열이면 "fetcher:fail" 사용.
-func NewFailureCounter(client *goredis.Client, threshold int, window time.Duration, keyPrefix string, log *logger.Logger) (storage.FailureCounter, error) {
+func NewFailureCounter(client *goredis.Client, threshold int, window time.Duration, keyPrefix string, log *logger.Logger) (primitive.FailureCounter, error) {
 	if client == nil {
 		return nil, errors.New("redisstore: NewFailureCounter requires non-nil redis client")
 	}
@@ -80,7 +80,7 @@ func (r *failureCounter) keyFor(host string) string {
 }
 
 // Record 는 sliding window 알고리즘에 따라 실패 1건을 누적합니다.
-func (r *failureCounter) Record(ctx context.Context, host string, reason storage.FailureReason) (int, bool, error) {
+func (r *failureCounter) Record(ctx context.Context, host string, reason primitive.FailureReason) (int, bool, error) {
 	if host == "" {
 		return 0, false, nil
 	}

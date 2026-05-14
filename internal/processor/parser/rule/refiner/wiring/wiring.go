@@ -12,7 +12,7 @@ import (
 
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/refiner"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/prompt"
@@ -30,8 +30,8 @@ import (
 func Build(
 	provider llm.Provider,
 	promptLoader prompt.Loader,
-	rules storage.ParserRuleRepository,
-	samples storage.SampleURLRepository,
+	rules repository.ParserRuleRepository,
+	samples repository.SampleURLRepository,
 	resolver *rule.Resolver,
 	metricsRegistry *prometheus.Registry,
 	log *logger.Logger,

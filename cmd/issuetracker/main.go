@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor"
@@ -28,9 +27,11 @@ import (
 	"issuetracker/internal/processor/validate"
 	validateWorkerPkg "issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/scheduler"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/decorator"
 	pgstore "issuetracker/internal/storage/postgres"
+	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
@@ -39,6 +40,8 @@ import (
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/metrics"
 	"issuetracker/pkg/queue"
+
+	goredis "github.com/redis/go-redis/v9"
 
 	"issuetracker/pkg/redis"
 )
@@ -140,14 +143,14 @@ func main() {
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
 	// 모든 Repository 는 WrapXxxWithTimeout 으로 감싸 query-level timeout 적용 (이슈 #427).
 	// pgxpool.Acquire 가 MaxConns 고갈 상황에서 무한 대기하는 시나리오 차단.
-	parserRuleRepo := storage.WrapParserRuleWithTimeout(pgstore.NewParserRuleRepository(pool, log), dbCfg.QueryTimeout)
+	parserRuleRepo := decorator.WrapParserRuleWithTimeout(pgstore.NewParserRuleRepository(pool, log), dbCfg.QueryTimeout)
 	ruleResolver, err := rule.NewResolver(parserRuleRepo)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")
 	}
 	// parser_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
 	// 호출처가 명시적 Invalidate 를 까먹어도 stale cache 발생 X — single source of truth.
-	parserRuleRepo = storage.WrapWithInvalidator(parserRuleRepo, ruleResolver)
+	parserRuleRepo = decorator.WrapWithInvalidator(parserRuleRepo, ruleResolver)
 	ruleParser, err := rule.NewParser(ruleResolver)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule parser")
@@ -161,16 +164,16 @@ func main() {
 	}
 	var (
 		blacklistMatcher *rule.BlacklistMatcher
-		blacklistRepo    storage.BlacklistRepository // llmGen.SetBlacklistRepo 에 전달 (#326).
+		blacklistRepo    repository.BlacklistRepository // llmGen.SetBlacklistRepo 에 전달 (#326).
 	)
 	if blacklistCfg.Enabled {
-		repo := storage.WrapBlacklistWithTimeout(pgstore.NewBlacklistRepository(pool, log), dbCfg.QueryTimeout)
+		repo := decorator.WrapBlacklistWithTimeout(pgstore.NewBlacklistRepository(pool, log), dbCfg.QueryTimeout)
 		bm, bmErr := rule.NewBlacklistMatcher(repo)
 		if bmErr != nil {
 			log.WithError(bmErr).Fatal("failed to construct blacklist matcher")
 		}
 		// invalidatingBlacklistRepo decorator: claudegen 자동 INSERT (#326) 시 Matcher cache flush.
-		blacklistRepo = storage.WrapBlacklistWithInvalidator(repo, bm)
+		blacklistRepo = decorator.WrapBlacklistWithInvalidator(repo, bm)
 		blacklistMatcher = bm
 		log.Info("page-parse blacklist enabled (parser_blacklist DB-backed)")
 	} else {
@@ -185,10 +188,10 @@ func main() {
 	}
 
 	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제.
-	rawRepo := storage.WrapRawContentWithTimeout(pgstore.NewRawContentRepository(pool, log), dbCfg.QueryTimeout)
+	rawRepo := decorator.WrapRawContentWithTimeout(pgstore.NewRawContentRepository(pool, log), dbCfg.QueryTimeout)
 	rawSvc := service.NewRawContentService(rawRepo, log)
 
-	contentRepo := storage.WrapContentWithTimeout(pgstore.NewContentRepository(pool, log), dbCfg.QueryTimeout)
+	contentRepo := decorator.WrapContentWithTimeout(pgstore.NewContentRepository(pool, log), dbCfg.QueryTimeout)
 	contentSvc := service.NewContentService(contentRepo, log)
 
 	// host 단위 fetcher 룰 — fetcher_rules 테이블 + Resolver wiring.
@@ -197,7 +200,7 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct fetcher rule repository")
 	}
-	fetcherRuleRepo := storage.WrapFetcherRuleWithTimeout(fetcherRuleRepoBase, dbCfg.QueryTimeout)
+	fetcherRuleRepo := decorator.WrapFetcherRuleWithTimeout(fetcherRuleRepoBase, dbCfg.QueryTimeout)
 	fetcherResolver, err := fetcherRule.NewResolver(fetcherRuleRepo, log, 0)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct fetcher rule resolver")
@@ -248,7 +251,7 @@ func main() {
 		if kwErr != nil {
 			log.WithError(kwErr).Warn("search keyword repo construction failed — search handler disabled")
 		} else {
-			searchKeywordRepo := storage.WrapSearchKeywordWithTimeout(searchKeywordRepoBase, dbCfg.QueryTimeout)
+			searchKeywordRepo := decorator.WrapSearchKeywordWithTimeout(searchKeywordRepoBase, dbCfg.QueryTimeout)
 			cseClient, cseErr := search.NewCSEClient(search.CSEClientOptions{
 				APIKey:  googleCSECfg.APIKey,
 				CX:      googleCSECfg.CX,
@@ -471,7 +474,7 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to load fetcher auto-upgrade config")
 	}
-	var failureCounter storage.FailureCounter = storage.NewNoopFailureCounter()
+	var failureCounter primitive.FailureCounter = primitive.NewNoopFailureCounter()
 	if fetcherUpgradeCfg.Enabled && redisClientShared != nil {
 		fc, fcErr := redisstore.NewFailureCounter(
 			redisClientShared.Raw(),
@@ -504,7 +507,7 @@ func main() {
 	// ZSET key-level EXPIRE 는 Track 마다 refresh 되어 stale entry 가 살아남는 race 차단 (이슈 #299).
 	// raw_contents row 가 cleanup 으로 삭제된 직후 Upgrader 가 그 ID 로 GetByID 호출하여 ErrNotFound
 	// (STORAGE_001) 노이즈 발생하던 케이스 봉쇄.
-	var rawIDTracker storage.RawIDTracker = storage.NewNoopRawIDTracker()
+	var rawIDTracker primitive.RawIDTracker = primitive.NewNoopRawIDTracker()
 	if fetcherUpgradeCfg.Enabled && redisClientShared != nil {
 		t, tErr := redisstore.NewRawIDTrackerWithFreshness(
 			redisClientShared.Raw(),
@@ -555,7 +558,7 @@ func main() {
 	parserKafkaCfg.GroupID = queue.GroupParsers
 	parserConsumer := queue.NewConsumer(parserKafkaCfg, queue.TopicFetched)
 	// sample URL 누적 — parser_worker 가 정상 파싱 후 누적, 단계 4-2 의 정밀화 트리거 입력.
-	sampleRepo := storage.WrapSampleURLWithTimeout(pgstore.NewSampleURLRepository(pool, log), dbCfg.QueryTimeout)
+	sampleRepo := decorator.WrapSampleURLWithTimeout(pgstore.NewSampleURLRepository(pool, log), dbCfg.QueryTimeout)
 
 	// Parser StageGate (이슈 #355) — ProcessingLock + per-stage Semaphore 합성.
 	// Semaphore capacity 는 PARSER_MAX_CONCURRENT_PER_STAGE 와 worker_count/2 의 min.
@@ -744,7 +747,7 @@ func main() {
 	if schedRepoErr != nil {
 		log.WithError(schedRepoErr).Warn("scheduler entry repo construction failed — using static DefaultEntries fallback")
 	} else {
-		schedulerEntryRepo := storage.WrapSchedulerEntryWithTimeout(schedulerEntryRepoBase, dbCfg.QueryTimeout)
+		schedulerEntryRepo := decorator.WrapSchedulerEntryWithTimeout(schedulerEntryRepoBase, dbCfg.QueryTimeout)
 		entryConverter := scheduler.NewDefaultEntryConverter(schedulerCfg.JobTimeout)
 		entryResolver, resErr := scheduler.NewEntryResolver(schedulerEntryRepo, entryConverter, log, 0)
 		if resErr != nil {

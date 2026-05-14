@@ -3,12 +3,12 @@ package rule
 import (
 	"context"
 	"errors"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
-
-	"issuetracker/internal/storage"
 )
 
 // DefaultBlacklistCacheTTL 은 BlacklistMatcher 의 기본 양성 캐시 TTL 입니다.
@@ -39,7 +39,7 @@ const DefaultBlacklistMaxRegexEntries = 10_000
 //
 // goroutine-safe.
 type BlacklistMatcher struct {
-	repo storage.BlacklistRepository
+	repo repository.BlacklistRepository
 
 	cacheTTL         time.Duration
 	negativeCacheTTL time.Duration
@@ -56,7 +56,7 @@ type BlacklistMatcher struct {
 }
 
 type blacklistCacheEntry struct {
-	rows      []*storage.BlacklistRecord // 빈 슬라이스 = negative cache
+	rows      []*model.BlacklistRecord // 빈 슬라이스 = negative cache
 	expiresAt time.Time
 }
 
@@ -106,7 +106,7 @@ func WithBlacklistMaxRegexEntries(n int) BlacklistMatcherOption {
 
 // NewBlacklistMatcher 는 BlacklistRepository 를 사용하는 Matcher 를 생성합니다.
 // repo 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
-func NewBlacklistMatcher(repo storage.BlacklistRepository, opts ...BlacklistMatcherOption) (*BlacklistMatcher, error) {
+func NewBlacklistMatcher(repo repository.BlacklistRepository, opts ...BlacklistMatcherOption) (*BlacklistMatcher, error) {
 	if repo == nil {
 		return nil, errors.New("rule: NewBlacklistMatcher requires non-nil repo")
 	}
@@ -215,9 +215,9 @@ func (m *BlacklistMatcher) Classify(ctx context.Context, urls []string) Blacklis
 		switch mode {
 		case "":
 			out.Allowed = append(out.Allowed, u)
-		case storage.BlacklistModeExtractLinksOnly:
+		case model.BlacklistModeExtractLinksOnly:
 			out.ExtractLinksOnly = append(out.ExtractLinksOnly, u)
-		case storage.BlacklistModeDrop:
+		case model.BlacklistModeDrop:
 			// 완전 drop — 어느 슬라이스에도 미포함.
 		default:
 			// 알 수 없는 mode (DB CHECK 가 막지만 방어 fallback) — drop 으로 간주하여 미포함.
@@ -230,7 +230,7 @@ func (m *BlacklistMatcher) Classify(ctx context.Context, urls []string) Blacklis
 //
 // 매칭 없음: ("", nil). lookup 에러: ("", err). 매칭됨: (mode, nil).
 // LENGTH(path_pattern) DESC 정렬 후보에서 첫 매칭 row 의 mode 사용 — 더 구체적 path 우선.
-func (m *BlacklistMatcher) matchedMode(ctx context.Context, rawURL string) (storage.BlacklistMode, error) {
+func (m *BlacklistMatcher) matchedMode(ctx context.Context, rawURL string) (model.BlacklistMode, error) {
 	host, path, err := extractHostPath(rawURL)
 	if err != nil {
 		return "", nil
@@ -268,7 +268,7 @@ func (m *BlacklistMatcher) InvalidateAll() {
 }
 
 // lookup 은 cache hit 시 후보 슬라이스를 반환, miss 시 DB 조회 후 cache 에 저장합니다.
-func (m *BlacklistMatcher) lookup(ctx context.Context, host string) ([]*storage.BlacklistRecord, error) {
+func (m *BlacklistMatcher) lookup(ctx context.Context, host string) ([]*model.BlacklistRecord, error) {
 	now := m.now()
 	m.mu.RLock()
 	entry, ok := m.cache[host]

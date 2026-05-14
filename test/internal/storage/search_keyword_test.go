@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 )
 
 // memSearchKeywordRepo 는 SearchKeywordRepository 의 in-memory 구현 — 단위 테스트 / phase 2
@@ -16,22 +18,22 @@ import (
 type memSearchKeywordRepo struct {
 	mu     sync.Mutex
 	nextID int64
-	byID   map[int64]*storage.SearchKeywordRecord
+	byID   map[int64]*model.SearchKeywordRecord
 	byKey  map[string]int64
 }
 
 func newMemSearchKeywordRepo() *memSearchKeywordRepo {
 	return &memSearchKeywordRepo{
 		nextID: 1,
-		byID:   map[int64]*storage.SearchKeywordRecord{},
+		byID:   map[int64]*model.SearchKeywordRecord{},
 		byKey:  map[string]int64{},
 	}
 }
 
-func (r *memSearchKeywordRepo) ListEnabled(_ context.Context, language, region string) ([]*storage.SearchKeywordRecord, error) {
+func (r *memSearchKeywordRepo) ListEnabled(_ context.Context, language, region string) ([]*model.SearchKeywordRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var out []*storage.SearchKeywordRecord
+	var out []*model.SearchKeywordRecord
 	for _, rec := range r.byID {
 		if !rec.Enabled {
 			continue
@@ -48,7 +50,7 @@ func (r *memSearchKeywordRepo) ListEnabled(_ context.Context, language, region s
 	return out, nil
 }
 
-func (r *memSearchKeywordRepo) Insert(_ context.Context, rec *storage.SearchKeywordRecord) error {
+func (r *memSearchKeywordRepo) Insert(_ context.Context, rec *model.SearchKeywordRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if rec.Keyword == "" {
@@ -58,7 +60,7 @@ func (r *memSearchKeywordRepo) Insert(_ context.Context, rec *storage.SearchKeyw
 		return storage.ErrDuplicate
 	}
 	if rec.Source == "" {
-		rec.Source = storage.SearchKeywordSourceManual
+		rec.Source = model.SearchKeywordSourceManual
 	}
 	rec.ID = r.nextID
 	r.nextID++
@@ -71,7 +73,7 @@ func (r *memSearchKeywordRepo) Insert(_ context.Context, rec *storage.SearchKeyw
 	return nil
 }
 
-func (r *memSearchKeywordRepo) Update(_ context.Context, rec *storage.SearchKeywordRecord) error {
+func (r *memSearchKeywordRepo) Update(_ context.Context, rec *model.SearchKeywordRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	stored, ok := r.byID[rec.ID]
@@ -80,7 +82,7 @@ func (r *memSearchKeywordRepo) Update(_ context.Context, rec *storage.SearchKeyw
 	}
 	stored.Enabled = rec.Enabled
 	if rec.Source == "" {
-		stored.Source = storage.SearchKeywordSourceManual
+		stored.Source = model.SearchKeywordSourceManual
 	} else {
 		stored.Source = rec.Source
 	}
@@ -116,14 +118,14 @@ func (r *memSearchKeywordRepo) MarkSearched(_ context.Context, id int64, t time.
 }
 
 // 컴파일 타임 contract 보증.
-var _ storage.SearchKeywordRepository = (*memSearchKeywordRepo)(nil)
+var _ repository.SearchKeywordRepository = (*memSearchKeywordRepo)(nil)
 
 func TestSearchKeywordRepo_InsertAndList(t *testing.T) {
 	t.Parallel()
 	repo := newMemSearchKeywordRepo()
 	ctx := context.Background()
 
-	rec := &storage.SearchKeywordRecord{
+	rec := &model.SearchKeywordRecord{
 		Keyword:  "AI 규제",
 		Enabled:  true,
 		Language: "ko",
@@ -132,7 +134,7 @@ func TestSearchKeywordRepo_InsertAndList(t *testing.T) {
 	}
 	assert.NoError(t, repo.Insert(ctx, rec))
 	assert.Greater(t, rec.ID, int64(0))
-	assert.Equal(t, storage.SearchKeywordSourceManual, rec.Source, "Insert 가 빈 source 를 manual 로 default 처리해야 함")
+	assert.Equal(t, model.SearchKeywordSourceManual, rec.Source, "Insert 가 빈 source 를 manual 로 default 처리해야 함")
 
 	all, err := repo.ListEnabled(ctx, "", "")
 	assert.NoError(t, err)
@@ -152,10 +154,10 @@ func TestSearchKeywordRepo_DuplicateKeywordRejected(t *testing.T) {
 	repo := newMemSearchKeywordRepo()
 	ctx := context.Background()
 
-	first := &storage.SearchKeywordRecord{Keyword: "duplicate", Enabled: true}
+	first := &model.SearchKeywordRecord{Keyword: "duplicate", Enabled: true}
 	assert.NoError(t, repo.Insert(ctx, first))
 
-	second := &storage.SearchKeywordRecord{Keyword: "duplicate", Enabled: true}
+	second := &model.SearchKeywordRecord{Keyword: "duplicate", Enabled: true}
 	err := repo.Insert(ctx, second)
 	assert.ErrorIs(t, err, storage.ErrDuplicate)
 }
@@ -163,7 +165,7 @@ func TestSearchKeywordRepo_DuplicateKeywordRejected(t *testing.T) {
 func TestSearchKeywordRepo_EmptyKeywordRejected(t *testing.T) {
 	t.Parallel()
 	repo := newMemSearchKeywordRepo()
-	err := repo.Insert(context.Background(), &storage.SearchKeywordRecord{Enabled: true})
+	err := repo.Insert(context.Background(), &model.SearchKeywordRecord{Enabled: true})
 	assert.ErrorIs(t, err, storage.ErrInvalid)
 }
 
@@ -172,8 +174,8 @@ func TestSearchKeywordRepo_DisabledKeywordsHidden(t *testing.T) {
 	repo := newMemSearchKeywordRepo()
 	ctx := context.Background()
 
-	on := &storage.SearchKeywordRecord{Keyword: "on-keyword", Enabled: true}
-	off := &storage.SearchKeywordRecord{Keyword: "off-keyword", Enabled: false}
+	on := &model.SearchKeywordRecord{Keyword: "on-keyword", Enabled: true}
+	off := &model.SearchKeywordRecord{Keyword: "off-keyword", Enabled: false}
 	assert.NoError(t, repo.Insert(ctx, on))
 	assert.NoError(t, repo.Insert(ctx, off))
 
@@ -188,7 +190,7 @@ func TestSearchKeywordRepo_UpdateAndDelete(t *testing.T) {
 	repo := newMemSearchKeywordRepo()
 	ctx := context.Background()
 
-	rec := &storage.SearchKeywordRecord{Keyword: "edit-me", Enabled: true}
+	rec := &model.SearchKeywordRecord{Keyword: "edit-me", Enabled: true}
 	assert.NoError(t, repo.Insert(ctx, rec))
 
 	rec.Enabled = false
@@ -199,7 +201,7 @@ func TestSearchKeywordRepo_UpdateAndDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, got, "disabled keyword 은 ListEnabled 에서 제외")
 
-	missing := &storage.SearchKeywordRecord{ID: 99999, Keyword: "edit-me"}
+	missing := &model.SearchKeywordRecord{ID: 99999, Keyword: "edit-me"}
 	assert.ErrorIs(t, repo.Update(ctx, missing), storage.ErrNotFound)
 
 	assert.NoError(t, repo.Delete(ctx, rec.ID))
@@ -211,7 +213,7 @@ func TestSearchKeywordRepo_MarkSearched(t *testing.T) {
 	repo := newMemSearchKeywordRepo()
 	ctx := context.Background()
 
-	rec := &storage.SearchKeywordRecord{Keyword: "mark-me", Enabled: true}
+	rec := &model.SearchKeywordRecord{Keyword: "mark-me", Enabled: true}
 	assert.NoError(t, repo.Insert(ctx, rec))
 	assert.Nil(t, rec.LastSearchedAt)
 

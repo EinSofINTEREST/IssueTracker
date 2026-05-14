@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/processor/parser/rule/claudegen"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -142,7 +142,7 @@ func TestClaudeWorker_Extract_Success_ArticlePage(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
-	sm, err := w.Extract(t.Context(), "news.naver.com", storage.TargetTypePage, "<html>...</html>")
+	sm, err := w.Extract(t.Context(), "news.naver.com", model.TargetTypePage, "<html>...</html>")
 
 	require.NoError(t, err)
 	require.NotNil(t, sm.Title)
@@ -162,7 +162,7 @@ func TestClaudeWorker_Extract_Success_ListPage(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
-	sm, err := w.Extract(t.Context(), "news.daum.net", storage.TargetTypeList, "<html>...</html>")
+	sm, err := w.Extract(t.Context(), "news.daum.net", model.TargetTypeList, "<html>...</html>")
 
 	require.NoError(t, err)
 	require.NotNil(t, sm.ItemContainer)
@@ -176,7 +176,7 @@ func TestClaudeWorker_Extract_WithoutStart_Fails(t *testing.T) {
 	runner := &mockContainerRunner{}
 	w := newTestWorker(t, runner)
 
-	_, err := w.Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+	_, err := w.Extract(t.Context(), "example.com", model.TargetTypePage, "<html></html>")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not started")
 }
@@ -191,7 +191,7 @@ func TestClaudeWorker_Extract_ExecError(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
-	_, err := w.Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+	_, err := w.Extract(t.Context(), "example.com", model.TargetTypePage, "<html></html>")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exec session")
 }
@@ -205,7 +205,7 @@ func TestClaudeWorker_Extract_NoJSONInOutput(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
-	_, err := w.Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+	_, err := w.Extract(t.Context(), "example.com", model.TargetTypePage, "<html></html>")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse claude output")
 }
@@ -217,7 +217,7 @@ func TestClaudeWorker_Extract_ModelInExecArgs(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
-	_, _ = w.Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+	_, _ = w.Extract(t.Context(), "example.com", model.TargetTypePage, "<html></html>")
 
 	modelFound := false
 	for i, arg := range runner.execedWith.args {
@@ -235,7 +235,7 @@ func TestClaudeWorker_Extract_SessionPathInArgs(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
-	_, _ = w.Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+	_, _ = w.Extract(t.Context(), "example.com", model.TargetTypePage, "<html></html>")
 
 	// -p 인자에 /workspace/<sessionID>/page.html 경로가 포함되어야 함
 	found := false
@@ -264,7 +264,7 @@ func TestClaudeWorker_Extract_ConcurrentSessions(t *testing.T) {
 	errs := make(chan error, n)
 	for range n {
 		go func() {
-			_, err := w.Extract(t.Context(), "example.com", storage.TargetTypePage, "<html></html>")
+			_, err := w.Extract(t.Context(), "example.com", model.TargetTypePage, "<html></html>")
 			errs <- err
 		}()
 	}

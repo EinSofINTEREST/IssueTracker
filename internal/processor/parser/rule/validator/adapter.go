@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // LLMGenAdapter 는 validator.Pool 을 llmgen.SelectorValidator 인터페이스로 감쌉니다.
@@ -18,7 +18,7 @@ func NewLLMGenAdapter(pool *Pool) *LLMGenAdapter {
 	return &LLMGenAdapter{pool: pool}
 }
 
-func (a *LLMGenAdapter) Validate(ctx context.Context, html string, selectors storage.SelectorMap, targetType storage.TargetType) (llmgen.SelectorValidatorResult, error) {
+func (a *LLMGenAdapter) Validate(ctx context.Context, html string, selectors model.SelectorMap, targetType model.TargetType) (llmgen.SelectorValidatorResult, error) {
 	res, err := a.pool.Validate(ctx, html, selectors, targetType)
 	return llmgen.SelectorValidatorResult{Valid: res.Valid, Reason: res.Reason}, err
 }

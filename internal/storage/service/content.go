@@ -10,6 +10,8 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -35,10 +37,10 @@ type ContentService interface {
 	GetByID(ctx context.Context, id string) (*core.Content, error)
 
 	// ListByCountry는 특정 국가의 content를 최신순으로 반환합니다.
-	ListByCountry(ctx context.Context, country string, filter storage.ContentFilter) ([]*core.Content, error)
+	ListByCountry(ctx context.Context, country string, filter model.ContentFilter) ([]*core.Content, error)
 
 	// Search는 다양한 조건으로 content를 검색합니다.
-	Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error)
+	Search(ctx context.Context, filter model.ContentFilter) ([]*core.Content, error)
 
 	// CountByCountry는 최근 N일간 국가별 content 수를 반환합니다.
 	CountByCountry(ctx context.Context, days int) (map[string]int64, error)
@@ -49,18 +51,18 @@ type ContentService interface {
 	Delete(ctx context.Context, id string) error
 
 	// UpdateValidationStatus updates validator result metadata for the given content id.
-	// 자세한 내용은 storage.ContentRepository.UpdateValidationStatus 참조.
+	// 자세한 내용은 repository.ContentRepository.UpdateValidationStatus 참조.
 	UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error
 }
 
 // contentService는 ContentService의 구현체입니다.
 type contentService struct {
-	repo storage.ContentRepository
+	repo repository.ContentRepository
 	log  *logger.Logger
 }
 
 // NewContentService는 주어진 repository를 사용하는 ContentService를 생성합니다.
-func NewContentService(repo storage.ContentRepository, log *logger.Logger) ContentService {
+func NewContentService(repo repository.ContentRepository, log *logger.Logger) ContentService {
 	return &contentService{repo: repo, log: log}
 }
 
@@ -125,7 +127,7 @@ func (s *contentService) GetByID(ctx context.Context, id string) (*core.Content,
 func (s *contentService) ListByCountry(
 	ctx context.Context,
 	country string,
-	filter storage.ContentFilter,
+	filter model.ContentFilter,
 ) ([]*core.Content, error) {
 	filter.Country = country
 
@@ -143,7 +145,7 @@ func (s *contentService) ListByCountry(
 }
 
 // Search는 ContentFilter 조건으로 content를 검색합니다.
-func (s *contentService) Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
+func (s *contentService) Search(ctx context.Context, filter model.ContentFilter) ([]*core.Content, error) {
 	contents, err := s.repo.List(ctx, filter)
 	if err != nil {
 		return nil, core.NewStorageError(core.CodeStorageRead, "search contents", true, err)
@@ -172,7 +174,7 @@ func (s *contentService) CountByCountry(ctx context.Context, days int) (map[stri
 	result := make(map[string]int64, len(countries))
 
 	for _, country := range countries {
-		count, err := s.repo.Count(ctx, storage.ContentFilter{
+		count, err := s.repo.Count(ctx, model.ContentFilter{
 			Country:        country,
 			PublishedAfter: &after,
 		})

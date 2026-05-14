@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -62,7 +63,7 @@ type sourceConfigCacheEntry struct {
 // rule.Resolver 와 동일하게 singleflight 로 thundering herd 방지 — cache miss / 만료 시점에
 // 동일 host 에 대해 여러 goroutine 이 동시 진입해도 DB 조회는 단 1회만 발생.
 type dbSourceConfigResolver struct {
-	repo   storage.FetcherRuleRepository
+	repo   repository.FetcherRuleRepository
 	log    *logger.Logger
 	ttl    time.Duration
 	cache  sync.Map // map[string]sourceConfigCacheEntry
@@ -73,7 +74,7 @@ type dbSourceConfigResolver struct {
 //
 // repo 가 nil 이면 wiring 오류 — error 반환.
 // ttl 이 0 이하이면 DefaultSourceConfigCacheTTL 사용.
-func NewSourceConfigResolver(repo storage.FetcherRuleRepository, log *logger.Logger, ttl time.Duration) (SourceConfigResolver, error) {
+func NewSourceConfigResolver(repo repository.FetcherRuleRepository, log *logger.Logger, ttl time.Duration) (SourceConfigResolver, error) {
 	if repo == nil {
 		return nil, errors.New("rate_limiter: NewSourceConfigResolver requires non-nil FetcherRuleRepository")
 	}

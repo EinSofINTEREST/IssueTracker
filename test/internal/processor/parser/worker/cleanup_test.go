@@ -13,6 +13,7 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	parserWorker "issuetracker/internal/processor/parser/worker"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 )
 
@@ -37,7 +38,7 @@ func (s *fakeRawSvc) Delete(_ context.Context, _ string) error {
 	atomic.AddInt64(&s.deleteCalls, 1)
 	return nil
 }
-func (s *fakeRawSvc) List(_ context.Context, _ storage.RawContentFilter) ([]*core.RawContent, error) {
+func (s *fakeRawSvc) List(_ context.Context, _ model.RawContentFilter) ([]*core.RawContent, error) {
 	return nil, nil
 }
 func (s *fakeRawSvc) PurgeOlderThan(_ context.Context, _ time.Time) (int64, error) {

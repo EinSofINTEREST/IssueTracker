@@ -1,8 +1,17 @@
-package storage
+// Package decorator 는 storage 계층의 cross-cutting decorator 들 (cache invalidate, query timeout)
+// 을 모아놓은 sub-package 입니다.
+//
+// 각 decorator 는 repository 인터페이스를 받아 동일 인터페이스를 반환하므로 wiring 단계에서
+// chain 으로 합성 가능합니다 (예: invalidating + timeout 합성).
+package decorator
 
 import (
 	"context"
 	"errors"
+
+	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 )
 
 // BlacklistInvalidator 는 host cache invalidate 의 최소 인터페이스입니다.
@@ -12,7 +21,7 @@ type BlacklistInvalidator interface {
 }
 
 // invalidatingBlacklistRepo 는 BlacklistRepository 를 wrap 하여 mutation 후 자동으로 Matcher 의
-// host cache 를 invalidate 하는 decorator 입니다 (parser_rules 의 invalidatingRepo 와 동일 패턴).
+// host cache 를 invalidate 하는 decorator 입니다.
 //
 // 적용 정책:
 //   - Insert 성공          → Invalidate (host)
@@ -20,16 +29,16 @@ type BlacklistInvalidator interface {
 //   - Update 성공          → 사전 GetByID 로 host lookup 후 Invalidate
 //   - Delete 성공          → 사전 GetByID 로 host lookup 후 Invalidate
 type invalidatingBlacklistRepo struct {
-	inner BlacklistRepository
+	inner repository.BlacklistRepository
 	inv   BlacklistInvalidator
 }
 
 // WrapBlacklistWithInvalidator 는 BlacklistRepository 를 invalidatingBlacklistRepo 로 wrap 합니다.
 //
 // inner nil 이면 panic — wiring 버그. inv nil 이면 wrapper 만 (invalidate skip).
-func WrapBlacklistWithInvalidator(inner BlacklistRepository, inv BlacklistInvalidator) BlacklistRepository {
+func WrapBlacklistWithInvalidator(inner repository.BlacklistRepository, inv BlacklistInvalidator) repository.BlacklistRepository {
 	if inner == nil {
-		panic("storage: WrapBlacklistWithInvalidator requires non-nil inner repository")
+		panic("decorator: WrapBlacklistWithInvalidator requires non-nil inner repository")
 	}
 	return &invalidatingBlacklistRepo{inner: inner, inv: inv}
 }
@@ -40,18 +49,15 @@ func (r *invalidatingBlacklistRepo) invalidate(host string) {
 	}
 }
 
-func (r *invalidatingBlacklistRepo) Insert(ctx context.Context, rec *BlacklistRecord) error {
+func (r *invalidatingBlacklistRepo) Insert(ctx context.Context, rec *model.BlacklistRecord) error {
 	err := r.inner.Insert(ctx, rec)
-	if err == nil || errors.Is(err, ErrDuplicate) {
+	if err == nil || errors.Is(err, storage.ErrDuplicate) {
 		r.invalidate(rec.HostPattern)
 	}
 	return err
 }
 
-func (r *invalidatingBlacklistRepo) Update(ctx context.Context, rec *BlacklistRecord) error {
-	// Update 는 host 변경 안 하므로 호출자가 rec.HostPattern 을 비워
-	// 보내도 정당. 사전 GetByID 로 authoritative host 를 얻어 invalidate — Delete 와 동일 패턴.
-	// pre-fetch 실패 시 fallback 으로 rec.HostPattern (비어있지 않을 때만) 사용.
+func (r *invalidatingBlacklistRepo) Update(ctx context.Context, rec *model.BlacklistRecord) error {
 	before, lookupErr := r.inner.GetByID(ctx, rec.ID)
 	if err := r.inner.Update(ctx, rec); err != nil {
 		return err
@@ -77,17 +83,15 @@ func (r *invalidatingBlacklistRepo) Delete(ctx context.Context, id int64) error 
 	return nil
 }
 
-// 이하 read-only 위임.
-
-func (r *invalidatingBlacklistRepo) GetByID(ctx context.Context, id int64) (*BlacklistRecord, error) {
+func (r *invalidatingBlacklistRepo) GetByID(ctx context.Context, id int64) (*model.BlacklistRecord, error) {
 	return r.inner.GetByID(ctx, id)
 }
-func (r *invalidatingBlacklistRepo) FindEnabledByHost(ctx context.Context, host string) ([]*BlacklistRecord, error) {
+func (r *invalidatingBlacklistRepo) FindEnabledByHost(ctx context.Context, host string) ([]*model.BlacklistRecord, error) {
 	return r.inner.FindEnabledByHost(ctx, host)
 }
-func (r *invalidatingBlacklistRepo) List(ctx context.Context, f BlacklistFilter) ([]*BlacklistRecord, error) {
+func (r *invalidatingBlacklistRepo) List(ctx context.Context, f model.BlacklistFilter) ([]*model.BlacklistRecord, error) {
 	return r.inner.List(ctx, f)
 }
 
 // 컴파일 타임 인터페이스 만족 검증.
-var _ BlacklistRepository = (*invalidatingBlacklistRepo)(nil)
+var _ repository.BlacklistRepository = (*invalidatingBlacklistRepo)(nil)

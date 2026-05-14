@@ -1,10 +1,9 @@
 package llmgen
 
 import (
+	"issuetracker/internal/storage/model"
 	"sync"
 	"time"
-
-	"issuetracker/internal/storage"
 )
 
 // HostBreakerConfig 는 HostBreaker 의 동작 정책입니다.
@@ -34,7 +33,7 @@ func DefaultHostBreakerConfig() HostBreakerConfig {
 // 소비 패턴이 다르므로 cooldown 도 분리.
 type hostKey struct {
 	host       string
-	targetType storage.TargetType
+	targetType model.TargetType
 }
 
 // hostState 는 단일 (host, target_type) 의 breaker 상태입니다.
@@ -90,7 +89,7 @@ func NewHostBreaker(cfg HostBreakerConfig) *HostBreaker {
 // 비차단 상태 (blockedUntil.IsZero) 의 entry 는 consecutive failure count 보존을 위해 삭제하지
 // 않음 — 그 카운터가 0 으로 되돌아가면 threshold 도달이 안 되어 cooldown 자체가 발화 안 함.
 // 비차단 entry 의 정리는 RecordSuccess (회복) 또는 cooldown 진입 후 만료 시점에 발생.
-func (b *HostBreaker) Allow(host string, targetType storage.TargetType) (bool, time.Duration) {
+func (b *HostBreaker) Allow(host string, targetType model.TargetType) (bool, time.Duration) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	key := hostKey{host: host, targetType: targetType}
@@ -114,7 +113,7 @@ func (b *HostBreaker) Allow(host string, targetType storage.TargetType) (bool, t
 // RecordRateLimit 는 (host, target_type) 에서 rate_limit 발생을 기록합니다.
 //
 // failures 카운터 +1. threshold 도달 시 cooldown 진입 (blockedUntil = now + cooldown).
-func (b *HostBreaker) RecordRateLimit(host string, targetType storage.TargetType) {
+func (b *HostBreaker) RecordRateLimit(host string, targetType model.TargetType) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	key := hostKey{host, targetType}
@@ -133,7 +132,7 @@ func (b *HostBreaker) RecordRateLimit(host string, targetType storage.TargetType
 //
 // 같은 host 의 정상 응답이 한 번이라도 들어오면 entry 자체를 삭제 — failures/cooldown reset
 // 효과 + map 무한 성장 방지 (CodeRabbit Major 반영). 다음 실패는 새 entry 로 시작.
-func (b *HostBreaker) RecordSuccess(host string, targetType storage.TargetType) {
+func (b *HostBreaker) RecordSuccess(host string, targetType model.TargetType) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.st, hostKey{host: host, targetType: targetType})
@@ -144,7 +143,7 @@ func (b *HostBreaker) RecordSuccess(host string, targetType storage.TargetType) 
 // 운영 metric 으로 활용 가능 — 차단 host 수가 갑자기 늘면 LLM provider 한도 / 키 만료 신호.
 type BreakerSnapshot struct {
 	Host         string
-	TargetType   storage.TargetType
+	TargetType   model.TargetType
 	Failures     int
 	BlockedUntil time.Time
 }

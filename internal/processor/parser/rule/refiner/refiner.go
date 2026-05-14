@@ -36,6 +36,8 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/rule/pathinfer"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -59,8 +61,8 @@ const DefaultMinSamples = 5
 //   - Start 두 번 호출은 두 번째가 noop, Stop 후 Start 는 noop (race 안전).
 //   - 테스트 친화 — Run / RunOnce 는 그대로 유지하여 외부에서 단일 cycle 호출 가능.
 type Refiner struct {
-	rules    storage.ParserRuleRepository
-	samples  storage.SampleURLRepository
+	rules    repository.ParserRuleRepository
+	samples  repository.SampleURLRepository
 	resolver *rule.Resolver
 	llm      pathinfer.LLMClient // nil 허용
 	loader   prompt.Loader       // LLM fallback 활성 시 (llm != nil) 필수
@@ -118,8 +120,8 @@ func WithMetrics(m *Metrics) Option {
 // New 는 Refiner 를 생성합니다. rules / samples / resolver / log 가 nil 이면 error —
 // 호출자 (cmd/main) 가 boot fatal 처리. LLMClient 만 nil 허용 (algorithm-only 동작).
 func New(
-	rules storage.ParserRuleRepository,
-	samples storage.SampleURLRepository,
+	rules repository.ParserRuleRepository,
+	samples repository.SampleURLRepository,
 	resolver *rule.Resolver,
 	log *logger.Logger,
 	opts ...Option,
@@ -239,7 +241,7 @@ func (r *Refiner) Run(ctx context.Context) {
 // 모든 rule 의 단계별 실패는 cycle 안에서 흡수 (Warn 로그) — 함수는 cycle 자체의 치명적
 // 에러 (rule List 실패) 만 에러 반환. test 친화 — Run 외부에서 단발 호출 가능.
 func (r *Refiner) RunOnce(ctx context.Context) error {
-	candidates, err := r.rules.List(ctx, storage.ParserRuleFilter{
+	candidates, err := r.rules.List(ctx, model.ParserRuleFilter{
 		SourceName:  llmgen.LLMAutoSourceName,
 		OnlyEnabled: true,
 		Limit:       1000, // 운영상 llm-auto rule 은 호스트 수 만큼 — 1000 이면 충분.
@@ -260,7 +262,7 @@ func (r *Refiner) RunOnce(ctx context.Context) error {
 
 // refineOne 은 단일 rule 에 대한 정밀화 단계를 수행합니다.
 // 모든 단계 실패는 함수 내에서 Warn 로그 + 조용히 return — 호출자가 다음 rule 로 진행 가능.
-func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParserRuleRecord) {
+func (r *Refiner) refineOne(ctx context.Context, rec *model.ParserRuleRecord) {
 	rlog := r.log.WithFields(map[string]interface{}{
 		"rule_id": rec.ID,
 		"host":    rec.HostPattern,
@@ -333,7 +335,7 @@ func (r *Refiner) refineOne(ctx context.Context, rec *storage.ParserRuleRecord) 
 	// 정렬로 v2 를 우선 시도하고 매칭 실패 시 v1 catch-all 로 자연 fallback.
 	//
 	// 새 record 의 selector / confidence / source / host / target / enabled 는 v1 의 값을 그대로 복사.
-	newRec := &storage.ParserRuleRecord{
+	newRec := &model.ParserRuleRecord{
 		SourceName:  rec.SourceName,
 		HostPattern: rec.HostPattern,
 		PathPattern: pattern,
@@ -418,7 +420,7 @@ func inferPattern(ctx context.Context, paths []string, llm pathinfer.LLMClient, 
 
 // extractPaths 는 SampleURL 슬라이스의 URL 들에서 path 부분만 추출합니다.
 // URL parse 실패한 항목은 skip — 호출자에서 길이로 부족 여부 판단.
-func extractPaths(samples []*storage.SampleURL) []string {
+func extractPaths(samples []*model.SampleURL) []string {
 	out := make([]string, 0, len(samples))
 	for _, s := range samples {
 		u, err := url.Parse(s.URL)

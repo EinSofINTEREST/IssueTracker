@@ -13,7 +13,7 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/worker"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -99,12 +99,12 @@ func (m *mockContentService) GetByID(ctx context.Context, id string) (*core.Cont
 	return args.Get(0).(*core.Content), args.Error(1)
 }
 
-func (m *mockContentService) ListByCountry(ctx context.Context, country string, filter storage.ContentFilter) ([]*core.Content, error) {
+func (m *mockContentService) ListByCountry(ctx context.Context, country string, filter model.ContentFilter) ([]*core.Content, error) {
 	args := m.Called(ctx, country, filter)
 	return args.Get(0).([]*core.Content), args.Error(1)
 }
 
-func (m *mockContentService) Search(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
+func (m *mockContentService) Search(ctx context.Context, filter model.ContentFilter) ([]*core.Content, error) {
 	args := m.Called(ctx, filter)
 	return args.Get(0).([]*core.Content), args.Error(1)
 }

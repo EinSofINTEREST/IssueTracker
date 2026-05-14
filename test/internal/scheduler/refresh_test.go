@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/scheduler"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 )
 
@@ -153,4 +153,4 @@ func TestScheduler_Refresh_NoResolver_NoOp(t *testing.T) {
 }
 
 // 본 테스트 파일은 storage import 도 함께 지키기 위해 unused import 회피용 sentinel.
-var _ = storage.SchedulerCategoryNews
+var _ = model.SchedulerCategoryNews

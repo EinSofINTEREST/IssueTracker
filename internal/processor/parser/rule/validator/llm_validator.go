@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/prompt"
 )
@@ -63,7 +63,7 @@ func NewLLMValidator(provider llm.Provider, loader prompt.Loader) (*LLMValidator
 	return &LLMValidator{provider: provider, loader: loader}, nil
 }
 
-func (v *LLMValidator) Validate(ctx context.Context, html string, selectors storage.SelectorMap, targetType storage.TargetType) (Result, error) {
+func (v *LLMValidator) Validate(ctx context.Context, html string, selectors model.SelectorMap, targetType model.TargetType) (Result, error) {
 	ec, err := extractContent(html, selectors)
 	if err != nil {
 		return Result{}, fmt.Errorf("extract content for validation: %w", err)
@@ -105,9 +105,9 @@ func (v *LLMValidator) Validate(ctx context.Context, html string, selectors stor
 	return Result(vr), nil
 }
 
-func buildValidationPrompt(ec extractedContent, targetType storage.TargetType, loader prompt.Loader) (string, error) {
+func buildValidationPrompt(ec extractedContent, targetType model.TargetType, loader prompt.Loader) (string, error) {
 	switch targetType {
-	case storage.TargetTypeList:
+	case model.TargetTypeList:
 		template, err := loader.Load("validator/list.user")
 		if err != nil {
 			return "", fmt.Errorf("load validator list user prompt: %w", err)

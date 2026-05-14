@@ -9,7 +9,7 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	validateWorker "issuetracker/internal/processor/validate/worker"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/decorator"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
@@ -85,7 +85,7 @@ func main() {
 	defer pool.Close()
 
 	// query-level timeout 적용 (이슈 #427).
-	contentRepo := storage.WrapContentWithTimeout(pgstore.NewContentRepository(pool, log), dbCfg.QueryTimeout)
+	contentRepo := decorator.WrapContentWithTimeout(pgstore.NewContentRepository(pool, log), dbCfg.QueryTimeout)
 	contentSvc := service.NewContentService(contentRepo, log)
 
 	// ── 4. Consumer / Producer 생성 ───────────────────────────────────────────

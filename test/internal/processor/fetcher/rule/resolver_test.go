@@ -12,6 +12,7 @@ import (
 
 	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 )
 
@@ -20,19 +21,19 @@ import (
 // repo 동작 자체는 본 sub 의 검증 대상이 아니라 (Postgres 통합 테스트 영역) Resolver 의
 // cache / fallback / Invalidate 동작을 격리 검증하기 위한 stub.
 type stubFetcherRuleRepo struct {
-	rules map[string]*storage.FetcherRuleRecord
+	rules map[string]*model.FetcherRuleRecord
 	err   error
 	calls atomic.Int32
 }
 
-func (s *stubFetcherRuleRepo) Upsert(ctx context.Context, host string, fetcher storage.FetcherKind, reason string) error {
+func (s *stubFetcherRuleRepo) Upsert(ctx context.Context, host string, fetcher model.FetcherKind, reason string) error {
 	if s.rules == nil {
-		s.rules = make(map[string]*storage.FetcherRuleRecord)
+		s.rules = make(map[string]*model.FetcherRuleRecord)
 	}
-	s.rules[host] = &storage.FetcherRuleRecord{HostPattern: host, Fetcher: fetcher, Reason: reason}
+	s.rules[host] = &model.FetcherRuleRecord{HostPattern: host, Fetcher: fetcher, Reason: reason}
 	return nil
 }
-func (s *stubFetcherRuleRepo) GetByHost(ctx context.Context, host string) (*storage.FetcherRuleRecord, error) {
+func (s *stubFetcherRuleRepo) GetByHost(ctx context.Context, host string) (*model.FetcherRuleRecord, error) {
 	s.calls.Add(1)
 	if s.err != nil {
 		return nil, s.err
@@ -42,8 +43,8 @@ func (s *stubFetcherRuleRepo) GetByHost(ctx context.Context, host string) (*stor
 	}
 	return nil, storage.ErrNotFound
 }
-func (s *stubFetcherRuleRepo) List(ctx context.Context) ([]*storage.FetcherRuleRecord, error) {
-	out := make([]*storage.FetcherRuleRecord, 0, len(s.rules))
+func (s *stubFetcherRuleRepo) List(ctx context.Context) ([]*model.FetcherRuleRecord, error) {
+	out := make([]*model.FetcherRuleRecord, 0, len(s.rules))
 	for _, r := range s.rules {
 		out = append(out, r)
 	}
@@ -84,8 +85,8 @@ func TestResolver_HostNotFound_ReturnsFalse(t *testing.T) {
 // 매칭 host 는 등록된 fetcher 그대로 반환.
 func TestResolver_HostMatched_ReturnsFetcher(t *testing.T) {
 	repo := &stubFetcherRuleRepo{
-		rules: map[string]*storage.FetcherRuleRecord{
-			"edition.cnn.com": {HostPattern: "edition.cnn.com", Fetcher: storage.FetcherChromedp},
+		rules: map[string]*model.FetcherRuleRecord{
+			"edition.cnn.com": {HostPattern: "edition.cnn.com", Fetcher: model.FetcherChromedp},
 		},
 	}
 	r, err := fetcherRule.NewResolver(repo, newTestLogger(), 0)
@@ -94,15 +95,15 @@ func TestResolver_HostMatched_ReturnsFetcher(t *testing.T) {
 	res, err := r.Resolve(context.Background(), "edition.cnn.com")
 	require.NoError(t, err)
 	assert.True(t, res.Found)
-	assert.Equal(t, storage.FetcherChromedp, res.Fetcher)
+	assert.Equal(t, model.FetcherChromedp, res.Fetcher)
 }
 
 // TestResolver_CachesPositiveResult:
 // 같은 host 의 반복 조회는 cache hit — repo.GetByHost 가 1회만 호출.
 func TestResolver_CachesPositiveResult(t *testing.T) {
 	repo := &stubFetcherRuleRepo{
-		rules: map[string]*storage.FetcherRuleRecord{
-			"edition.cnn.com": {HostPattern: "edition.cnn.com", Fetcher: storage.FetcherChromedp},
+		rules: map[string]*model.FetcherRuleRecord{
+			"edition.cnn.com": {HostPattern: "edition.cnn.com", Fetcher: model.FetcherChromedp},
 		},
 	}
 	r, err := fetcherRule.NewResolver(repo, newTestLogger(), 1*time.Hour)
@@ -147,8 +148,8 @@ func TestResolver_RepoError_PropagatesNoCache(t *testing.T) {
 // TTL 만료 후 재조회는 repo 로 다시 hit.
 func TestResolver_TTLExpiry_RefetchesFromRepo(t *testing.T) {
 	repo := &stubFetcherRuleRepo{
-		rules: map[string]*storage.FetcherRuleRecord{
-			"edition.cnn.com": {HostPattern: "edition.cnn.com", Fetcher: storage.FetcherChromedp},
+		rules: map[string]*model.FetcherRuleRecord{
+			"edition.cnn.com": {HostPattern: "edition.cnn.com", Fetcher: model.FetcherChromedp},
 		},
 	}
 	r, err := fetcherRule.NewResolver(repo, newTestLogger(), 5*time.Millisecond)
@@ -167,8 +168,8 @@ func TestResolver_TTLExpiry_RefetchesFromRepo(t *testing.T) {
 // Invalidate 호출 후 같은 host 조회는 cache miss → repo hit.
 func TestResolver_Invalidate_ForcesRefetch(t *testing.T) {
 	repo := &stubFetcherRuleRepo{
-		rules: map[string]*storage.FetcherRuleRecord{
-			"edition.cnn.com": {HostPattern: "edition.cnn.com", Fetcher: storage.FetcherChromedp},
+		rules: map[string]*model.FetcherRuleRecord{
+			"edition.cnn.com": {HostPattern: "edition.cnn.com", Fetcher: model.FetcherChromedp},
 		},
 	}
 	r, err := fetcherRule.NewResolver(repo, newTestLogger(), 1*time.Hour)

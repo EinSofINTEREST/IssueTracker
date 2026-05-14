@@ -10,7 +10,7 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/rule"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -139,7 +139,7 @@ func (h *ChainHandler) selectChain(ctx context.Context, job *core.CrawlJob) (Han
 	// 과 함께 부착되어야만 honor. 외부 publisher (현재는 없으나 미래 확장 시) 가 token 추측 불가.
 	// token 부재 / 불일치 시 warn 후 default 분기 — fail-safe.
 	if v, ok := job.Target.Metadata[rule.MetadataKeyForceFetcher]; ok {
-		if s, ok := v.(string); ok && s == string(storage.FetcherChromedp) {
+		if s, ok := v.(string); ok && s == string(model.FetcherChromedp) {
 			tokenVal, _ := job.Target.Metadata[rule.MetadataKeyForceFetcherToken].(string)
 			if !rule.ValidateForceFetcherToken(tokenVal) {
 				h.Log.WithFields(map[string]interface{}{
@@ -177,7 +177,7 @@ func (h *ChainHandler) selectChain(ctx context.Context, job *core.CrawlJob) (Han
 	if !res.Found {
 		return h.DefaultChain, false
 	}
-	if res.Fetcher == storage.FetcherChromedp {
+	if res.Fetcher == model.FetcherChromedp {
 		if !h.hasChromedpChain() {
 			h.Log.WithFields(map[string]interface{}{
 				"url":  job.Target.URL,

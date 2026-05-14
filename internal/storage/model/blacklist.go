@@ -1,9 +1,10 @@
-package storage
+// Package model 은 storage 계층의 도메인 데이터 타입 (Record / Filter / Enum) 만 정의합니다.
+//
+// 본 패키지는 인터페이스 / 의존성 / 동작을 가지지 않으며, 다른 모든 storage 하위 패키지가
+// 본 패키지에 의존하지만 본 패키지는 아무것도 import 하지 않습니다 (time 외).
+package model
 
-import (
-	"context"
-	"time"
-)
+import "time"
 
 // BlacklistSource 는 블랙리스트 row 의 등록 출처입니다.
 //
@@ -63,35 +64,4 @@ type BlacklistFilter struct {
 	OnlyEnabled bool            // true 면 enabled=true 만
 	Limit       int             // 0 이면 기본값 (50)
 	Offset      int
-}
-
-// BlacklistRepository 는 parser_blacklist 테이블에 대한 데이터 접근 인터페이스입니다.
-//
-// goroutine-safe: 모든 구현은 동시 호출 안전해야 함.
-type BlacklistRepository interface {
-	// Insert 는 새 블랙리스트 row 를 저장합니다. 자연키 (host_pattern, path_pattern) 충돌 시
-	// ErrDuplicate 반환. PathPattern 이 빈 문자열이 아니면 RE2 컴파일 검증 — 실패 시 ErrInvalid.
-	// 성공 시 r.ID / CreatedAt / UpdatedAt 채워짐.
-	Insert(ctx context.Context, r *BlacklistRecord) error
-
-	// Update 는 ID 로 row 를 갱신합니다 (자연키 변경 불가). Enabled / Reason / Source 만 변경 가능.
-	// 존재하지 않으면 ErrNotFound.
-	Update(ctx context.Context, r *BlacklistRecord) error
-
-	// Delete 는 ID 로 row 를 삭제합니다. 존재하지 않아도 nil 반환 (idempotent).
-	Delete(ctx context.Context, id int64) error
-
-	// GetByID 는 ID 로 row 를 조회합니다.
-	GetByID(ctx context.Context, id int64) (*BlacklistRecord, error)
-
-	// FindEnabledByHost 는 host_pattern 매칭 enabled=TRUE row 들을 반환합니다 (Matcher 핫패스).
-	//
-	// 정렬: LENGTH(path_pattern) DESC — 더 구체적인 path 가 먼저 평가되도록 (parser_rules 의
-	// FindActiveCandidates 와 동일 정책). path_pattern="" (catch-all) 은 가장 마지막.
-	//
-	// 매칭 없으면 빈 슬라이스 + nil error.
-	FindEnabledByHost(ctx context.Context, host string) ([]*BlacklistRecord, error)
-
-	// List 는 필터 조건에 맞는 row 들을 반환합니다 (운영 대시보드용).
-	List(ctx context.Context, filter BlacklistFilter) ([]*BlacklistRecord, error)
 }

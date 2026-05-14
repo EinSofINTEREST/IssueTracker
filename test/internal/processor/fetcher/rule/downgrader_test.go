@@ -12,6 +12,7 @@ import (
 
 	fetcherRule "issuetracker/internal/processor/fetcher/rule"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // downgradeStubRepo 는 Downgrader 단위 테스트용 in-memory 스텁입니다.
@@ -22,13 +23,13 @@ type downgradeStubRepo struct {
 	bulkCalls  atomic.Int32
 }
 
-func (s *downgradeStubRepo) Upsert(ctx context.Context, host string, fetcher storage.FetcherKind, reason string) error {
+func (s *downgradeStubRepo) Upsert(ctx context.Context, host string, fetcher model.FetcherKind, reason string) error {
 	return nil
 }
-func (s *downgradeStubRepo) GetByHost(ctx context.Context, host string) (*storage.FetcherRuleRecord, error) {
+func (s *downgradeStubRepo) GetByHost(ctx context.Context, host string) (*model.FetcherRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (s *downgradeStubRepo) List(ctx context.Context) ([]*storage.FetcherRuleRecord, error) {
+func (s *downgradeStubRepo) List(ctx context.Context) ([]*model.FetcherRuleRecord, error) {
 	return nil, nil
 }
 func (s *downgradeStubRepo) Delete(ctx context.Context, host string) error { return nil }
@@ -83,9 +84,9 @@ func TestDowngrader_Run_NoChanges_NoInvalidate(t *testing.T) {
 func TestDowngrader_Run_ChangesPresent_InvalidatesCache(t *testing.T) {
 	repo := &positiveStubRepo{
 		// host A 의 룰을 chromedp 로 보관 (Resolver 캐시 채우기 용)
-		rules: map[string]*storage.FetcherRuleRecord{
-			"a.com": {HostPattern: "a.com", Fetcher: storage.FetcherChromedp},
-			"b.com": {HostPattern: "b.com", Fetcher: storage.FetcherChromedp},
+		rules: map[string]*model.FetcherRuleRecord{
+			"a.com": {HostPattern: "a.com", Fetcher: model.FetcherChromedp},
+			"b.com": {HostPattern: "b.com", Fetcher: model.FetcherChromedp},
 		},
 		// BulkDowngrade 시 두 host 모두 변경됐다고 응답
 		bulkResult: []string{"a.com", "b.com"},
@@ -164,23 +165,23 @@ func TestDowngrader_Name_Stable(t *testing.T) {
 // positiveStubRepo 는 Resolver cache invalidate 효과 검증을 위한 추가 스텁.
 // downgradeStubRepo 와 분리 — GetByHost 가 실제 host map 조회를 수행해 캐시 동작 추적.
 type positiveStubRepo struct {
-	rules      map[string]*storage.FetcherRuleRecord
+	rules      map[string]*model.FetcherRuleRecord
 	bulkResult []string
 	getCalls   atomic.Int32
 	bulkCalls  atomic.Int32
 }
 
-func (s *positiveStubRepo) Upsert(ctx context.Context, host string, fetcher storage.FetcherKind, reason string) error {
+func (s *positiveStubRepo) Upsert(ctx context.Context, host string, fetcher model.FetcherKind, reason string) error {
 	return nil
 }
-func (s *positiveStubRepo) GetByHost(ctx context.Context, host string) (*storage.FetcherRuleRecord, error) {
+func (s *positiveStubRepo) GetByHost(ctx context.Context, host string) (*model.FetcherRuleRecord, error) {
 	s.getCalls.Add(1)
 	if r, ok := s.rules[host]; ok {
 		return r, nil
 	}
 	return nil, storage.ErrNotFound
 }
-func (s *positiveStubRepo) List(ctx context.Context) ([]*storage.FetcherRuleRecord, error) {
+func (s *positiveStubRepo) List(ctx context.Context) ([]*model.FetcherRuleRecord, error) {
 	return nil, nil
 }
 func (s *positiveStubRepo) Delete(ctx context.Context, host string) error { return nil }

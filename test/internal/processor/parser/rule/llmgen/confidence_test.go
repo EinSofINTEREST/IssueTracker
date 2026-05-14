@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 const confSampleHTML = `<!DOCTYPE html>
@@ -23,12 +23,12 @@ const confSampleHTML = `<!DOCTYPE html>
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestComputeFieldConfidence_AllSelectorsMatch(t *testing.T) {
-	sm := storage.SelectorMap{
-		Title:       &storage.FieldSelector{CSS: "h1.article-title"},
-		MainContent: &storage.FieldSelector{CSS: "article p", Multi: true},
-		Author:      &storage.FieldSelector{CSS: "span.author"},
-		PublishedAt: &storage.FieldSelector{CSS: "time", Attribute: "datetime"},
-		Summary:     &storage.FieldSelector{CSS: "meta[name=description]", Attribute: "content"},
+	sm := model.SelectorMap{
+		Title:       &model.FieldSelector{CSS: "h1.article-title"},
+		MainContent: &model.FieldSelector{CSS: "article p", Multi: true},
+		Author:      &model.FieldSelector{CSS: "span.author"},
+		PublishedAt: &model.FieldSelector{CSS: "time", Attribute: "datetime"},
+		Summary:     &model.FieldSelector{CSS: "meta[name=description]", Attribute: "content"},
 	}
 	got := llmgen.ComputeFieldConfidence(sm, confSampleHTML)
 
@@ -43,9 +43,9 @@ func TestComputeFieldConfidence_AllSelectorsMatch(t *testing.T) {
 }
 
 func TestComputeFieldConfidence_MissingSelectorReturnsZero(t *testing.T) {
-	sm := storage.SelectorMap{
-		Title:       &storage.FieldSelector{CSS: "h1.does-not-exist"},
-		MainContent: &storage.FieldSelector{CSS: "article p"},
+	sm := model.SelectorMap{
+		Title:       &model.FieldSelector{CSS: "h1.does-not-exist"},
+		MainContent: &model.FieldSelector{CSS: "article p"},
 	}
 	got := llmgen.ComputeFieldConfidence(sm, confSampleHTML)
 
@@ -56,8 +56,8 @@ func TestComputeFieldConfidence_MissingSelectorReturnsZero(t *testing.T) {
 func TestComputeFieldConfidence_PublishedAtUnparseableText_ReturnsZero(t *testing.T) {
 	// time element 는 매칭되나 text 가 \"2026-05-07\" 이 아니라 random 문자열인 케이스.
 	html := `<html><body><time class="ts">not a date</time></body></html>`
-	sm := storage.SelectorMap{
-		PublishedAt: &storage.FieldSelector{CSS: "time.ts"}, // attribute 없음 → text() 사용
+	sm := model.SelectorMap{
+		PublishedAt: &model.FieldSelector{CSS: "time.ts"}, // attribute 없음 → text() 사용
 	}
 	got := llmgen.ComputeFieldConfidence(sm, html)
 	assert.Equal(t, 0.0, got["published_at"].HitRate, "selector 매칭하나 text 가 date parse 실패 → hit_rate=0")
@@ -79,7 +79,7 @@ func TestComputeFieldConfidence_PublishedAtVariousFormats(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			full := "<html><body>" + tc.html + "</body></html>"
-			sm := storage.SelectorMap{PublishedAt: &storage.FieldSelector{CSS: "time"}}
+			sm := model.SelectorMap{PublishedAt: &model.FieldSelector{CSS: "time"}}
 			got := llmgen.ComputeFieldConfidence(sm, full)
 			assert.Equal(t, tc.want, got["published_at"].HitRate)
 		})
@@ -91,27 +91,27 @@ func TestComputeFieldConfidence_EmptyExtractedValue_ReturnsZero(t *testing.T) {
 	cases := []struct {
 		name string
 		html string
-		fs   *storage.FieldSelector
+		fs   *model.FieldSelector
 	}{
 		{
 			name: "text selector 매칭하나 element 비어있음",
 			html: `<html><body><h1 class="title"></h1></body></html>`,
-			fs:   &storage.FieldSelector{CSS: "h1.title"},
+			fs:   &model.FieldSelector{CSS: "h1.title"},
 		},
 		{
 			name: "attribute selector — attribute 부재",
 			html: `<html><body><a class="link">text</a></body></html>`,
-			fs:   &storage.FieldSelector{CSS: "a.link", Attribute: "href"},
+			fs:   &model.FieldSelector{CSS: "a.link", Attribute: "href"},
 		},
 		{
 			name: "attribute selector — attribute 빈 문자열",
 			html: `<html><body><a class="link" href="">text</a></body></html>`,
-			fs:   &storage.FieldSelector{CSS: "a.link", Attribute: "href"},
+			fs:   &model.FieldSelector{CSS: "a.link", Attribute: "href"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sm := storage.SelectorMap{Title: tc.fs}
+			sm := model.SelectorMap{Title: tc.fs}
 			got := llmgen.ComputeFieldConfidence(sm, tc.html)
 			assert.Equal(t, 0.0, got["title"].HitRate, "추출 값이 빈 문자열이면 hit_rate=0")
 		})
@@ -119,8 +119,8 @@ func TestComputeFieldConfidence_EmptyExtractedValue_ReturnsZero(t *testing.T) {
 }
 
 func TestComputeFieldConfidence_NilSelectorIgnored(t *testing.T) {
-	sm := storage.SelectorMap{
-		Title: &storage.FieldSelector{CSS: "h1.article-title"},
+	sm := model.SelectorMap{
+		Title: &model.FieldSelector{CSS: "h1.article-title"},
 		// MainContent / Author / 기타 nil
 	}
 	got := llmgen.ComputeFieldConfidence(sm, confSampleHTML)
@@ -132,7 +132,7 @@ func TestComputeFieldConfidence_NilSelectorIgnored(t *testing.T) {
 func TestComputeFieldConfidence_HTMLParseError_ReturnsEmptyMap(t *testing.T) {
 	// goquery 는 거의 모든 입력을 파싱 — 빈 string 도 정상 파싱하므로 실제 파싱 에러
 	// 시뮬레이션이 어려움. 빈 SelectorMap 으로 빈 map 반환만 확인.
-	got := llmgen.ComputeFieldConfidence(storage.SelectorMap{}, confSampleHTML)
+	got := llmgen.ComputeFieldConfidence(model.SelectorMap{}, confSampleHTML)
 	assert.Empty(t, got, "selector 자체가 모두 nil 이면 빈 map")
 }
 
@@ -141,12 +141,12 @@ func TestComputeFieldConfidence_HTMLParseError_ReturnsEmptyMap(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestApplyConfidenceFilter_DropsLowConfidenceSelectors(t *testing.T) {
-	sm := storage.SelectorMap{
-		Title:       &storage.FieldSelector{CSS: "h1"},
-		MainContent: &storage.FieldSelector{CSS: "article"},
-		PublishedAt: &storage.FieldSelector{CSS: "time"}, // 신뢰도 0
+	sm := model.SelectorMap{
+		Title:       &model.FieldSelector{CSS: "h1"},
+		MainContent: &model.FieldSelector{CSS: "article"},
+		PublishedAt: &model.FieldSelector{CSS: "time"}, // 신뢰도 0
 	}
-	conf := map[string]storage.FieldConfidence{
+	conf := map[string]model.FieldConfidence{
 		"title":        {HitRate: 1.0, SampleCount: 1},
 		"main_content": {HitRate: 1.0, SampleCount: 1},
 		"published_at": {HitRate: 0.0, SampleCount: 1}, // drop 대상
@@ -158,19 +158,19 @@ func TestApplyConfidenceFilter_DropsLowConfidenceSelectors(t *testing.T) {
 }
 
 func TestApplyConfidenceFilter_ConfidenceMissingForField_KeepsSelector(t *testing.T) {
-	sm := storage.SelectorMap{
-		Title: &storage.FieldSelector{CSS: "h1"},
+	sm := model.SelectorMap{
+		Title: &model.FieldSelector{CSS: "h1"},
 	}
-	got := llmgen.ApplyConfidenceFilter(sm, map[string]storage.FieldConfidence{})
+	got := llmgen.ApplyConfidenceFilter(sm, map[string]model.FieldConfidence{})
 	assert.NotNil(t, got.Title, "confidence map 에 entry 없으면 보수적으로 보존")
 }
 
 func TestApplyConfidenceFilter_AllAboveThreshold_KeepsAll(t *testing.T) {
-	sm := storage.SelectorMap{
-		Title:       &storage.FieldSelector{CSS: "h1"},
-		MainContent: &storage.FieldSelector{CSS: "article"},
+	sm := model.SelectorMap{
+		Title:       &model.FieldSelector{CSS: "h1"},
+		MainContent: &model.FieldSelector{CSS: "article"},
 	}
-	conf := map[string]storage.FieldConfidence{
+	conf := map[string]model.FieldConfidence{
 		"title":        {HitRate: 1.0, SampleCount: 1},
 		"main_content": {HitRate: 0.6, SampleCount: 1}, // 임계값 0.5 위
 	}

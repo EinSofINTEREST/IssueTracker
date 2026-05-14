@@ -12,6 +12,7 @@ import (
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 	"issuetracker/internal/workerpool"
 	"issuetracker/pkg/config"
@@ -399,7 +400,7 @@ func (w *Worker) recordValidationRejected(ctx context.Context, id string, reason
 	}
 
 	if err := w.contentSvc.UpdateValidationStatus(
-		ctx, id, storage.ValidationStatusRejected, code, detail,
+		ctx, id, model.ValidationStatusRejected, code, detail,
 	); err != nil {
 		log.WithFields(map[string]interface{}{
 			"content_id":  id,
@@ -417,7 +418,7 @@ func (w *Worker) recordValidationPassed(ctx context.Context, id string) {
 	log := logger.FromContext(ctx)
 
 	if err := w.contentSvc.UpdateValidationStatus(
-		ctx, id, storage.ValidationStatusPassed, "", "",
+		ctx, id, model.ValidationStatusPassed, "", "",
 	); err != nil {
 		log.WithFields(map[string]interface{}{
 			"content_id": id,

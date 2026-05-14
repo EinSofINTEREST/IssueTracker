@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/primitive"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-
-	"issuetracker/internal/storage"
 )
 
 // DefaultPendingTTL 은 pending LIST 키의 기본 TTL 입니다.
@@ -56,7 +56,7 @@ type pendingQueue struct {
 // NewPendingQueue 는 기본 TTL(24h) + 최대 길이(1000) 로 PendingQueue 를 생성합니다.
 //
 // rdb 가 nil 이면 error — wiring 시 panic-on-nil 정책 (다른 redisstore 생성자와 일관).
-func NewPendingQueue(rdb *goredis.Client) (storage.PendingQueue, error) {
+func NewPendingQueue(rdb *goredis.Client) (primitive.PendingQueue, error) {
 	if rdb == nil {
 		return nil, errors.New("redisstore: NewPendingQueue requires non-nil redis client")
 	}
@@ -67,7 +67,7 @@ func NewPendingQueue(rdb *goredis.Client) (storage.PendingQueue, error) {
 	}, nil
 }
 
-func (r *pendingQueue) Push(ctx context.Context, host string, targetType storage.TargetType, payload []byte) error {
+func (r *pendingQueue) Push(ctx context.Context, host string, targetType model.TargetType, payload []byte) error {
 	key := r.key(host, targetType)
 
 	// 단일 EVAL 로 길이 체크 + RPUSH + EXPIRE 원자 실행 — 동시 호출 시 maxLen 초과 방지.
@@ -83,7 +83,7 @@ func (r *pendingQueue) Push(ctx context.Context, host string, targetType storage
 	return nil
 }
 
-func (r *pendingQueue) Flush(ctx context.Context, host string, targetType storage.TargetType) ([][]byte, error) {
+func (r *pendingQueue) Flush(ctx context.Context, host string, targetType model.TargetType) ([][]byte, error) {
 	key := r.key(host, targetType)
 	result, err := r.rdb.Eval(ctx, luaFlush, []string{key}).StringSlice()
 	if err != nil && !errors.Is(err, goredis.Nil) {
@@ -97,6 +97,6 @@ func (r *pendingQueue) Flush(ctx context.Context, host string, targetType storag
 	return out, nil
 }
 
-func (r *pendingQueue) key(host string, targetType storage.TargetType) string {
+func (r *pendingQueue) key(host string, targetType model.TargetType) string {
 	return pendingKeyPrefix + host + ":" + string(targetType)
 }

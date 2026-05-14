@@ -4,19 +4,19 @@ import (
 	"context"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // PendingItem 은 in-flight LLM 학습이 끝난 후 재투입할 URL 의 컨텍스트입니다.
 //
 // Kafka 메시지 헤더 복원에 필요한 메타 (CrawlerName / TargetType / TimeoutMs / LLMRetryCount)
-// 와 raw 식별자 (RawRef) 를 보유. storage.PendingQueue 는 raw bytes 만 다루므로 본 구조의
+// 와 raw 식별자 (RawRef) 를 보유. primitive.PendingQueue 는 raw bytes 만 다루므로 본 구조의
 // JSON marshal/unmarshal 은 Generator 책임.
 type PendingItem struct {
 	RawRef        core.RawContentRef `json:"raw_ref"`
 	CrawlerName   string             `json:"crawler_name"`
 	LLMRetryCount int                `json:"llm_retry_count"`
-	TargetType    storage.TargetType `json:"target_type"`
+	TargetType    model.TargetType   `json:"target_type"`
 	// TimeoutMs 는 원본 crawl job 의 timeout — 카테고리 재투입 시 chained job timeout 보존.
 	TimeoutMs int64 `json:"timeout_ms"`
 }

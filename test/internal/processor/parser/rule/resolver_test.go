@@ -13,13 +13,14 @@ import (
 
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // fakeRepo 는 in-memory ParserRuleRepository 구현입니다.
 // FindActiveCandidates 호출 횟수를 atomic 으로 추적하여 cache 동작을 검증합니다.
 type fakeRepo struct {
-	rules           []*storage.ParserRuleRecord // FindActiveCandidates 매칭 후보
-	notFound        bool                        // true 면 항상 빈 슬라이스 (negative cache 시뮬레이션)
+	rules           []*model.ParserRuleRecord // FindActiveCandidates 매칭 후보
+	notFound        bool                      // true 면 항상 빈 슬라이스 (negative cache 시뮬레이션)
 	findActiveCalls int64
 
 	// hasAnyRule 시뮬레이션 (이슈 #287)
@@ -30,12 +31,12 @@ type fakeRepo struct {
 	hasAnyRuleAllRows bool // true: rules 슬라이스 기반 동적 결과 (HostPattern/TargetType 매칭)
 }
 
-func (r *fakeRepo) Insert(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
-func (r *fakeRepo) Update(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
-func (r *fakeRepo) GetByID(_ context.Context, _ int64) (*storage.ParserRuleRecord, error) {
+func (r *fakeRepo) Insert(_ context.Context, _ *model.ParserRuleRecord) error { return nil }
+func (r *fakeRepo) Update(_ context.Context, _ *model.ParserRuleRecord) error { return nil }
+func (r *fakeRepo) GetByID(_ context.Context, _ int64) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *fakeRepo) List(_ context.Context, _ storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
+func (r *fakeRepo) List(_ context.Context, _ model.ParserRuleFilter) ([]*model.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (r *fakeRepo) Delete(_ context.Context, _ int64) error { return nil }
@@ -44,7 +45,7 @@ func (r *fakeRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) er
 }
 
 // FindActive 는 FindActiveCandidates 의 첫 항목을 반환 (이슈 #173 후방 호환).
-func (r *fakeRepo) FindActive(ctx context.Context, host string, t storage.TargetType) (*storage.ParserRuleRecord, error) {
+func (r *fakeRepo) FindActive(ctx context.Context, host string, t model.TargetType) (*model.ParserRuleRecord, error) {
 	candidates, err := r.FindActiveCandidates(ctx, host, t)
 	if err != nil {
 		return nil, err
@@ -56,12 +57,12 @@ func (r *fakeRepo) FindActive(ctx context.Context, host string, t storage.Target
 }
 
 // FindActiveCandidates 는 host + target_type 매칭 슬라이스 반환. LENGTH(path_pattern) DESC 정렬 시뮬레이션.
-func (r *fakeRepo) FindActiveCandidates(_ context.Context, host string, t storage.TargetType) ([]*storage.ParserRuleRecord, error) {
+func (r *fakeRepo) FindActiveCandidates(_ context.Context, host string, t model.TargetType) ([]*model.ParserRuleRecord, error) {
 	atomic.AddInt64(&r.findActiveCalls, 1)
 	if r.notFound {
 		return nil, nil
 	}
-	out := make([]*storage.ParserRuleRecord, 0)
+	out := make([]*model.ParserRuleRecord, 0)
 	for _, rec := range r.rules {
 		if rec.HostPattern == host && rec.TargetType == t && rec.Enabled {
 			out = append(out, rec)
@@ -74,7 +75,7 @@ func (r *fakeRepo) FindActiveCandidates(_ context.Context, host string, t storag
 
 func (r *fakeRepo) calls() int { return int(atomic.LoadInt64(&r.findActiveCalls)) }
 
-func (r *fakeRepo) HasAnyRule(_ context.Context, host string, t storage.TargetType) (bool, bool, error) {
+func (r *fakeRepo) HasAnyRule(_ context.Context, host string, t model.TargetType) (bool, bool, error) {
 	atomic.AddInt64(&r.hasAnyRuleCalls, 1)
 	if r.hasAnyErr != nil {
 		return false, false, r.hasAnyErr
@@ -95,17 +96,17 @@ func (r *fakeRepo) HasAnyRule(_ context.Context, host string, t storage.TargetTy
 	return r.hasAnyExists, r.hasAnyEnabled, nil
 }
 func (r *fakeRepo) hasAnyCalls() int { return int(atomic.LoadInt64(&r.hasAnyRuleCalls)) }
-func (r *fakeRepo) InsertNextVersion(_ context.Context, _ *storage.ParserRuleRecord) error {
+func (r *fakeRepo) InsertNextVersion(_ context.Context, _ *model.ParserRuleRecord) error {
 	return nil
 }
 
-func (r *fakeRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParserRuleRecord, error) {
+func (r *fakeRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ model.TargetType, _ int) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
 
 // sortByPathPatternLengthDesc 는 LENGTH(path_pattern) DESC, version DESC 정렬을 수행합니다.
 // postgres 의 ORDER BY LENGTH(path_pattern) DESC, version DESC 와 동일 동작 (PR #181 gemini 피드백).
-func sortByPathPatternLengthDesc(s []*storage.ParserRuleRecord) {
+func sortByPathPatternLengthDesc(s []*model.ParserRuleRecord) {
 	sort.SliceStable(s, func(i, j int) bool {
 		if len(s[i].PathPattern) != len(s[j].PathPattern) {
 			return len(s[i].PathPattern) > len(s[j].PathPattern)
@@ -114,17 +115,17 @@ func sortByPathPatternLengthDesc(s []*storage.ParserRuleRecord) {
 	})
 }
 
-func samplePageRule(host string) *storage.ParserRuleRecord {
-	return &storage.ParserRuleRecord{
+func samplePageRule(host string) *model.ParserRuleRecord {
+	return &model.ParserRuleRecord{
 		ID:          1,
 		SourceName:  "test",
 		HostPattern: host,
-		TargetType:  storage.TargetTypePage,
+		TargetType:  model.TargetTypePage,
 		Version:     1,
 		Enabled:     true,
-		Selectors: storage.SelectorMap{
-			Title:       &storage.FieldSelector{CSS: "h1"},
-			MainContent: &storage.FieldSelector{CSS: "article p", Multi: true},
+		Selectors: model.SelectorMap{
+			Title:       &model.FieldSelector{CSS: "h1"},
+			MainContent: &model.FieldSelector{CSS: "article p", Multi: true},
 		},
 	}
 }
@@ -134,21 +135,21 @@ func samplePageRule(host string) *storage.ParserRuleRecord {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestResolver_ResolveByURL_Success(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{samplePageRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{samplePageRule("news.example.com")}}
 	r, _ := rule.NewResolver(repo)
 
-	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/1", storage.TargetTypePage)
+	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/1", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "news.example.com", got.HostPattern)
 	assert.Equal(t, 1, repo.calls())
 }
 
 func TestResolver_ResolveByURL_HostUppercaseNormalized(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{samplePageRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{samplePageRule("news.example.com")}}
 	r, _ := rule.NewResolver(repo)
 
 	// URL host 가 대문자여도 lookup 은 lowercase 로 정규화되어 매칭
-	_, err := r.ResolveByURL(context.Background(), "https://NEWS.EXAMPLE.COM/x", storage.TargetTypePage)
+	_, err := r.ResolveByURL(context.Background(), "https://NEWS.EXAMPLE.COM/x", model.TargetTypePage)
 	require.NoError(t, err)
 }
 
@@ -156,7 +157,7 @@ func TestResolver_ResolveByURL_InvalidURL_ReturnsError(t *testing.T) {
 	repo := &fakeRepo{}
 	r, _ := rule.NewResolver(repo)
 
-	_, err := r.ResolveByURL(context.Background(), "://no-scheme", storage.TargetTypePage)
+	_, err := r.ResolveByURL(context.Background(), "://no-scheme", model.TargetTypePage)
 	require.Error(t, err)
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
@@ -168,7 +169,7 @@ func TestResolver_NoMatch_ReturnsErrNoRule(t *testing.T) {
 	repo := &fakeRepo{notFound: true}
 	r, _ := rule.NewResolver(repo)
 
-	_, err := r.Resolve(context.Background(), "no-rule.example.com", "/", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "no-rule.example.com", "/", model.TargetTypePage)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, &rule.Error{Code: rule.ErrNoRule}))
 }
@@ -178,17 +179,17 @@ func TestResolver_NoMatch_ReturnsErrNoRule(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestResolver_Cache_HitsAvoidRepoCall(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{samplePageRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{samplePageRule("news.example.com")}}
 	r, _ := rule.NewResolver(repo)
 
 	// 첫 호출 → repo 1
-	_, err := r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "news.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 1, repo.calls())
 
 	// 후속 호출 → cache hit, repo 호출 X
 	for i := 0; i < 5; i++ {
-		_, err := r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
+		_, err := r.Resolve(context.Background(), "news.example.com", "/", model.TargetTypePage)
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 1, repo.calls(), "양성 cache hit — 추가 repo 호출 없어야 함")
@@ -199,63 +200,63 @@ func TestResolver_NegativeCache_AvoidRepoCallForMissingHost(t *testing.T) {
 	r, _ := rule.NewResolver(repo)
 
 	for i := 0; i < 5; i++ {
-		_, err := r.Resolve(context.Background(), "missing.example.com", "/", storage.TargetTypePage)
+		_, err := r.Resolve(context.Background(), "missing.example.com", "/", model.TargetTypePage)
 		require.Error(t, err)
 	}
 	assert.Equal(t, 1, repo.calls(), "negative cache 도 repo 폭주 회피")
 }
 
 func TestResolver_Invalidate_ForcesRepoCall(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{samplePageRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{samplePageRule("news.example.com")}}
 	r, _ := rule.NewResolver(repo)
 
-	_, err := r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "news.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
-	_, err = r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "news.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 1, repo.calls())
 
-	r.Invalidate("news.example.com", storage.TargetTypePage)
+	r.Invalidate("news.example.com", model.TargetTypePage)
 
-	_, err = r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "news.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 2, repo.calls(), "Invalidate 후 다음 호출은 repo 다시 도달")
 }
 
 func TestResolver_InvalidateAll_ClearsAllEntries(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{
 		samplePageRule("a.example.com"),
 		samplePageRule("b.example.com"),
 	}}
 	r, _ := rule.NewResolver(repo)
 
-	_, err := r.Resolve(context.Background(), "a.example.com", "/", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "a.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
-	_, err = r.Resolve(context.Background(), "b.example.com", "/", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "b.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 2, repo.calls())
 
 	r.InvalidateAll()
 
-	_, err = r.Resolve(context.Background(), "a.example.com", "/", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "a.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
-	_, err = r.Resolve(context.Background(), "b.example.com", "/", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "b.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 4, repo.calls())
 }
 
 func TestResolver_CacheTTL_ExpiresAfterDuration(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{samplePageRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{samplePageRule("news.example.com")}}
 	// TTL 50ms — 테스트 친화적 짧은 시간
 	r, _ := rule.NewResolver(repo, rule.WithCacheTTL(50*time.Millisecond))
 
-	_, err := r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "news.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 1, repo.calls())
 
 	time.Sleep(80 * time.Millisecond)
 
-	_, err = r.Resolve(context.Background(), "news.example.com", "/", storage.TargetTypePage)
+	_, err = r.Resolve(context.Background(), "news.example.com", "/", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 2, repo.calls(), "TTL 만료 후 repo 다시 호출")
 }
@@ -273,11 +274,11 @@ func TestNewResolver_NilRepo_ReturnsError(t *testing.T) {
 
 // path_pattern=” (catch-all) rule 만 있을 때 어떤 path 든 매칭됨 — 기존 동작 보존.
 func TestResolver_PathPattern_EmptyMatchesAnyPath(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{samplePageRule("news.example.com")}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{samplePageRule("news.example.com")}}
 	r, _ := rule.NewResolver(repo)
 
 	for _, path := range []string{"/", "/article/1", "/sports/breaking-news", "/about"} {
-		got, err := r.Resolve(context.Background(), "news.example.com", path, storage.TargetTypePage)
+		got, err := r.Resolve(context.Background(), "news.example.com", path, model.TargetTypePage)
 		require.NoError(t, err, "path=%s", path)
 		assert.Equal(t, "news.example.com", got.HostPattern, "path=%s", path)
 	}
@@ -289,21 +290,21 @@ func TestResolver_PathPattern_LongerPatternWinsOverCatchAll(t *testing.T) {
 	specific.ID = 2
 	specific.Version = 2
 	specific.PathPattern = "^/sports/.*$"
-	specific.Selectors.Title = &storage.FieldSelector{CSS: "h1.sports-headline"}
+	specific.Selectors.Title = &model.FieldSelector{CSS: "h1.sports-headline"}
 
 	catchAll := samplePageRule("news.example.com") // PathPattern="" 기본
-	catchAll.Selectors.Title = &storage.FieldSelector{CSS: "h1.default"}
+	catchAll.Selectors.Title = &model.FieldSelector{CSS: "h1.default"}
 
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{specific, catchAll}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{specific, catchAll}}
 	r, _ := rule.NewResolver(repo)
 
 	// /sports/* path 는 specific rule 매칭 (LENGTH DESC 정렬상 우선)
-	got, err := r.Resolve(context.Background(), "news.example.com", "/sports/breaking", storage.TargetTypePage)
+	got, err := r.Resolve(context.Background(), "news.example.com", "/sports/breaking", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.sports-headline", got.Selectors.Title.CSS, "더 구체적인 path_pattern 우선")
 
 	// /article/* path 는 catch-all 매칭
-	got, err = r.Resolve(context.Background(), "news.example.com", "/article/123", storage.TargetTypePage)
+	got, err = r.Resolve(context.Background(), "news.example.com", "/article/123", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.default", got.Selectors.Title.CSS, "specific 미매칭 시 catch-all fallback")
 }
@@ -316,18 +317,18 @@ func TestResolver_PathPattern_HigherVersionWinsForSamePattern(t *testing.T) {
 	v1.ID = 10
 	v1.Version = 1
 	v1.PathPattern = "^/article/(\\d+)$"
-	v1.Selectors.Title = &storage.FieldSelector{CSS: "h1.old"}
+	v1.Selectors.Title = &model.FieldSelector{CSS: "h1.old"}
 
 	v2 := samplePageRule("news.example.com")
 	v2.ID = 11
 	v2.Version = 2
 	v2.PathPattern = "^/article/(\\d+)$" // 동일 path_pattern (stale relearn 결과)
-	v2.Selectors.Title = &storage.FieldSelector{CSS: "h1.new"}
+	v2.Selectors.Title = &model.FieldSelector{CSS: "h1.new"}
 
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{v1, v2}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{v1, v2}}
 	r, _ := rule.NewResolver(repo)
 
-	got, err := r.Resolve(context.Background(), "news.example.com", "/article/123", storage.TargetTypePage)
+	got, err := r.Resolve(context.Background(), "news.example.com", "/article/123", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.new", got.Selectors.Title.CSS, "동일 path_pattern 은 version DESC 로 더 높은 v 가 우선")
 	assert.Equal(t, 2, got.Version)
@@ -343,7 +344,7 @@ func TestResolver_PathPattern_RefinedAndCatchAll_FallbackForNonMatching(t *testi
 	catchAll.SourceName = "llm-auto"
 	catchAll.Version = 1
 	catchAll.PathPattern = ""
-	catchAll.Selectors.Title = &storage.FieldSelector{CSS: "h1.catchall"}
+	catchAll.Selectors.Title = &model.FieldSelector{CSS: "h1.catchall"}
 
 	// 정밀 (v1, llm-auto, path="^/article/(\d+)$") — refiner 가 InsertNextVersion 으로 추가
 	refined := samplePageRule("news.example.com")
@@ -351,18 +352,18 @@ func TestResolver_PathPattern_RefinedAndCatchAll_FallbackForNonMatching(t *testi
 	refined.SourceName = "llm-auto"
 	refined.Version = 1
 	refined.PathPattern = `^/article/(\d+)$`
-	refined.Selectors.Title = &storage.FieldSelector{CSS: "h1.refined"}
+	refined.Selectors.Title = &model.FieldSelector{CSS: "h1.refined"}
 
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{catchAll, refined}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{catchAll, refined}}
 	r, _ := rule.NewResolver(repo)
 
 	// 매칭 path → refined 채택
-	got, err := r.Resolve(context.Background(), "news.example.com", "/article/42", storage.TargetTypePage)
+	got, err := r.Resolve(context.Background(), "news.example.com", "/article/42", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.refined", got.Selectors.Title.CSS, "정밀 path_pattern 이 매칭 path 우선 채택")
 
 	// 미매칭 path → catch-all fallback (silent miss X)
-	got, err = r.Resolve(context.Background(), "news.example.com", "/about/team", storage.TargetTypePage)
+	got, err = r.Resolve(context.Background(), "news.example.com", "/about/team", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.catchall", got.Selectors.Title.CSS, "정밀 미매칭 path 는 catch-all fallback")
 }
@@ -372,10 +373,10 @@ func TestResolver_PathPattern_NoMatchReturnsErrNoRule(t *testing.T) {
 	specific := samplePageRule("news.example.com")
 	specific.PathPattern = "^/sports/.*$"
 
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{specific}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{specific}}
 	r, _ := rule.NewResolver(repo)
 
-	_, err := r.Resolve(context.Background(), "news.example.com", "/about", storage.TargetTypePage)
+	_, err := r.Resolve(context.Background(), "news.example.com", "/about", model.TargetTypePage)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, &rule.Error{Code: rule.ErrNoRule}))
 }
@@ -389,12 +390,12 @@ func TestResolver_PathPattern_InvalidRegexFallsThrough(t *testing.T) {
 	bad.PathPattern = "[unclosed-bracket" // 컴파일 실패
 
 	catchAll := samplePageRule("news.example.com") // PathPattern=""
-	catchAll.Selectors.Title = &storage.FieldSelector{CSS: "h1.default"}
+	catchAll.Selectors.Title = &model.FieldSelector{CSS: "h1.default"}
 
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{bad, catchAll}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{bad, catchAll}}
 	r, _ := rule.NewResolver(repo)
 
-	got, err := r.Resolve(context.Background(), "news.example.com", "/article/1", storage.TargetTypePage)
+	got, err := r.Resolve(context.Background(), "news.example.com", "/article/1", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.default", got.Selectors.Title.CSS, "잘못된 regex 는 skip 되고 catch-all fallback")
 }
@@ -409,14 +410,14 @@ func TestResolver_PathPattern_RegexCacheReuseAcrossHosts(t *testing.T) {
 	b := samplePageRule("b.example.com")
 	b.PathPattern = pattern
 
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{a, b}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{a, b}}
 	r, _ := rule.NewResolver(repo)
 
-	got, err := r.Resolve(context.Background(), "a.example.com", "/news/123", storage.TargetTypePage)
+	got, err := r.Resolve(context.Background(), "a.example.com", "/news/123", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "a.example.com", got.HostPattern)
 
-	got, err = r.Resolve(context.Background(), "b.example.com", "/news/456", storage.TargetTypePage)
+	got, err = r.Resolve(context.Background(), "b.example.com", "/news/456", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "b.example.com", got.HostPattern)
 }
@@ -425,12 +426,12 @@ func TestResolver_PathPattern_RegexCacheReuseAcrossHosts(t *testing.T) {
 func TestResolver_ResolveByURL_PathPatternMatching(t *testing.T) {
 	specific := samplePageRule("news.example.com")
 	specific.PathPattern = "^/article/[0-9]+$"
-	specific.Selectors.Title = &storage.FieldSelector{CSS: "h1.article"}
+	specific.Selectors.Title = &model.FieldSelector{CSS: "h1.article"}
 
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{specific}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{specific}}
 	r, _ := rule.NewResolver(repo)
 
-	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/12345?utm=x", storage.TargetTypePage)
+	got, err := r.ResolveByURL(context.Background(), "https://news.example.com/article/12345?utm=x", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, "h1.article", got.Selectors.Title.CSS, "URL.Path 가 path_pattern 매칭")
 }
@@ -443,7 +444,7 @@ func TestResolver_HasAnyRule_NoRule(t *testing.T) {
 	repo := &fakeRepo{} // exists=false, enabled=false default
 	r, _ := rule.NewResolver(repo)
 
-	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.False(t, exists)
 	assert.False(t, enabled)
@@ -453,7 +454,7 @@ func TestResolver_HasAnyRule_EnabledRule(t *testing.T) {
 	repo := &fakeRepo{hasAnyExists: true, hasAnyEnabled: true}
 	r, _ := rule.NewResolver(repo)
 
-	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.True(t, exists)
 	assert.True(t, enabled)
@@ -463,7 +464,7 @@ func TestResolver_HasAnyRule_DisabledRuleOnly(t *testing.T) {
 	repo := &fakeRepo{hasAnyExists: true, hasAnyEnabled: false}
 	r, _ := rule.NewResolver(repo)
 
-	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	exists, enabled, err := r.HasAnyRule(context.Background(), "example.com", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.True(t, exists, "disabled 룰만 있어도 exists=true")
 	assert.False(t, enabled)
@@ -474,7 +475,7 @@ func TestResolver_HasAnyRule_CachesResult(t *testing.T) {
 	r, _ := rule.NewResolver(repo)
 
 	for i := 0; i < 5; i++ {
-		_, _, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+		_, _, err := r.HasAnyRule(context.Background(), "example.com", model.TargetTypePage)
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 1, repo.hasAnyCalls(), "5회 호출 중 DB lookup 은 1회 — 캐시 적중 4회")
@@ -484,13 +485,13 @@ func TestResolver_HasAnyRule_InvalidatedOnRuleChange(t *testing.T) {
 	repo := &fakeRepo{hasAnyExists: true, hasAnyEnabled: true}
 	r, _ := rule.NewResolver(repo)
 
-	_, _, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	_, _, err := r.HasAnyRule(context.Background(), "example.com", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 1, repo.hasAnyCalls())
 
-	r.Invalidate("example.com", storage.TargetTypePage)
+	r.Invalidate("example.com", model.TargetTypePage)
 
-	_, _, err = r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	_, _, err = r.HasAnyRule(context.Background(), "example.com", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 2, repo.hasAnyCalls(), "Invalidate 후 lookup 재실행")
 }
@@ -499,6 +500,6 @@ func TestResolver_HasAnyRule_LookupErrorPropagated(t *testing.T) {
 	repo := &fakeRepo{hasAnyErr: errors.New("db down")}
 	r, _ := rule.NewResolver(repo)
 
-	_, _, err := r.HasAnyRule(context.Background(), "example.com", storage.TargetTypePage)
+	_, _, err := r.HasAnyRule(context.Background(), "example.com", model.TargetTypePage)
 	require.Error(t, err)
 }

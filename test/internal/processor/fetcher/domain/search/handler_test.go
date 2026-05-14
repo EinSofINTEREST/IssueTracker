@@ -16,25 +16,26 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/search"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 )
 
 // memSearchKeywordRepo 는 SearchKeywordRepository 의 in-memory 구현 (handler 테스트용 fixture).
 type memSearchKeywordRepo struct {
 	mu      sync.Mutex
-	rows    []*storage.SearchKeywordRecord
+	rows    []*model.SearchKeywordRecord
 	marked  map[int64]time.Time
 	listErr error
 	markErr error
 }
 
-func (r *memSearchKeywordRepo) ListEnabled(_ context.Context, language, region string) ([]*storage.SearchKeywordRecord, error) {
+func (r *memSearchKeywordRepo) ListEnabled(_ context.Context, language, region string) ([]*model.SearchKeywordRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
-	var out []*storage.SearchKeywordRecord
+	var out []*model.SearchKeywordRecord
 	for _, rec := range r.rows {
 		if !rec.Enabled {
 			continue
@@ -51,11 +52,11 @@ func (r *memSearchKeywordRepo) ListEnabled(_ context.Context, language, region s
 	return out, nil
 }
 
-func (r *memSearchKeywordRepo) Insert(_ context.Context, _ *storage.SearchKeywordRecord) error {
+func (r *memSearchKeywordRepo) Insert(_ context.Context, _ *model.SearchKeywordRecord) error {
 	return errors.New("not used in test")
 }
 
-func (r *memSearchKeywordRepo) Update(_ context.Context, _ *storage.SearchKeywordRecord) error {
+func (r *memSearchKeywordRepo) Update(_ context.Context, _ *model.SearchKeywordRecord) error {
 	return errors.New("not used in test")
 }
 
@@ -150,7 +151,7 @@ func stubCSEServer(t *testing.T, byKeyword map[string][]string) *httptest.Server
 	}))
 }
 
-func newTestHandler(t *testing.T, server *httptest.Server, repo storage.SearchKeywordRepository, pub search.JobPublisher) *search.SearchHandler {
+func newTestHandler(t *testing.T, server *httptest.Server, repo repository.SearchKeywordRepository, pub search.JobPublisher) *search.SearchHandler {
 	t.Helper()
 	log := newTestLogger(t)
 	c, err := search.NewCSEClient(newTestClientOpts("k", "cx", server.URL), log)
@@ -182,7 +183,7 @@ func TestSearchHandler_Handle_FanoutByHostAndDedup(t *testing.T) {
 	defer server.Close()
 
 	repo := &memSearchKeywordRepo{
-		rows: []*storage.SearchKeywordRecord{
+		rows: []*model.SearchKeywordRecord{
 			{ID: 1, Keyword: "kw1", Enabled: true},
 			{ID: 2, Keyword: "kw2", Enabled: true},
 		},
@@ -230,7 +231,7 @@ func TestSearchHandler_Handle_NoEnabledKeywords(t *testing.T) {
 	defer server.Close()
 
 	repo := &memSearchKeywordRepo{
-		rows: []*storage.SearchKeywordRecord{
+		rows: []*model.SearchKeywordRecord{
 			{ID: 1, Keyword: "off", Enabled: false},
 		},
 	}
@@ -249,7 +250,7 @@ func TestSearchHandler_Handle_SkipUnsupportedEngine(t *testing.T) {
 	server := stubCSEServer(t, map[string][]string{"kw": {"https://example.com/a"}})
 	defer server.Close()
 
-	repo := &memSearchKeywordRepo{rows: []*storage.SearchKeywordRecord{{ID: 1, Keyword: "kw", Enabled: true}}}
+	repo := &memSearchKeywordRepo{rows: []*model.SearchKeywordRecord{{ID: 1, Keyword: "kw", Enabled: true}}}
 	pub := &recordingPublisher{}
 	h := newTestHandler(t, server, repo, pub)
 
@@ -282,7 +283,7 @@ func TestSearchHandler_Handle_KeywordSkipsOnTransientError(t *testing.T) {
 	defer server.Close()
 
 	repo := &memSearchKeywordRepo{
-		rows: []*storage.SearchKeywordRecord{
+		rows: []*model.SearchKeywordRecord{
 			{ID: 1, Keyword: "failing_kw", Enabled: true},
 			{ID: 2, Keyword: "ok_kw", Enabled: true},
 		},
@@ -311,7 +312,7 @@ func TestSearchHandler_Handle_NonRetryableAbortsCycle(t *testing.T) {
 	defer server.Close()
 
 	repo := &memSearchKeywordRepo{
-		rows: []*storage.SearchKeywordRecord{
+		rows: []*model.SearchKeywordRecord{
 			{ID: 1, Keyword: "kw1", Enabled: true},
 			{ID: 2, Keyword: "kw2", Enabled: true},
 		},
@@ -372,7 +373,7 @@ func TestSearchHandler_Handle_PerKeywordLanguageRegionPropagated(t *testing.T) {
 	defer server.Close()
 
 	repo := &memSearchKeywordRepo{
-		rows: []*storage.SearchKeywordRecord{
+		rows: []*model.SearchKeywordRecord{
 			{ID: 1, Keyword: "ko_kw", Enabled: true, Language: "ko", Region: "kr"},
 			{ID: 2, Keyword: "en_kw", Enabled: true, Language: "en", Region: "us"},
 		},

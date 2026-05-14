@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -27,7 +29,7 @@ type pgParserRuleRepository struct {
 // log 인자는 향후 query latency / error log 등 운영 가시성 추가를 대비해 시그니처에 유지하되,
 // 현재 구현에서는 사용하지 않습니다 (Gemini code review #8 — 미사용 필드 정리).
 // 다른 Repository 들 (NewContentRepository 등) 의 시그니처와 일관성을 위해 인자는 보존.
-func NewParserRuleRepository(pool *pgxpool.Pool, log *logger.Logger) storage.ParserRuleRepository {
+func NewParserRuleRepository(pool *pgxpool.Pool, log *logger.Logger) repository.ParserRuleRepository {
 	_ = log
 	return &pgParserRuleRepository{pool: pool}
 }
@@ -49,7 +51,7 @@ RETURNING id, created_at, updated_at
 // INSERT 시점에 거부하는 것이 운영 가시성 ↑ + DB 에 잘못된 row 진입 차단.
 //
 // 성공 시 r.ID / CreatedAt / UpdatedAt 가 채워집니다.
-func (r *pgParserRuleRepository) Insert(ctx context.Context, rec *storage.ParserRuleRecord) error {
+func (r *pgParserRuleRepository) Insert(ctx context.Context, rec *model.ParserRuleRecord) error {
 	if rec.PathPattern != "" {
 		if _, reErr := regexp.Compile(rec.PathPattern); reErr != nil {
 			return fmt.Errorf("%w: path_pattern %q is not a valid regex: %v", storage.ErrInvalid, rec.PathPattern, reErr)
@@ -95,7 +97,7 @@ RETURNING updated_at
 // 같이 채워서 전달 (또는 nil/빈 map 으로 reset).
 //
 // 갱신 가능 필드: Selectors, Confidence, Enabled, Description, Article (자연키 + PageType 은 변경 불가).
-func (r *pgParserRuleRepository) Update(ctx context.Context, rec *storage.ParserRuleRecord) error {
+func (r *pgParserRuleRepository) Update(ctx context.Context, rec *model.ParserRuleRecord) error {
 	selectors, err := json.Marshal(rec.Selectors)
 	if err != nil {
 		return fmt.Errorf("marshal selectors: %w", err)
@@ -159,7 +161,7 @@ WHERE id = $1
 `
 
 // GetByID 는 ID 로 규칙을 조회합니다.
-func (r *pgParserRuleRepository) GetByID(ctx context.Context, id int64) (*storage.ParserRuleRecord, error) {
+func (r *pgParserRuleRepository) GetByID(ctx context.Context, id int64) (*model.ParserRuleRecord, error) {
 	row := r.pool.QueryRow(ctx, sqlGetParserRuleByID, id)
 	rec, err := scanParserRule(row)
 	if err != nil {
@@ -188,7 +190,7 @@ WHERE source_name  = $1
 //
 // 용도: llmgen.Generator 가 LLM 호출 전 사전 lookup 으로 사용. 이미 같은 자연키 룰이
 // 존재하면 LLM 호출 (~55s sonnet) 을 회피하여 비용 절감.
-func (r *pgParserRuleRepository) FindByNaturalKey(ctx context.Context, sourceName, hostPattern, pathPattern string, targetType storage.TargetType, version int) (*storage.ParserRuleRecord, error) {
+func (r *pgParserRuleRepository) FindByNaturalKey(ctx context.Context, sourceName, hostPattern, pathPattern string, targetType model.TargetType, version int) (*model.ParserRuleRecord, error) {
 	row := r.pool.QueryRow(ctx, sqlFindParserRuleByNaturalKey,
 		sourceName, hostPattern, pathPattern, string(targetType), version,
 	)
@@ -215,7 +217,7 @@ WHERE source_name = $1
 //
 // race window: MAX 조회와 INSERT 사이에 다른 인스턴스가 같은 version 을 INSERT 할 수 있음.
 // 자연키 unique 제약이 ErrDuplicate 로 반응 — 호출자가 retry 또는 흡수 책임.
-func (r *pgParserRuleRepository) InsertNextVersion(ctx context.Context, rec *storage.ParserRuleRecord) error {
+func (r *pgParserRuleRepository) InsertNextVersion(ctx context.Context, rec *model.ParserRuleRecord) error {
 	if rec.PathPattern != "" {
 		if _, reErr := regexp.Compile(rec.PathPattern); reErr != nil {
 			return fmt.Errorf("%w: path_pattern %q is not a valid regex: %v", storage.ErrInvalid, rec.PathPattern, reErr)
@@ -248,7 +250,7 @@ WHERE host_pattern=$1 AND target_type=$2
 //
 // FindActiveCandidates 와 달리 enabled 필터 없음 — disabled 룰도 \"존재함\" 으로 카운트.
 // 결과는 (exists, hasEnabled).
-func (r *pgParserRuleRepository) HasAnyRule(ctx context.Context, hostPattern string, targetType storage.TargetType) (bool, bool, error) {
+func (r *pgParserRuleRepository) HasAnyRule(ctx context.Context, hostPattern string, targetType model.TargetType) (bool, bool, error) {
 	row := r.pool.QueryRow(ctx, sqlHasAnyRule, hostPattern, string(targetType))
 	var exists, hasEnabled bool
 	if err := row.Scan(&exists, &hasEnabled); err != nil {
@@ -276,7 +278,7 @@ ORDER BY LENGTH(path_pattern) DESC, version DESC
 // Deprecated: path_pattern 도입 후 후보 슬라이스를 받아 application 측에서 path 매칭하는
 // FindActiveCandidates 사용 권장. 본 메소드는 호출자 호환을 위해 유지 — 내부적으로 후보 슬라이스의
 // 첫 항목 (가장 구체적 또는 최신) 을 반환. ErrNotFound 시 storage.ErrNotFound.
-func (r *pgParserRuleRepository) FindActive(ctx context.Context, host string, targetType storage.TargetType) (*storage.ParserRuleRecord, error) {
+func (r *pgParserRuleRepository) FindActive(ctx context.Context, host string, targetType model.TargetType) (*model.ParserRuleRecord, error) {
 	candidates, err := r.FindActiveCandidates(ctx, host, targetType)
 	if err != nil {
 		return nil, err
@@ -291,14 +293,14 @@ func (r *pgParserRuleRepository) FindActive(ctx context.Context, host string, ta
 // version DESC 정렬로 반환합니다.
 //
 // 매칭 없으면 빈 슬라이스 + nil 에러 (호출자가 빈 슬라이스로 분기).
-func (r *pgParserRuleRepository) FindActiveCandidates(ctx context.Context, host string, targetType storage.TargetType) ([]*storage.ParserRuleRecord, error) {
+func (r *pgParserRuleRepository) FindActiveCandidates(ctx context.Context, host string, targetType model.TargetType) ([]*model.ParserRuleRecord, error) {
 	rows, err := r.pool.Query(ctx, sqlFindActiveCandidates, host, string(targetType))
 	if err != nil {
 		return nil, fmt.Errorf("find active candidates (%s, %s): %w", host, targetType, err)
 	}
 	defer rows.Close()
 
-	var out []*storage.ParserRuleRecord
+	var out []*model.ParserRuleRecord
 	for rows.Next() {
 		rec, scanErr := scanParserRule(rows)
 		if scanErr != nil {
@@ -313,7 +315,7 @@ func (r *pgParserRuleRepository) FindActiveCandidates(ctx context.Context, host 
 }
 
 // List 는 필터 조건에 맞는 규칙들을 반환합니다.
-func (r *pgParserRuleRepository) List(ctx context.Context, f storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
+func (r *pgParserRuleRepository) List(ctx context.Context, f model.ParserRuleFilter) ([]*model.ParserRuleRecord, error) {
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 50
@@ -359,7 +361,7 @@ WHERE 1=1`
 	}
 	defer rows.Close()
 
-	var out []*storage.ParserRuleRecord
+	var out []*model.ParserRuleRecord
 	for rows.Next() {
 		rec, err := scanParserRule(rows)
 		if err != nil {
@@ -385,8 +387,8 @@ func (r *pgParserRuleRepository) Delete(ctx context.Context, id int64) error {
 
 // scanParserRule 은 Row/Rows 에서 ParserRuleRecord 를 스캔합니다.
 // selectors / confidence 는 raw JSONB → application struct 로 unmarshal.
-func scanParserRule(s scanner) (*storage.ParserRuleRecord, error) {
-	rec := &storage.ParserRuleRecord{}
+func scanParserRule(s scanner) (*model.ParserRuleRecord, error) {
+	rec := &model.ParserRuleRecord{}
 	var selectorsRaw, confidenceRaw []byte
 	var targetType string
 	if err := s.Scan(
@@ -396,7 +398,7 @@ func scanParserRule(s scanner) (*storage.ParserRuleRecord, error) {
 	); err != nil {
 		return nil, err
 	}
-	rec.TargetType = storage.TargetType(targetType)
+	rec.TargetType = model.TargetType(targetType)
 	if len(selectorsRaw) > 0 {
 		if err := json.Unmarshal(selectorsRaw, &rec.Selectors); err != nil {
 			return nil, fmt.Errorf("unmarshal selectors for rule %d: %w", rec.ID, err)
@@ -413,7 +415,7 @@ func scanParserRule(s scanner) (*storage.ParserRuleRecord, error) {
 // marshalConfidence 는 Confidence map 을 JSONB byte 로 직렬화합니다.
 //
 // nil 또는 빈 map 은 "{}" 로 직렬화 — JSONB NOT NULL 제약 충족 + scan 시 빈 map 으로 복원.
-func marshalConfidence(c map[string]storage.FieldConfidence) ([]byte, error) {
+func marshalConfidence(c map[string]model.FieldConfidence) ([]byte, error) {
 	if len(c) == 0 {
 		return []byte("{}"), nil
 	}

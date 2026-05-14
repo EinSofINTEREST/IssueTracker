@@ -35,6 +35,9 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/types"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/primitive"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/internal/storage/service"
 	"issuetracker/internal/workerpool"
 	"issuetracker/pkg/logger"
@@ -62,19 +65,19 @@ type Worker struct {
 	rawSvc     service.RawContentService
 	contentSvc service.ContentService
 	parser     *rule.Parser
-	resolver   *rule.Resolver              // sample 누적 시 매칭된 rule lookup
-	sampleSvc  storage.SampleURLRepository // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
-	gate       locks.StageGate             // nil 이면 NoopStageGate 사용 — 이슈 #355 (StageGate 합성: ProcessingLock + per-stage Semaphore)
-	llmGen     *llmgen.Generator           // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
+	resolver   *rule.Resolver                 // sample 누적 시 매칭된 rule lookup
+	sampleSvc  repository.SampleURLRepository // nil 허용 — nil 이면 sample 누적 skip (단계 4-1)
+	gate       locks.StageGate                // nil 이면 NoopStageGate 사용 — 이슈 #355 (StageGate 합성: ProcessingLock + per-stage Semaphore)
+	llmGen     *llmgen.Generator              // nil 허용 — nil 이면 ErrNoRule 시 raw 잔존만 (LLM auto-rule 비활성)
 
 	// failureCounter: host 단위 fetcher 실패 카운터.
 	// nil 시 noopFailureCounter 로 fallback — 카운팅 자체 비활성.
 	// rule.ErrParseFailure / rule.ErrEmptySelector 또는 빈본문 발생 시 Record 호출.
-	failureCounter storage.FailureCounter
+	failureCounter primitive.FailureCounter
 
 	// rawIDTracker: 같은 실패 시점에 host 별 raw_id 추적.
 	// nil 시 noopRawIDTracker — republish 비활성 (단계 3 trigger 가 빈 raw_id 받음).
-	rawIDTracker storage.RawIDTracker
+	rawIDTracker primitive.RawIDTracker
 
 	// upgrader: 임계값 도달 시 chromedp 자동 전환 + 실패 raw republish 트리거.
 	// nil 허용 — nil 이면 thresholdReached 신호 발신만 (자동 전환 비활성).
@@ -96,7 +99,7 @@ type Worker struct {
 	// nil 허용 — nil 이면 stale 재학습 비활성 (chromedp 자동 전환만 동작).
 	// ErrParseFailure / ErrEmptySelector 발생 시 Record 호출, threshold 도달 시
 	// llmGen.EnqueueStale 트리거.
-	staleCounter storage.StaleCounter
+	staleCounter primitive.StaleCounter
 	// staleThreshold: window 내 stale failure 임계값.
 	// 임계 도달 첫 회 (count == staleThreshold) 만 enqueue — count > threshold 인 후속 호출은
 	// 카운트만 누적하고 enqueue 회피 (window 내 동일 host 의 version churn / 비용 spike 방지).
@@ -144,11 +147,11 @@ func NewWorker(
 	contentSvc service.ContentService,
 	parser *rule.Parser,
 	resolver *rule.Resolver,
-	sampleSvc storage.SampleURLRepository,
+	sampleSvc repository.SampleURLRepository,
 	gate locks.StageGate,
 	llmGen *llmgen.Generator,
-	failureCounter storage.FailureCounter,
-	rawIDTracker storage.RawIDTracker,
+	failureCounter primitive.FailureCounter,
+	rawIDTracker primitive.RawIDTracker,
 	upgrader *fetcherRule.Upgrader,
 	emptyBodyTitleMin int,
 	emptyBodyContentMin int,
@@ -162,10 +165,10 @@ func NewWorker(
 		gate = locks.NewNoopStageGate()
 	}
 	if failureCounter == nil {
-		failureCounter = storage.NewNoopFailureCounter()
+		failureCounter = primitive.NewNoopFailureCounter()
 	}
 	if rawIDTracker == nil {
-		rawIDTracker = storage.NewNoopRawIDTracker()
+		rawIDTracker = primitive.NewNoopRawIDTracker()
 	}
 	return &Worker{
 		consumer:            consumer,
@@ -207,7 +210,7 @@ func (w *Worker) SetBlacklist(b *rule.BlacklistMatcher) {
 // threshold <= 0 이면 threshold-crossing gate 비활성 — counter.Record 의 thresholdReached 만으로 트리거
 // (window 내 매 후속 호출마다 enqueue 가능, 호환 fallback).
 // Start 호출 전 wiring 단계에서 1회 설정.
-func (w *Worker) SetStaleCounter(c storage.StaleCounter, threshold int) {
+func (w *Worker) SetStaleCounter(c primitive.StaleCounter, threshold int) {
 	w.staleCounter = c
 	w.staleThreshold = threshold
 }
@@ -408,7 +411,7 @@ func (w *Worker) processCategoryPage(ctx context.Context, raw *core.RawContent, 
 
 	items, err := w.parser.ParseLinks(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, raw, rawID, "parse_links", storage.TargetTypeList, err, llmRetryCount, crawlerName, jobTimeout, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_links", model.TargetTypeList, err, llmRetryCount, crawlerName, jobTimeout, mlog)
 	}
 	if len(items) == 0 {
 		mlog.Debug("no article links found in category page")
@@ -491,7 +494,7 @@ func (w *Worker) processArticlePage(ctx context.Context, raw *core.RawContent, r
 
 	page, err := w.parser.ParsePage(ctx, raw)
 	if err != nil {
-		return w.handleRuleError(ctx, raw, rawID, "parse_page", storage.TargetTypePage, err, llmRetryCount, crawlerName, 0, mlog)
+		return w.handleRuleError(ctx, raw, rawID, "parse_page", model.TargetTypePage, err, llmRetryCount, crawlerName, 0, mlog)
 	}
 
 	// parse 자체는 성공했지만 Title / MainContent 텍스트 길이가 임계값 미달이면
@@ -521,7 +524,7 @@ func (w *Worker) processArticlePage(ctx context.Context, raw *core.RawContent, r
 // rule.ErrParseFailure / rule.ErrEmptySelector 는 host 단위 카운터로
 // 누적 — 임계값 도달 시 단계 3 (#221) 의 chromedp 자동 전환 트리거 입력. ErrNoRule 은 LLM 자동
 // rule 생성 의 책임 영역이라 카운팅 제외 (다른 정책으로 처리됨).
-func (w *Worker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType storage.TargetType, err error, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) error {
+func (w *Worker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType model.TargetType, err error, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
 		mlog.WithFields(map[string]interface{}{
@@ -568,9 +571,9 @@ func (w *Worker) handleRuleError(ctx context.Context, raw *core.RawContent, rawI
 		// list (category) 는 본질적으로 다른 selector 셋이라 chromedp 전환 신호로 부적절.
 		// 같은 시점에 raw_id 를 host 별 추적 — 단계 3 의 republish 대상 수집.
 		// 동일 시점에 stale counter 누적 — 임계 도달 시 LLM 재학습 트리거.
-		if targetType == storage.TargetTypePage &&
+		if targetType == model.TargetTypePage &&
 			(rerr.Code == rule.ErrParseFailure || rerr.Code == rule.ErrEmptySelector) {
-			w.recordHostFailure(ctx, rerr.Host, rawID, storage.FailureReasonRuleParseFailure, mlog)
+			w.recordHostFailure(ctx, rerr.Host, rawID, primitive.FailureReasonRuleParseFailure, mlog)
 			w.recordStaleAndMaybeRelearn(ctx, rerr.Host, targetType, raw, llmRetryCount, crawlerName, jobTimeout, mlog)
 		}
 
@@ -593,7 +596,7 @@ func (w *Worker) handleRuleError(ctx context.Context, raw *core.RawContent, rawI
 //
 // rawID 는 단계 3 의 chromedp 자동 전환 trigger 가 republish 대상으로 사용. 빈 문자열이면
 // Tracker 가 noop.
-func (w *Worker) recordHostFailure(ctx context.Context, host, rawID string, reason storage.FailureReason, mlog *logger.Logger) {
+func (w *Worker) recordHostFailure(ctx context.Context, host, rawID string, reason primitive.FailureReason, mlog *logger.Logger) {
 	if w.failureCounter == nil {
 		return
 	}
@@ -640,7 +643,7 @@ func (w *Worker) recordHostFailure(ctx context.Context, host, rawID string, reas
 //
 // 카운팅 / lookup 실패는 non-fatal — warn 로그만 남기고 정상 흐름 유지. 임계 도달 후 EnqueueStale
 // 은 비동기 (Generator 내부 goroutine) 라 본 함수 latency 영향 없음.
-func (w *Worker) recordStaleAndMaybeRelearn(ctx context.Context, host string, targetType storage.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) {
+func (w *Worker) recordStaleAndMaybeRelearn(ctx context.Context, host string, targetType model.TargetType, raw *core.RawContent, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) {
 	if w.staleCounter == nil || w.llmGen == nil {
 		return
 	}
@@ -739,9 +742,9 @@ func (w *Worker) recordEmptyBodyIfApplicable(ctx context.Context, raw *core.RawC
 		"host":         host,
 		"title_length": titleLen,
 		"body_length":  bodyLen,
-		"reason":       string(storage.FailureReasonEmptyBody),
+		"reason":       string(primitive.FailureReasonEmptyBody),
 	}).Warn("empty body detected — recording host failure")
-	w.recordHostFailure(ctx, host, rawID, storage.FailureReasonEmptyBody, mlog)
+	w.recordHostFailure(ctx, host, rawID, primitive.FailureReasonEmptyBody, mlog)
 }
 
 // publishContents 는 *core.Content 슬라이스를 contents 저장 + ContentRef 발행 (TopicNormalized).
@@ -823,7 +826,7 @@ const (
 // targetType, crawlerName 은 Kafka 메시지 헤더로 설정 — 재큐 후 processMessage 가 올바른
 // 파싱 경로 (category vs article) 로 분기할 수 있도록 보존합니다 (gemini/Copilot/CodeRabbit 피드백).
 // 재발행 실패는 non-fatal — raw 는 TTL cleanup 으로 최종 정리됩니다.
-func (w *Worker) RequeueForLLMRetry(ctx context.Context, ref core.RawContentRef, llmRetryCount int, targetType storage.TargetType, crawlerName string) {
+func (w *Worker) RequeueForLLMRetry(ctx context.Context, ref core.RawContentRef, llmRetryCount int, targetType model.TargetType, crawlerName string) {
 	nextCount := llmRetryCount + 1
 	if nextCount > maxLLMRetries {
 		w.log.WithFields(map[string]interface{}{
@@ -950,7 +953,7 @@ func (w *Worker) accumulateSample(ctx context.Context, raw *core.RawContent, mlo
 	if w.resolver == nil || w.sampleSvc == nil {
 		return
 	}
-	matchedRule, err := w.resolver.ResolveByURL(ctx, raw.URL, storage.TargetTypePage)
+	matchedRule, err := w.resolver.ResolveByURL(ctx, raw.URL, model.TargetTypePage)
 	if err != nil {
 		// rule 매칭 안 되거나 resolver 에러 — 정상 파싱 후라 비정상 상황. 단지 디버그 로그.
 		mlog.WithError(err).Debug("sample accumulate: rule lookup failed")
@@ -1015,13 +1018,13 @@ func ShouldEnqueueLLMOnNoRule(exists, hasEnabled bool, lookupErr error) bool {
 	return true
 }
 
-// storageToFetcherTargetType 은 storage.TargetType ("list"/"page") 을
+// storageToFetcherTargetType 은 model.TargetType ("list"/"page") 을
 // TopicFetched 헤더에서 사용하는 core.TargetType 문자열 ("category"/"article") 로 변환합니다.
 //
 // 초기 fetcher 는 core.TargetType 값을 target_type 헤더로 발행하므로,
 // RequeueParsing / RequeueForLLMRetry 에서 재발행 시 동일 변환이 필요합니다.
-func storageToFetcherTargetType(t storage.TargetType) string {
-	if t == storage.TargetTypeList {
+func storageToFetcherTargetType(t model.TargetType) string {
+	if t == model.TargetTypeList {
 		return string(core.TargetTypeCategory)
 	}
 	return string(core.TargetTypeArticle)

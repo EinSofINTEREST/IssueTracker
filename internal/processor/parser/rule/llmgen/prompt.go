@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/llm/prompt"
 )
 
@@ -20,18 +20,18 @@ const promptMaxHTMLBytes = 32 * 1024
 // BuildPrompt 는 host + target_type + 샘플 HTML 로 LLM 시스템/사용자 프롬프트를 생성합니다.
 //
 // LLM 응답 형식 강제 — 반드시 단일 JSON 객체로 응답하도록 지시.
-// JSON 구조는 storage.SelectorMap 의 JSON tag 와 1:1 매핑되어 그대로 unmarshal 가능.
+// JSON 구조는 model.SelectorMap 의 JSON tag 와 1:1 매핑되어 그대로 unmarshal 가능.
 //
 // loader 는 외부 파일 또는 binary embed (pkg/llm/prompt/assets/llmgen/...) 에서 prompt 본문을 로드.
 // 반환값: (system, user) — Provider 호출 시 RoleSystem + RoleUser 메시지로 분리 전달.
-func BuildPrompt(loader prompt.Loader, host string, targetType storage.TargetType, html string) (system, user string, err error) {
+func BuildPrompt(loader prompt.Loader, host string, targetType model.TargetType, html string) (system, user string, err error) {
 	system, err = loader.Load("llmgen/system")
 	if err != nil {
 		return "", "", fmt.Errorf("load llmgen system prompt: %w", err)
 	}
 
 	userPromptName := "llmgen/page.user"
-	if targetType == storage.TargetTypeList {
+	if targetType == model.TargetTypeList {
 		userPromptName = "llmgen/list.user"
 	}
 	template, err := loader.Load(userPromptName)

@@ -15,7 +15,7 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/worker"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -138,11 +138,11 @@ func (s *mockContentService) GetByID(_ context.Context, id string) (*core.Conten
 	return c, nil
 }
 
-func (s *mockContentService) ListByCountry(_ context.Context, _ string, _ storage.ContentFilter) ([]*core.Content, error) {
+func (s *mockContentService) ListByCountry(_ context.Context, _ string, _ model.ContentFilter) ([]*core.Content, error) {
 	return nil, nil
 }
 
-func (s *mockContentService) Search(_ context.Context, _ storage.ContentFilter) ([]*core.Content, error) {
+func (s *mockContentService) Search(_ context.Context, _ model.ContentFilter) ([]*core.Content, error) {
 	return nil, nil
 }
 

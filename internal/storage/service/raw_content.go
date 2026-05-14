@@ -8,6 +8,8 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -27,7 +29,7 @@ type RawContentService interface {
 	Delete(ctx context.Context, id string) error
 
 	// List는 필터 조건에 맞는 RawContent 목록을 반환합니다.
-	List(ctx context.Context, filter storage.RawContentFilter) ([]*core.RawContent, error)
+	List(ctx context.Context, filter model.RawContentFilter) ([]*core.RawContent, error)
 
 	// PurgeOlderThan은 cutoff 이전에 수집된 원본 데이터를 일괄 삭제합니다.
 	// 원본 데이터 보존 정책(기본 90일) 적용에 사용됩니다.
@@ -37,12 +39,12 @@ type RawContentService interface {
 
 // rawContentService는 RawContentService의 구현체입니다.
 type rawContentService struct {
-	repo storage.RawContentRepository
+	repo repository.RawContentRepository
 	log  *logger.Logger
 }
 
 // NewRawContentService는 주어진 repository를 사용하는 RawContentService를 생성합니다.
-func NewRawContentService(repo storage.RawContentRepository, log *logger.Logger) RawContentService {
+func NewRawContentService(repo repository.RawContentRepository, log *logger.Logger) RawContentService {
 	return &rawContentService{repo: repo, log: log}
 }
 
@@ -95,7 +97,7 @@ func (s *rawContentService) Delete(ctx context.Context, id string) error {
 }
 
 // List는 RawContentFilter 조건으로 RawContent를 조회합니다.
-func (s *rawContentService) List(ctx context.Context, filter storage.RawContentFilter) ([]*core.RawContent, error) {
+func (s *rawContentService) List(ctx context.Context, filter model.RawContentFilter) ([]*core.RawContent, error) {
 	raws, err := s.repo.List(ctx, filter)
 	if err != nil {
 		return nil, core.NewStorageError(core.CodeStorageRead, "list raw contents", true, err)

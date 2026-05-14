@@ -9,7 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/primitive"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -30,7 +31,7 @@ func TestGenerator_SetLocker_Nil_FallsBackToMem(t *testing.T) {
 
 	g.SetLocker(nil)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -47,7 +48,7 @@ func TestGenerator_SetLocker_AlwaysLocked_NoLLMCall(t *testing.T) {
 
 	g.SetLocker(&alwaysLockedLocker{})
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -71,7 +72,7 @@ func TestGenerator_SetLocker_CustomLocker_IsInvoked(t *testing.T) {
 	locker := &countingLocker{}
 	g.SetLocker(locker)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -87,10 +88,10 @@ func TestGenerator_SetLocker_CustomLocker_IsInvoked(t *testing.T) {
 // alwaysLockedLocker 는 항상 acquired=false 를 반환합니다.
 type alwaysLockedLocker struct{}
 
-func (a *alwaysLockedLocker) TryAcquire(_ context.Context, _ string, _ storage.TargetType) (bool, error) {
+func (a *alwaysLockedLocker) TryAcquire(_ context.Context, _ string, _ model.TargetType) (bool, error) {
 	return false, nil
 }
-func (a *alwaysLockedLocker) Release(_ context.Context, _ string, _ storage.TargetType) error {
+func (a *alwaysLockedLocker) Release(_ context.Context, _ string, _ model.TargetType) error {
 	return nil
 }
 
@@ -102,7 +103,7 @@ type countingLocker struct {
 	held    map[string]struct{}
 }
 
-func (c *countingLocker) TryAcquire(_ context.Context, host string, targetType storage.TargetType) (bool, error) {
+func (c *countingLocker) TryAcquire(_ context.Context, host string, targetType model.TargetType) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.acquire++
@@ -117,7 +118,7 @@ func (c *countingLocker) TryAcquire(_ context.Context, host string, targetType s
 	return true, nil
 }
 
-func (c *countingLocker) Release(_ context.Context, host string, targetType storage.TargetType) error {
+func (c *countingLocker) Release(_ context.Context, host string, targetType model.TargetType) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.release++
@@ -137,6 +138,6 @@ func (c *countingLocker) releaseCalls() int {
 	return c.release
 }
 
-// Ensure test fakes implement storage.InflightLocker
-var _ storage.InflightLocker = (*alwaysLockedLocker)(nil)
-var _ storage.InflightLocker = (*countingLocker)(nil)
+// Ensure test fakes implement primitive.InflightLocker
+var _ primitive.InflightLocker = (*alwaysLockedLocker)(nil)
+var _ primitive.InflightLocker = (*countingLocker)(nil)
