@@ -8,6 +8,7 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/precheck"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
@@ -171,6 +172,18 @@ func NewPoolManager(
 //
 // m.resolver 가 nil 인 경우 (테스트 wiring) 는 job.Priority 를 그대로 사용 — coderabbit
 // PR #409 피드백. bus.buildMessage 가 nil resolver 를 fail-safe 로 허용하는 정책과 일관.
+// SetPrecheck 는 모든 worker pool (high/normal/low + chromedp) 에 precheck.Decider 를 일괄 주입합니다 (이슈 #425).
+//
+// nil 주입 시 게이트 비활성. Start 호출 전 wiring 단계에서 1회 호출.
+func (m *PoolManager) SetPrecheck(d precheck.Decider) {
+	for _, p := range m.pools {
+		p.SetPrecheck(d)
+	}
+	if m.chromedpPool != nil {
+		m.chromedpPool.SetPrecheck(d)
+	}
+}
+
 func (m *PoolManager) Publish(ctx context.Context, job *core.CrawlJob) error {
 	priority := job.Priority
 	if m.resolver != nil {
