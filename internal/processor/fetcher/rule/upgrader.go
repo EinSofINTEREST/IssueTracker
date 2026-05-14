@@ -14,6 +14,9 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/primitive"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -58,9 +61,9 @@ const (
 //   - max 20 cap: 단일 사이클 republish 폭주 회피
 //   - 모든 단계 실패는 non-fatal — best-effort. 다음 카운팅 사이클이 자연스러운 retry.
 type Upgrader struct {
-	repo       storage.FetcherRuleRepository
+	repo       repository.FetcherRuleRepository
 	resolver   Resolver
-	tracker    storage.RawIDTracker
+	tracker    primitive.RawIDTracker
 	rawSvc     service.RawContentService
 	upgradePub bus.UpgradePublisher // gemini PR #398 — `publisher` package import 와 shadow 회피.
 	redis      *goredis.Client      // SETNX in-flight lock 용. nil 이면 lock 비활성 (단일 인스턴스 환경).
@@ -73,9 +76,9 @@ type Upgrader struct {
 // 모든 인자는 nil 허용 안 함 (redis 만 nil 허용 — 단일 인스턴스 환경에서 lock 비활성).
 // nil 인자 발견 시 error.
 func NewUpgrader(
-	repo storage.FetcherRuleRepository,
+	repo repository.FetcherRuleRepository,
 	resolver Resolver,
-	tracker storage.RawIDTracker,
+	tracker primitive.RawIDTracker,
 	rawSvc service.RawContentService,
 	pub bus.UpgradePublisher,
 	redisClient *goredis.Client,
@@ -136,7 +139,7 @@ func (u *Upgrader) Trigger(ctx context.Context, host string) {
 
 	// 이미 chromedp 인 host 차단
 	if existing, err := u.repo.GetByHost(ctx, host); err == nil {
-		if existing.Fetcher == storage.FetcherChromedp {
+		if existing.Fetcher == model.FetcherChromedp {
 			u.logFields("upgrader skipped — host already on chromedp (audit: chromedp itself failing for this host)", map[string]interface{}{
 				"host":   host,
 				"reason": existing.Reason,
@@ -149,7 +152,7 @@ func (u *Upgrader) Trigger(ctx context.Context, host string) {
 	}
 
 	// UPSERT chromedp + cache invalidate
-	if err := u.repo.Upsert(ctx, host, storage.FetcherChromedp, "auto_upgrade_validation"); err != nil {
+	if err := u.repo.Upsert(ctx, host, model.FetcherChromedp, "auto_upgrade_validation"); err != nil {
 		u.logWarn("upgrader fetcher_rules Upsert failed", host, err)
 		return
 	}
@@ -211,7 +214,7 @@ func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []stri
 				URL:  raw.URL,
 				Type: core.TargetTypeArticle,
 				Metadata: map[string]interface{}{
-					MetadataKeyForceFetcher:      string(storage.FetcherChromedp),
+					MetadataKeyForceFetcher:      string(model.FetcherChromedp),
 					MetadataKeyForceFetcherToken: ForceFetcherTokenValue(),
 					"retry_reason":               "validation_upgrade",
 					"original_raw_id":            rawID,

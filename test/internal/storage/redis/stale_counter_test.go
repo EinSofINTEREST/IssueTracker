@@ -8,14 +8,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
 )
 
 // NoopStaleCounter 는 항상 (0, false, nil) 반환을 검증.
 func TestNoopStaleCounter_AlwaysReturnsZero(t *testing.T) {
-	c := storage.NewNoopStaleCounter()
-	count, reached, err := c.Record(context.Background(), "example.com", storage.TargetTypePage)
+	c := primitive.NewNoopStaleCounter()
+	count, reached, err := c.Record(context.Background(), "example.com", model.TargetTypePage)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 	assert.False(t, reached)

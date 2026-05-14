@@ -1,13 +1,12 @@
 package llmgen
 
 import (
+	"issuetracker/internal/storage/model"
 	"reflect"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-
-	"issuetracker/internal/storage"
 )
 
 // confidenceThreshold 는 selector 의 hit_rate 가 본 임계값 미만이면 drop (nil) 처리됩니다.
@@ -49,12 +48,12 @@ var publishedAtTimeLayouts = []string{
 // element (제목 / 광고 등) 매칭 시 텍스트는 추출되지만 date 가 아니므로 hit_rate=0.
 //
 // 빈 SelectorMap 또는 html parse 실패 시 빈 map 반환 (caller 가 무시).
-func ComputeFieldConfidence(sm storage.SelectorMap, html string) map[string]storage.FieldConfidence {
+func ComputeFieldConfidence(sm model.SelectorMap, html string) map[string]model.FieldConfidence {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
-		return map[string]storage.FieldConfidence{}
+		return map[string]model.FieldConfidence{}
 	}
-	out := make(map[string]storage.FieldConfidence)
+	out := make(map[string]model.FieldConfidence)
 
 	v := reflect.ValueOf(sm)
 	t := reflect.TypeOf(sm)
@@ -64,7 +63,7 @@ func ComputeFieldConfidence(sm storage.SelectorMap, html string) map[string]stor
 		if field.Kind() != reflect.Ptr || field.IsNil() {
 			continue
 		}
-		fs, ok := field.Interface().(*storage.FieldSelector)
+		fs, ok := field.Interface().(*model.FieldSelector)
 		if !ok {
 			continue
 		}
@@ -73,7 +72,7 @@ func ComputeFieldConfidence(sm storage.SelectorMap, html string) map[string]stor
 			continue
 		}
 		hit := isFieldHit(doc, jsonTag, fs)
-		out[jsonTag] = storage.FieldConfidence{
+		out[jsonTag] = model.FieldConfidence{
 			HitRate:     boolToFloat(hit),
 			SampleCount: 1,
 		}
@@ -85,7 +84,7 @@ func ComputeFieldConfidence(sm storage.SelectorMap, html string) map[string]stor
 //
 // 신뢰할 수 없는 selector 가 INSERT 되면 하류 parser 가 빈 값을 추출 — host 별 \"본 필드 부재\" 학습
 // 으로 이어짐. validator 는 confidence=0 인 필드를 \"부재가 정상\" 으로 판단할 수 있음 (sub-issue).
-func ApplyConfidenceFilter(sm storage.SelectorMap, confidence map[string]storage.FieldConfidence) storage.SelectorMap {
+func ApplyConfidenceFilter(sm model.SelectorMap, confidence map[string]model.FieldConfidence) model.SelectorMap {
 	out := sm
 	v := reflect.ValueOf(&out).Elem()
 	t := v.Type()
@@ -116,7 +115,7 @@ func ApplyConfidenceFilter(sm storage.SelectorMap, confidence map[string]storage
 //   - **추출 결과 (text 또는 attribute) 가 비어있지 않음** — attribute selector 가 attribute
 //     를 못 찾거나 빈 element 매칭하면 hit 아님 (low-confidence drop 게이트 강화)
 //   - published_at 추가: 추출된 텍스트가 time.Parse 통과해야 hit
-func isFieldHit(doc *goquery.Document, fieldName string, fs *storage.FieldSelector) bool {
+func isFieldHit(doc *goquery.Document, fieldName string, fs *model.FieldSelector) bool {
 	if fs == nil || strings.TrimSpace(fs.CSS) == "" {
 		return false
 	}
@@ -138,7 +137,7 @@ func isFieldHit(doc *goquery.Document, fieldName string, fs *storage.FieldSelect
 //
 // fs.Attribute != "" 이면 attribute 값 (없으면 빈 문자열 — text fallback 안 함, attribute
 // selector 의 의도 존중). 그 외에는 text().
-func extractFirstValue(sel *goquery.Selection, fs *storage.FieldSelector) string {
+func extractFirstValue(sel *goquery.Selection, fs *model.FieldSelector) string {
 	first := sel.First()
 	if fs.Attribute != "" {
 		if v, exists := first.Attr(fs.Attribute); exists {

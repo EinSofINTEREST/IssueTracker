@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -231,14 +231,14 @@ func (p *ClaudeWorkerPool) Stop(ctx context.Context) error {
 // Extract 는 round-robin 으로 worker 를 선택해 Extract 위임합니다.
 //
 // SelectorExtractor 인터페이스 호환 — llmgen.Generator.SetExtractor 가 본 메소드를 호출.
-func (p *ClaudeWorkerPool) Extract(ctx context.Context, host string, targetType storage.TargetType, html string) (storage.SelectorMap, error) {
+func (p *ClaudeWorkerPool) Extract(ctx context.Context, host string, targetType model.TargetType, html string) (model.SelectorMap, error) {
 	return p.pick().Extract(ctx, host, targetType, html)
 }
 
 // ExtractEnriched 는 round-robin 으로 worker 를 선택해 ExtractEnriched 위임합니다.
 //
 // EnrichedExtractor 인터페이스 호환 — llmgen.Generator 가 type assertion 으로 자동 분기.
-func (p *ClaudeWorkerPool) ExtractEnriched(ctx context.Context, host string, targetType storage.TargetType, html string) (*llmgen.ExtractResult, error) {
+func (p *ClaudeWorkerPool) ExtractEnriched(ctx context.Context, host string, targetType model.TargetType, html string) (*llmgen.ExtractResult, error) {
 	return p.pick().ExtractEnriched(ctx, host, targetType, html)
 }
 

@@ -20,7 +20,8 @@ import (
 	"issuetracker/internal/processor/fetcher/implementation/goquery"
 	"issuetracker/internal/processor/fetcher/rate_limiter"
 	"issuetracker/internal/processor/fetcher/rule"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 )
@@ -52,7 +53,7 @@ var defaultLazyKeywords = []string{"data-lazy-src", "lazyload", "data-lazy"}
 func RegisterAll(
 	ctx context.Context,
 	registry *handler.Registry,
-	fetcherRuleRepo storage.FetcherRuleRepository,
+	fetcherRuleRepo repository.FetcherRuleRepository,
 	baseConfig core.Config,
 	rawSvc service.RawContentService,
 	pub *bus.Publisher,
@@ -135,7 +136,7 @@ func RegisterAll(
 // rec.RequestsPerHour 가 0 이면 nil limiter 주입 (DNS lookup 비용 회피).
 func buildHandler(
 	sourceName string,
-	rec *storage.FetcherRuleRecord,
+	rec *model.FetcherRuleRecord,
 	baseConfig core.Config,
 	rawSvc service.RawContentService,
 	pub *bus.Publisher,
@@ -198,7 +199,7 @@ func buildHandler(
 // SourceEntry 는 source_name 별 canonical row 와 그 row 가 canonical (base_url hostname ==
 // host_pattern) 인지 여부를 보관합니다 — AnalyzeSources 가 채워서 반환.
 type SourceEntry struct {
-	Rec      *storage.FetcherRuleRecord
+	Rec      *model.FetcherRuleRecord
 	HasExact bool
 }
 
@@ -217,7 +218,7 @@ type SourceEntry struct {
 // test/internal/<pkg>/ 하위에 외부 _test 패키지로 작성. 내부 helper 의 unit test 를 위한
 // internal/<pkg>/*_test.go (same-package) 패턴은 본 repo 의 디렉토리 컨벤션 위반이므로,
 // testability 최소 노출로 본 함수를 export. API 안정 약속 아님 — 내부 도우미.
-func AnalyzeSources(rules []*storage.FetcherRuleRecord) (
+func AnalyzeSources(rules []*model.FetcherRuleRecord) (
 	bySource map[string]SourceEntry,
 	hostsBySource map[string][]string,
 	baseURLsBySource map[string]map[string]struct{},
@@ -265,7 +266,7 @@ func AnalyzeSources(rules []*storage.FetcherRuleRecord) (
 
 // isCanonicalHost 는 r.BaseURL 의 hostname 이 r.HostPattern 과 일치하면 true 를 반환합니다.
 // 동일 source_name 의 여러 row 중 canonical(대표) host 를 결정적으로 선택하는 데 사용합니다.
-func isCanonicalHost(r *storage.FetcherRuleRecord) bool {
+func isCanonicalHost(r *model.FetcherRuleRecord) bool {
 	if r.BaseURL == "" {
 		return false
 	}

@@ -11,6 +11,7 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/logger"
 )
@@ -235,7 +236,7 @@ func TestContentService_ListByCountry_ReturnsContents(t *testing.T) {
 	svc := service.NewContentService(repo, newTestLogger())
 
 	contents := []*core.Content{newTestContent()}
-	filter := storage.ContentFilter{Pagination: storage.Pagination{Limit: 10}}
+	filter := model.ContentFilter{Pagination: model.Pagination{Limit: 10}}
 
 	expectedFilter := filter
 	expectedFilter.Country = "US"
@@ -257,12 +258,12 @@ func TestContentService_CountByCountry_ReturnsCountMap(t *testing.T) {
 	svc := service.NewContentService(repo, newTestLogger())
 
 	// US 카운트
-	repo.On("Count", mock.Anything, mock.MatchedBy(func(f storage.ContentFilter) bool {
+	repo.On("Count", mock.Anything, mock.MatchedBy(func(f model.ContentFilter) bool {
 		return f.Country == "US" && f.PublishedAfter != nil
 	})).Return(int64(42), nil)
 
 	// KR 카운트
-	repo.On("Count", mock.Anything, mock.MatchedBy(func(f storage.ContentFilter) bool {
+	repo.On("Count", mock.Anything, mock.MatchedBy(func(f model.ContentFilter) bool {
 		return f.Country == "KR" && f.PublishedAfter != nil
 	})).Return(int64(17), nil)
 

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/processor/parser/rule"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // fullPageHTML 은 카테고리 페이지를 모사 — 헤더 / 본문 / 사이드바 / 푸터에
@@ -44,15 +44,15 @@ const fullPageHTML = `
 </body></html>
 `
 
-func discoveryRule(cfg *storage.LinkDiscoveryConfig) *storage.ParserRuleRecord {
-	return &storage.ParserRuleRecord{
+func discoveryRule(cfg *model.LinkDiscoveryConfig) *model.ParserRuleRecord {
+	return &model.ParserRuleRecord{
 		ID:          3,
 		SourceName:  "test",
 		HostPattern: "news.example.com",
-		TargetType:  storage.TargetTypeList,
+		TargetType:  model.TargetTypeList,
 		Version:     1,
 		Enabled:     true,
-		Selectors: storage.SelectorMap{
+		Selectors: model.SelectorMap{
 			LinkDiscovery: cfg,
 		},
 	}
@@ -64,7 +64,7 @@ func discoveryRule(cfg *storage.LinkDiscoveryConfig) *storage.ParserRuleRecord {
 
 func TestPageLinkDiscovery_BasicRegexFilter(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `^https?://news\.example\.com/article/\d{4}/\d{2}/\d{2}/`,
 		SameOriginOnly:    true,
 	}
@@ -91,7 +91,7 @@ func TestPageLinkDiscovery_BasicRegexFilter(t *testing.T) {
 
 func TestPageLinkDiscovery_SameOriginOnly_ExcludesExternal(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/\d{4}/\d{2}/\d{2}/`,
 		SameOriginOnly:    true,
 	}
@@ -106,7 +106,7 @@ func TestPageLinkDiscovery_SameOriginOnly_ExcludesExternal(t *testing.T) {
 
 func TestPageLinkDiscovery_SameOriginOff_AllowsExternal(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/\d{4}/\d{2}/\d{2}/`,
 		SameOriginOnly:    false,
 	}
@@ -125,7 +125,7 @@ func TestPageLinkDiscovery_SameOriginOff_AllowsExternal(t *testing.T) {
 
 func TestPageLinkDiscovery_PathPrefixesActAsCutoff(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/\d{4}/\d{2}/\d{2}/`,
 		SameOriginOnly:    true,
 		PathPrefixes:      []string{"/article/"}, // /category/, /about, /login 등 제외
@@ -142,7 +142,7 @@ func TestPageLinkDiscovery_PathPrefixesActAsCutoff(t *testing.T) {
 
 func TestPageLinkDiscovery_ExcludePatterns(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/`,
 		SameOriginOnly:    true,
 		ExcludePatterns:   []string{"/2026/04/28/"}, // 4월 28일 article 만 제외
@@ -169,7 +169,7 @@ func TestPageLinkDiscovery_ExcludePatterns(t *testing.T) {
 // SameOriginOnly=false, maxOut=2 — same-origin 5건은 cap 무시 통과, cross 0건 (이미 cap 초과).
 func TestPageLinkDiscovery_MaxLinksPerPage_SameOriginUnlimited(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/`,
 		SameOriginOnly:    false,
 		MaxLinksPerPage:   2,
@@ -187,7 +187,7 @@ func TestPageLinkDiscovery_MaxLinksPerPage_SameOriginUnlimited(t *testing.T) {
 // maxOut 이 same-origin 보다 크면 잔여 슬롯에 cross 가 채워짐.
 func TestPageLinkDiscovery_MaxLinksPerPage_CrossOriginFillsRemaining(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/`,
 		SameOriginOnly:    false,
 		MaxLinksPerPage:   10, // same 5 + cross 1 = 6 ≤ 10 → 모두 통과
@@ -209,7 +209,7 @@ func TestPageLinkDiscovery_MaxLinksPerPage_CrossOriginFillsRemaining(t *testing.
 // maxOut == 0 (무제한) — same + cross 모두 통과.
 func TestPageLinkDiscovery_MaxLinksPerPage_Unlimited(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/`,
 		SameOriginOnly:    false,
 		MaxLinksPerPage:   0,
@@ -223,7 +223,7 @@ func TestPageLinkDiscovery_MaxLinksPerPage_Unlimited(t *testing.T) {
 // SameOriginOnly=true 일 때 cross 자체가 candidates 에 안 들어옴 — same-origin 모두 통과.
 func TestPageLinkDiscovery_MaxLinksPerPage_SameOriginOnlyMode(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/`,
 		SameOriginOnly:    true,
 		MaxLinksPerPage:   2,
@@ -250,7 +250,7 @@ func TestPageLinkDiscovery_MaxLinksPerPage_CrossOriginRandomSample(t *testing.T)
   <a href="https://ext5.example.com/article/e">Ext E</a>
 </body></html>
 `
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/`,
 		SameOriginOnly:    false,
 		MaxLinksPerPage:   3,
@@ -283,7 +283,7 @@ func contains(s, substr string) bool {
 
 func TestPageLinkDiscovery_NoMatch_ReturnsParseFailure(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/never-matches-anything/`,
 		SameOriginOnly:    true,
 	}
@@ -300,7 +300,7 @@ func TestPageLinkDiscovery_NoMatch_ReturnsParseFailure(t *testing.T) {
 // 만 적용되고 그 외 모든 (a href) 가 통과.
 func TestPageLinkDiscovery_EmptyPattern_AllPass(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: "",
 		SameOriginOnly:    true,
 	}
@@ -325,7 +325,7 @@ func TestPageLinkDiscovery_EmptyPattern_AllPass(t *testing.T) {
 // ExcludePatterns 가 정상 동작함을 검증합니다.
 func TestPageLinkDiscovery_EmptyPattern_ExcludeStillApplies(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: "",
 		SameOriginOnly:    true,
 		ExcludePatterns:   []string{"/category/", "/about"},
@@ -344,7 +344,7 @@ func TestPageLinkDiscovery_EmptyPattern_ExcludeStillApplies(t *testing.T) {
 // PathPrefixes 가 path 기반 cutoff 로 동작함을 검증합니다 (Coderabbit 피드백).
 func TestPageLinkDiscovery_EmptyPattern_PathPrefixesStillApply(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: "",
 		SameOriginOnly:    true,
 		PathPrefixes:      []string{"/article/"}, // /, /category/, /about, /login 모두 차단
@@ -371,7 +371,7 @@ func TestPageLinkDiscovery_NilConfig_ReturnsEmptySelector(t *testing.T) {
 
 func TestPageLinkDiscovery_InvalidRegex_ReturnsEmptySelector(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `[invalid(regex`,
 	}
 
@@ -384,7 +384,7 @@ func TestPageLinkDiscovery_InvalidRegex_ReturnsEmptySelector(t *testing.T) {
 
 func TestPageLinkDiscovery_EmptyRaw_ReturnsParseFailure(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{ArticleURLPattern: `/article/`}
+	cfg := &model.LinkDiscoveryConfig{ArticleURLPattern: `/article/`}
 
 	_, err := d.Discover(makeRaw("https://news.example.com/x", ""), cfg)
 	require.Error(t, err)
@@ -399,7 +399,7 @@ func TestPageLinkDiscovery_EmptyRaw_ReturnsParseFailure(t *testing.T) {
 // Extract 는 url.Parse(raw.URL) 가 실패할 때 에러 반환 — invalid base URL 로 트리거.
 func TestPageLinkDiscovery_ExtractorFailure_ReturnsParseFailure(t *testing.T) {
 	d := rule.NewPageLinkDiscovery()
-	cfg := &storage.LinkDiscoveryConfig{ArticleURLPattern: `/article/`}
+	cfg := &model.LinkDiscoveryConfig{ArticleURLPattern: `/article/`}
 
 	// raw.URL 이 control character 포함 → url.Parse 실패 → extractor 의 resolveBase 실패
 	_, err := d.Discover(makeRaw("http://example.com/\x7f", fullPageHTML), cfg)
@@ -414,11 +414,11 @@ func TestPageLinkDiscovery_ExtractorFailure_ReturnsParseFailure(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestParser_ParseLinks_RoutesToDiscoveryWhenPatternSet(t *testing.T) {
-	cfg := &storage.LinkDiscoveryConfig{
+	cfg := &model.LinkDiscoveryConfig{
 		ArticleURLPattern: `/article/\d{4}/\d{2}/\d{2}/`,
 		SameOriginOnly:    true,
 	}
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{discoveryRule(cfg)}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{discoveryRule(cfg)}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -429,7 +429,7 @@ func TestParser_ParseLinks_RoutesToDiscoveryWhenPatternSet(t *testing.T) {
 
 func TestParser_ParseLinks_FallsBackToItemContainerWhenPatternEmpty(t *testing.T) {
 	// LinkDiscovery 가 nil → 기존 ItemContainer 경로 사용
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{listRule()}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{listRule()}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -447,13 +447,13 @@ func TestParser_ParseLinks_FallsBackToItemContainerWhenPatternEmpty(t *testing.T
 //   - 그래도 3건 반환 → discovery 경로가 동작했다는 명백한 증거
 func TestParser_ParseLinks_LinkDiscoveryWithEmptyPattern_AllPassDiscovery(t *testing.T) {
 	r := listRule()
-	r.Selectors.LinkDiscovery = &storage.LinkDiscoveryConfig{
+	r.Selectors.LinkDiscovery = &model.LinkDiscoveryConfig{
 		ArticleURLPattern: "",
 		SameOriginOnly:    true,
 	}
 	// ItemContainer 를 매칭 0건 selector 로 변경 — fallback 진입 시 ErrParseFailure 보장
-	r.Selectors.ItemContainer = &storage.FieldSelector{CSS: "div.no-such-class-anywhere"}
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{r}}
+	r.Selectors.ItemContainer = &model.FieldSelector{CSS: "div.no-such-class-anywhere"}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 

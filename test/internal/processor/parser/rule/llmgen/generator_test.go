@@ -15,6 +15,8 @@ import (
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
@@ -53,11 +55,11 @@ func (p *fakeProvider) callCount() int {
 // recordingRepo 는 Insert 호출을 기록하는 ParserRuleRepository 구현입니다.
 type recordingRepo struct {
 	mu       sync.Mutex
-	inserted []*storage.ParserRuleRecord
+	inserted []*model.ParserRuleRecord
 	insertEr error
 
 	// findByNaturalKeyResult: 사전 lookup 시뮬레이션 (이슈 #274). nil 이면 ErrNotFound.
-	findByNaturalKeyResult *storage.ParserRuleRecord
+	findByNaturalKeyResult *model.ParserRuleRecord
 	// findByNaturalKeyErr: 설정 시 result 무시하고 본 에러 반환 (PR #275 리뷰 — DB 장애 시뮬레이션).
 	findByNaturalKeyErr   error
 	findByNaturalKeyCalls int
@@ -68,7 +70,7 @@ type recordingRepo struct {
 	insertNextVersionCalls int
 }
 
-func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParserRuleRecord) error {
+func (r *recordingRepo) Insert(_ context.Context, rec *model.ParserRuleRecord) error {
 	if r.insertEr != nil {
 		return r.insertEr
 	}
@@ -80,20 +82,20 @@ func (r *recordingRepo) Insert(_ context.Context, rec *storage.ParserRuleRecord)
 	r.inserted = append(r.inserted, &clone)
 	return nil
 }
-func (r *recordingRepo) Update(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
-func (r *recordingRepo) GetByID(_ context.Context, _ int64) (*storage.ParserRuleRecord, error) {
+func (r *recordingRepo) Update(_ context.Context, _ *model.ParserRuleRecord) error { return nil }
+func (r *recordingRepo) GetByID(_ context.Context, _ int64) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *recordingRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParserRuleRecord, error) {
+func (r *recordingRepo) FindActive(_ context.Context, _ string, _ model.TargetType) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParserRuleRecord, error) {
+func (r *recordingRepo) FindActiveCandidates(_ context.Context, _ string, _ model.TargetType) ([]*model.ParserRuleRecord, error) {
 	return nil, nil
 }
-func (r *recordingRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
+func (r *recordingRepo) HasAnyRule(_ context.Context, _ string, _ model.TargetType) (bool, bool, error) {
 	return false, false, nil
 }
-func (r *recordingRepo) InsertNextVersion(ctx context.Context, rec *storage.ParserRuleRecord) error {
+func (r *recordingRepo) InsertNextVersion(ctx context.Context, rec *model.ParserRuleRecord) error {
 	r.mu.Lock()
 	r.insertNextVersionCalls++
 	// 자연키 (source, host, path, type) 동일 row 의 MAX(version)+1 시뮬레이션 — postgres 구현과 일치.
@@ -112,7 +114,7 @@ func (r *recordingRepo) InsertNextVersion(ctx context.Context, rec *storage.Pars
 	r.mu.Unlock()
 	return r.Insert(ctx, rec)
 }
-func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParserRuleRecord, error) {
+func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ model.TargetType, _ int) (*model.ParserRuleRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.findByNaturalKeyCalls++
@@ -124,17 +126,17 @@ func (r *recordingRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ st
 	}
 	return nil, storage.ErrNotFound
 }
-func (r *recordingRepo) List(_ context.Context, _ storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
+func (r *recordingRepo) List(_ context.Context, _ model.ParserRuleFilter) ([]*model.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (r *recordingRepo) Delete(_ context.Context, _ int64) error { return nil }
 func (r *recordingRepo) UpdatePathPattern(_ context.Context, _ int64, _, _ string) error {
 	return nil
 }
-func (r *recordingRepo) inserts() []*storage.ParserRuleRecord {
+func (r *recordingRepo) inserts() []*model.ParserRuleRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]*storage.ParserRuleRecord, len(r.inserted))
+	out := make([]*model.ParserRuleRecord, len(r.inserted))
 	copy(out, r.inserted)
 	return out
 }
@@ -165,7 +167,7 @@ var testPromptLoader = prompt.MapLoader{
 	"llmgen/list.user": "host={{HOST}} type={{TARGET_TYPE}} html={{HTML}}",
 }
 
-func newGenerator(t *testing.T, provider llm.Provider, repo storage.ParserRuleRepository) (*llmgen.Generator, *rule.Resolver) {
+func newGenerator(t *testing.T, provider llm.Provider, repo repository.ParserRuleRepository) (*llmgen.Generator, *rule.Resolver) {
 	t.Helper()
 	resolver, _ := rule.NewResolver(&noopFindRepo{}, rule.WithCacheTTL(time.Minute))
 	g, err := llmgen.New(provider, repo, resolver, testPromptLoader, logger.New(logger.DefaultConfig()))
@@ -176,27 +178,27 @@ func newGenerator(t *testing.T, provider llm.Provider, repo storage.ParserRuleRe
 // noopFindRepo: Resolver 가 요구하는 ParserRuleRepository 인터페이스를 만족하는 stub.
 type noopFindRepo struct{}
 
-func (noopFindRepo) Insert(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
-func (noopFindRepo) Update(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
-func (noopFindRepo) GetByID(_ context.Context, _ int64) (*storage.ParserRuleRecord, error) {
+func (noopFindRepo) Insert(_ context.Context, _ *model.ParserRuleRecord) error { return nil }
+func (noopFindRepo) Update(_ context.Context, _ *model.ParserRuleRecord) error { return nil }
+func (noopFindRepo) GetByID(_ context.Context, _ int64) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (noopFindRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParserRuleRecord, error) {
+func (noopFindRepo) FindActive(_ context.Context, _ string, _ model.TargetType) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (noopFindRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParserRuleRecord, error) {
+func (noopFindRepo) FindActiveCandidates(_ context.Context, _ string, _ model.TargetType) ([]*model.ParserRuleRecord, error) {
 	return nil, nil
 }
-func (noopFindRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
+func (noopFindRepo) HasAnyRule(_ context.Context, _ string, _ model.TargetType) (bool, bool, error) {
 	return false, false, nil
 }
-func (noopFindRepo) InsertNextVersion(_ context.Context, _ *storage.ParserRuleRecord) error {
+func (noopFindRepo) InsertNextVersion(_ context.Context, _ *model.ParserRuleRecord) error {
 	return nil
 }
-func (noopFindRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParserRuleRecord, error) {
+func (noopFindRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ model.TargetType, _ int) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (noopFindRepo) List(_ context.Context, _ storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
+func (noopFindRepo) List(_ context.Context, _ model.ParserRuleFilter) ([]*model.ParserRuleRecord, error) {
 	return nil, nil
 }
 func (noopFindRepo) Delete(_ context.Context, _ int64) error { return nil }
@@ -234,7 +236,7 @@ func TestGenerator_Enqueue_PageSuccess_InsertsEnabledRule(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -244,7 +246,7 @@ func TestGenerator_Enqueue_PageSuccess_InsertsEnabledRule(t *testing.T) {
 	require.Len(t, got, 1)
 	rec := got[0]
 	assert.Equal(t, "example.com", rec.HostPattern)
-	assert.Equal(t, storage.TargetTypePage, rec.TargetType)
+	assert.Equal(t, model.TargetTypePage, rec.TargetType)
 	assert.True(t, rec.Enabled, "CSS selector 검증 통과 = 품질 게이트 — LLM 자동 생성 룰은 즉시 enabled=true")
 	assert.Equal(t, "llm-auto", rec.SourceName)
 	require.NotNil(t, rec.Selectors.Title)
@@ -264,13 +266,13 @@ func TestGenerator_Enqueue_ListSuccess(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypeList, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypeList, &core.RawContent{
 		URL: "https://example.com/news", HTML: sampleListHTML,
 	}, 0, "", 0)
 
 	waitForInserts(t, repo, 1, 2*time.Second)
 	rec := repo.inserts()[0]
-	assert.Equal(t, storage.TargetTypeList, rec.TargetType)
+	assert.Equal(t, model.TargetTypeList, rec.TargetType)
 	require.NotNil(t, rec.Selectors.ItemContainer)
 	assert.Equal(t, "li.news-item", rec.Selectors.ItemContainer.CSS)
 }
@@ -287,7 +289,7 @@ func TestGenerator_Enqueue_ValidationFailure_NoInsert(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -301,7 +303,7 @@ func TestGenerator_Enqueue_LLMError_NoInsert(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -337,7 +339,7 @@ func TestGenerator_Enqueue_InflightDedup_SingleLLMCall(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+			g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 				URL: "https://example.com/x", HTML: samplePageHTML,
 			}, 0, "", 0)
 		}()
@@ -361,10 +363,10 @@ func TestGenerator_Enqueue_DifferentHosts_BothCalled(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "a.example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "a.example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://a.example.com/x", HTML: samplePageHTML,
 	}, 0, "", 0)
-	g.Enqueue(context.Background(), "b.example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "b.example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://b.example.com/x", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -377,7 +379,7 @@ func TestGenerator_Enqueue_EmptyHTML_NoCall(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: "",
 	}, 0, "", 0)
 
@@ -401,7 +403,7 @@ func TestGenerator_Stop_WaitsForInflightGoroutines(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -422,7 +424,7 @@ func TestGenerator_EnqueueAfterStop_NoOp(t *testing.T) {
 
 	g.Stop(context.Background())
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -459,7 +461,7 @@ func TestGenerator_Enqueue_OutlivesCallerCtxCancel(t *testing.T) {
 	g, _ := newGenerator(t, provider, repo)
 
 	callerCtx, cancel := context.WithCancel(context.Background())
-	g.Enqueue(callerCtx, "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(callerCtx, "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/x", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -476,13 +478,13 @@ func TestGenerator_Enqueue_OutlivesCallerCtxCancel(t *testing.T) {
 
 // fakeExtractor 는 SelectorExtractor 의 테스트용 구현입니다.
 type fakeExtractor struct {
-	sm  storage.SelectorMap
+	sm  model.SelectorMap
 	err error
 	mu  sync.Mutex
 	n   int
 }
 
-func (e *fakeExtractor) Extract(_ context.Context, _ string, _ storage.TargetType, _ string) (storage.SelectorMap, error) {
+func (e *fakeExtractor) Extract(_ context.Context, _ string, _ model.TargetType, _ string) (model.SelectorMap, error) {
 	e.mu.Lock()
 	e.n++
 	e.mu.Unlock()
@@ -511,14 +513,14 @@ func TestGenerator_SetExtractor_UsesExtractorNotProvider(t *testing.T) {
 	g, _ := newGenerator(t, provider, repo)
 
 	extractor := &fakeExtractor{
-		sm: storage.SelectorMap{
-			Title:       &storage.FieldSelector{CSS: "h1.article-title"},
-			MainContent: &storage.FieldSelector{CSS: "article p", Multi: true},
+		sm: model.SelectorMap{
+			Title:       &model.FieldSelector{CSS: "h1.article-title"},
+			MainContent: &model.FieldSelector{CSS: "article p", Multi: true},
 		},
 	}
 	g.SetExtractor(extractor)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -540,16 +542,16 @@ func TestGenerator_SetExtractor_ModelNameFromInterface(t *testing.T) {
 
 	extractor := &fakeExtractorWithModel{
 		fakeExtractor: fakeExtractor{
-			sm: storage.SelectorMap{
-				Title:       &storage.FieldSelector{CSS: "h1.article-title"},
-				MainContent: &storage.FieldSelector{CSS: "article p"},
+			sm: model.SelectorMap{
+				Title:       &model.FieldSelector{CSS: "h1.article-title"},
+				MainContent: &model.FieldSelector{CSS: "article p"},
 			},
 		},
 		modelName: "claude-sonnet-4-6",
 	}
 	g.SetExtractor(extractor)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -569,14 +571,14 @@ func TestGenerator_SetExtractor_FallbackModelName(t *testing.T) {
 	g, _ := newGenerator(t, provider, repo)
 
 	extractor := &fakeExtractor{
-		sm: storage.SelectorMap{
-			Title:       &storage.FieldSelector{CSS: "h1.article-title"},
-			MainContent: &storage.FieldSelector{CSS: "article p"},
+		sm: model.SelectorMap{
+			Title:       &model.FieldSelector{CSS: "h1.article-title"},
+			MainContent: &model.FieldSelector{CSS: "article p"},
 		},
 	}
 	g.SetExtractor(extractor)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -597,7 +599,7 @@ func TestGenerator_SetExtractor_Error_NoInsert(t *testing.T) {
 	extractor := &fakeExtractor{err: errors.New("docker exec failed")}
 	g.SetExtractor(extractor)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -620,7 +622,7 @@ func TestGenerator_SetExtractor_Nil_FallsBackToProvider(t *testing.T) {
 
 	g.SetExtractor(nil) // nil → provider fallback
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -668,7 +670,7 @@ func TestGenerator_DuplicateInsert_AbsorbedAsSuccess(t *testing.T) {
 	repo := &recordingRepo{insertEr: storage.ErrDuplicate}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -687,18 +689,18 @@ func TestGenerator_DuplicateInsert_AbsorbedAsSuccess(t *testing.T) {
 func TestGenerator_PreCheckHit_SkipsLLMCall(t *testing.T) {
 	provider := &fakeProvider{name: "fake", response: `{"title":{"css":"h1"}}`}
 	repo := &recordingRepo{
-		findByNaturalKeyResult: &storage.ParserRuleRecord{
+		findByNaturalKeyResult: &model.ParserRuleRecord{
 			ID:          42,
 			SourceName:  llmgen.LLMAutoSourceName,
 			HostPattern: "example.com",
-			TargetType:  storage.TargetTypePage,
+			TargetType:  model.TargetTypePage,
 			Version:     1,
 			Enabled:     true,
 		},
 	}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -727,7 +729,7 @@ func TestGenerator_PreCheckMiss_ProceedsToLLM(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -745,18 +747,18 @@ func TestGenerator_PreCheckMiss_ProceedsToLLM(t *testing.T) {
 func TestGenerator_PreCheckHit_DisabledRule_SkipsLLM(t *testing.T) {
 	provider := &fakeProvider{name: "fake", response: `{"title":{"css":"h1"}}`}
 	repo := &recordingRepo{
-		findByNaturalKeyResult: &storage.ParserRuleRecord{
+		findByNaturalKeyResult: &model.ParserRuleRecord{
 			ID:          99,
 			SourceName:  llmgen.LLMAutoSourceName,
 			HostPattern: "example.com",
-			TargetType:  storage.TargetTypePage,
+			TargetType:  model.TargetTypePage,
 			Version:     1,
 			Enabled:     false, // 운영자 disabled — 자동 재활성 회피
 		},
 	}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -782,7 +784,7 @@ func TestGenerator_PreCheckLookupError_FallthroughToLLM(t *testing.T) {
 	repo := &recordingRepo{findByNaturalKeyErr: errors.New("db connection refused")}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -808,7 +810,7 @@ func TestGenerator_EnqueueStale_InsertNextVersion(t *testing.T) {
 	repo := &recordingRepo{}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.EnqueueStale(context.Background(), "stale.example.com", storage.TargetTypePage, &core.RawContent{
+	g.EnqueueStale(context.Background(), "stale.example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://stale.example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -837,22 +839,22 @@ func TestGenerator_EnqueueStale_BypassesEnabledPreCheck(t *testing.T) {
 	// 사전 lookup 결과 — enabled=true 룰 잔존 (정상적으로 fresh Enqueue 면 skip 대상).
 	// 동일 자연키 row 를 inserted 에 미리 시딩하여 InsertNextVersion 의 MAX(version)+1 동작이
 	// v=2 를 산출하도록 — postgres 의 실제 자연키 충돌 회피 동작과 일치.
-	existingV1 := &storage.ParserRuleRecord{
+	existingV1 := &model.ParserRuleRecord{
 		ID:          1,
 		SourceName:  llmgen.LLMAutoSourceName,
 		HostPattern: "stale.example.com",
 		PathPattern: "",
-		TargetType:  storage.TargetTypePage,
+		TargetType:  model.TargetTypePage,
 		Version:     1,
 		Enabled:     true,
 	}
 	repo := &recordingRepo{
-		inserted:               []*storage.ParserRuleRecord{existingV1},
+		inserted:               []*model.ParserRuleRecord{existingV1},
 		findByNaturalKeyResult: existingV1,
 	}
 	g, _ := newGenerator(t, provider, repo)
 
-	g.EnqueueStale(context.Background(), "stale.example.com", storage.TargetTypePage, &core.RawContent{
+	g.EnqueueStale(context.Background(), "stale.example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://stale.example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 

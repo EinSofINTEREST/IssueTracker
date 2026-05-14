@@ -3,8 +3,7 @@ package rule
 import (
 	"context"
 	"fmt"
-
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // seededHostTargets 는 IssueTracker 가 부팅 시 parser_rules 테이블에 활성 row 로 존재해야 하는
@@ -13,16 +12,16 @@ import (
 // 신규 사이트 추가 시: migration 또는 별도 seed 입력 후 본 슬라이스에 항목 추가.
 var seededHostTargets = []struct {
 	Host       string
-	TargetType storage.TargetType
+	TargetType model.TargetType
 }{
-	{"n.news.naver.com", storage.TargetTypePage},
-	{"news.naver.com", storage.TargetTypeList},
-	{"v.daum.net", storage.TargetTypePage},
-	{"news.daum.net", storage.TargetTypeList},
-	{"www.yna.co.kr", storage.TargetTypePage},
-	{"www.yna.co.kr", storage.TargetTypeList},
-	{"edition.cnn.com", storage.TargetTypePage},
-	{"edition.cnn.com", storage.TargetTypeList},
+	{"n.news.naver.com", model.TargetTypePage},
+	{"news.naver.com", model.TargetTypeList},
+	{"v.daum.net", model.TargetTypePage},
+	{"news.daum.net", model.TargetTypeList},
+	{"www.yna.co.kr", model.TargetTypePage},
+	{"www.yna.co.kr", model.TargetTypeList},
+	{"edition.cnn.com", model.TargetTypePage},
+	{"edition.cnn.com", model.TargetTypeList},
 }
 
 // VerifySeeded 는 seededHostTargets 의 모든 (host, target_type) 페어가 parser_rules 테이블에

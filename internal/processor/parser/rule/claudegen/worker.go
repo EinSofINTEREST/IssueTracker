@@ -36,7 +36,7 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -316,13 +316,13 @@ func (w *ClaudeWorker) Stop(ctx context.Context) error {
 //
 // llmgen.Generator 는 EnrichedExtractor 인터페이스 type assertion 으로 자동 분기 —
 // claudegen.ClaudeWorker 는 두 인터페이스 모두 구현.
-func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType storage.TargetType, html string) (storage.SelectorMap, error) {
+func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType model.TargetType, html string) (model.SelectorMap, error) {
 	res, err := w.ExtractEnriched(ctx, host, targetType, html)
 	if err != nil {
-		return storage.SelectorMap{}, err
+		return model.SelectorMap{}, err
 	}
 	if res.Blacklist != nil {
-		return storage.SelectorMap{}, fmt.Errorf("page blacklisted: %s", res.Blacklist.Reason)
+		return model.SelectorMap{}, fmt.Errorf("page blacklisted: %s", res.Blacklist.Reason)
 	}
 	return res.Selectors, nil
 }
@@ -338,7 +338,7 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType stor
 //
 // validity == "blacklist" 면 ExtractResult.Blacklist 비-nil — 호출자가 셀렉터 INSERT skip
 // + parser_blacklist Upsert 분기. Selectors / PageType 은 의미 없음.
-func (w *ClaudeWorker) ExtractEnriched(ctx context.Context, host string, targetType storage.TargetType, html string) (*llmgen.ExtractResult, error) {
+func (w *ClaudeWorker) ExtractEnriched(ctx context.Context, host string, targetType model.TargetType, html string) (*llmgen.ExtractResult, error) {
 	// wg.Add 를 락 획득보다 먼저 수행 — Stop() 의 wg.Wait() 이 이 Extract 호출을 놓치지 않도록 함.
 	w.wg.Add(1)
 	defer w.wg.Done()
@@ -431,13 +431,13 @@ func (w *ClaudeWorker) ExtractEnriched(ctx context.Context, host string, targetT
 // validity == "blacklist" 일 때 selectors / self_check 는 비어있을 수 있음 — Generator 의
 // 호출자가 Blacklist 분기로 즉시 진입하므로 의미 없음.
 type enrichedOutput struct {
-	Validity           string              `json:"validity"`
-	BlacklistReason    string              `json:"blacklist_reason"`
-	PageType           string              `json:"page_type"`
-	PageTypeConfidence float64             `json:"page_type_confidence"`
-	Article            bool                `json:"article"`
-	ArticleConfidence  float64             `json:"article_confidence"`
-	Selectors          storage.SelectorMap `json:"selectors"`
+	Validity           string            `json:"validity"`
+	BlacklistReason    string            `json:"blacklist_reason"`
+	PageType           string            `json:"page_type"`
+	PageTypeConfidence float64           `json:"page_type_confidence"`
+	Article            bool              `json:"article"`
+	ArticleConfidence  float64           `json:"article_confidence"`
+	Selectors          model.SelectorMap `json:"selectors"`
 	// SelfCheck 는 운영 진단용 — 본 worker 는 currently 무시 (호출자가 metrics / 로그에 활용 가능).
 	// 향후 self_check.warnings 가 있으면 LLM 재시도 trigger 로 사용 가능.
 	SelfCheck json.RawMessage `json:"self_check,omitempty"`
@@ -479,7 +479,7 @@ func parseEnrichedOutput(output string) (*llmgen.ExtractResult, error) {
 	case "":
 		// Schema 가 채워지지 않았거나 LLM 이 여전히 legacy SelectorMap-only 를 반환한 경우.
 		// 같은 JSON 을 SelectorMap 으로 재파싱 시도 — backward compat fallback.
-		var sm storage.SelectorMap
+		var sm model.SelectorMap
 		if err := json.Unmarshal([]byte(jsonStr), &sm); err != nil {
 			return nil, fmt.Errorf("validity field missing and not a legacy selector map: %w", err)
 		}

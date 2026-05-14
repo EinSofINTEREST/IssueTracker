@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -58,7 +58,7 @@ func TestRequeueForLLMRetry_PublishesWithIncrementedCount(t *testing.T) {
 	pw := newMinimalWorker(prod, log)
 	ref := newTestRef()
 
-	pw.RequeueForLLMRetry(context.Background(), ref, 0, storage.TargetTypePage, "test-crawler")
+	pw.RequeueForLLMRetry(context.Background(), ref, 0, model.TargetTypePage, "test-crawler")
 
 	require.Len(t, prod.published, 1)
 	msg := prod.published[0]
@@ -80,11 +80,11 @@ func TestRequeueForLLMRetry_PreservesHeaders(t *testing.T) {
 	pw := newMinimalWorker(prod, log)
 	ref := newTestRef()
 
-	pw.RequeueForLLMRetry(context.Background(), ref, 0, storage.TargetTypeList, "naver")
+	pw.RequeueForLLMRetry(context.Background(), ref, 0, model.TargetTypeList, "naver")
 
 	require.Len(t, prod.published, 1)
 	msg := prod.published[0]
-	// storage.TargetTypeList ("list") → core.TargetTypeCategory ("category") 변환 검증 (이슈 #262 리뷰).
+	// model.TargetTypeList ("list") → core.TargetTypeCategory ("category") 변환 검증 (이슈 #262 리뷰).
 	assert.Equal(t, "category", msg.Headers["target_type"], "target_type 헤더는 fetcher 형식(category)으로 변환되어야 함")
 	assert.Equal(t, "naver", msg.Headers["crawler"], "crawler 헤더 보존")
 }
@@ -98,7 +98,7 @@ func TestRequeueForLLMRetry_RespectsMaxRetries(t *testing.T) {
 	ref := newTestRef()
 
 	// maxLLMRetries = 3, llmRetryCount = 3 이면 nextCount = 4 > 3 → 재큐 중단
-	pw.RequeueForLLMRetry(context.Background(), ref, 3, storage.TargetTypePage, "test-crawler")
+	pw.RequeueForLLMRetry(context.Background(), ref, 3, model.TargetTypePage, "test-crawler")
 
 	assert.Empty(t, prod.published, "max retry 초과 시 publish 없어야 함")
 }
@@ -111,7 +111,7 @@ func TestRequeueForLLMRetry_SecondRetry(t *testing.T) {
 	pw := newMinimalWorker(prod, log)
 	ref := newTestRef()
 
-	pw.RequeueForLLMRetry(context.Background(), ref, 1, storage.TargetTypePage, "test-crawler")
+	pw.RequeueForLLMRetry(context.Background(), ref, 1, model.TargetTypePage, "test-crawler")
 
 	require.Len(t, prod.published, 1)
 	var got core.RawContentRef

@@ -18,6 +18,8 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/rule/refiner"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -37,7 +39,7 @@ var pathinferLoader = prompt.MapLoader{
 // List / InsertNextVersion / FindActiveCandidates 만 사용 — 나머지는 zero stub.
 type fakeRulesRepo struct {
 	mu       sync.Mutex
-	records  []*storage.ParserRuleRecord
+	records  []*model.ParserRuleRecord
 	inserts  []insertCall // 이슈 #282 Phase 2: 새 InsertNextVersion 추적
 	listErr  error
 	insErr   error // InsertNextVersion 강제 에러
@@ -52,23 +54,23 @@ type insertCall struct {
 	description string
 }
 
-func (r *fakeRulesRepo) Insert(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
-func (r *fakeRulesRepo) Update(_ context.Context, _ *storage.ParserRuleRecord) error { return nil }
-func (r *fakeRulesRepo) GetByID(_ context.Context, _ int64) (*storage.ParserRuleRecord, error) {
+func (r *fakeRulesRepo) Insert(_ context.Context, _ *model.ParserRuleRecord) error { return nil }
+func (r *fakeRulesRepo) Update(_ context.Context, _ *model.ParserRuleRecord) error { return nil }
+func (r *fakeRulesRepo) GetByID(_ context.Context, _ int64) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *fakeRulesRepo) FindActive(_ context.Context, _ string, _ storage.TargetType) (*storage.ParserRuleRecord, error) {
+func (r *fakeRulesRepo) FindActive(_ context.Context, _ string, _ model.TargetType) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *fakeRulesRepo) FindActiveCandidates(_ context.Context, _ string, _ storage.TargetType) ([]*storage.ParserRuleRecord, error) {
+func (r *fakeRulesRepo) FindActiveCandidates(_ context.Context, _ string, _ model.TargetType) ([]*model.ParserRuleRecord, error) {
 	return nil, nil
 }
-func (r *fakeRulesRepo) HasAnyRule(_ context.Context, _ string, _ storage.TargetType) (bool, bool, error) {
+func (r *fakeRulesRepo) HasAnyRule(_ context.Context, _ string, _ model.TargetType) (bool, bool, error) {
 	return false, false, nil
 }
 
 // InsertNextVersion 은 자연키의 MAX(version)+1 로 새 record 를 기록하고 sequential ID 를 할당합니다 (이슈 #282).
-func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, rec *storage.ParserRuleRecord) error {
+func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, rec *model.ParserRuleRecord) error {
 	if r.insErr != nil {
 		return r.insErr
 	}
@@ -104,16 +106,16 @@ func (r *fakeRulesRepo) InsertNextVersion(_ context.Context, rec *storage.Parser
 	return nil
 }
 
-func (r *fakeRulesRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ storage.TargetType, _ int) (*storage.ParserRuleRecord, error) {
+func (r *fakeRulesRepo) FindByNaturalKey(_ context.Context, _, _, _ string, _ model.TargetType, _ int) (*model.ParserRuleRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *fakeRulesRepo) List(_ context.Context, f storage.ParserRuleFilter) ([]*storage.ParserRuleRecord, error) {
+func (r *fakeRulesRepo) List(_ context.Context, f model.ParserRuleFilter) ([]*model.ParserRuleRecord, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]*storage.ParserRuleRecord, 0)
+	out := make([]*model.ParserRuleRecord, 0)
 	for _, rec := range r.records {
 		if f.SourceName != "" && rec.SourceName != f.SourceName {
 			continue
@@ -144,14 +146,14 @@ func (r *fakeRulesRepo) insertCalls() []insertCall {
 // fakeSamplesRepo 는 SampleURLRepository 의 in-memory 구현입니다.
 type fakeSamplesRepo struct {
 	mu      sync.Mutex
-	byRule  map[int64][]*storage.SampleURL
+	byRule  map[int64][]*model.SampleURL
 	purged  map[int64]int // rule_id 별 Purge 호출 횟수
 	listErr error
 }
 
 func newFakeSamplesRepo() *fakeSamplesRepo {
 	return &fakeSamplesRepo{
-		byRule: make(map[int64][]*storage.SampleURL),
+		byRule: make(map[int64][]*model.SampleURL),
 		purged: make(map[int64]int),
 	}
 }
@@ -159,7 +161,7 @@ func newFakeSamplesRepo() *fakeSamplesRepo {
 func (r *fakeSamplesRepo) Insert(_ context.Context, ruleID int64, url string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.byRule[ruleID] = append(r.byRule[ruleID], &storage.SampleURL{
+	r.byRule[ruleID] = append(r.byRule[ruleID], &model.SampleURL{
 		ID: int64(len(r.byRule[ruleID]) + 1), RuleID: ruleID, URL: url, ObservedAt: time.Now(),
 	})
 	return nil
@@ -169,7 +171,7 @@ func (r *fakeSamplesRepo) Count(_ context.Context, ruleID int64) (int, error) {
 	defer r.mu.Unlock()
 	return len(r.byRule[ruleID]), nil
 }
-func (r *fakeSamplesRepo) List(_ context.Context, ruleID int64, limit int) ([]*storage.SampleURL, error) {
+func (r *fakeSamplesRepo) List(_ context.Context, ruleID int64, limit int) ([]*model.SampleURL, error) {
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
@@ -179,7 +181,7 @@ func (r *fakeSamplesRepo) List(_ context.Context, ruleID int64, limit int) ([]*s
 	if limit > 0 && limit < len(all) {
 		all = all[:limit]
 	}
-	out := make([]*storage.SampleURL, len(all))
+	out := make([]*model.SampleURL, len(all))
 	copy(out, all)
 	return out, nil
 }
@@ -215,19 +217,19 @@ func (f *fakeLLM) Generate(_ context.Context, _ string, _ string) (string, error
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-func newCatchAllRule(id int64, host string) *storage.ParserRuleRecord {
-	return &storage.ParserRuleRecord{
+func newCatchAllRule(id int64, host string) *model.ParserRuleRecord {
+	return &model.ParserRuleRecord{
 		ID:          id,
 		SourceName:  llmgen.LLMAutoSourceName,
 		HostPattern: host,
 		PathPattern: "", // catch-all — 정밀화 대상
-		TargetType:  storage.TargetTypePage,
+		TargetType:  model.TargetTypePage,
 		Version:     1,
 		Enabled:     true,
 	}
 }
 
-func newRefiner(t *testing.T, rules storage.ParserRuleRepository, samples storage.SampleURLRepository, opts ...refiner.Option) *refiner.Refiner {
+func newRefiner(t *testing.T, rules repository.ParserRuleRepository, samples repository.SampleURLRepository, opts ...refiner.Option) *refiner.Refiner {
 	t.Helper()
 	resolver, _ := rule.NewResolver(rules)
 	log := logger.New(logger.DefaultConfig())
@@ -245,7 +247,7 @@ func newRefiner(t *testing.T, rules storage.ParserRuleRepository, samples storag
 
 func TestRunOnce_AlgorithmSuccess_InsertsNextVersion(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}, nextID: 1}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec}, nextID: 1}
 	samples := newFakeSamplesRepo()
 
 	// numeric ID 패턴 — InferHeuristic 이 ^/article/(\d+)$ 추론.
@@ -287,7 +289,7 @@ func TestRunOnce_AlgorithmSuccess_InsertsNextVersion(t *testing.T) {
 
 func TestRunOnce_BelowThreshold_NoUpdate(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 
 	// 2 sample — minSamples 3 미만.
@@ -305,7 +307,7 @@ func TestRunOnce_AlreadyRefined_Skipped(t *testing.T) {
 	// PathPattern != "" → 정밀화 대상 아님.
 	rec := newCatchAllRule(1, "news.example.com")
 	rec.PathPattern = `^/news/(\d+)$`
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	for i := 0; i < 5; i++ {
 		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/news/1"))
@@ -319,7 +321,7 @@ func TestRunOnce_AlreadyRefined_Skipped(t *testing.T) {
 
 func TestRunOnce_AlgorithmFails_LLMFallback(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 
 	// segment 길이가 다른 sample — InferHeuristic 실패 케이스.
@@ -346,7 +348,7 @@ func TestRunOnce_AlgorithmFails_LLMFallback(t *testing.T) {
 
 func TestRunOnce_AlgorithmFails_NoLLM_Skipped(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	// segment 길이가 다른 sample — InferHeuristic 실패.
 	for _, u := range []string{
@@ -366,7 +368,7 @@ func TestRunOnce_AlgorithmFails_NoLLM_Skipped(t *testing.T) {
 
 func TestRunOnce_LLMError_NoUpdate(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	// algorithm 실패 케이스.
 	for _, u := range []string{
@@ -389,7 +391,7 @@ func TestRunOnce_NonAutoRule_Skipped(t *testing.T) {
 	// SourceName != "llm-auto" → List filter 가 거름.
 	rec := newCatchAllRule(1, "news.example.com")
 	rec.SourceName = "operator-tuned"
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	for i := 0; i < 5; i++ {
 		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/article/1"))
@@ -404,7 +406,7 @@ func TestRunOnce_NonAutoRule_Skipped(t *testing.T) {
 func TestRunOnce_DisabledRule_Skipped(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
 	rec.Enabled = false
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec}}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec}}
 	samples := newFakeSamplesRepo()
 	for i := 0; i < 5; i++ {
 		require.NoError(t, samples.Insert(context.Background(), 1, "https://news.example.com/article/1"))
@@ -430,7 +432,7 @@ func TestRunOnce_ListError_Returned(t *testing.T) {
 func TestRunOnce_InsertError_NoPurge(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
 	rules := &fakeRulesRepo{
-		records: []*storage.ParserRuleRecord{rec},
+		records: []*model.ParserRuleRecord{rec},
 		insErr:  errors.New("insert failed"),
 	}
 	samples := newFakeSamplesRepo()
@@ -453,7 +455,7 @@ func TestRunOnce_InsertError_NoPurge(t *testing.T) {
 func TestRunOnce_InsertDuplicate_Skipped(t *testing.T) {
 	rec := newCatchAllRule(1, "news.example.com")
 	rules := &fakeRulesRepo{
-		records:  []*storage.ParserRuleRecord{rec},
+		records:  []*model.ParserRuleRecord{rec},
 		insIsDup: true,
 	}
 	samples := newFakeSamplesRepo()
@@ -531,7 +533,7 @@ func TestRunOnce_RecordsMetrics(t *testing.T) {
 
 	// (1) success / algorithm — numeric ID 패턴.
 	rec1 := newCatchAllRule(1, "news.example.com")
-	rules := &fakeRulesRepo{records: []*storage.ParserRuleRecord{rec1}}
+	rules := &fakeRulesRepo{records: []*model.ParserRuleRecord{rec1}}
 	samples := newFakeSamplesRepo()
 	for _, u := range []string{
 		"https://news.example.com/article/100",

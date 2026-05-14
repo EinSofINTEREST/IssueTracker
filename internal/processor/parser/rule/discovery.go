@@ -8,7 +8,7 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/parser/types"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/links"
 )
 
@@ -47,7 +47,7 @@ func NewPageLinkDiscovery() *PageLinkDiscovery { return &PageLinkDiscovery{} }
 // 반환 LinkItem 의 Title 은 anchor text 로 채움 (ItemContainer 모드 와 달리 별도 selector
 // 가 없음). Snippet 은 비워둠 — full-page discovery 는 list 페이지의 컨텍스트가 없으므로
 // snippet 추출이 불가능. 호출자 (worker / publisher) 는 Title 빈 케이스를 허용해야 함.
-func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDiscoveryConfig) ([]types.LinkItem, error) {
+func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscoveryConfig) ([]types.LinkItem, error) {
 	if err := validateRaw(raw); err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 			Code:       ErrEmptySelector,
 			Message:    "link discovery requires non-nil LinkDiscoveryConfig",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeList),
+			TargetType: string(model.TargetTypeList),
 		}
 	}
 
@@ -69,7 +69,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 				Code:       ErrEmptySelector,
 				Message:    fmt.Sprintf("invalid ArticleURLPattern regex: %q", cfg.ArticleURLPattern),
 				URL:        raw.URL,
-				TargetType: string(storage.TargetTypeList),
+				TargetType: string(model.TargetTypeList),
 				Err:        err,
 			}
 		}
@@ -97,7 +97,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 			Code:       ErrParseFailure,
 			Message:    "link extractor failed",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeList),
+			TargetType: string(model.TargetTypeList),
 			Err:        err,
 		}
 	}
@@ -162,7 +162,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *storage.LinkDisc
 			Code:       ErrParseFailure,
 			Message:    msg,
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeList),
+			TargetType: string(model.TargetTypeList),
 		}
 	}
 	return out, nil

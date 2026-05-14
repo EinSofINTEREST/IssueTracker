@@ -11,6 +11,7 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 )
 
@@ -150,9 +151,9 @@ func TestRawContentService_List_WithFilter_ReturnsList(t *testing.T) {
 	svc := service.NewRawContentService(repo, newTestLogger())
 
 	raws := []*core.RawContent{newTestRawContent()}
-	filter := storage.RawContentFilter{
+	filter := model.RawContentFilter{
 		Country:    "US",
-		Pagination: storage.Pagination{Limit: 20},
+		Pagination: model.Pagination{Limit: 20},
 	}
 
 	repo.On("List", mock.Anything, filter).Return(raws, nil)
@@ -171,7 +172,7 @@ func TestRawContentService_List_RepoError_ReturnsError(t *testing.T) {
 	dbErr := errors.New("list failed")
 	repo.On("List", mock.Anything, mock.Anything).Return(nil, dbErr)
 
-	result, err := svc.List(context.Background(), storage.RawContentFilter{})
+	result, err := svc.List(context.Background(), model.RawContentFilter{})
 
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, dbErr)

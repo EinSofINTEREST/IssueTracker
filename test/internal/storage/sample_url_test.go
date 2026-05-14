@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 )
 
 // inMemorySampleRepo 는 SampleURLRepository 의 in-memory 구현 — 인터페이스 정책 검증용.
@@ -19,7 +21,7 @@ import (
 // 본 mock 은 Insert / Count / List / Purge 의 sequence 동작 + cap 정책 + UNIQUE 동작을 검증.
 type inMemorySampleRepo struct {
 	mu      sync.Mutex
-	rows    []*storage.SampleURL
+	rows    []*model.SampleURL
 	nextID  int64
 	failErr error // Insert/Count 가 실패할 때 반환할 에러 (테스트 setup 용)
 }
@@ -41,7 +43,7 @@ func (r *inMemorySampleRepo) Insert(_ context.Context, ruleID int64, url string)
 			count++
 		}
 	}
-	if count >= storage.SampleCapPerRule {
+	if count >= model.SampleCapPerRule {
 		return nil // skip
 	}
 	// UNIQUE check (rule_id, url)
@@ -50,7 +52,7 @@ func (r *inMemorySampleRepo) Insert(_ context.Context, ruleID int64, url string)
 			return storage.ErrDuplicate
 		}
 	}
-	r.rows = append(r.rows, &storage.SampleURL{
+	r.rows = append(r.rows, &model.SampleURL{
 		ID:         r.nextID,
 		RuleID:     ruleID,
 		URL:        url,
@@ -72,13 +74,13 @@ func (r *inMemorySampleRepo) Count(_ context.Context, ruleID int64) (int, error)
 	return count, nil
 }
 
-func (r *inMemorySampleRepo) List(_ context.Context, ruleID int64, limit int) ([]*storage.SampleURL, error) {
+func (r *inMemorySampleRepo) List(_ context.Context, ruleID int64, limit int) ([]*model.SampleURL, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]*storage.SampleURL, 0)
+	out := make([]*model.SampleURL, 0)
 	for _, s := range r.rows {
 		if s.RuleID == ruleID {
 			out = append(out, s)
@@ -93,7 +95,7 @@ func (r *inMemorySampleRepo) List(_ context.Context, ruleID int64, limit int) ([
 func (r *inMemorySampleRepo) Purge(_ context.Context, ruleID int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	kept := make([]*storage.SampleURL, 0, len(r.rows))
+	kept := make([]*model.SampleURL, 0, len(r.rows))
 	for _, s := range r.rows {
 		if s.RuleID != ruleID {
 			kept = append(kept, s)
@@ -154,19 +156,19 @@ func TestSampleURLRepository_CapEnforced(t *testing.T) {
 	repo := newInMemorySampleRepo()
 	ctx := context.Background()
 
-	for i := 0; i < storage.SampleCapPerRule; i++ {
+	for i := 0; i < model.SampleCapPerRule; i++ {
 		url := "/article/" + intToStr(i)
 		require.NoError(t, repo.Insert(ctx, 1, url))
 	}
 	count, _ := repo.Count(ctx, 1)
-	assert.Equal(t, storage.SampleCapPerRule, count)
+	assert.Equal(t, model.SampleCapPerRule, count)
 
 	// cap 도달 후 INSERT — skip + nil
 	err := repo.Insert(ctx, 1, "/article/over-cap")
 	require.NoError(t, err, "cap 도달 시 skip + nil")
 
 	countAfter, _ := repo.Count(ctx, 1)
-	assert.Equal(t, storage.SampleCapPerRule, countAfter, "cap 초과 INSERT 는 누적 안 됨")
+	assert.Equal(t, model.SampleCapPerRule, countAfter, "cap 초과 INSERT 는 누적 안 됨")
 }
 
 func TestSampleURLRepository_ListReturnsRuleSamples(t *testing.T) {
@@ -202,7 +204,7 @@ func TestSampleURLRepository_PurgeIdempotent(t *testing.T) {
 }
 
 // 컴파일 시점에 inMemorySampleRepo 가 SampleURLRepository 인터페이스 만족 검증.
-var _ storage.SampleURLRepository = (*inMemorySampleRepo)(nil)
+var _ repository.SampleURLRepository = (*inMemorySampleRepo)(nil)
 
 // intToStr — fmt 의존 회피용 단순 helper.
 func intToStr(n int) string {

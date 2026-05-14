@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"issuetracker/internal/processor"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -41,7 +41,7 @@ const downgraderInitialGrace = 1 * time.Minute
 //
 // processor.Stage 인터페이스 구현 — main.go 의 stages slice 에 다른 단계와 균일하게 등록.
 type Downgrader struct {
-	repo     storage.FetcherRuleRepository
+	repo     repository.FetcherRuleRepository
 	resolver Resolver
 	interval time.Duration
 	log      *logger.Logger
@@ -54,7 +54,7 @@ type Downgrader struct {
 // repo / resolver 는 nil 허용 안 함.
 // interval 은 0 또는 음수 시 error — 호출자가 ENABLED=false 분기로 처리해야 함.
 func NewDowngrader(
-	repo storage.FetcherRuleRepository,
+	repo repository.FetcherRuleRepository,
 	resolver Resolver,
 	interval time.Duration,
 	log *logger.Logger,

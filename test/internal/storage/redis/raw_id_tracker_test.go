@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
 )
 
@@ -274,7 +274,7 @@ func TestNewRedisRawIDTracker_NegativeFreshnessNormalized(t *testing.T) {
 // TestNoopRawIDTracker_AllNoop:
 // Noop tracker 의 모든 메소드 nil.
 func TestNoopRawIDTracker_AllNoop(t *testing.T) {
-	tr := storage.NewNoopRawIDTracker()
+	tr := primitive.NewNoopRawIDTracker()
 	ctx := context.Background()
 
 	require.NoError(t, tr.Track(ctx, "host.com", "raw-1"))

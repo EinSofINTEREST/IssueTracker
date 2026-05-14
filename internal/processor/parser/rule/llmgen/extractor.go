@@ -2,8 +2,7 @@ package llmgen
 
 import (
 	"context"
-
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // PageType 은 LLM 이 추출한 페이지의 도메인 분류입니다.
@@ -41,7 +40,7 @@ type BlacklistDecision struct {
 // 즉시 넘어가야 함. Blacklist == nil 이면 Selectors 가 정상 추출 결과 + PageType 메타데이터.
 type ExtractResult struct {
 	// Selectors: target_type 별 추출된 CSS 셀렉터 맵. Blacklist != nil 이면 비어있을 수 있음.
-	Selectors storage.SelectorMap
+	Selectors model.SelectorMap
 
 	// PageType: 페이지 도메인 분류. 빈 문자열이면 미분류. Blacklist != nil 이면 의미 없음.
 	PageType PageType
@@ -77,5 +76,5 @@ type ExtractResult struct {
 // 등 단순 provider 는 SelectorExtractor 만 구현 — Generator 가 인터페이스 type assertion 으로
 // 자동 분기.
 type EnrichedExtractor interface {
-	ExtractEnriched(ctx context.Context, host string, targetType storage.TargetType, html string) (*ExtractResult, error)
+	ExtractEnriched(ctx context.Context, host string, targetType model.TargetType, html string) (*ExtractResult, error)
 }

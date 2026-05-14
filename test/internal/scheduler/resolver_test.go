@@ -12,41 +12,42 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/scheduler"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
 // fakeSchedulerEntryRepo 는 ListEnabled 호출 횟수와 응답을 통제하는 stub.
 type fakeSchedulerEntryRepo struct {
 	mu      sync.Mutex
-	records []*storage.SchedulerEntryRecord
+	records []*model.SchedulerEntryRecord
 	calls   int32
 	err     error
 }
 
-func (r *fakeSchedulerEntryRepo) ListEnabled(_ context.Context, _ storage.SchedulerCategory) ([]*storage.SchedulerEntryRecord, error) {
+func (r *fakeSchedulerEntryRepo) ListEnabled(_ context.Context, _ model.SchedulerCategory) ([]*model.SchedulerEntryRecord, error) {
 	atomic.AddInt32(&r.calls, 1)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.err != nil {
 		return nil, r.err
 	}
-	out := make([]*storage.SchedulerEntryRecord, len(r.records))
+	out := make([]*model.SchedulerEntryRecord, len(r.records))
 	copy(out, r.records)
 	return out, nil
 }
 
-func (r *fakeSchedulerEntryRepo) Insert(_ context.Context, _ *storage.SchedulerEntryRecord) error {
+func (r *fakeSchedulerEntryRepo) Insert(_ context.Context, _ *model.SchedulerEntryRecord) error {
 	return nil
 }
-func (r *fakeSchedulerEntryRepo) Update(_ context.Context, _ *storage.SchedulerEntryRecord) error {
+func (r *fakeSchedulerEntryRepo) Update(_ context.Context, _ *model.SchedulerEntryRecord) error {
 	return nil
 }
 func (r *fakeSchedulerEntryRepo) Delete(_ context.Context, _ int64) error { return nil }
 
 func (r *fakeSchedulerEntryRepo) callCount() int { return int(atomic.LoadInt32(&r.calls)) }
 
-func (r *fakeSchedulerEntryRepo) setRecords(recs []*storage.SchedulerEntryRecord) {
+func (r *fakeSchedulerEntryRepo) setRecords(recs []*model.SchedulerEntryRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.records = recs
@@ -58,7 +59,7 @@ func (r *fakeSchedulerEntryRepo) setErr(err error) {
 	r.err = err
 }
 
-func newTestResolver(t *testing.T, repo storage.SchedulerEntryRepository, ttl time.Duration) scheduler.EntryResolver {
+func newTestResolver(t *testing.T, repo repository.SchedulerEntryRepository, ttl time.Duration) scheduler.EntryResolver {
 	t.Helper()
 	conv := scheduler.NewDefaultEntryConverter(30 * time.Second)
 	r, err := scheduler.NewEntryResolver(repo, conv, logger.New(logger.DefaultConfig()), ttl)
@@ -68,8 +69,8 @@ func newTestResolver(t *testing.T, repo storage.SchedulerEntryRepository, ttl ti
 
 func TestEntryResolver_Resolve_HitsAndCaches(t *testing.T) {
 	repo := &fakeSchedulerEntryRepo{
-		records: []*storage.SchedulerEntryRecord{
-			{ID: 1, Category: storage.SchedulerCategoryNews, SourceName: "naver",
+		records: []*model.SchedulerEntryRecord{
+			{ID: 1, Category: model.SchedulerCategoryNews, SourceName: "naver",
 				URL: "https://news.naver.com/section/100", TargetType: "category",
 				Interval: 30 * time.Minute, Priority: 2, Enabled: true},
 		},
@@ -91,8 +92,8 @@ func TestEntryResolver_Resolve_HitsAndCaches(t *testing.T) {
 
 func TestEntryResolver_Resolve_DBError_KeepsLastSnapshot(t *testing.T) {
 	repo := &fakeSchedulerEntryRepo{
-		records: []*storage.SchedulerEntryRecord{
-			{ID: 1, Category: storage.SchedulerCategoryNews, SourceName: "naver",
+		records: []*model.SchedulerEntryRecord{
+			{ID: 1, Category: model.SchedulerCategoryNews, SourceName: "naver",
 				URL: "https://x.com/", TargetType: "category",
 				Interval: time.Minute, Priority: 2, Enabled: true},
 		},
@@ -114,8 +115,8 @@ func TestEntryResolver_Resolve_DBError_KeepsLastSnapshot(t *testing.T) {
 
 func TestEntryResolver_Invalidate_ImmediatelyDropsCache(t *testing.T) {
 	repo := &fakeSchedulerEntryRepo{
-		records: []*storage.SchedulerEntryRecord{
-			{ID: 1, Category: storage.SchedulerCategoryNews, SourceName: "naver",
+		records: []*model.SchedulerEntryRecord{
+			{ID: 1, Category: model.SchedulerCategoryNews, SourceName: "naver",
 				URL: "https://x.com/", TargetType: "category",
 				Interval: time.Minute, Priority: 2, Enabled: true},
 		},
@@ -126,11 +127,11 @@ func TestEntryResolver_Invalidate_ImmediatelyDropsCache(t *testing.T) {
 	assert.Equal(t, 1, repo.callCount())
 
 	r.Invalidate()
-	repo.setRecords([]*storage.SchedulerEntryRecord{
-		{ID: 1, Category: storage.SchedulerCategoryNews, SourceName: "naver",
+	repo.setRecords([]*model.SchedulerEntryRecord{
+		{ID: 1, Category: model.SchedulerCategoryNews, SourceName: "naver",
 			URL: "https://x.com/", TargetType: "category",
 			Interval: 5 * time.Minute, Priority: 2, Enabled: true},
-		{ID: 2, Category: storage.SchedulerCategoryNews, SourceName: "daum",
+		{ID: 2, Category: model.SchedulerCategoryNews, SourceName: "daum",
 			URL: "https://y.com/", TargetType: "category",
 			Interval: time.Minute, Priority: 2, Enabled: true},
 	})

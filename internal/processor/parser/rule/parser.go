@@ -12,7 +12,7 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/parser/types"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // resolveTimeout 은 호출자 ctx 가 deadline 없을 때 추가 안전망입니다.
@@ -24,7 +24,7 @@ const resolveTimeout = 5 * time.Second
 // Parser 는 DB 기반 파싱 규칙으로 동작하는 단일 page parser engine 입니다.
 //
 // Parser implements both types.ContentParser and types.LinkListParser, driven by
-// storage.ParserRuleRecord resolved per request via Resolver. 사이트별 hardcode 파서
+// model.ParserRuleRecord resolved per request via Resolver. 사이트별 hardcode 파서
 // (NaverParser/DaumParser/...) 를 대체 — 새 사이트 지원 = parser_rules row 추가.
 //
 // 도메인 중립 — 뉴스 / 블로그 / 제품 페이지 / 일반 문서 모두 동일 engine 으로 처리.
@@ -81,7 +81,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 	// 호출자 ctx 의 cancel/trace metadata 를 보존하면서 추가 timeout 안전망 적용.
 	resolveCtx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
-	rule, err := p.resolver.ResolveByURL(resolveCtx, raw.URL, storage.TargetTypePage)
+	rule, err := p.resolver.ResolveByURL(resolveCtx, raw.URL, model.TargetTypePage)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 			Code:       ErrEmptySelector,
 			Message:    "page rule missing required Title or MainContent selector",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypePage),
+			TargetType: string(model.TargetTypePage),
 		}
 	}
 
@@ -121,7 +121,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 			Code:       ErrParseFailure,
 			Message:    "Title or MainContent selector matched 0 elements (rule may be stale)",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypePage),
+			TargetType: string(model.TargetTypePage),
 		}
 	}
 	return page, nil
@@ -150,7 +150,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 	// 호출자 ctx 의 cancel/trace metadata 를 보존하면서 추가 timeout 안전망 적용.
 	resolveCtx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
-	rule, err := p.resolver.ResolveByURL(resolveCtx, raw.URL, storage.TargetTypeList)
+	rule, err := p.resolver.ResolveByURL(resolveCtx, raw.URL, model.TargetTypeList)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 			Code:       ErrEmptySelector,
 			Message:    "list rule missing required ItemContainer or ItemLink selector (or set LinkDiscovery.ArticleURLPattern)",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeList),
+			TargetType: string(model.TargetTypeList),
 		}
 	}
 
@@ -191,7 +191,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 			Code:       ErrParseFailure,
 			Message:    "ItemContainer selector matched 0 elements (rule may be stale)",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeList),
+			TargetType: string(model.TargetTypeList),
 		}
 	}
 
@@ -220,7 +220,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 			Code:       ErrParseFailure,
 			Message:    "ItemContainer matched but no valid ItemLink found (ItemLink selector may be stale)",
 			URL:        raw.URL,
-			TargetType: string(storage.TargetTypeList),
+			TargetType: string(model.TargetTypeList),
 		}
 	}
 	return items, nil
@@ -228,7 +228,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 
 // hasRequiredSelector 는 selector 가 lookup 가능한지 검사합니다 (Coderabbit 피드백).
 // nil 이거나 CSS 가 trim 후 빈 문자열이면 false — DB 의 zero-value row 도 명확히 reject.
-func hasRequiredSelector(fs *storage.FieldSelector) bool {
+func hasRequiredSelector(fs *model.FieldSelector) bool {
 	return fs != nil && strings.TrimSpace(fs.CSS) != ""
 }
 
@@ -250,7 +250,7 @@ func validateRaw(raw *core.RawContent) error {
 //
 // Multi=false (기본): 첫 매칭 element 의 값 반환.
 // Multi=true: 모든 매칭 element 의 값을 줄바꿈으로 합쳐 반환 (MainContent 다중 단락 등).
-func extractField(doc *goquery.Document, fs *storage.FieldSelector) string {
+func extractField(doc *goquery.Document, fs *model.FieldSelector) string {
 	if fs == nil || fs.CSS == "" {
 		return ""
 	}
@@ -258,7 +258,7 @@ func extractField(doc *goquery.Document, fs *storage.FieldSelector) string {
 }
 
 // extractFieldFromSelection 은 sub-selection 안에서 필드를 추출합니다 (list item 내부 lookup).
-func extractFieldFromSelection(s *goquery.Selection, fs *storage.FieldSelector) string {
+func extractFieldFromSelection(s *goquery.Selection, fs *model.FieldSelector) string {
 	if fs == nil || fs.CSS == "" {
 		return ""
 	}
@@ -266,7 +266,7 @@ func extractFieldFromSelection(s *goquery.Selection, fs *storage.FieldSelector) 
 }
 
 // extractFromSelection 은 selection 범위에서 selector 적용 결과를 반환합니다.
-func extractFromSelection(scope *goquery.Selection, fs *storage.FieldSelector) string {
+func extractFromSelection(scope *goquery.Selection, fs *model.FieldSelector) string {
 	matched := scope.Find(fs.CSS)
 	if matched.Length() == 0 {
 		return ""
@@ -287,7 +287,7 @@ func extractFromSelection(scope *goquery.Selection, fs *storage.FieldSelector) s
 // extractFieldMulti 는 multi 결과를 string 슬라이스로 반환합니다 (Tags / Images 용).
 //
 // extractField 의 multi 모드는 줄바꿈으로 합치지만, 본 함수는 각 element 를 별도 항목으로 보존.
-func extractFieldMulti(doc *goquery.Document, fs *storage.FieldSelector) []string {
+func extractFieldMulti(doc *goquery.Document, fs *model.FieldSelector) []string {
 	if fs == nil || fs.CSS == "" {
 		return nil
 	}
@@ -319,7 +319,7 @@ func extractValue(sel *goquery.Selection, attribute string) string {
 
 // extractDate 는 PublishedAt 필드를 추출하고 dateLayouts 를 순회 시도합니다.
 // 추출 실패 시 zero time 반환 — 호출자 (validator 등) 가 zero 검사로 분기.
-func (p *Parser) extractDate(doc *goquery.Document, fs *storage.FieldSelector) time.Time {
+func (p *Parser) extractDate(doc *goquery.Document, fs *model.FieldSelector) time.Time {
 	raw := extractField(doc, fs)
 	if raw == "" {
 		return time.Time{}

@@ -14,7 +14,7 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -51,7 +51,7 @@ func (stubRawSvc) GetByID(_ context.Context, _ string) (*core.RawContent, error)
 func (stubRawSvc) Delete(_ context.Context, _ string) error {
 	panic("stubRawSvc.Delete should not be called")
 }
-func (stubRawSvc) List(_ context.Context, _ storage.RawContentFilter) ([]*core.RawContent, error) {
+func (stubRawSvc) List(_ context.Context, _ model.RawContentFilter) ([]*core.RawContent, error) {
 	panic("stubRawSvc.List should not be called")
 }
 func (stubRawSvc) PurgeOlderThan(_ context.Context, _ time.Time) (int64, error) {

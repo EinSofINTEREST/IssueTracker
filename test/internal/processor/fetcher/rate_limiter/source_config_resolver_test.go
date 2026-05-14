@@ -13,6 +13,7 @@ import (
 
 	ratelimiter "issuetracker/internal/processor/fetcher/rate_limiter"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 )
 
@@ -23,22 +24,22 @@ import (
 
 type fakeFetcherRuleRepo struct {
 	mu       sync.Mutex
-	records  map[string]*storage.FetcherRuleRecord
+	records  map[string]*model.FetcherRuleRecord
 	getCalls int32
 	getErr   error
 }
 
 func newFakeFetcherRuleRepo() *fakeFetcherRuleRepo {
-	return &fakeFetcherRuleRepo{records: make(map[string]*storage.FetcherRuleRecord)}
+	return &fakeFetcherRuleRepo{records: make(map[string]*model.FetcherRuleRecord)}
 }
 
-func (r *fakeFetcherRuleRepo) put(host string, rec *storage.FetcherRuleRecord) {
+func (r *fakeFetcherRuleRepo) put(host string, rec *model.FetcherRuleRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.records[host] = rec
 }
 
-func (r *fakeFetcherRuleRepo) GetByHost(_ context.Context, host string) (*storage.FetcherRuleRecord, error) {
+func (r *fakeFetcherRuleRepo) GetByHost(_ context.Context, host string) (*model.FetcherRuleRecord, error) {
 	atomic.AddInt32(&r.getCalls, 1)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -54,10 +55,10 @@ func (r *fakeFetcherRuleRepo) GetByHost(_ context.Context, host string) (*storag
 
 func (r *fakeFetcherRuleRepo) callCount() int { return int(atomic.LoadInt32(&r.getCalls)) }
 
-func (r *fakeFetcherRuleRepo) Upsert(_ context.Context, _ string, _ storage.FetcherKind, _ string) error {
+func (r *fakeFetcherRuleRepo) Upsert(_ context.Context, _ string, _ model.FetcherKind, _ string) error {
 	return nil
 }
-func (r *fakeFetcherRuleRepo) List(_ context.Context) ([]*storage.FetcherRuleRecord, error) {
+func (r *fakeFetcherRuleRepo) List(_ context.Context) ([]*model.FetcherRuleRecord, error) {
 	return nil, nil
 }
 func (r *fakeFetcherRuleRepo) Delete(_ context.Context, _ string) error { return nil }
@@ -74,7 +75,7 @@ func TestNewSourceConfigResolver_NilRepo_Errors(t *testing.T) {
 
 func TestSourceConfigResolver_Resolve_HitsAndCaches(t *testing.T) {
 	repo := newFakeFetcherRuleRepo()
-	repo.put("naver.example.com", &storage.FetcherRuleRecord{
+	repo.put("naver.example.com", &model.FetcherRuleRecord{
 		HostPattern: "naver.example.com", RequestsPerHour: 200,
 	})
 	r, err := ratelimiter.NewSourceConfigResolver(repo, logger.New(logger.DefaultConfig()), 5*time.Minute)
@@ -118,7 +119,7 @@ func TestSourceConfigResolver_Resolve_DBError_FailOpen_NoCacheStore(t *testing.T
 
 	// 두 번째 호출도 동일 DB 실패가 sticky 하게 cache 되지 않아 다시 DB 시도.
 	repo.getErr = nil
-	repo.put("transient.example.com", &storage.FetcherRuleRecord{RequestsPerHour: 100})
+	repo.put("transient.example.com", &model.FetcherRuleRecord{RequestsPerHour: 100})
 
 	cfg, err = r.Resolve(context.Background(), "transient.example.com")
 	require.NoError(t, err)
@@ -127,7 +128,7 @@ func TestSourceConfigResolver_Resolve_DBError_FailOpen_NoCacheStore(t *testing.T
 
 func TestSourceConfigResolver_Resolve_TTLExpiry_RefetchesFromDB(t *testing.T) {
 	repo := newFakeFetcherRuleRepo()
-	repo.put("dynamic.example.com", &storage.FetcherRuleRecord{RequestsPerHour: 100})
+	repo.put("dynamic.example.com", &model.FetcherRuleRecord{RequestsPerHour: 100})
 
 	// 짧은 TTL 로 만료 시점 검증. sleep 마진은 GC pause / OS scheduler delay 흡수를 위해
 	// TTL 의 4배 (100ms vs 25ms) — slow CI 환경에서 flaky 회피.
@@ -138,7 +139,7 @@ func TestSourceConfigResolver_Resolve_TTLExpiry_RefetchesFromDB(t *testing.T) {
 	assert.Equal(t, 100, cfg.RequestsPerHour)
 
 	// 운영자가 UPDATE 한 상황 시뮬레이션.
-	repo.put("dynamic.example.com", &storage.FetcherRuleRecord{RequestsPerHour: 50})
+	repo.put("dynamic.example.com", &model.FetcherRuleRecord{RequestsPerHour: 50})
 
 	// TTL 만료 전에는 stale 100 유지.
 	cfg, _ = r.Resolve(context.Background(), "dynamic.example.com")
@@ -152,7 +153,7 @@ func TestSourceConfigResolver_Resolve_TTLExpiry_RefetchesFromDB(t *testing.T) {
 
 func TestSourceConfigResolver_Invalidate_ImmediatelyDropsCache(t *testing.T) {
 	repo := newFakeFetcherRuleRepo()
-	repo.put("flaky.example.com", &storage.FetcherRuleRecord{RequestsPerHour: 100})
+	repo.put("flaky.example.com", &model.FetcherRuleRecord{RequestsPerHour: 100})
 	r, err := ratelimiter.NewSourceConfigResolver(repo, logger.New(logger.DefaultConfig()), 5*time.Minute)
 	require.NoError(t, err)
 
@@ -160,7 +161,7 @@ func TestSourceConfigResolver_Invalidate_ImmediatelyDropsCache(t *testing.T) {
 	assert.Equal(t, 100, cfg.RequestsPerHour)
 
 	// 운영자 UPDATE + Invalidate — TTL 대기 없이 즉시 반영.
-	repo.put("flaky.example.com", &storage.FetcherRuleRecord{RequestsPerHour: 50})
+	repo.put("flaky.example.com", &model.FetcherRuleRecord{RequestsPerHour: 50})
 	r.Invalidate("flaky.example.com")
 
 	cfg, _ = r.Resolve(context.Background(), "flaky.example.com")

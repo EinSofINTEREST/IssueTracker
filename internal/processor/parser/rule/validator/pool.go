@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 )
 
@@ -25,7 +25,7 @@ func NewPool(log *logger.Logger, validators ...Validator) *Pool {
 	return &Pool{validators: validators, log: log}
 }
 
-func (p *Pool) Validate(ctx context.Context, html string, selectors storage.SelectorMap, targetType storage.TargetType) (Result, error) {
+func (p *Pool) Validate(ctx context.Context, html string, selectors model.SelectorMap, targetType model.TargetType) (Result, error) {
 	if len(p.validators) == 0 {
 		return Result{Valid: true, Reason: "no validators configured"}, nil
 	}

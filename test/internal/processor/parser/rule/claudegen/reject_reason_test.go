@@ -18,7 +18,7 @@ import (
 
 	"issuetracker/internal/processor/parser/rule/claudegen"
 	"issuetracker/internal/processor/parser/rule/llmgen"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -41,7 +41,7 @@ func TestExtractEnriched_NoReason_PromptHasNoFeedbackBlock(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
-	_, err := w.ExtractEnriched(t.Context(), "news.example.com", storage.TargetTypePage, "<html><h1>title</h1><article>body</article></html>")
+	_, err := w.ExtractEnriched(t.Context(), "news.example.com", model.TargetTypePage, "<html><h1>title</h1><article>body</article></html>")
 	require.NoError(t, err)
 
 	prompt := extractPromptArg(runner.execedWith.args)
@@ -62,7 +62,7 @@ func TestExtractEnriched_WithReason_PromptHasFeedbackBlock(t *testing.T) {
 
 	const reason = "PublishedAt required, Title min_length"
 	ctx := llmgen.WithRejectReason(t.Context(), reason)
-	_, err := w.ExtractEnriched(ctx, "news.example.com", storage.TargetTypePage, "<html><h1>title</h1><article>body</article></html>")
+	_, err := w.ExtractEnriched(ctx, "news.example.com", model.TargetTypePage, "<html><h1>title</h1><article>body</article></html>")
 	require.NoError(t, err)
 
 	prompt := extractPromptArg(runner.execedWith.args)
@@ -84,7 +84,7 @@ func TestExtractEnriched_EmptyReason_NoFeedbackBlock(t *testing.T) {
 
 	// WithRejectReason 에 빈 문자열 — None Object 패턴으로 ctx 그대로 반환
 	ctx := llmgen.WithRejectReason(t.Context(), "")
-	_, err := w.ExtractEnriched(ctx, "news.example.com", storage.TargetTypePage, "<html><h1>title</h1><article>body</article></html>")
+	_, err := w.ExtractEnriched(ctx, "news.example.com", model.TargetTypePage, "<html><h1>title</h1><article>body</article></html>")
 	require.NoError(t, err)
 
 	prompt := extractPromptArg(runner.execedWith.args)
@@ -118,7 +118,7 @@ func TestExtractEnriched_TemplateMissingPlaceholder_FailsFast(t *testing.T) {
 
 	// reason 존재 + placeholder 부재 → 에러 반환
 	ctx := llmgen.WithRejectReason(t.Context(), "PublishedAt required")
-	_, extractErr := w.ExtractEnriched(ctx, "news.example.com", storage.TargetTypePage, "<html></html>")
+	_, extractErr := w.ExtractEnriched(ctx, "news.example.com", model.TargetTypePage, "<html></html>")
 	require.Error(t, extractErr, "placeholder 부재 시 reparse 경로는 fail-fast")
 	assert.Contains(t, extractErr.Error(), "VALIDATION_REJECT_REASON_CONTEXT",
 		"에러 메시지에 누락된 placeholder 이름 포함")
@@ -151,7 +151,7 @@ func TestExtractEnriched_TemplateMissingPlaceholder_NoReason_OK(t *testing.T) {
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
 	// reason 부재 → placeholder 부재해도 정상 동작 (기존 호환성)
-	_, extractErr := w.ExtractEnriched(t.Context(), "news.example.com", storage.TargetTypePage, "<html><h1>x</h1><article>y</article></html>")
+	_, extractErr := w.ExtractEnriched(t.Context(), "news.example.com", model.TargetTypePage, "<html><h1>x</h1><article>y</article></html>")
 	assert.NoError(t, extractErr, "reason 부재 시 placeholder 부재 OK (기존 외부 템플릿 호환)")
 }
 
@@ -166,7 +166,7 @@ func TestExtractEnriched_ListTarget_WithReason_PromptHasFeedbackBlock(t *testing
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
 	ctx := llmgen.WithRejectReason(t.Context(), "ItemContainer matched 0 elements")
-	_, err := w.ExtractEnriched(ctx, "news.example.com", storage.TargetTypeList, "<html><ul><li><a href='/x'>x</a></li></ul></html>")
+	_, err := w.ExtractEnriched(ctx, "news.example.com", model.TargetTypeList, "<html><ul><li><a href='/x'>x</a></li></ul></html>")
 	require.NoError(t, err)
 
 	prompt := extractPromptArg(runner.execedWith.args)

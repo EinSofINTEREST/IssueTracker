@@ -13,11 +13,12 @@ import (
 
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // fakeBlacklistRepo 는 in-memory BlacklistRepository — Matcher / decorator 단위 테스트용.
 type fakeBlacklistRepo struct {
-	rows         []*storage.BlacklistRecord
+	rows         []*model.BlacklistRecord
 	findCalls    int64
 	getByIDCalls int64
 	findErr      error
@@ -27,7 +28,7 @@ type fakeBlacklistRepo struct {
 	deleteErr    error
 }
 
-func (r *fakeBlacklistRepo) Insert(_ context.Context, rec *storage.BlacklistRecord) error {
+func (r *fakeBlacklistRepo) Insert(_ context.Context, rec *model.BlacklistRecord) error {
 	if r.insertErr != nil {
 		return r.insertErr
 	}
@@ -36,7 +37,7 @@ func (r *fakeBlacklistRepo) Insert(_ context.Context, rec *storage.BlacklistReco
 	return nil
 }
 
-func (r *fakeBlacklistRepo) Update(_ context.Context, rec *storage.BlacklistRecord) error {
+func (r *fakeBlacklistRepo) Update(_ context.Context, rec *model.BlacklistRecord) error {
 	if r.updateErr != nil {
 		return r.updateErr
 	}
@@ -65,7 +66,7 @@ func (r *fakeBlacklistRepo) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-func (r *fakeBlacklistRepo) GetByID(_ context.Context, id int64) (*storage.BlacklistRecord, error) {
+func (r *fakeBlacklistRepo) GetByID(_ context.Context, id int64) (*model.BlacklistRecord, error) {
 	atomic.AddInt64(&r.getByIDCalls, 1)
 	if r.getByIDErr != nil {
 		return nil, r.getByIDErr
@@ -78,12 +79,12 @@ func (r *fakeBlacklistRepo) GetByID(_ context.Context, id int64) (*storage.Black
 	return nil, storage.ErrNotFound
 }
 
-func (r *fakeBlacklistRepo) FindEnabledByHost(_ context.Context, host string) ([]*storage.BlacklistRecord, error) {
+func (r *fakeBlacklistRepo) FindEnabledByHost(_ context.Context, host string) ([]*model.BlacklistRecord, error) {
 	atomic.AddInt64(&r.findCalls, 1)
 	if r.findErr != nil {
 		return nil, r.findErr
 	}
-	out := make([]*storage.BlacklistRecord, 0)
+	out := make([]*model.BlacklistRecord, 0)
 	for _, existing := range r.rows {
 		if existing.HostPattern == host && existing.Enabled {
 			out = append(out, existing)
@@ -99,7 +100,7 @@ func (r *fakeBlacklistRepo) FindEnabledByHost(_ context.Context, host string) ([
 	return out, nil
 }
 
-func (r *fakeBlacklistRepo) List(_ context.Context, _ storage.BlacklistFilter) ([]*storage.BlacklistRecord, error) {
+func (r *fakeBlacklistRepo) List(_ context.Context, _ model.BlacklistFilter) ([]*model.BlacklistRecord, error) {
 	return r.rows, nil
 }
 
@@ -108,8 +109,8 @@ func (r *fakeBlacklistRepo) List(_ context.Context, _ storage.BlacklistFilter) (
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestBlacklistMatcher_HostCatchAllBlocksAllPaths(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, err := rule.NewBlacklistMatcher(repo)
 	require.NoError(t, err)
@@ -126,8 +127,8 @@ func TestBlacklistMatcher_HostCatchAllBlocksAllPaths(t *testing.T) {
 }
 
 func TestBlacklistMatcher_PathPatternBlocksMatchingOnly(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "news.example.com", PathPattern: `^/promotion/.*$`, Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "news.example.com", PathPattern: `^/promotion/.*$`, Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, err := rule.NewBlacklistMatcher(repo)
 	require.NoError(t, err)
@@ -140,8 +141,8 @@ func TestBlacklistMatcher_PathPatternBlocksMatchingOnly(t *testing.T) {
 }
 
 func TestBlacklistMatcher_DisabledRowsIgnored(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: false},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: false},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -150,8 +151,8 @@ func TestBlacklistMatcher_DisabledRowsIgnored(t *testing.T) {
 }
 
 func TestBlacklistMatcher_HostMismatchPasses(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -169,8 +170,8 @@ func TestBlacklistMatcher_InvalidURLDoesNotBlock(t *testing.T) {
 }
 
 func TestBlacklistMatcher_HostNormalizedLowercase(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -180,9 +181,9 @@ func TestBlacklistMatcher_HostNormalizedLowercase(t *testing.T) {
 
 func TestBlacklistMatcher_InvalidRegexFallsThrough(t *testing.T) {
 	// 잘못된 regex 는 컴파일 실패 — 매칭 안 됨으로 처리, 다른 row 가 catch-all 이면 그쪽 적용.
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "news.example.com", PathPattern: "[unclosed", Source: storage.BlacklistSourceManual, Enabled: true},
-		{ID: 2, HostPattern: "news.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "news.example.com", PathPattern: "[unclosed", Source: model.BlacklistSourceManual, Enabled: true},
+		{ID: 2, HostPattern: "news.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -200,9 +201,9 @@ func TestBlacklistMatcher_DBErrorPropagates(t *testing.T) {
 }
 
 func TestBlacklistMatcher_Filter_RemovesBlockedURLs(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
-		{ID: 2, HostPattern: "news.example.com", PathPattern: `^/promotion/.*$`, Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
+		{ID: 2, HostPattern: "news.example.com", PathPattern: `^/promotion/.*$`, Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -241,8 +242,8 @@ func TestBlacklistMatcher_Filter_DBErrorPassesThroughURL(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestBlacklistMatcher_Cache_HitsAvoidRepoCall(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "news.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "news.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -264,8 +265,8 @@ func TestBlacklistMatcher_NegativeCache_AvoidsRepoCallForMissingHost(t *testing.
 }
 
 func TestBlacklistMatcher_Invalidate_ForcesRepoCall(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "news.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "news.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -279,9 +280,9 @@ func TestBlacklistMatcher_Invalidate_ForcesRepoCall(t *testing.T) {
 }
 
 func TestBlacklistMatcher_InvalidateAll_ClearsCache(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "a.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
-		{ID: 2, HostPattern: "b.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "a.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
+		{ID: 2, HostPattern: "b.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -305,8 +306,8 @@ func TestBlacklistMatcher_NewWithNilRepo_Errors(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestBlacklistMatcher_Classify_DropMatch_ExcludedFromAllSlices(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Mode: storage.BlacklistModeDrop, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Mode: model.BlacklistModeDrop, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -320,8 +321,8 @@ func TestBlacklistMatcher_Classify_DropMatch_ExcludedFromAllSlices(t *testing.T)
 }
 
 func TestBlacklistMatcher_Classify_ExtractLinksOnly_RoutedToOwnSlice(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "sitemap.example.com", PathPattern: "", Mode: storage.BlacklistModeExtractLinksOnly, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "sitemap.example.com", PathPattern: "", Mode: model.BlacklistModeExtractLinksOnly, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -336,9 +337,9 @@ func TestBlacklistMatcher_Classify_ExtractLinksOnly_RoutedToOwnSlice(t *testing.
 }
 
 func TestBlacklistMatcher_Classify_MixedModes(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Mode: storage.BlacklistModeDrop, Enabled: true},
-		{ID: 2, HostPattern: "sitemap.example.com", PathPattern: "", Mode: storage.BlacklistModeExtractLinksOnly, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "ads.example.com", PathPattern: "", Mode: model.BlacklistModeDrop, Enabled: true},
+		{ID: 2, HostPattern: "sitemap.example.com", PathPattern: "", Mode: model.BlacklistModeExtractLinksOnly, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -365,11 +366,11 @@ func TestBlacklistMatcher_Classify_LookupError_FallbackToAllowed(t *testing.T) {
 
 // 같은 host 에 path 다른 두 row — LENGTH(path_pattern) DESC 정렬상 더 구체적 path 의 mode 채택.
 func TestBlacklistMatcher_Classify_LongerPathPatternModeWins(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
 		// catch-all (path="") — 'extract_links_only'
-		{ID: 1, HostPattern: "site.example.com", PathPattern: "", Mode: storage.BlacklistModeExtractLinksOnly, Enabled: true},
+		{ID: 1, HostPattern: "site.example.com", PathPattern: "", Mode: model.BlacklistModeExtractLinksOnly, Enabled: true},
 		// 정밀 path — 'drop'
-		{ID: 2, HostPattern: "site.example.com", PathPattern: `^/promotion/.*$`, Mode: storage.BlacklistModeDrop, Enabled: true},
+		{ID: 2, HostPattern: "site.example.com", PathPattern: `^/promotion/.*$`, Mode: model.BlacklistModeDrop, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo)
 
@@ -385,8 +386,8 @@ func TestBlacklistMatcher_Classify_LongerPathPatternModeWins(t *testing.T) {
 
 // 이슈 #295: Cache TTL 짧게 설정 후 만료 후 재fetch 검증.
 func TestBlacklistMatcher_CacheTTL_ExpiresAfterDuration(t *testing.T) {
-	repo := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
-		{ID: 1, HostPattern: "news.example.com", PathPattern: "", Source: storage.BlacklistSourceManual, Enabled: true},
+	repo := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
+		{ID: 1, HostPattern: "news.example.com", PathPattern: "", Source: model.BlacklistSourceManual, Enabled: true},
 	}}
 	m, _ := rule.NewBlacklistMatcher(repo,
 		rule.WithBlacklistCacheTTL(50*time.Millisecond),

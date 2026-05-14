@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/processor/parser/rule/claudegen"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/logger"
 )
 
@@ -179,12 +179,12 @@ func TestPool_Extract_RoundRobin(t *testing.T) {
 	// concurrent Extract 호출 — 각 호출 결과 / err 도 검증하여 실패 silent skip 회피 (Copilot 반영).
 	var wg sync.WaitGroup
 	errCh := make(chan error, callCount)
-	resCh := make(chan storage.SelectorMap, callCount)
+	resCh := make(chan model.SelectorMap, callCount)
 	for i := 0; i < callCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sm, err := pool.Extract(context.Background(), "example.com", storage.TargetTypePage, "<html></html>")
+			sm, err := pool.Extract(context.Background(), "example.com", model.TargetTypePage, "<html></html>")
 			errCh <- err
 			resCh <- sm
 		}()
@@ -221,7 +221,7 @@ func TestPool_Extract_SequentialDistributesRoundRobin(t *testing.T) {
 	t.Cleanup(func() { _ = pool.Stop(context.Background()) })
 
 	for i := 0; i < 4; i++ {
-		sm, err := pool.Extract(context.Background(), "example.com", storage.TargetTypePage, "<html></html>")
+		sm, err := pool.Extract(context.Background(), "example.com", model.TargetTypePage, "<html></html>")
 		require.NoError(t, err, "sequential Extract must succeed (call %d)", i)
 		require.NotNil(t, sm.Title, "Extract result must include parsed selectors (call %d)", i)
 	}

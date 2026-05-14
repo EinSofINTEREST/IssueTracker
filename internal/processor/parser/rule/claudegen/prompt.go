@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/llm/prompt"
 )
 
@@ -28,7 +28,7 @@ var ErrRejectReasonPlaceholderMissing = errors.New("claudegen: prompt template m
 //   - 빈 문자열 (정상 경로) → placeholder 가 빈 문자열로 치환. 템플릿이 placeholder 미포함이어도 무영향.
 //   - 비어있지 않음 (reparse 경로) → 컨텍스트 블록으로 변환되어 prompt 에 삽입.
 //     템플릿에 placeholder 가 없으면 ErrRejectReasonPlaceholderMissing 반환 (fail-fast).
-func buildPrompt(loader prompt.Loader, host string, targetType storage.TargetType, sessionPath, rejectReason string) (string, error) {
+func buildPrompt(loader prompt.Loader, host string, targetType model.TargetType, sessionPath, rejectReason string) (string, error) {
 	name := promptNameFor(targetType)
 	template, err := loader.Load(name)
 	if err != nil {
@@ -67,8 +67,8 @@ no valid content for the required fields (e.g., it's a meta/index page without
 article body or published_at metadata), return validity="blacklist".`, reason)
 }
 
-func promptNameFor(targetType storage.TargetType) string {
-	if targetType == storage.TargetTypeList {
+func promptNameFor(targetType model.TargetType) string {
+	if targetType == model.TargetTypeList {
 		return "claudegen/list.user"
 	}
 	return "claudegen/page.user"

@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // MockContentRepository는 ContentRepository 인터페이스의 mock 구현체입니다.
@@ -48,7 +48,7 @@ func (m *MockContentRepository) GetByContentHash(ctx context.Context, hash strin
 	return args.Get(0).(*core.Content), args.Error(1)
 }
 
-func (m *MockContentRepository) List(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
+func (m *MockContentRepository) List(ctx context.Context, filter model.ContentFilter) ([]*core.Content, error) {
 	args := m.Called(ctx, filter)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -56,7 +56,7 @@ func (m *MockContentRepository) List(ctx context.Context, filter storage.Content
 	return args.Get(0).([]*core.Content), args.Error(1)
 }
 
-func (m *MockContentRepository) Count(ctx context.Context, filter storage.ContentFilter) (int64, error) {
+func (m *MockContentRepository) Count(ctx context.Context, filter model.ContentFilter) (int64, error) {
 	args := m.Called(ctx, filter)
 	return args.Get(0).(int64), args.Error(1)
 }

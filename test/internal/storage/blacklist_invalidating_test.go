@@ -11,11 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/decorator"
+	"issuetracker/internal/storage/model"
 )
 
 // fakeBlacklistRepo 는 invalidatingBlacklistRepo decorator 단위 테스트용 in-memory BlacklistRepository.
 type fakeBlacklistRepo struct {
-	rows         []*storage.BlacklistRecord
+	rows         []*model.BlacklistRecord
 	getByIDCalls int64
 	insertErr    error
 	getByIDErr   error
@@ -23,7 +25,7 @@ type fakeBlacklistRepo struct {
 	deleteErr    error
 }
 
-func (r *fakeBlacklistRepo) Insert(_ context.Context, rec *storage.BlacklistRecord) error {
+func (r *fakeBlacklistRepo) Insert(_ context.Context, rec *model.BlacklistRecord) error {
 	if r.insertErr != nil {
 		return r.insertErr
 	}
@@ -32,7 +34,7 @@ func (r *fakeBlacklistRepo) Insert(_ context.Context, rec *storage.BlacklistReco
 	return nil
 }
 
-func (r *fakeBlacklistRepo) Update(_ context.Context, rec *storage.BlacklistRecord) error {
+func (r *fakeBlacklistRepo) Update(_ context.Context, rec *model.BlacklistRecord) error {
 	if r.updateErr != nil {
 		return r.updateErr
 	}
@@ -61,7 +63,7 @@ func (r *fakeBlacklistRepo) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-func (r *fakeBlacklistRepo) GetByID(_ context.Context, id int64) (*storage.BlacklistRecord, error) {
+func (r *fakeBlacklistRepo) GetByID(_ context.Context, id int64) (*model.BlacklistRecord, error) {
 	atomic.AddInt64(&r.getByIDCalls, 1)
 	if r.getByIDErr != nil {
 		return nil, r.getByIDErr
@@ -74,11 +76,11 @@ func (r *fakeBlacklistRepo) GetByID(_ context.Context, id int64) (*storage.Black
 	return nil, storage.ErrNotFound
 }
 
-func (r *fakeBlacklistRepo) FindEnabledByHost(_ context.Context, _ string) ([]*storage.BlacklistRecord, error) {
+func (r *fakeBlacklistRepo) FindEnabledByHost(_ context.Context, _ string) ([]*model.BlacklistRecord, error) {
 	return nil, nil
 }
 
-func (r *fakeBlacklistRepo) List(_ context.Context, _ storage.BlacklistFilter) ([]*storage.BlacklistRecord, error) {
+func (r *fakeBlacklistRepo) List(_ context.Context, _ model.BlacklistFilter) ([]*model.BlacklistRecord, error) {
 	return r.rows, nil
 }
 
@@ -109,10 +111,10 @@ func (r *recordingBlacklistInvalidator) snapshot() []string {
 func TestInvalidatingBlacklistRepo_Insert_Success_Invalidates(t *testing.T) {
 	inner := &fakeBlacklistRepo{}
 	inv := &recordingBlacklistInvalidator{}
-	repo := storage.WrapBlacklistWithInvalidator(inner, inv)
+	repo := decorator.WrapBlacklistWithInvalidator(inner, inv)
 
-	err := repo.Insert(context.Background(), &storage.BlacklistRecord{
-		HostPattern: "ads.example.com", Source: storage.BlacklistSourceManual, Enabled: true,
+	err := repo.Insert(context.Background(), &model.BlacklistRecord{
+		HostPattern: "ads.example.com", Source: model.BlacklistSourceManual, Enabled: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot())
@@ -121,23 +123,23 @@ func TestInvalidatingBlacklistRepo_Insert_Success_Invalidates(t *testing.T) {
 func TestInvalidatingBlacklistRepo_Insert_DuplicateAlsoInvalidates(t *testing.T) {
 	inner := &fakeBlacklistRepo{insertErr: storage.ErrDuplicate}
 	inv := &recordingBlacklistInvalidator{}
-	repo := storage.WrapBlacklistWithInvalidator(inner, inv)
+	repo := decorator.WrapBlacklistWithInvalidator(inner, inv)
 
-	err := repo.Insert(context.Background(), &storage.BlacklistRecord{
-		HostPattern: "ads.example.com", Source: storage.BlacklistSourceManual, Enabled: true,
+	err := repo.Insert(context.Background(), &model.BlacklistRecord{
+		HostPattern: "ads.example.com", Source: model.BlacklistSourceManual, Enabled: true,
 	})
 	require.ErrorIs(t, err, storage.ErrDuplicate)
 	assert.Equal(t, []string{"ads.example.com"}, inv.snapshot(), "ErrDuplicate 도 invalidate")
 }
 
 func TestInvalidatingBlacklistRepo_Update_Success_Invalidates(t *testing.T) {
-	inner := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+	inner := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
 		{ID: 1, HostPattern: "ads.example.com", Enabled: true},
 	}}
 	inv := &recordingBlacklistInvalidator{}
-	repo := storage.WrapBlacklistWithInvalidator(inner, inv)
+	repo := decorator.WrapBlacklistWithInvalidator(inner, inv)
 
-	err := repo.Update(context.Background(), &storage.BlacklistRecord{
+	err := repo.Update(context.Background(), &model.BlacklistRecord{
 		ID: 1, HostPattern: "ads.example.com", Reason: "updated", Enabled: false,
 	})
 	require.NoError(t, err)
@@ -147,13 +149,13 @@ func TestInvalidatingBlacklistRepo_Update_Success_Invalidates(t *testing.T) {
 // Update 는 host 변경 안 하므로 호출자가 rec.HostPattern 을 비워 보낼 수 있음.
 // 사전 GetByID 로 authoritative host 를 얻어 invalidate 해야 cache 누락 0.
 func TestInvalidatingBlacklistRepo_Update_EmptyHostInArg_StillInvalidatesActualHost(t *testing.T) {
-	inner := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+	inner := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
 		{ID: 1, HostPattern: "ads.example.com", Enabled: true},
 	}}
 	inv := &recordingBlacklistInvalidator{}
-	repo := storage.WrapBlacklistWithInvalidator(inner, inv)
+	repo := decorator.WrapBlacklistWithInvalidator(inner, inv)
 
-	err := repo.Update(context.Background(), &storage.BlacklistRecord{
+	err := repo.Update(context.Background(), &model.BlacklistRecord{
 		ID: 1, Reason: "updated", Enabled: false,
 	})
 	require.NoError(t, err)
@@ -162,11 +164,11 @@ func TestInvalidatingBlacklistRepo_Update_EmptyHostInArg_StillInvalidatesActualH
 }
 
 func TestInvalidatingBlacklistRepo_Delete_PrefetchesAndInvalidates(t *testing.T) {
-	inner := &fakeBlacklistRepo{rows: []*storage.BlacklistRecord{
+	inner := &fakeBlacklistRepo{rows: []*model.BlacklistRecord{
 		{ID: 1, HostPattern: "ads.example.com", Enabled: true},
 	}}
 	inv := &recordingBlacklistInvalidator{}
-	repo := storage.WrapBlacklistWithInvalidator(inner, inv)
+	repo := decorator.WrapBlacklistWithInvalidator(inner, inv)
 
 	err := repo.Delete(context.Background(), 1)
 	require.NoError(t, err)
@@ -176,7 +178,7 @@ func TestInvalidatingBlacklistRepo_Delete_PrefetchesAndInvalidates(t *testing.T)
 func TestInvalidatingBlacklistRepo_Delete_PrefetchFails_NoInvalidate(t *testing.T) {
 	inner := &fakeBlacklistRepo{getByIDErr: errors.New("db down")}
 	inv := &recordingBlacklistInvalidator{}
-	repo := storage.WrapBlacklistWithInvalidator(inner, inv)
+	repo := decorator.WrapBlacklistWithInvalidator(inner, inv)
 
 	err := repo.Delete(context.Background(), 1)
 	require.NoError(t, err, "Delete 자체는 성공할 수 있음")
@@ -185,10 +187,10 @@ func TestInvalidatingBlacklistRepo_Delete_PrefetchFails_NoInvalidate(t *testing.
 
 func TestInvalidatingBlacklistRepo_NilInvalidator_NoOp(t *testing.T) {
 	inner := &fakeBlacklistRepo{}
-	repo := storage.WrapBlacklistWithInvalidator(inner, nil)
+	repo := decorator.WrapBlacklistWithInvalidator(inner, nil)
 
-	err := repo.Insert(context.Background(), &storage.BlacklistRecord{
-		HostPattern: "ads.example.com", Source: storage.BlacklistSourceManual, Enabled: true,
+	err := repo.Insert(context.Background(), &model.BlacklistRecord{
+		HostPattern: "ads.example.com", Source: model.BlacklistSourceManual, Enabled: true,
 	})
 	require.NoError(t, err)
 }

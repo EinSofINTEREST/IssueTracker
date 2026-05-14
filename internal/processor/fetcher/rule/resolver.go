@@ -18,6 +18,8 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -33,7 +35,7 @@ const DefaultCacheTTL = 5 * time.Minute
 // Found=true 면 Fetcher 가 'goquery' 또는 'chromedp'.
 type ResolveResult struct {
 	Found   bool
-	Fetcher storage.FetcherKind
+	Fetcher model.FetcherKind
 }
 
 // Resolver 는 host → fetcher 매핑을 조회합니다.
@@ -58,7 +60,7 @@ type cacheEntry struct {
 // 대해 여러 goroutine 이 동시에 진입해도 DB 조회는 단 1회만 발생하고 모든 caller 가 같은 결과를
 // 공유함.
 type dbResolver struct {
-	repo   storage.FetcherRuleRepository
+	repo   repository.FetcherRuleRepository
 	log    *logger.Logger
 	ttl    time.Duration
 	cache  sync.Map // map[string]cacheEntry
@@ -69,7 +71,7 @@ type dbResolver struct {
 //
 // repo 가 nil 이면 wiring 오류 — error 반환.
 // ttl 이 0 이하이면 DefaultCacheTTL 사용.
-func NewResolver(repo storage.FetcherRuleRepository, log *logger.Logger, ttl time.Duration) (Resolver, error) {
+func NewResolver(repo repository.FetcherRuleRepository, log *logger.Logger, ttl time.Duration) (Resolver, error) {
 	if repo == nil {
 		return nil, errors.New("rule: NewResolver requires non-nil FetcherRuleRepository")
 	}

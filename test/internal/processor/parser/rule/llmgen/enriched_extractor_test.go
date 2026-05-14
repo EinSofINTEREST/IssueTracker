@@ -12,6 +12,7 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 // fakeEnrichedExtractor 는 ExtractEnriched 결과를 프로그래매틱하게 제어하는 stub.
@@ -23,19 +24,19 @@ type fakeEnrichedExtractor struct {
 	err    error
 }
 
-func (e *fakeEnrichedExtractor) Extract(ctx context.Context, host string, t storage.TargetType, html string) (storage.SelectorMap, error) {
+func (e *fakeEnrichedExtractor) Extract(ctx context.Context, host string, t model.TargetType, html string) (model.SelectorMap, error) {
 	res, err := e.ExtractEnriched(ctx, host, t, html)
 	if err != nil {
-		return storage.SelectorMap{}, err
+		return model.SelectorMap{}, err
 	}
 	if res.Blacklist != nil {
 		// legacy 인터페이스 호환 — Generator 는 EnrichedExtractor 분기를 우선하므로 본 경로는 실제 미사용.
-		return storage.SelectorMap{}, nil
+		return model.SelectorMap{}, nil
 	}
 	return res.Selectors, nil
 }
 
-func (e *fakeEnrichedExtractor) ExtractEnriched(_ context.Context, _ string, _ storage.TargetType, _ string) (*llmgen.ExtractResult, error) {
+func (e *fakeEnrichedExtractor) ExtractEnriched(_ context.Context, _ string, _ model.TargetType, _ string) (*llmgen.ExtractResult, error) {
 	e.mu.Lock()
 	e.calls++
 	e.mu.Unlock()
@@ -51,11 +52,11 @@ func (e *fakeEnrichedExtractor) callCount() int {
 // recordingBlacklistRepo 는 Insert 호출을 기록하는 BlacklistRepository stub.
 type recordingBlacklistRepo struct {
 	mu       sync.Mutex
-	inserts  []*storage.BlacklistRecord
+	inserts  []*model.BlacklistRecord
 	insertOK bool // false 면 ErrDuplicate 반환 (멱등성 검증)
 }
 
-func (r *recordingBlacklistRepo) Insert(_ context.Context, rec *storage.BlacklistRecord) error {
+func (r *recordingBlacklistRepo) Insert(_ context.Context, rec *model.BlacklistRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.inserts = append(r.inserts, rec)
@@ -65,17 +66,17 @@ func (r *recordingBlacklistRepo) Insert(_ context.Context, rec *storage.Blacklis
 	return nil
 }
 
-func (r *recordingBlacklistRepo) Update(_ context.Context, _ *storage.BlacklistRecord) error {
+func (r *recordingBlacklistRepo) Update(_ context.Context, _ *model.BlacklistRecord) error {
 	return nil
 }
 func (r *recordingBlacklistRepo) Delete(_ context.Context, _ int64) error { return nil }
-func (r *recordingBlacklistRepo) GetByID(_ context.Context, _ int64) (*storage.BlacklistRecord, error) {
+func (r *recordingBlacklistRepo) GetByID(_ context.Context, _ int64) (*model.BlacklistRecord, error) {
 	return nil, storage.ErrNotFound
 }
-func (r *recordingBlacklistRepo) FindEnabledByHost(_ context.Context, _ string) ([]*storage.BlacklistRecord, error) {
+func (r *recordingBlacklistRepo) FindEnabledByHost(_ context.Context, _ string) ([]*model.BlacklistRecord, error) {
 	return nil, nil
 }
-func (r *recordingBlacklistRepo) List(_ context.Context, _ storage.BlacklistFilter) ([]*storage.BlacklistRecord, error) {
+func (r *recordingBlacklistRepo) List(_ context.Context, _ model.BlacklistFilter) ([]*model.BlacklistRecord, error) {
 	return nil, nil
 }
 
@@ -104,7 +105,7 @@ func TestGenerator_EnrichedExtractor_BlacklistBranch(t *testing.T) {
 	blRepo := &recordingBlacklistRepo{insertOK: true}
 	g.SetBlacklistRepo(blRepo)
 
-	g.Enqueue(context.Background(), "ads.example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "ads.example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://ads.example.com/promo/123", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -120,8 +121,8 @@ func TestGenerator_EnrichedExtractor_BlacklistBranch(t *testing.T) {
 	require.Equal(t, 1, blRepo.callCount(), "BlacklistRepository.Insert 정확히 1회")
 	rec := blRepo.inserts[0]
 	assert.Equal(t, "ads.example.com", rec.HostPattern)
-	assert.Equal(t, storage.BlacklistSourceAuto, rec.Source)
-	assert.Equal(t, storage.BlacklistModeDrop, rec.Mode)
+	assert.Equal(t, model.BlacklistSourceAuto, rec.Source)
+	assert.Equal(t, model.BlacklistModeDrop, rec.Mode)
 	assert.True(t, rec.Enabled)
 	assert.Equal(t, "광고 페이지", rec.Reason)
 	// path_pattern 은 ^/promo/123$ 형태로 escape + anchor.
@@ -137,9 +138,9 @@ func TestGenerator_EnrichedExtractor_Ok_PageTypeStored(t *testing.T) {
 
 	extractor := &fakeEnrichedExtractor{
 		result: &llmgen.ExtractResult{
-			Selectors: storage.SelectorMap{
-				Title:       &storage.FieldSelector{CSS: "h1.article-title"},
-				MainContent: &storage.FieldSelector{CSS: "article p", Multi: true},
+			Selectors: model.SelectorMap{
+				Title:       &model.FieldSelector{CSS: "h1.article-title"},
+				MainContent: &model.FieldSelector{CSS: "article p", Multi: true},
 			},
 			PageType:           llmgen.PageTypeNews,
 			PageTypeConfidence: 0.95,
@@ -147,7 +148,7 @@ func TestGenerator_EnrichedExtractor_Ok_PageTypeStored(t *testing.T) {
 	}
 	g.SetExtractor(extractor)
 
-	g.Enqueue(context.Background(), "example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://example.com/article/1", HTML: samplePageHTML,
 	}, 0, "", 0)
 
@@ -173,7 +174,7 @@ func TestGenerator_EnrichedExtractor_BlacklistRepoNil_StillSkipsInsert(t *testin
 	g.SetExtractor(extractor)
 	// SetBlacklistRepo 미호출 — nil 상태.
 
-	g.Enqueue(context.Background(), "loginwall.example.com", storage.TargetTypePage, &core.RawContent{
+	g.Enqueue(context.Background(), "loginwall.example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://loginwall.example.com/secure", HTML: samplePageHTML,
 	}, 0, "", 0)
 

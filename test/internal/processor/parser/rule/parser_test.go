@@ -11,7 +11,7 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/parser/rule"
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 )
 
 const articleHTML = `
@@ -53,39 +53,39 @@ const listHTML = `
 </body></html>
 `
 
-func pageRule() *storage.ParserRuleRecord {
-	return &storage.ParserRuleRecord{
+func pageRule() *model.ParserRuleRecord {
+	return &model.ParserRuleRecord{
 		ID:          1,
 		SourceName:  "test",
 		HostPattern: "news.example.com",
-		TargetType:  storage.TargetTypePage,
+		TargetType:  model.TargetTypePage,
 		Version:     1,
 		Enabled:     true,
-		Selectors: storage.SelectorMap{
-			Title:       &storage.FieldSelector{CSS: "h1.hl"},
-			Author:      &storage.FieldSelector{CSS: "div.byline"},
-			Category:    &storage.FieldSelector{CSS: "span.cat"},
-			PublishedAt: &storage.FieldSelector{CSS: "time", Attribute: "datetime"},
-			MainContent: &storage.FieldSelector{CSS: "article p", Multi: true},
-			Tags:        &storage.FieldSelector{CSS: "ul.tags li a"},
-			Images:      &storage.FieldSelector{CSS: "div.images img", Attribute: "src"},
+		Selectors: model.SelectorMap{
+			Title:       &model.FieldSelector{CSS: "h1.hl"},
+			Author:      &model.FieldSelector{CSS: "div.byline"},
+			Category:    &model.FieldSelector{CSS: "span.cat"},
+			PublishedAt: &model.FieldSelector{CSS: "time", Attribute: "datetime"},
+			MainContent: &model.FieldSelector{CSS: "article p", Multi: true},
+			Tags:        &model.FieldSelector{CSS: "ul.tags li a"},
+			Images:      &model.FieldSelector{CSS: "div.images img", Attribute: "src"},
 		},
 	}
 }
 
-func listRule() *storage.ParserRuleRecord {
-	return &storage.ParserRuleRecord{
+func listRule() *model.ParserRuleRecord {
+	return &model.ParserRuleRecord{
 		ID:          2,
 		SourceName:  "test",
 		HostPattern: "news.example.com",
-		TargetType:  storage.TargetTypeList,
+		TargetType:  model.TargetTypeList,
 		Version:     1,
 		Enabled:     true,
-		Selectors: storage.SelectorMap{
-			ItemContainer: &storage.FieldSelector{CSS: "ul.list li.item"},
-			ItemLink:      &storage.FieldSelector{CSS: "a.lnk", Attribute: "href"},
-			ItemTitle:     &storage.FieldSelector{CSS: "a.lnk"},
-			ItemSnippet:   &storage.FieldSelector{CSS: "p.sum"},
+		Selectors: model.SelectorMap{
+			ItemContainer: &model.FieldSelector{CSS: "ul.list li.item"},
+			ItemLink:      &model.FieldSelector{CSS: "a.lnk", Attribute: "href"},
+			ItemTitle:     &model.FieldSelector{CSS: "a.lnk"},
+			ItemSnippet:   &model.FieldSelector{CSS: "p.sum"},
 		},
 	}
 }
@@ -99,7 +99,7 @@ func makeRaw(url, html string) *core.RawContent {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestParser_ParsePage_Success(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{pageRule()}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{pageRule()}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -130,7 +130,7 @@ func TestParser_ParsePage_NoRule_ReturnsErrNoRule(t *testing.T) {
 func TestParser_ParsePage_MissingTitleSelector_EmptySelector(t *testing.T) {
 	r := pageRule()
 	r.Selectors.Title = nil
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{r}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -143,8 +143,8 @@ func TestParser_ParsePage_MissingTitleSelector_EmptySelector(t *testing.T) {
 
 func TestParser_ParsePage_MainContentMatchesNothing_ParseFailure(t *testing.T) {
 	r := pageRule()
-	r.Selectors.MainContent = &storage.FieldSelector{CSS: "div.no-such-class", Multi: true}
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{r}}
+	r.Selectors.MainContent = &model.FieldSelector{CSS: "div.no-such-class", Multi: true}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -156,7 +156,7 @@ func TestParser_ParsePage_MainContentMatchesNothing_ParseFailure(t *testing.T) {
 }
 
 func TestParser_ParsePage_EmptyRaw_ParseFailure(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{pageRule()}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{pageRule()}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -172,7 +172,7 @@ func TestParser_ParsePage_EmptyRaw_ParseFailure(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func TestParser_ParseLinks_Success_AbsolutizesURLs(t *testing.T) {
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{listRule()}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{listRule()}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -191,7 +191,7 @@ func TestParser_ParseLinks_Success_AbsolutizesURLs(t *testing.T) {
 func TestParser_ParseLinks_MissingItemContainer_EmptySelector(t *testing.T) {
 	r := listRule()
 	r.Selectors.ItemContainer = nil
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{r}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
@@ -205,7 +205,7 @@ func TestParser_ParseLinks_MissingItemContainer_EmptySelector(t *testing.T) {
 func TestParser_ParseLinks_MissingItemLink_EmptySelector(t *testing.T) {
 	r := listRule()
 	r.Selectors.ItemLink = nil
-	repo := &fakeRepo{rules: []*storage.ParserRuleRecord{r}}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
