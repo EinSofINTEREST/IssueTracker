@@ -908,6 +908,7 @@ func TestLoadWorkerCounts_DefaultValues(t *testing.T) {
 		"FETCHER_LOW_WORKER_COUNT",
 		"PARSER_WORKER_COUNT",
 		"VALIDATE_WORKER_COUNT",
+		"ENRICH_WORKER_COUNT",
 	} {
 		t.Setenv(k, "")
 	}
@@ -931,6 +932,9 @@ func TestLoadWorkerCounts_DefaultValues(t *testing.T) {
 	if cfg.Validate != def.Validate {
 		t.Errorf("Validate: got %d, want %d", cfg.Validate, def.Validate)
 	}
+	if cfg.Enrich != def.Enrich {
+		t.Errorf("Enrich: got %d, want %d", cfg.Enrich, def.Enrich)
+	}
 }
 
 func TestLoadWorkerCounts_EnvOverride(t *testing.T) {
@@ -939,12 +943,13 @@ func TestLoadWorkerCounts_EnvOverride(t *testing.T) {
 	t.Setenv("FETCHER_LOW_WORKER_COUNT", "5")
 	t.Setenv("PARSER_WORKER_COUNT", "12")
 	t.Setenv("VALIDATE_WORKER_COUNT", "16")
+	t.Setenv("ENRICH_WORKER_COUNT", "7")
 
 	cfg, err := runtimecfg.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 
 	if cfg.FetcherHigh != 10 || cfg.FetcherNormal != 20 || cfg.FetcherLow != 5 ||
-		cfg.Parser != 12 || cfg.Validate != 16 {
+		cfg.Parser != 12 || cfg.Validate != 16 || cfg.Enrich != 7 {
 		t.Errorf("env override 실패: %+v", cfg)
 	}
 }
