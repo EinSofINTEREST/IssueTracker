@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
+	"strings"
 	"time"
 
 	"issuetracker/internal/bus"
@@ -20,6 +22,7 @@ import (
 	"issuetracker/internal/processor/enrich/extractor"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 	"issuetracker/internal/workerpool"
 	"issuetracker/pkg/logger"
@@ -38,15 +41,21 @@ const drainTimeout = workerpool.DefaultDrainTimeout
 // 이슈 #447 에서 추가된 동작:
 //   - ContentService 로 ref.ID 의 Content (Title/Body 포함) 조회
 //   - extractor.Extract 로 EnrichedFacts 추출
-//   - 결과를 ProcessingMessage.Metadata["enriched_facts"] 에 JSON 으로 첨부 후 forward
 //
-// 추출 실패는 파이프라인을 멈추지 않습니다 — warn 로깅 + 빈 facts 로 fallback + forward 진행.
+// 이슈 #448 에서 추가된 동작:
+//   - extracted claims 가 있으면 ContentService 로 동일 국가·최근 윈도우 후보 조회
+//   - title token overlap 기반 top-N 후보 선정 후 verifier.Verify 호출
+//   - facts.Verifications 에 결과 첨부
+//
+// 결과는 ProcessingMessage.Metadata["enriched_facts"] 에 JSON 으로 첨부 후 forward.
+// 추출/검증 실패는 파이프라인을 멈추지 않습니다 — warn 로깅 + 빈 결과로 fallback + forward 진행.
 // content 조회 실패 (ErrNotFound) 는 idempotent 정상 분기 — 이미 처리된 메시지로 보고 commit.
 type Worker struct {
 	consumer    bus.Consumer
 	pub         *bus.Publisher
 	contentSvc  service.ContentService
 	extractor   extractor.Extractor
+	verifier    extractor.Verifier
 	gate        locks.StageGate // nil 허용 → NoopStageGate 로 fallback
 	workerCount int
 
@@ -55,13 +64,14 @@ type Worker struct {
 
 // NewWorker 는 새로운 Worker 를 생성합니다.
 //
-// pub / contentSvc / extractor 가 nil 이면 panic — fail-fast (silent failure 회피).
+// pub / contentSvc / extractor / verifier 가 nil 이면 panic — fail-fast (silent failure 회피).
 // gate 가 nil 이면 NoopStageGate 로 fallback.
 func NewWorker(
 	consumer bus.Consumer,
 	pub *bus.Publisher,
 	contentSvc service.ContentService,
 	ex extractor.Extractor,
+	vr extractor.Verifier,
 	gate locks.StageGate,
 	workerCount int,
 ) *Worker {
@@ -74,6 +84,9 @@ func NewWorker(
 	if ex == nil {
 		panic("enrich.NewWorker: extractor must not be nil (use extractor.NoopExtractor for disabled enrichment)")
 	}
+	if vr == nil {
+		panic("enrich.NewWorker: verifier must not be nil (use extractor.NoopVerifier for disabled verification)")
+	}
 	if gate == nil {
 		gate = locks.NewNoopStageGate()
 	}
@@ -82,6 +95,7 @@ func NewWorker(
 		pub:         pub,
 		contentSvc:  contentSvc,
 		extractor:   ex,
+		verifier:    vr,
 		gate:        gate,
 		workerCount: workerCount,
 	}
@@ -173,10 +187,11 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		defer release()
 	}
 
-	// 이슈 #447 — Content 조회 + extractor 호출 + facts 첨부.
+	// 이슈 #447 / #448 — Content 조회 + extractor 호출 + cross-verify + facts 첨부.
 	// 본 단계 어떤 실패도 forward 를 막지 않음 — pipeline 진행이 enrichment 보다 우선.
-	facts := w.runExtraction(ctx, &pm, &ref)
+	content, facts := w.runExtraction(ctx, &pm, &ref)
 	if facts != nil {
+		w.runVerification(ctx, &pm, &ref, content, facts)
 		w.attachFacts(&pm, facts)
 	}
 
@@ -196,9 +211,10 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 }
 
 // runExtraction 은 content 를 조회하고 extractor 를 호출합니다.
-// 모든 실패 경로는 nil 을 반환 — 호출자가 facts 첨부 skip 하고 forward 진행.
-// 즉 enrichment 실패는 pipeline 을 멈추지 않음 (forward-first 정책).
-func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, ref *core.ContentRef) *extractor.EnrichedFacts {
+// 모든 실패 경로는 (nil, nil) 을 반환 — 호출자가 facts 첨부 skip 하고 forward 진행.
+// 성공 시 (content, facts) 를 함께 반환 — 호출자가 verification 단계에서 content 메타데이터
+// (Country/PublishedAt) 를 재사용할 수 있도록.
+func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, ref *core.ContentRef) (*core.Content, *extractor.EnrichedFacts) {
 	log := logger.FromContext(ctx)
 
 	content, err := w.contentSvc.GetByID(ctx, ref.ID)
@@ -208,13 +224,13 @@ func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, 
 				"job_id": pm.ID,
 				"ref_id": ref.ID,
 			}).Info("content not found, skipping enrichment (already deleted or duplicate)")
-			return nil
+			return nil, nil
 		}
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
 			"ref_id": ref.ID,
 		}).WithError(err).Warn("failed to fetch content for enrichment, forwarding without facts")
-		return nil
+		return nil, nil
 	}
 
 	host := ""
@@ -244,7 +260,7 @@ func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, 
 			"ref_id": ref.ID,
 			"host":   host,
 		}).WithError(err).Warn("enrichment extraction failed, forwarding without facts")
-		return nil
+		return content, nil
 	}
 
 	log.WithFields(map[string]interface{}{
@@ -254,7 +270,184 @@ func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, 
 		"claim_count":  len(facts.Claims),
 		"fact_count":   len(facts.Facts),
 	}).Debug("enrichment extraction completed")
-	return facts
+	return content, facts
+}
+
+// 검증 단계 상수 (이슈 #448).
+const (
+	// verificationWindow: 후보 article 시간 윈도우 — 발행 시각 ±N. ±24h 가 일반적인 뉴스 사이클.
+	verificationWindow = 24 * time.Hour
+	// verificationCandidateFetchLimit: DB 후보 조회 fetch limit — 너무 많으면 ranking 비용 증가.
+	verificationCandidateFetchLimit = 50
+	// verificationTopK: 최종 verifier 에 넘기는 후보 수 — prompt context 비용 보호.
+	verificationTopK = 5
+)
+
+// runVerification 은 추출된 claims 에 대해 cross-verification 을 수행하고 facts.Verifications
+// 에 결과를 첨부합니다.
+//
+// 모든 실패 경로는 verifications 미첨부로 fallback — pipeline 진행 보장 (forward-first).
+// claims 가 없으면 skip — verifier 호출 불필요.
+//
+// 후보 선정:
+//  1. ContentService.ListByCountry 로 동일 country + 시간 윈도우 (±24h) 내 최근 발행 article fetch (limit 50)
+//  2. 본인 article (URL 또는 ID 동일) 제외
+//  3. title token overlap 으로 ranking → top 5
+//
+// 그 5개를 CandidateRef 로 verifier 에 전달. verifier (prompt) 가 WebFetch 로 추가 신규
+// 페치 + 검증을 수행.
+func (w *Worker) runVerification(
+	ctx context.Context,
+	pm *core.ProcessingMessage,
+	ref *core.ContentRef,
+	content *core.Content,
+	facts *extractor.EnrichedFacts,
+) {
+	log := logger.FromContext(ctx)
+
+	if facts == nil || len(facts.Claims) == 0 {
+		return
+	}
+	if content == nil {
+		return
+	}
+
+	candidates := w.findCandidates(ctx, content)
+	host := hostOf(ref.URL)
+
+	in := extractor.VerifyInput{
+		URL:        ref.URL,
+		Host:       host,
+		Title:      content.Title,
+		Claims:     facts.Claims,
+		Candidates: candidates,
+	}
+
+	verifications, err := w.verifier.Verify(ctx, in)
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id":          pm.ID,
+			"ref_id":          ref.ID,
+			"claim_count":     len(facts.Claims),
+			"candidate_count": len(candidates),
+		}).WithError(err).Warn("enrichment verification failed, forwarding without verifications")
+		return
+	}
+	facts.Verifications = verifications
+	log.WithFields(map[string]interface{}{
+		"job_id":             pm.ID,
+		"ref_id":             ref.ID,
+		"claim_count":        len(facts.Claims),
+		"candidate_count":    len(candidates),
+		"verification_count": len(verifications),
+	}).Debug("enrichment verification completed")
+}
+
+// findCandidates 는 본 content 와 같은 country + 시간 윈도우의 후보 article 들을 조회하고
+// title token overlap 으로 ranking 한 top-K 를 반환합니다. 본인 article 은 제외.
+//
+// 본 메소드는 DB error 시 빈 slice 반환 — verifier 는 DB 후보 없이도 WebFetch 만으로 진행 가능.
+func (w *Worker) findCandidates(ctx context.Context, src *core.Content) []extractor.CandidateRef {
+	log := logger.FromContext(ctx)
+
+	// PublishedAt zero-value 면 시간 윈도우 적용 불가 — 빈 후보로 진행.
+	if src.PublishedAt.IsZero() {
+		return nil
+	}
+
+	after := src.PublishedAt.Add(-verificationWindow)
+	before := src.PublishedAt.Add(verificationWindow)
+	filter := model.ContentFilter{
+		PublishedAfter:  &after,
+		PublishedBefore: &before,
+		Pagination:      model.Pagination{Limit: verificationCandidateFetchLimit},
+	}
+	rows, err := w.contentSvc.ListByCountry(ctx, src.Country, filter)
+	if err != nil {
+		log.WithError(err).Debug("candidate fetch failed, proceeding with empty candidates")
+		return nil
+	}
+
+	srcTokens := tokenize(src.Title)
+	type scored struct {
+		c     *core.Content
+		score int
+	}
+	ranked := make([]scored, 0, len(rows))
+	for _, r := range rows {
+		if r == nil {
+			continue
+		}
+		// 본인 제외 (ID 또는 URL 일치)
+		if r.ID == src.ID || (r.URL != "" && r.URL == src.URL) {
+			continue
+		}
+		s := tokenOverlap(srcTokens, tokenize(r.Title))
+		if s == 0 {
+			continue
+		}
+		ranked = append(ranked, scored{c: r, score: s})
+	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+
+	limit := verificationTopK
+	if len(ranked) < limit {
+		limit = len(ranked)
+	}
+	out := make([]extractor.CandidateRef, 0, limit)
+	for i := 0; i < limit; i++ {
+		c := ranked[i].c
+		out = append(out, extractor.CandidateRef{
+			URL:   c.URL,
+			Title: c.Title,
+			Host:  hostOf(c.URL),
+		})
+	}
+	return out
+}
+
+// hostOf 는 URL 의 host 부분만 추출합니다. parse 실패 시 빈 문자열 반환.
+func hostOf(u string) string {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return ""
+	}
+	return parsed.Host
+}
+
+// tokenize 는 title 을 소문자 단어 토큰 set 으로 분해합니다. 길이 2 이하 토큰은 stopword 제외.
+func tokenize(s string) map[string]struct{} {
+	out := map[string]struct{}{}
+	cur := make([]rune, 0, 32)
+	flush := func() {
+		if len(cur) > 2 {
+			out[strings.ToLower(string(cur))] = struct{}{}
+		}
+		cur = cur[:0]
+	}
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			cur = append(cur, r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return out
+}
+
+// tokenOverlap 은 두 토큰 set 의 교집합 크기를 반환합니다.
+func tokenOverlap(a, b map[string]struct{}) int {
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	n := 0
+	for t := range a {
+		if _, ok := b[t]; ok {
+			n++
+		}
+	}
+	return n
 }
 
 // attachFacts 는 추출된 facts 를 ProcessingMessage.Metadata 에 JSON 으로 저장합니다.

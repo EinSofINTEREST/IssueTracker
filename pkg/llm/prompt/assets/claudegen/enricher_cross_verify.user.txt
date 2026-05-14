@@ -1,0 +1,43 @@
+You are verifying claims extracted from a news/community article. Your goal is to assess each claim against external sources.
+
+Source article:
+- URL: {{URL}}
+- Host: {{HOST}}
+- Title: {{TITLE}}
+
+Claims to verify (each has an idx):
+{{CLAIMS_JSON}}
+
+DB candidate articles (same country / time window, may cover the same topic):
+{{CANDIDATES_JSON}}
+
+Your task:
+1. For each candidate URL, **use the WebFetch tool** to retrieve and read the article. Compare against the claims.
+2. **Use the WebFetch tool to search the open web** for additional independent sources covering the same claims. Prefer reputable / official sources.
+3. For each claim, decide a verdict based on the evidence you find.
+
+Output a single JSON object — no explanation, no markdown, no code blocks:
+{
+  "verifications": [
+    {
+      "claim_idx": <integer matching the idx field of an input claim>,
+      "verdict": "supported" | "contradicted" | "unverified",
+      "sources": ["<url1>", "<url2>", ...],
+      "note": "<short rationale, max 200 chars>"
+    }
+  ]
+}
+
+Verdict rules:
+- "supported": at least one independent source corroborates the same claim (matching subject + predicate + object/value).
+- "contradicted": at least one independent source contradicts the claim outright.
+- "unverified": no external source either way after reasonable search effort.
+
+Source rules:
+- Cite the URLs you actually fetched. Do not invent URLs.
+- Prefer sources different from the source article's host (cross-source corroboration). The source article itself is NOT a valid evidence source.
+- 1-3 sources per claim is usually enough.
+
+Be honest about uncertainty — when in doubt, prefer "unverified" with a short note explaining what you searched and why it was inconclusive.
+
+Return ONLY the JSON object.
