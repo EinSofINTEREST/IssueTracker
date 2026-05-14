@@ -24,6 +24,7 @@ import (
 	refinerwiring "issuetracker/internal/processor/parser/rule/refiner/wiring"
 	"issuetracker/internal/processor/parser/rule/validator"
 	parserWorker "issuetracker/internal/processor/parser/worker"
+	"issuetracker/internal/processor/precheck"
 	"issuetracker/internal/processor/validate"
 	validateWorkerPkg "issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/scheduler"
@@ -612,12 +613,17 @@ func main() {
 		w.SetPipelineGuard(pipelineGuard)
 	}
 
-	// ── Page-parse 블랙리스트 ───────────────────────────────────────
-	// 카테고리에서 추출된 article URL 중 blacklist 매칭은 bus.Publish 직전 drop.
-	// Matcher 가 nil (BLACKLIST_ENABLED=false) 이면 setter noop — 모든 링크 그대로 발행.
-	if blacklistMatcher != nil {
-		w.SetBlacklist(blacklistMatcher)
-	}
+	// ── Precheck 게이트 (이슈 #425) ───────────────────────────────────
+	// fetcher / parser 진입점에서 URL 처리 가부를 일괄 판정. 현재 단일 Source (blacklist) 등록 —
+	// 향후 rate_limit / robots / domain_throttle 등 추가 시 본 wiring 만 확장.
+	//
+	// blacklistMatcher 가 nil (BLACKLIST_ENABLED=false) 이면 NewBlacklistSource 가 nil 반환,
+	// precheck.New 가 nil source 를 자동 필터링 → 모든 URL Allow (게이트 비활성).
+	precheckDecider := precheck.New(precheck.NewBlacklistSource(blacklistMatcher))
+	// parser worker — 진입점 + outgoing chained URL filter.
+	w.SetPrecheck(precheckDecider)
+	// fetcher worker pool manager — 모든 priority pool + chromedp pool 에 일괄 주입.
+	manager.SetPrecheck(precheckDecider)
 
 	// ── Stale rule 재학습 카운터 ───────────────────────────────────
 	// host 단위 stale parse failure 누적 — 임계 도달 시 Generator.EnqueueStale 트리거.
