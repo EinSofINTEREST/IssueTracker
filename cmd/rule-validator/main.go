@@ -15,13 +15,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	llmcfg "issuetracker/pkg/config/llm"
+	storagecfg "issuetracker/pkg/config/storage"
 	"os"
 	"time"
 
 	"issuetracker/internal/processor/parser/rule/validator"
 	"issuetracker/internal/storage/decorator"
 	pgstore "issuetracker/internal/storage/postgres"
-	"issuetracker/pkg/config"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/chain"
 	"issuetracker/pkg/llm/policy"
@@ -45,7 +46,7 @@ func main() {
 	}
 
 	// DB 연결
-	dbCfg, err := config.Load()
+	dbCfg, err := storagecfg.Load()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load db config")
 	}
@@ -80,7 +81,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	promptCfg, err := config.LoadPrompt()
+	promptCfg, err := llmcfg.LoadPrompt()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load prompt config")
 	}
@@ -109,7 +110,7 @@ func main() {
 }
 
 func buildProvider(log *logger.Logger) llm.Provider {
-	cfg, err := config.LoadLLM()
+	cfg, err := llmcfg.LoadLLM()
 	if err != nil {
 		log.WithError(err).Warn("failed to load LLM config")
 		return nil

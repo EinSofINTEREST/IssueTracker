@@ -1,10 +1,10 @@
 package scheduler
 
 import (
+	processorcfg "issuetracker/pkg/config/processor"
 	"net/url"
 
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/pkg/config"
 )
 
 // sourceCategoryURLs 는 각 소스의 카테고리 URL 목록입니다.
@@ -69,7 +69,7 @@ func hostOf(rawURL string) string {
 //
 // DefaultEntries builds the full list of ScheduleEntry values from sourceCategoryURLs.
 // Intervals are controlled by SchedulerConfig.
-func DefaultEntries(cfg config.SchedulerConfig) []ScheduleEntry {
+func DefaultEntries(cfg processorcfg.SchedulerConfig) []ScheduleEntry {
 	var entries []ScheduleEntry
 	for _, urls := range sourceCategoryURLs {
 		for _, rawURL := range urls {

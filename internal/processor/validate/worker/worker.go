@@ -15,7 +15,7 @@ import (
 	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
 	"issuetracker/internal/workerpool"
-	"issuetracker/pkg/config"
+	processorcfg "issuetracker/pkg/config/processor"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -42,7 +42,7 @@ type Worker struct {
 	pub         *bus.Publisher
 	contentSvc  service.ContentService
 	gate        locks.StageGate // nil 허용 → NoopStageGate 로 fallback (이슈 #356)
-	cfg         config.ValidateConfig
+	cfg         processorcfg.ValidateConfig
 	workerCount int
 
 	// pool 은 workerpool harness — Start 에서 lazy 생성. lifecycle (poll / dispatch / shutdown /
@@ -69,7 +69,7 @@ func NewWorker(
 	contentSvc service.ContentService,
 	gate locks.StageGate,
 	workerCount int,
-	cfg config.ValidateConfig,
+	cfg processorcfg.ValidateConfig,
 ) *Worker {
 	// pub 은 4 publish 사이트 (validated / dlq / requeue / reparse) 가 dereference 하는 hard
 	// dependency. nil 주입 시 첫 publish 에서 bus.Forward 가 error 를 반환하지만, validate

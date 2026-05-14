@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	storagecfg "issuetracker/pkg/config/storage"
 	"os"
 
 	pgStorage "issuetracker/internal/storage/postgres"
 	"issuetracker/migrations"
-	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 )
 
@@ -16,7 +16,7 @@ func main() {
 	logConfig.Pretty = true
 	log := logger.New(logConfig)
 
-	dbCfg, err := config.Load()
+	dbCfg, err := storagecfg.Load()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load config")
 		os.Exit(1)

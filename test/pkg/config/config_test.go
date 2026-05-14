@@ -1,25 +1,29 @@
 package config_test
 
 import (
+	appcfg "issuetracker/pkg/config/app"
+	fetchercfg "issuetracker/pkg/config/fetcher"
+	llmcfg "issuetracker/pkg/config/llm"
+	processorcfg "issuetracker/pkg/config/processor"
+	runtimecfg "issuetracker/pkg/config/runtime"
+	storagecfg "issuetracker/pkg/config/storage"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"issuetracker/pkg/config"
 )
 
 func TestLoad_DefaultValues(t *testing.T) {
 	// TestLoad_DefaultValues는 환경변수가 없는 경우 기본값이 반환되는지 검증합니다.
 	unsetEnvVars(t)
 
-	cfg, err := config.Load("/tmp/nonexistent-env-file.env")
+	cfg, err := storagecfg.Load("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("기본값 로드 실패: %v", err)
 	}
 
-	def := config.DefaultDBConfig()
+	def := storagecfg.DefaultDBConfig()
 	if cfg.Host != def.Host {
 		t.Errorf("Host: got %q, want %q", cfg.Host, def.Host)
 	}
@@ -43,7 +47,7 @@ func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("POSTGRES_MAX_CONNS", "50")
 	t.Setenv("POSTGRES_CONN_TIMEOUT", "10s")
 
-	cfg, err := config.Load("/tmp/nonexistent-env-file.env")
+	cfg, err := storagecfg.Load("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("환경변수 로드 실패: %v", err)
 	}
@@ -69,7 +73,7 @@ func TestLoad_InvalidPort(t *testing.T) {
 	unsetEnvVars(t)
 	t.Setenv("POSTGRES_PORT", "not-a-number")
 
-	_, err := config.Load("/tmp/nonexistent-env-file.env")
+	_, err := storagecfg.Load("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("잘못된 POSTGRES_PORT 값에 대해 에러가 반환되어야 합니다")
 	}
@@ -79,7 +83,7 @@ func TestLoad_InvalidMaxConns(t *testing.T) {
 	unsetEnvVars(t)
 	t.Setenv("POSTGRES_MAX_CONNS", "bad")
 
-	_, err := config.Load("/tmp/nonexistent-env-file.env")
+	_, err := storagecfg.Load("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("잘못된 POSTGRES_MAX_CONNS 값에 대해 에러가 반환되어야 합니다")
 	}
@@ -89,7 +93,7 @@ func TestLoad_InvalidMinConns(t *testing.T) {
 	unsetEnvVars(t)
 	t.Setenv("POSTGRES_MIN_CONNS", "bad")
 
-	_, err := config.Load("/tmp/nonexistent-env-file.env")
+	_, err := storagecfg.Load("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("잘못된 POSTGRES_MIN_CONNS 값에 대해 에러가 반환되어야 합니다")
 	}
@@ -99,7 +103,7 @@ func TestLoad_InvalidConnTimeout(t *testing.T) {
 	unsetEnvVars(t)
 	t.Setenv("POSTGRES_CONN_TIMEOUT", "not-a-duration")
 
-	_, err := config.Load("/tmp/nonexistent-env-file.env")
+	_, err := storagecfg.Load("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("잘못된 POSTGRES_CONN_TIMEOUT 값에 대해 에러가 반환되어야 합니다")
 	}
@@ -109,7 +113,7 @@ func TestLoad_MissingEnvFileIsIgnored(t *testing.T) {
 	// TestLoad_MissingEnvFileIsIgnored는 .env 파일이 없는 경우 에러 없이 기본값으로 로드되는지 검증합니다.
 	unsetEnvVars(t)
 
-	_, err := config.Load("/tmp/does-not-exist.env")
+	_, err := storagecfg.Load("/tmp/does-not-exist.env")
 	if err != nil {
 		t.Fatalf("존재하지 않는 .env 파일은 에러를 반환하면 안 됩니다: %v", err)
 	}
@@ -125,12 +129,12 @@ func unsetLogEnvVars(t *testing.T) {
 func TestLoadLog_DefaultValues(t *testing.T) {
 	unsetLogEnvVars(t)
 
-	cfg, err := config.LoadLog("/tmp/nonexistent-env-file.env")
+	cfg, err := appcfg.LoadLog("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("기본값 로드 실패: %v", err)
 	}
 
-	def := config.DefaultLogConfig()
+	def := appcfg.DefaultLogConfig()
 	if cfg.Level != def.Level {
 		t.Errorf("Level: got %q, want %q", cfg.Level, def.Level)
 	}
@@ -159,7 +163,7 @@ func TestLoadLog_EnvOverride(t *testing.T) {
 			t.Setenv("LOG_LEVEL", tt.level)
 			t.Setenv("LOG_PRETTY", tt.pretty)
 
-			cfg, err := config.LoadLog("/tmp/nonexistent-env-file.env")
+			cfg, err := appcfg.LoadLog("/tmp/nonexistent-env-file.env")
 			if err != nil {
 				t.Fatalf("환경변수 로드 실패: %v", err)
 			}
@@ -188,7 +192,7 @@ func TestLoadLog_InvalidLevel(t *testing.T) {
 			unsetLogEnvVars(t)
 			t.Setenv("LOG_LEVEL", tt.value)
 
-			_, err := config.LoadLog("/tmp/nonexistent-env-file.env")
+			_, err := appcfg.LoadLog("/tmp/nonexistent-env-file.env")
 			if err == nil {
 				t.Fatalf("LOG_LEVEL=%q: 에러가 반환되어야 합니다", tt.value)
 			}
@@ -200,7 +204,7 @@ func TestLoadLog_InvalidPretty(t *testing.T) {
 	unsetLogEnvVars(t)
 	t.Setenv("LOG_PRETTY", "not-a-bool")
 
-	_, err := config.LoadLog("/tmp/nonexistent-env-file.env")
+	_, err := appcfg.LoadLog("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("잘못된 LOG_PRETTY 값에 대해 에러가 반환되어야 합니다")
 	}
@@ -209,7 +213,7 @@ func TestLoadLog_InvalidPretty(t *testing.T) {
 func TestLoadLog_MissingEnvFileIsIgnored(t *testing.T) {
 	unsetLogEnvVars(t)
 
-	_, err := config.LoadLog("/tmp/does-not-exist.env")
+	_, err := appcfg.LoadLog("/tmp/does-not-exist.env")
 	if err != nil {
 		t.Fatalf("존재하지 않는 .env 파일은 에러를 반환하면 안 됩니다: %v", err)
 	}
@@ -244,12 +248,12 @@ func unsetRedisEnvVars(t *testing.T) {
 func TestLoadRedis_DefaultValues(t *testing.T) {
 	unsetRedisEnvVars(t)
 
-	cfg, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+	cfg, err := storagecfg.LoadRedis("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("기본값 로드 실패: %v", err)
 	}
 
-	def := config.DefaultRedisConfig()
+	def := storagecfg.DefaultRedisConfig()
 	if cfg.Host != def.Host {
 		t.Errorf("Host: got %q, want %q", cfg.Host, def.Host)
 	}
@@ -275,7 +279,7 @@ func TestLoadRedis_EnvOverride(t *testing.T) {
 	t.Setenv("REDIS_POOL_SIZE", "20")
 	t.Setenv("REDIS_DIAL_TIMEOUT", "10s")
 
-	cfg, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+	cfg, err := storagecfg.LoadRedis("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("환경변수 로드 실패: %v", err)
 	}
@@ -312,7 +316,7 @@ func TestLoadRedis_InvalidPort(t *testing.T) {
 			unsetRedisEnvVars(t)
 			t.Setenv("REDIS_PORT", tt.value)
 
-			_, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+			_, err := storagecfg.LoadRedis("/tmp/nonexistent-env-file.env")
 			if err == nil {
 				t.Fatalf("REDIS_PORT=%q: 에러가 반환되어야 합니다", tt.value)
 			}
@@ -333,7 +337,7 @@ func TestLoadRedis_InvalidDB(t *testing.T) {
 			unsetRedisEnvVars(t)
 			t.Setenv("REDIS_DB", tt.value)
 
-			_, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+			_, err := storagecfg.LoadRedis("/tmp/nonexistent-env-file.env")
 			if err == nil {
 				t.Fatalf("REDIS_DB=%q: 에러가 반환되어야 합니다", tt.value)
 			}
@@ -355,7 +359,7 @@ func TestLoadRedis_InvalidPoolSize(t *testing.T) {
 			unsetRedisEnvVars(t)
 			t.Setenv("REDIS_POOL_SIZE", tt.value)
 
-			_, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+			_, err := storagecfg.LoadRedis("/tmp/nonexistent-env-file.env")
 			if err == nil {
 				t.Fatalf("REDIS_POOL_SIZE=%q: 에러가 반환되어야 합니다", tt.value)
 			}
@@ -384,7 +388,7 @@ func TestLoadRedis_InvalidTimeouts(t *testing.T) {
 				unsetRedisEnvVars(t)
 				t.Setenv(envVar, tt.value)
 
-				_, err := config.LoadRedis("/tmp/nonexistent-env-file.env")
+				_, err := storagecfg.LoadRedis("/tmp/nonexistent-env-file.env")
 				if err == nil {
 					t.Fatalf("%s=%q: 에러가 반환되어야 합니다", envVar, tt.value)
 				}
@@ -411,12 +415,12 @@ func unsetSchedulerEnvVars(t *testing.T) {
 func TestLoadScheduler_DefaultValues(t *testing.T) {
 	unsetSchedulerEnvVars(t)
 
-	cfg, err := config.LoadScheduler("/tmp/nonexistent-env-file.env")
+	cfg, err := processorcfg.LoadScheduler("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("기본값 로드 실패: %v", err)
 	}
 
-	def := config.DefaultSchedulerConfig()
+	def := processorcfg.DefaultSchedulerConfig()
 	if cfg.MaxBacklog != def.MaxBacklog {
 		t.Errorf("MaxBacklog: got %d, want %d (disabled)", cfg.MaxBacklog, def.MaxBacklog)
 	}
@@ -430,7 +434,7 @@ func TestLoadScheduler_BacklogEnvOverride(t *testing.T) {
 	t.Setenv("SCHEDULER_MAX_BACKLOG", "10000")
 	t.Setenv("SCHEDULER_BACKLOG_CHECK_TIMEOUT", "2s")
 
-	cfg, err := config.LoadScheduler("/tmp/nonexistent-env-file.env")
+	cfg, err := processorcfg.LoadScheduler("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("환경변수 로드 실패: %v", err)
 	}
@@ -447,7 +451,7 @@ func TestLoadScheduler_InvalidMaxBacklog(t *testing.T) {
 	unsetSchedulerEnvVars(t)
 	t.Setenv("SCHEDULER_MAX_BACKLOG", "not-a-number")
 
-	_, err := config.LoadScheduler("/tmp/nonexistent-env-file.env")
+	_, err := processorcfg.LoadScheduler("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("SCHEDULER_MAX_BACKLOG 가 정수가 아니면 에러가 반환되어야 합니다")
 	}
@@ -457,7 +461,7 @@ func TestLoadScheduler_InvalidBacklogCheckTimeout(t *testing.T) {
 	unsetSchedulerEnvVars(t)
 	t.Setenv("SCHEDULER_BACKLOG_CHECK_TIMEOUT", "not-a-duration")
 
-	_, err := config.LoadScheduler("/tmp/nonexistent-env-file.env")
+	_, err := processorcfg.LoadScheduler("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("SCHEDULER_BACKLOG_CHECK_TIMEOUT 가 duration 형식이 아니면 에러가 반환되어야 합니다")
 	}
@@ -470,7 +474,7 @@ func TestLoadScheduler_InvalidBacklogCheckTimeout(t *testing.T) {
 func TestLoadPathInfer_DefaultValues(t *testing.T) {
 	t.Setenv("PATHINFER_MIN_SAMPLES", "")
 
-	cfg, err := config.LoadPathInfer("/tmp/nonexistent-env-file.env")
+	cfg, err := llmcfg.LoadPathInfer("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("기본값 로드 실패: %v", err)
 	}
@@ -482,7 +486,7 @@ func TestLoadPathInfer_DefaultValues(t *testing.T) {
 func TestLoadPathInfer_OverrideViaEnv(t *testing.T) {
 	t.Setenv("PATHINFER_MIN_SAMPLES", "5")
 
-	cfg, err := config.LoadPathInfer("/tmp/nonexistent-env-file.env")
+	cfg, err := llmcfg.LoadPathInfer("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("override 로드 실패: %v", err)
 	}
@@ -494,7 +498,7 @@ func TestLoadPathInfer_OverrideViaEnv(t *testing.T) {
 func TestLoadPathInfer_InvalidNonInteger(t *testing.T) {
 	t.Setenv("PATHINFER_MIN_SAMPLES", "abc")
 
-	_, err := config.LoadPathInfer("/tmp/nonexistent-env-file.env")
+	_, err := llmcfg.LoadPathInfer("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("PATHINFER_MIN_SAMPLES 가 정수 아니면 에러")
 	}
@@ -504,7 +508,7 @@ func TestLoadPathInfer_InvalidZeroOrNegative(t *testing.T) {
 	for _, v := range []string{"0", "-1"} {
 		t.Run(v, func(t *testing.T) {
 			t.Setenv("PATHINFER_MIN_SAMPLES", v)
-			_, err := config.LoadPathInfer("/tmp/nonexistent-env-file.env")
+			_, err := llmcfg.LoadPathInfer("/tmp/nonexistent-env-file.env")
 			if err == nil {
 				t.Fatalf("PATHINFER_MIN_SAMPLES=%q 는 1 이상이어야 함", v)
 			}
@@ -532,12 +536,12 @@ func unsetFetcherChromedpPoolEnvVars(t *testing.T) {
 func TestLoadFetcherChromedpPool_DefaultValues(t *testing.T) {
 	unsetFetcherChromedpPoolEnvVars(t)
 
-	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	cfg, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("기본값 로드 실패: %v", err)
 	}
 
-	def := config.DefaultFetcherChromedpPoolConfig()
+	def := fetchercfg.DefaultFetcherChromedpPoolConfig()
 	if cfg.Enabled != def.Enabled {
 		t.Errorf("Enabled: got %v, want %v", cfg.Enabled, def.Enabled)
 	}
@@ -569,7 +573,7 @@ func TestLoadFetcherChromedpPool_RemoteURLsEnvOverride(t *testing.T) {
 	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "3")
 	t.Setenv("FETCHER_CHROMEDP_REMOTE_URLS", "ws://chrome-1:9222, ws://chrome-2:9222 ,ws://chrome-3:9222")
 
-	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	cfg, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("RemoteURLs override 실패: %v", err)
 	}
@@ -600,7 +604,7 @@ func TestLoadFetcherChromedpPool_RemoteURLsLengthMismatch_Fails(t *testing.T) {
 			unsetFetcherChromedpPoolEnvVars(t)
 			t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", c.workerCount)
 			t.Setenv("FETCHER_CHROMEDP_REMOTE_URLS", c.urls)
-			_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+			_, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 			if err == nil {
 				t.Fatalf("WorkerCount=%s, urls=%q 는 거부되어야 함", c.workerCount, c.urls)
 			}
@@ -613,7 +617,7 @@ func TestLoadFetcherChromedpPool_RemoteURLsEmptyEntry_Fails(t *testing.T) {
 	unsetFetcherChromedpPoolEnvVars(t)
 	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "2")
 	t.Setenv("FETCHER_CHROMEDP_REMOTE_URLS", "ws://chrome-1:9222, ,ws://chrome-2:9222")
-	_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	_, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("빈 항목 포함 list 는 거부되어야 함")
 	}
@@ -625,7 +629,7 @@ func TestLoadFetcherChromedpPool_RemoteURLPattern_Expands(t *testing.T) {
 	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "3")
 	t.Setenv("FETCHER_CHROMEDP_REMOTE_URL_PATTERN", "ws://chrome-{n}:9222")
 
-	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	cfg, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("PATTERN expand 실패: %v", err)
 	}
@@ -648,7 +652,7 @@ func TestLoadFetcherChromedpPool_RemoteURLsOverridesPattern(t *testing.T) {
 	t.Setenv("FETCHER_CHROMEDP_REMOTE_URLS", "ws://explicit-1:9222,ws://explicit-2:9222")
 	t.Setenv("FETCHER_CHROMEDP_REMOTE_URL_PATTERN", "ws://chrome-{n}:9222")
 
-	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	cfg, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("override 실패: %v", err)
 	}
@@ -665,7 +669,7 @@ func TestLoadFetcherChromedpPool_RemoteURLPattern_MissingPlaceholder_Fails(t *te
 	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "2")
 	t.Setenv("FETCHER_CHROMEDP_REMOTE_URL_PATTERN", "ws://chrome-static:9222")
 
-	_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	_, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("{n} placeholder 누락 PATTERN 은 거부되어야 함")
 	}
@@ -677,7 +681,7 @@ func TestLoadFetcherChromedpPool_EnvOverride(t *testing.T) {
 	t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", "4")
 	t.Setenv("FETCHER_CHROMEDP_SEMAPHORE_CAPACITY", "3")
 
-	cfg, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+	cfg, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("환경변수 override 실패: %v", err)
 	}
@@ -697,7 +701,7 @@ func TestLoadFetcherChromedpPool_InvalidWorkerCount(t *testing.T) {
 		t.Run(v, func(t *testing.T) {
 			unsetFetcherChromedpPoolEnvVars(t)
 			t.Setenv("FETCHER_CHROMEDP_WORKER_COUNT", v)
-			_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+			_, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 			if err == nil {
 				t.Fatalf("FETCHER_CHROMEDP_WORKER_COUNT=%q 는 거부되어야 함", v)
 			}
@@ -710,7 +714,7 @@ func TestLoadFetcherChromedpPool_InvalidSemaphoreCapacity(t *testing.T) {
 		t.Run(v, func(t *testing.T) {
 			unsetFetcherChromedpPoolEnvVars(t)
 			t.Setenv("FETCHER_CHROMEDP_SEMAPHORE_CAPACITY", v)
-			_, err := config.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
+			_, err := fetchercfg.LoadFetcherChromedpPool("/tmp/nonexistent-env-file.env")
 			if err == nil {
 				t.Fatalf("FETCHER_CHROMEDP_SEMAPHORE_CAPACITY=%q 는 거부되어야 함", v)
 			}
@@ -732,12 +736,12 @@ func unsetShutdownEnvVars(t *testing.T) {
 func TestLoadShutdown_DefaultValues(t *testing.T) {
 	unsetShutdownEnvVars(t)
 
-	cfg, err := config.LoadShutdown("/tmp/nonexistent-env-file.env")
+	cfg, err := appcfg.LoadShutdown("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("기본값 로드 실패: %v", err)
 	}
 
-	def := config.DefaultShutdownConfig()
+	def := appcfg.DefaultShutdownConfig()
 	if cfg.Timeout != def.Timeout {
 		t.Errorf("Timeout: got %v, want %v", cfg.Timeout, def.Timeout)
 	}
@@ -757,7 +761,7 @@ func TestLoadShutdown_EnvOverride(t *testing.T) {
 	t.Setenv("SHUTDOWN_TIMEOUT", "120s")
 	t.Setenv("CLAUDE_CODE_SHUTDOWN_TIMEOUT", "30s")
 
-	cfg, err := config.LoadShutdown("/tmp/nonexistent-env-file.env")
+	cfg, err := appcfg.LoadShutdown("/tmp/nonexistent-env-file.env")
 	if err != nil {
 		t.Fatalf("환경변수 로드 실패: %v", err)
 	}
@@ -786,7 +790,7 @@ func TestLoadShutdown_InvalidValues(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			unsetShutdownEnvVars(t)
 			t.Setenv(tt.key, tt.value)
-			if _, err := config.LoadShutdown("/tmp/nonexistent-env-file.env"); err == nil {
+			if _, err := appcfg.LoadShutdown("/tmp/nonexistent-env-file.env"); err == nil {
 				t.Fatalf("%s=%q 는 거부되어야 함", tt.key, tt.value)
 			}
 		})
@@ -798,7 +802,7 @@ func TestLoadPrompt_Unset(t *testing.T) {
 	// LookupEnv 는 빈 값으로 set 된 상태도 ok=true 이므로, 본 case 는 명시적으로 unset 시킨다.
 	require.NoError(t, os.Unsetenv("LLM_PROMPT_DIR"))
 
-	cfg, err := config.LoadPrompt("/tmp/nonexistent-env-file.env")
+	cfg, err := llmcfg.LoadPrompt("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	if cfg.DirSet {
 		t.Errorf("DirSet: got true, want false (env unset)")
@@ -811,7 +815,7 @@ func TestLoadPrompt_Unset(t *testing.T) {
 func TestLoadPrompt_SetEmpty(t *testing.T) {
 	t.Setenv("LLM_PROMPT_DIR", "")
 
-	cfg, err := config.LoadPrompt("/tmp/nonexistent-env-file.env")
+	cfg, err := llmcfg.LoadPrompt("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	if !cfg.DirSet {
 		t.Errorf("DirSet: got false, want true (env set to empty)")
@@ -824,7 +828,7 @@ func TestLoadPrompt_SetEmpty(t *testing.T) {
 func TestLoadPrompt_SetValue(t *testing.T) {
 	t.Setenv("LLM_PROMPT_DIR", "/custom/path")
 
-	cfg, err := config.LoadPrompt("/tmp/nonexistent-env-file.env")
+	cfg, err := llmcfg.LoadPrompt("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	if !cfg.DirSet {
 		t.Errorf("DirSet: got false, want true")
@@ -841,10 +845,10 @@ func TestLoadPrompt_SetValue(t *testing.T) {
 func TestLoadRetryScheduler_DefaultValues(t *testing.T) {
 	t.Setenv("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS", "")
 
-	cfg, err := config.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
+	cfg, err := runtimecfg.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 
-	def := config.DefaultRetrySchedulerConfig()
+	def := runtimecfg.DefaultRetrySchedulerConfig()
 	if cfg.HeartbeatEveryNIdleTicks != def.HeartbeatEveryNIdleTicks {
 		t.Errorf("HeartbeatEveryNIdleTicks: got %d, want %d (default)",
 			cfg.HeartbeatEveryNIdleTicks, def.HeartbeatEveryNIdleTicks)
@@ -865,7 +869,7 @@ func TestLoadRetryScheduler_EnvOverride(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS", tt.env)
 
-			cfg, err := config.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
+			cfg, err := runtimecfg.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
 			require.NoError(t, err)
 			if cfg.HeartbeatEveryNIdleTicks != tt.want {
 				t.Errorf("HeartbeatEveryNIdleTicks: got %d, want %d", cfg.HeartbeatEveryNIdleTicks, tt.want)
@@ -887,7 +891,7 @@ func TestLoadRetryScheduler_InvalidValues(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS", tt.env)
 
-			_, err := config.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
+			_, err := runtimecfg.LoadRetryScheduler("/tmp/nonexistent-env-file.env")
 			require.Error(t, err, "%q 는 에러여야 함", tt.env)
 		})
 	}
@@ -908,10 +912,10 @@ func TestLoadWorkerCounts_DefaultValues(t *testing.T) {
 		t.Setenv(k, "")
 	}
 
-	cfg, err := config.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
+	cfg, err := runtimecfg.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 
-	def := config.DefaultWorkerCountsConfig()
+	def := runtimecfg.DefaultWorkerCountsConfig()
 	if cfg.FetcherHigh != def.FetcherHigh {
 		t.Errorf("FetcherHigh: got %d, want %d", cfg.FetcherHigh, def.FetcherHigh)
 	}
@@ -936,7 +940,7 @@ func TestLoadWorkerCounts_EnvOverride(t *testing.T) {
 	t.Setenv("PARSER_WORKER_COUNT", "12")
 	t.Setenv("VALIDATE_WORKER_COUNT", "16")
 
-	cfg, err := config.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
+	cfg, err := runtimecfg.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 
 	if cfg.FetcherHigh != 10 || cfg.FetcherNormal != 20 || cfg.FetcherLow != 5 ||
@@ -958,10 +962,10 @@ func TestLoadWorkerCounts_PartialOverride(t *testing.T) {
 	}
 	t.Setenv("PARSER_WORKER_COUNT", "12")
 
-	cfg, err := config.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
+	cfg, err := runtimecfg.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 
-	def := config.DefaultWorkerCountsConfig()
+	def := runtimecfg.DefaultWorkerCountsConfig()
 	if cfg.Parser != 12 {
 		t.Errorf("Parser env override 미반영: got %d, want 12", cfg.Parser)
 	}
@@ -996,7 +1000,7 @@ func TestLoadWorkerCounts_InvalidValues(t *testing.T) {
 			}
 			t.Setenv(tt.key, tt.val)
 
-			_, err := config.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
+			_, err := runtimecfg.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
 			require.Error(t, err, "%s=%q 는 에러여야 함", tt.key, tt.val)
 		})
 	}

@@ -2,6 +2,7 @@ package community_test
 
 import (
 	"context"
+	processorcfg "issuetracker/pkg/config/processor"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,6 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/domain/community"
-	"issuetracker/pkg/config"
 )
 
 func newCommunityContent() *core.Content {
@@ -28,7 +28,7 @@ func newCommunityContent() *core.Content {
 }
 
 func TestCommunityValidator_Validate_ValidContent_ReturnsValid(t *testing.T) {
-	v := community.NewValidator(config.DefaultValidateConfig())
+	v := community.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newCommunityContent()
 
 	result := v.Validate(context.Background(), content)
@@ -39,7 +39,7 @@ func TestCommunityValidator_Validate_ValidContent_ReturnsValid(t *testing.T) {
 }
 
 func TestCommunityValidator_Validate_BodyTooShort_ReturnsError(t *testing.T) {
-	v := community.NewValidator(config.DefaultValidateConfig())
+	v := community.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newCommunityContent()
 	content.Body = "짧음"
 
@@ -51,7 +51,7 @@ func TestCommunityValidator_Validate_BodyTooShort_ReturnsError(t *testing.T) {
 }
 
 func TestCommunityValidator_Validate_MissingPublishedAt_StillValid(t *testing.T) {
-	v := community.NewValidator(config.DefaultValidateConfig())
+	v := community.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newCommunityContent()
 	content.PublishedAt = time.Time{} // 커뮤니티는 PublishedAt 선택
 
@@ -62,7 +62,7 @@ func TestCommunityValidator_Validate_MissingPublishedAt_StillValid(t *testing.T)
 }
 
 func TestCommunityValidator_Validate_FloodPattern_ReturnsError(t *testing.T) {
-	v := community.NewValidator(config.DefaultValidateConfig())
+	v := community.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newCommunityContent()
 	// 30% 이상이 반복 문자
 	content.Body = strings.Repeat("ㅋ", 50) + " " + strings.Repeat("ㅋ", 50)
@@ -81,7 +81,7 @@ func TestCommunityValidator_Validate_FloodPattern_ReturnsError(t *testing.T) {
 }
 
 func TestCommunityValidator_Validate_ShortRepeatNotFlood_ReturnsValid(t *testing.T) {
-	v := community.NewValidator(config.DefaultValidateConfig())
+	v := community.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newCommunityContent()
 	// 반복이 짧아서(3회 이하) 도배로 감지되지 않음
 	content.Body = strings.Repeat("ㅋㅋㅋ content is fine here. ", 5)
@@ -95,7 +95,7 @@ func TestCommunityValidator_Validate_ShortRepeatNotFlood_ReturnsValid(t *testing
 }
 
 func TestCommunityValidator_Validate_QualityScoreRange(t *testing.T) {
-	v := community.NewValidator(config.DefaultValidateConfig())
+	v := community.NewValidator(processorcfg.DefaultValidateConfig())
 
 	tests := []struct {
 		name    string

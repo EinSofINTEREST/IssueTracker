@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	appcfg "issuetracker/pkg/config/app"
+	processorcfg "issuetracker/pkg/config/processor"
+	storagecfg "issuetracker/pkg/config/storage"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,7 +15,6 @@ import (
 	"issuetracker/internal/storage/decorator"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/service"
-	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/metrics"
 	"issuetracker/pkg/queue"
@@ -25,7 +27,7 @@ const validateWorkerCount = 8
 func main() {
 	log := logger.New(logger.DefaultConfig())
 
-	logCfg, err := config.LoadLog()
+	logCfg, err := appcfg.LoadLog()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load log config")
 	}
@@ -36,7 +38,7 @@ func main() {
 
 	log.Info("starting IssueTracker processor")
 
-	shutdownCfg, err := config.LoadShutdown()
+	shutdownCfg, err := appcfg.LoadShutdown()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load shutdown config")
 	}
@@ -48,7 +50,7 @@ func main() {
 	ctx = log.ToContext(ctx)
 
 	// ── Metrics endpoint ──────────────────────────────────────────
-	metricsCfg, err := config.LoadMetrics()
+	metricsCfg, err := appcfg.LoadMetrics()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load metrics config")
 	}
@@ -58,7 +60,7 @@ func main() {
 	}
 
 	// ── 1. 검증 임계값 설정 로드 ──────────────────────────────────────────────
-	validateCfg, err := config.LoadValidate()
+	validateCfg, err := processorcfg.LoadValidate()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load validate config")
 	}
@@ -73,7 +75,7 @@ func main() {
 	}).Info("kafka configuration loaded")
 
 	// ── 3. DB 연결 및 ContentService 생성 ────────────────────────────────────
-	dbCfg, err := config.Load()
+	dbCfg, err := storagecfg.Load()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load db config")
 	}
