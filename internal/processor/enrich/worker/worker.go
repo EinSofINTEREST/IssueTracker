@@ -218,7 +218,15 @@ func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, 
 	}
 
 	host := ""
-	if u, perr := url.Parse(ref.URL); perr == nil {
+	// url.Parse 실패 시 host 가 빈 문자열로 남고 extractor 가 degraded 입력을 받는데,
+	// 이는 forward-first 정책 일관 — 다만 진단을 위해 DEBUG 로깅 (coderabbit-review PR #452).
+	if u, perr := url.Parse(ref.URL); perr != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+			"url":    ref.URL,
+		}).WithError(perr).Debug("url parse failed for host extraction, using empty host")
+	} else {
 		host = u.Host
 	}
 

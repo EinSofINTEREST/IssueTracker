@@ -126,19 +126,35 @@ func parseEnrichOutput(output string) (*EnrichedFacts, error) {
 	return &raw, nil
 }
 
-// stripFences 는 markdown code fence (```json ... ```) 를 제거합니다.
+// stripFences 는 응답에서 markdown code fence (```json ... ```) 를 견고하게 제거합니다.
+//
+// 처리 시나리오 (gemini-review PR #452 반영):
+//   - prompt 위반으로 fence 외부에 대화 텍스트 (예: "Here is the JSON:") 가 있어도
+//     첫 fence 의 시작점을 찾아 그 이전 텍스트는 버림.
+//   - 언어 식별자 (json/javascript 등) 가 newline 없이 붙어 있어도 ('json{"k":1}')
+//     JSON 시작 토큰 ({ 또는 [) 까지 skip.
+//   - 닫는 fence 뒤 텍스트가 있어도 last `\x60\x60\x60` 위치로 자름.
+//   - fence 가 전혀 없는 응답은 그대로 trim 만 적용.
 func stripFences(s string) string {
-	if !strings.HasPrefix(s, "```") {
+	s = strings.TrimSpace(s)
+	startIdx := strings.Index(s, "```")
+	if startIdx == -1 {
 		return s
 	}
-	// 첫 줄 (```json 등) 제거
-	if idx := strings.Index(s, "\n"); idx > 0 {
+	// 첫 fence 진입 — 그 이전 텍스트는 무시.
+	s = s[startIdx+3:]
+
+	// 언어 식별자 처리: newline 까지 skip. newline 없으면 JSON 시작 토큰 위치로 점프.
+	if idx := strings.Index(s, "\n"); idx >= 0 {
 		s = s[idx+1:]
-	} else {
-		s = strings.TrimPrefix(s, "```")
+	} else if start := strings.IndexAny(s, "{["); start != -1 {
+		s = s[start:]
 	}
-	// 마지막 ``` 제거
-	s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+
+	// 닫는 fence 위치 (최근 발견) — 뒤쪽 텍스트 제거.
+	if idx := strings.LastIndex(s, "```"); idx != -1 {
+		s = s[:idx]
+	}
 	return strings.TrimSpace(s)
 }
 

@@ -86,6 +86,45 @@ func TestClaudegenExtractor_StripsMarkdownFence(t *testing.T) {
 	assert.Equal(t, extractor.SentimentPositive, got.Sentiment)
 }
 
+// TestClaudegenExtractor_StripsFenceVariants — gemini-review PR #452 반영.
+// stripFences 가 다양한 LLM 응답 변형 (preamble / 언어 ID 무 newline / trailing 텍스트) 에서
+// 견고하게 동작하는지 검증.
+func TestClaudegenExtractor_StripsFenceVariants(t *testing.T) {
+	cases := []struct {
+		name   string
+		stdout string
+	}{
+		{
+			name:   "preamble before fence",
+			stdout: "Here is the JSON:\n```json\n{\"sentiment\":\"positive\"}\n```",
+		},
+		{
+			name:   "language id without newline",
+			stdout: "```json{\"sentiment\":\"positive\"}```",
+		},
+		{
+			name:   "trailing text after closing fence",
+			stdout: "```json\n{\"sentiment\":\"positive\"}\n```\nThanks for asking!",
+		},
+		{
+			name:   "no fence at all",
+			stdout: `{"sentiment":"positive"}`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ex, err := extractor.NewClaudegenExtractor(
+				&stubRunner{stdout: c.stdout},
+				&stubLoader{tpl: "t"},
+			)
+			require.NoError(t, err)
+			got, err := ex.Extract(context.Background(), extractor.Input{})
+			require.NoError(t, err)
+			assert.Equal(t, extractor.SentimentPositive, got.Sentiment, "case %q", c.name)
+		})
+	}
+}
+
 func TestClaudegenExtractor_NilFieldsNormalized(t *testing.T) {
 	// 응답에 entities / claims / facts / topics 가 모두 누락 — empty slice 로 정규화.
 	stdout := `{"sentiment": "neutral"}`
