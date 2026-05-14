@@ -2,6 +2,7 @@ package redisstore_test
 
 import (
 	"context"
+	storagecfg "issuetracker/pkg/config/storage"
 	"testing"
 	"time"
 
@@ -10,7 +11,6 @@ import (
 
 	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
-	"issuetracker/pkg/config"
 	pkgredis "issuetracker/pkg/redis"
 )
 
@@ -18,7 +18,7 @@ import (
 // 미연결 시 통합 테스트 자체 skip (lock_test.go 패턴 동일).
 func newTestRedisClient(t *testing.T) *pkgredis.Client {
 	t.Helper()
-	cfg, err := config.LoadRedis()
+	cfg, err := storagecfg.LoadRedis()
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

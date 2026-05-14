@@ -7,13 +7,13 @@ package wiring
 
 import (
 	"fmt"
+	llmcfg "issuetracker/pkg/config/llm"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/refiner"
 	"issuetracker/internal/storage/repository"
-	"issuetracker/pkg/config"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
@@ -36,7 +36,7 @@ func Build(
 	metricsRegistry *prometheus.Registry,
 	log *logger.Logger,
 ) (*refiner.Refiner, error) {
-	cfg, err := config.LoadRefinement()
+	cfg, err := llmcfg.LoadRefinement()
 	if err != nil {
 		// malformed env 가 silent 로 refiner 를 끄지 않도록 명시적 에러 반환.
 		// (nil, nil) 은 explicit !cfg.Enabled 경로에 한정 — 호출자가 Fatal 결정.

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	processorcfg "issuetracker/pkg/config/processor"
 	"strconv"
 	"testing"
 	"time"
@@ -27,7 +28,6 @@ import (
 	"issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/service"
-	"issuetracker/pkg/config"
 	"issuetracker/pkg/queue"
 )
 
@@ -134,7 +134,7 @@ func TestWorker_Reparse_FirstAttempt_PublishesCrawlJob(t *testing.T) {
 	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
 	contentSvc.On("Delete", mock.Anything, content.ID).Return(nil)
 
-	cfg := config.DefaultValidateConfig()
+	cfg := processorcfg.DefaultValidateConfig()
 	cfg.ReparseEnabled = true
 
 	var publishedCrawlJob queue.Message
@@ -186,7 +186,7 @@ func TestWorker_Reparse_PropagatesOriginalHeaders(t *testing.T) {
 	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
 	contentSvc.On("Delete", mock.Anything, content.ID).Return(nil)
 
-	cfg := config.DefaultValidateConfig()
+	cfg := processorcfg.DefaultValidateConfig()
 	cfg.ReparseEnabled = true
 
 	var publishedCrawlJob queue.Message
@@ -224,7 +224,7 @@ func TestWorker_Reparse_MaxCount_NoCrawlJob(t *testing.T) {
 	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
 	contentSvc.On("UpdateValidationStatus", mock.Anything, content.ID, mock.Anything, mock.Anything).Return(nil)
 
-	cfg := config.DefaultValidateConfig()
+	cfg := processorcfg.DefaultValidateConfig()
 	cfg.ReparseEnabled = true
 
 	crawlPublished := false
@@ -251,7 +251,7 @@ func TestWorker_Reparse_Disabled_NoCrawlJob(t *testing.T) {
 	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
 	contentSvc.On("UpdateValidationStatus", mock.Anything, content.ID, mock.Anything, mock.Anything).Return(nil)
 
-	cfg := config.DefaultValidateConfig()
+	cfg := processorcfg.DefaultValidateConfig()
 	cfg.ReparseEnabled = false // 비활성
 
 	crawlPublished := false

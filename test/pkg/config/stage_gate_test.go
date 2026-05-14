@@ -1,18 +1,18 @@
 package config_test
 
 import (
+	processorcfg "issuetracker/pkg/config/processor"
+	runtimecfg "issuetracker/pkg/config/runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"issuetracker/pkg/config"
 )
 
 func TestLoadStageGate_DefaultValues(t *testing.T) {
 	t.Setenv("FETCHER_MAX_CONCURRENT_PER_STAGE", "")
 	t.Setenv("PARSER_MAX_CONCURRENT_PER_STAGE", "")
 	t.Setenv("VALIDATE_MAX_CONCURRENT_PER_STAGE", "")
-	cfg, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
+	cfg, err := runtimecfg.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	require.Equal(t, 0, cfg.FetcherMaxConcurrentPerStage)
 	require.Equal(t, 0, cfg.ParserMaxConcurrentPerStage)
@@ -23,7 +23,7 @@ func TestLoadStageGate_EnvOverride(t *testing.T) {
 	t.Setenv("FETCHER_MAX_CONCURRENT_PER_STAGE", "2")
 	t.Setenv("PARSER_MAX_CONCURRENT_PER_STAGE", "4")
 	t.Setenv("VALIDATE_MAX_CONCURRENT_PER_STAGE", "5")
-	cfg, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
+	cfg, err := runtimecfg.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	require.Equal(t, 2, cfg.FetcherMaxConcurrentPerStage)
 	require.Equal(t, 4, cfg.ParserMaxConcurrentPerStage)
@@ -32,39 +32,39 @@ func TestLoadStageGate_EnvOverride(t *testing.T) {
 
 func TestLoadStageGate_InvalidValue(t *testing.T) {
 	t.Setenv("PARSER_MAX_CONCURRENT_PER_STAGE", "not-a-number")
-	_, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
+	_, err := runtimecfg.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.Error(t, err)
 }
 
 func TestLoadStageGate_InvalidFetcherValue(t *testing.T) {
 	t.Setenv("FETCHER_MAX_CONCURRENT_PER_STAGE", "abc")
-	_, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
+	_, err := runtimecfg.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.Error(t, err)
 }
 
 func TestLoadStageGate_InvalidValidateValue(t *testing.T) {
 	t.Setenv("VALIDATE_MAX_CONCURRENT_PER_STAGE", "xyz")
-	_, err := config.LoadStageGate("/tmp/nonexistent-env-file.env")
+	_, err := runtimecfg.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.Error(t, err)
 }
 
 func TestLoadValidate_ReparseEnabled_DefaultFalse(t *testing.T) {
 	t.Setenv("VALIDATE_REPARSE_ENABLED", "")
-	cfg, err := config.LoadValidate("/tmp/nonexistent-env-file.env")
+	cfg, err := processorcfg.LoadValidate("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	require.False(t, cfg.ReparseEnabled, "default 는 false (Sub C 머지 후 활성화)")
 }
 
 func TestLoadValidate_ReparseEnabled_True(t *testing.T) {
 	t.Setenv("VALIDATE_REPARSE_ENABLED", "true")
-	cfg, err := config.LoadValidate("/tmp/nonexistent-env-file.env")
+	cfg, err := processorcfg.LoadValidate("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	require.True(t, cfg.ReparseEnabled)
 }
 
 func TestLoadValidate_ReparseEnabled_InvalidValue(t *testing.T) {
 	t.Setenv("VALIDATE_REPARSE_ENABLED", "not-a-bool")
-	_, err := config.LoadValidate("/tmp/nonexistent-env-file.env")
+	_, err := processorcfg.LoadValidate("/tmp/nonexistent-env-file.env")
 	require.Error(t, err)
 }
 
@@ -89,7 +89,7 @@ func TestCapPerStage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := config.CapPerStage(tt.workerCount, tt.configured)
+			got := runtimecfg.CapPerStage(tt.workerCount, tt.configured)
 			require.Equal(t, tt.want, got)
 		})
 	}

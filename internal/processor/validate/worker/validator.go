@@ -8,12 +8,12 @@ package worker
 import (
 	"context"
 	"fmt"
+	processorcfg "issuetracker/pkg/config/processor"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/domain/community"
 	"issuetracker/internal/processor/validate/domain/news"
 	"issuetracker/internal/processor/validate/types"
-	"issuetracker/pkg/config"
 )
 
 // NewValidator 는 SourceType 에 맞는 Validator 를 반환합니다.
@@ -21,7 +21,7 @@ import (
 //
 // NewValidator returns the appropriate Validator for the given SourceType.
 // Defaults to the news validator for unknown or social types.
-func NewValidator(sourceType core.SourceType, cfg config.ValidateConfig) types.Validator {
+func NewValidator(sourceType core.SourceType, cfg processorcfg.ValidateConfig) types.Validator {
 	switch sourceType {
 	case core.SourceTypeCommunity:
 		return community.NewValidator(cfg)

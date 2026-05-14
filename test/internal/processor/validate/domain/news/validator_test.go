@@ -2,6 +2,7 @@ package news_test
 
 import (
 	"context"
+	processorcfg "issuetracker/pkg/config/processor"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,6 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/domain/news"
-	"issuetracker/pkg/config"
 )
 
 func newNewsContent() *core.Content {
@@ -33,7 +33,7 @@ func newNewsContent() *core.Content {
 }
 
 func TestNewsValidator_Validate_ValidContent_ReturnsValid(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 
 	result := v.Validate(context.Background(), content)
@@ -44,7 +44,7 @@ func TestNewsValidator_Validate_ValidContent_ReturnsValid(t *testing.T) {
 }
 
 func TestNewsValidator_Validate_TitleTooShort_ReturnsError(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 	content.Title = "Short"
 
@@ -57,7 +57,7 @@ func TestNewsValidator_Validate_TitleTooShort_ReturnsError(t *testing.T) {
 }
 
 func TestNewsValidator_Validate_TitleTooLong_ReturnsError(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 	content.Title = strings.Repeat("a", 501)
 
@@ -68,7 +68,7 @@ func TestNewsValidator_Validate_TitleTooLong_ReturnsError(t *testing.T) {
 }
 
 func TestNewsValidator_Validate_BodyTooShort_ReturnsError(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 	content.Body = "Too short."
 
@@ -80,7 +80,7 @@ func TestNewsValidator_Validate_BodyTooShort_ReturnsError(t *testing.T) {
 }
 
 func TestNewsValidator_Validate_BodyTooLong_ReturnsError(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 	content.Body = strings.Repeat("a", 50001)
 
@@ -91,7 +91,7 @@ func TestNewsValidator_Validate_BodyTooLong_ReturnsError(t *testing.T) {
 }
 
 func TestNewsValidator_Validate_MissingPublishedAt_ReturnsError(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 	content.Article = true // article=true 룰에서만 PublishedAt 필수 강제 (이슈 #423)
 	content.PublishedAt = time.Time{}
@@ -110,7 +110,7 @@ func TestNewsValidator_Validate_MissingPublishedAt_ReturnsError(t *testing.T) {
 // newNewsContent() 는 다른 모든 검증을 통과하는 유효 컨텐츠이므로 IsValid 가 true 여야 함 —
 // 단순 PublishedAt 필드 부재 체크보다 IsValid 직접 단언이 견고 (gemini PR #424 피드백).
 func TestNewsValidator_Validate_MissingPublishedAt_NonArticle_Passes(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 	content.Article = false // 비-article 페이지
 	content.PublishedAt = time.Time{}
@@ -122,7 +122,7 @@ func TestNewsValidator_Validate_MissingPublishedAt_NonArticle_Passes(t *testing.
 }
 
 func TestNewsValidator_Validate_ExcessiveCaps_ReturnsSpamError(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 	// 30% 이상 대문자
 	content.Title = "THIS IS A VERY LONG TITLE THAT IS ENTIRELY IN UPPERCASE LETTERS"
@@ -142,7 +142,7 @@ func TestNewsValidator_Validate_ExcessiveCaps_ReturnsSpamError(t *testing.T) {
 }
 
 func TestNewsValidator_Validate_QualityScoreRange(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 
 	tests := []struct {
 		name    string
@@ -163,7 +163,7 @@ func TestNewsValidator_Validate_QualityScoreRange(t *testing.T) {
 }
 
 func TestNewsValidator_Validate_MultipleErrors_AllReported(t *testing.T) {
-	v := news.NewValidator(config.DefaultValidateConfig())
+	v := news.NewValidator(processorcfg.DefaultValidateConfig())
 	content := newNewsContent()
 	content.Article = true // article 룰에서만 PublishedAt 필수 강제 (이슈 #423)
 	content.Title = "Short"

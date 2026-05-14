@@ -6,8 +6,7 @@ package redis
 import (
 	"context"
 	"fmt"
-
-	"issuetracker/pkg/config"
+	storagecfg "issuetracker/pkg/config/storage"
 
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -22,7 +21,7 @@ type Client struct {
 // New는 RedisConfig로 새 Redis 클라이언트를 생성하고 Ping으로 연결을 검증합니다.
 //
 // New creates a new Client from RedisConfig and validates the connection with Ping.
-func New(ctx context.Context, cfg config.RedisConfig) (*Client, error) {
+func New(ctx context.Context, cfg storagecfg.RedisConfig) (*Client, error) {
 	rdb := goredis.NewClient(&goredis.Options{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Password:     cfg.Password,

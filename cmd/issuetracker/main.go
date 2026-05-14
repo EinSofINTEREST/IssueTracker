@@ -2,6 +2,12 @@ package main
 
 import (
 	"context"
+	appcfg "issuetracker/pkg/config/app"
+	fetchercfg "issuetracker/pkg/config/fetcher"
+	llmcfg "issuetracker/pkg/config/llm"
+	processorcfg "issuetracker/pkg/config/processor"
+	runtimecfg "issuetracker/pkg/config/runtime"
+	storagecfg "issuetracker/pkg/config/storage"
 	"os"
 	"os/signal"
 	"syscall"
@@ -33,7 +39,6 @@ import (
 	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/internal/storage/service"
-	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/llm/prompt"
 	llmwiring "issuetracker/pkg/llm/wiring"
@@ -49,7 +54,7 @@ import (
 func main() {
 	log := logger.New(logger.DefaultConfig())
 
-	logCfg, err := config.LoadLog()
+	logCfg, err := appcfg.LoadLog()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load log config")
 	}
@@ -60,7 +65,7 @@ func main() {
 
 	log.Info("starting IssueTracker")
 
-	shutdownCfg, err := config.LoadShutdown()
+	shutdownCfg, err := appcfg.LoadShutdown()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load shutdown config")
 	}
@@ -71,7 +76,7 @@ func main() {
 
 	// 모든 stage 의 worker goroutine 수를 env 로 노출 (이슈 #376).
 	// default 는 기존 hardcoded 값과 동일 — env 미설정 시 동작 100% 보존.
-	workerCountsCfg, err := config.LoadWorkerCounts()
+	workerCountsCfg, err := runtimecfg.LoadWorkerCounts()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load worker counts config")
 	}
@@ -90,7 +95,7 @@ func main() {
 
 	// ── Metrics endpoint ──────────────────────────────────────────
 	// METRICS_ADDR 빈 값이면 endpoint 비활성화. default ":9090".
-	metricsCfg, err := config.LoadMetrics()
+	metricsCfg, err := appcfg.LoadMetrics()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load metrics config")
 	}
@@ -126,7 +131,7 @@ func main() {
 
 	registry := handler.NewRegistry(log)
 
-	dbCfg, err := config.Load()
+	dbCfg, err := storagecfg.Load()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load db config")
 	}
@@ -166,7 +171,7 @@ func main() {
 	//
 	// BlacklistService (이슈 #431) 가 decorator chain (timeout + invalidating cache) 을 내부 합성 +
 	// HandleLLMDecision 비즈니스 로직 캡슐화. Matcher 는 별도 구성 — read-only cache + match.
-	blacklistCfg, err := config.LoadBlacklist()
+	blacklistCfg, err := processorcfg.LoadBlacklist()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load blacklist config")
 	}
@@ -227,7 +232,7 @@ func main() {
 
 	// chromedp pool config 를 사이트 등록 전에 로드 — 사이트별 chromedp chain 이
 	// worker_id 별 RemoteURL 로 N 개 build 되어야 ChainHandler 가 worker:Chrome 1:1 매핑 활성화.
-	chromedpPoolCfg, err := config.LoadFetcherChromedpPool()
+	chromedpPoolCfg, err := fetchercfg.LoadFetcherChromedpPool()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load fetcher chromedp pool config")
 	}
@@ -254,7 +259,7 @@ func main() {
 	// Search handler (Google CSE) — optional. APIKey/CX 미설정이면 wire skip.
 	// scheduler_entries 의 category='search' entry 가 fetcher 에 도달했을 때 본 handler 가 호출되어
 	// keyword × CSE fanout → host 단위 chained article job 발행.
-	googleCSECfg, err := config.LoadGoogleCSE()
+	googleCSECfg, err := llmcfg.LoadGoogleCSE()
 	if err != nil {
 		log.WithError(err).Warn("failed to load google cse config — search handler disabled")
 	} else if !googleCSECfg.IsConfigured() {
@@ -302,7 +307,7 @@ func main() {
 	var retryScheduler bus.RetryScheduler
 	var retrySchedulerStop func()
 	var redisClientShared *redis.Client // failure counter wiring 에서 재사용
-	redisCfg, err := config.LoadRedis()
+	redisCfg, err := storagecfg.LoadRedis()
 	if err != nil {
 		log.WithError(err).Warn("failed to load redis config, falling back to noop processing lock and ingestion lock")
 	} else {
@@ -324,7 +329,7 @@ func main() {
 			// Redis 부재 시 worker 가 lazy 로 KafkaImmediateRetryScheduler 를 사용 (기존 동작).
 			retryCfg := bus.DefaultRedisRetrySchedulerConfig()
 			// idle heartbeat 압축 (이슈 #370) — pkg/config 로 env 로드 일관성 유지.
-			retrySchedCfg, retrySchedErr := config.LoadRetryScheduler()
+			retrySchedCfg, retrySchedErr := runtimecfg.LoadRetryScheduler()
 			if retrySchedErr != nil {
 				log.WithError(retrySchedErr).Fatal("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS 로드 실패")
 			}
@@ -365,7 +370,7 @@ func main() {
 
 	// StageGate 설정 (이슈 #353/#355/#356) — fetcher / parser / validator 의 per-stage Semaphore cap.
 	// 환경변수로 명시 cap 제공, 미지정 시 각 stage 의 worker_count/2 자동.
-	stageGateCfg, err := config.LoadStageGate()
+	stageGateCfg, err := runtimecfg.LoadStageGate()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load stage gate config")
 	}
@@ -385,9 +390,9 @@ func main() {
 		"high":       managerCfg.High.WorkerCount,
 		"normal":     managerCfg.Normal.WorkerCount,
 		"low":        managerCfg.Low.WorkerCount,
-		"high_cap":   config.CapPerStage(managerCfg.High.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
-		"normal_cap": config.CapPerStage(managerCfg.Normal.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
-		"low_cap":    config.CapPerStage(managerCfg.Low.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
+		"high_cap":   runtimecfg.CapPerStage(managerCfg.High.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
+		"normal_cap": runtimecfg.CapPerStage(managerCfg.Normal.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
+		"low_cap":    runtimecfg.CapPerStage(managerCfg.Low.WorkerCount, stageGateCfg.FetcherMaxConcurrentPerStage),
 	}).Info("fetcher stage gate config loaded (per-pool cap = min(configured, worker_count/2))")
 
 	// chromedp 전용 worker pool — semaphore 로 Chrome 동시 호출 제한.
@@ -460,7 +465,7 @@ func main() {
 	// LLM 비활성 환경에서 prompt 디렉토리 부재로 인한 boot 실패 회피.
 	var promptLoader prompt.Loader
 	if llmProvider != nil {
-		promptCfg, pcErr := config.LoadPrompt()
+		promptCfg, pcErr := llmcfg.LoadPrompt()
 		if pcErr != nil {
 			log.WithError(pcErr).Fatal("failed to load prompt config")
 		}
@@ -483,7 +488,7 @@ func main() {
 	// ── Fetcher 실패 카운터 ────────────────────────────────────────
 	// host 단위 fetcher 실패를 sliding window 로 누적 — 단계 3 (#221) 의 chromedp 자동 전환
 	// 트리거 입력. ENABLED=false 또는 Redis 미연결 시 Noop (성능 저하 0).
-	fetcherUpgradeCfg, err := config.LoadFetcherAutoUpgrade()
+	fetcherUpgradeCfg, err := fetchercfg.LoadFetcherAutoUpgrade()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load fetcher auto-upgrade config")
 	}
@@ -576,7 +581,7 @@ func main() {
 	// Parser StageGate (이슈 #355) — ProcessingLock + per-stage Semaphore 합성.
 	// Semaphore capacity 는 PARSER_MAX_CONCURRENT_PER_STAGE 와 worker_count/2 의 min.
 	// stageGateCfg 는 fetcher managerCfg 직전 (위쪽) 에서 이미 로드.
-	parserCap := config.CapPerStage(workerCountsCfg.Parser, stageGateCfg.ParserMaxConcurrentPerStage)
+	parserCap := runtimecfg.CapPerStage(workerCountsCfg.Parser, stageGateCfg.ParserMaxConcurrentPerStage)
 	parserGate := locks.BuildStageGate(locks.StageParser, parserCap, procLock, log)
 	if procLock != nil {
 		log.WithFields(map[string]interface{}{
@@ -629,7 +634,7 @@ func main() {
 	// host 단위 stale parse failure 누적 — 임계 도달 시 Generator.EnqueueStale 트리거.
 	// FetcherAutoUpgrade 와 별개 keyspace + 더 긴 윈도우 / 더 높은 임계값 — chromedp 전환이
 	// 먼저 시도되고, 그래도 실패 지속 시 LLM 재학습 (InsertNextVersion 으로 v+1 추가).
-	staleRelearnCfg, err := config.LoadStaleRelearn()
+	staleRelearnCfg, err := processorcfg.LoadStaleRelearn()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load stale relearn config")
 	}
@@ -745,7 +750,7 @@ func main() {
 	cleaner := parserWorker.NewRawContentCleaner(rawSvc, parserWorker.CleanupConfig{}, log)
 
 	// ── Scheduler (시드 Job 발행) ─────────────────────────────────────────────
-	schedulerCfg, err := config.LoadScheduler()
+	schedulerCfg, err := processorcfg.LoadScheduler()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load scheduler config")
 	}
@@ -806,7 +811,7 @@ func main() {
 	// Processor (Validate)
 	// ══════════════════════════════════════════════════════════════════════════
 
-	validateCfg, err := config.LoadValidate()
+	validateCfg, err := processorcfg.LoadValidate()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load validate config")
 	}
@@ -825,7 +830,7 @@ func main() {
 	validatePublisher := bus.New(validateProducer, nil, log)
 
 	// Validate StageGate (이슈 #356) — ProcessingLock + per-stage Semaphore 합성.
-	validateCap := config.CapPerStage(workerCountsCfg.Validate, stageGateCfg.ValidateMaxConcurrentPerStage)
+	validateCap := runtimecfg.CapPerStage(workerCountsCfg.Validate, stageGateCfg.ValidateMaxConcurrentPerStage)
 	validateGate := locks.BuildStageGate(locks.StageValidator, validateCap, procLock, log)
 	if procLock != nil {
 		log.WithFields(map[string]interface{}{
@@ -865,7 +870,7 @@ func main() {
 	// chromedp 자동 upgrade 의 자가 회복 안전장치 — interval 마다 reason='auto_upgrade_validation'
 	// row 를 goquery 로 reset. ENABLED=false 시 stage 미등록 (단계 3 의 upgrade-only 동작 유지).
 	stages := []processor.Stage{fetcherStage, parserStg, validateStage}
-	downgradeCfg, err := config.LoadFetcherAutoDowngrade()
+	downgradeCfg, err := fetchercfg.LoadFetcherAutoDowngrade()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load fetcher auto-downgrade config")
 	}

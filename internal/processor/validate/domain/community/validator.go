@@ -8,12 +8,12 @@ package community
 import (
 	"context"
 	"fmt"
+	processorcfg "issuetracker/pkg/config/processor"
 	"strings"
 	"unicode/utf8"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/types"
-	"issuetracker/pkg/config"
 )
 
 // Validator는 커뮤니티 컨텐츠 전용 검증기입니다.
@@ -21,11 +21,11 @@ import (
 // Validator is the community-specific content validator.
 // It applies lenient rules suited for informal community posts.
 type Validator struct {
-	cfg config.ValidateConfig
+	cfg processorcfg.ValidateConfig
 }
 
 // NewValidator는 새로운 커뮤니티 Validator를 반환합니다.
-func NewValidator(cfg config.ValidateConfig) *Validator {
+func NewValidator(cfg processorcfg.ValidateConfig) *Validator {
 	return &Validator{cfg: cfg}
 }
 

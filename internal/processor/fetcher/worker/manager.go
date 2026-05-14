@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	runtimecfg "issuetracker/pkg/config/runtime"
 	"sync"
 
 	"issuetracker/internal/bus"
@@ -10,16 +11,15 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/precheck"
 	"issuetracker/internal/storage/service"
-	"issuetracker/pkg/config"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 	"issuetracker/pkg/resilience"
 )
 
 // buildStageCap 은 fetcher pool 의 Semaphore capacity 를 계산합니다.
-// pkg/config.CapPerStage 의 정책을 본 패키지에서도 사용 — 동일 규칙 (worker_count/2 floor, min cap).
+// pkg/runtimecfg.CapPerStage 의 정책을 본 패키지에서도 사용 — 동일 규칙 (worker_count/2 floor, min cap).
 func buildStageCap(workerCount, configured int) int {
-	return config.CapPerStage(workerCount, configured)
+	return runtimecfg.CapPerStage(workerCount, configured)
 }
 
 // ─────────────────────────────────────────────────────────────────────────

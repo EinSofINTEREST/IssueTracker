@@ -2,21 +2,21 @@ package redis_test
 
 import (
 	"context"
+	storagecfg "issuetracker/pkg/config/storage"
 	"testing"
 	"time"
 
+	pkgredis "issuetracker/pkg/redis"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"issuetracker/pkg/config"
-	pkgredis "issuetracker/pkg/redis"
 )
 
 // newTestClient는 로컬 Redis에 연결하는 테스트용 클라이언트를 반환합니다.
 // REDIS_HOST/PORT 환경변수로 주소를 변경할 수 있습니다.
 func newTestClient(t *testing.T) *pkgredis.Client {
 	t.Helper()
-	cfg, err := config.LoadRedis()
+	cfg, err := storagecfg.LoadRedis()
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

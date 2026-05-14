@@ -8,13 +8,13 @@ package news
 import (
 	"context"
 	"fmt"
+	processorcfg "issuetracker/pkg/config/processor"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/validate/types"
-	"issuetracker/pkg/config"
 )
 
 // Validator는 뉴스 컨텐츠 전용 검증기입니다.
@@ -22,11 +22,11 @@ import (
 // Validator is the news-specific content validator.
 // It enforces news domain rules and computes a quality score.
 type Validator struct {
-	cfg config.ValidateConfig
+	cfg processorcfg.ValidateConfig
 }
 
 // NewValidator는 새로운 뉴스 Validator를 반환합니다.
-func NewValidator(cfg config.ValidateConfig) *Validator {
+func NewValidator(cfg processorcfg.ValidateConfig) *Validator {
 	return &Validator{cfg: cfg}
 }
 

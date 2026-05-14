@@ -7,20 +7,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	storagecfg "issuetracker/pkg/config/storage"
 	"time"
+
+	"issuetracker/pkg/logger"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"issuetracker/pkg/config"
-	"issuetracker/pkg/logger"
 )
 
 // NewPool은 DBConfig를 기반으로 pgxpool.Pool을 생성하고 연결을 확인합니다.
 // 연결이 실패하면 즉시 에러를 반환합니다.
 //
 // query-level timeout (이슈 #427) 은 Repository decorator 에서 적용 — WrapXxxWithTimeout 사용.
-func NewPool(ctx context.Context, cfg config.DBConfig, log *logger.Logger) (*pgxpool.Pool, error) {
+func NewPool(ctx context.Context, cfg storagecfg.DBConfig, log *logger.Logger) (*pgxpool.Pool, error) {
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN())
 	if err != nil {
 		return nil, fmt.Errorf("parse db config: %w", err)

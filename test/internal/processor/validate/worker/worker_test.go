@@ -18,7 +18,7 @@ import (
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/service"
-	"issuetracker/pkg/config"
+	processorcfg "issuetracker/pkg/config/processor"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
 )
@@ -166,7 +166,7 @@ func makeProcessingMessage(content *core.Content, retryCount int) *queue.Message
 }
 
 func newWorker(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService) *worker.Worker {
-	return worker.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, config.DefaultValidateConfig())
+	return worker.NewWorker(consumer, newTestPublisher(producer), contentSvc, locks.NewNoopStageGate(), 1, processorcfg.DefaultValidateConfig())
 }
 
 func runWorker(t *testing.T, consumer *mockConsumer, w *worker.Worker, msg *queue.Message) {
@@ -365,7 +365,7 @@ func TestValidateWorker_NewValidator_DispatchesBySourceType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := worker.NewValidator(tt.sourceType, config.DefaultValidateConfig())
+			v := worker.NewValidator(tt.sourceType, processorcfg.DefaultValidateConfig())
 			assert.NotNil(t, v)
 		})
 	}

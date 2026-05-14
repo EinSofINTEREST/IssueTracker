@@ -6,19 +6,19 @@ package wiring
 
 import (
 	"fmt"
+	llmcfg "issuetracker/pkg/config/llm"
 	"math"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/prometheus/client_golang/prometheus"
-
-	"issuetracker/pkg/config"
 	"issuetracker/pkg/llm"
 	"issuetracker/pkg/llm/chain"
 	"issuetracker/pkg/llm/policy"
 	_ "issuetracker/pkg/llm/providers"
 	"issuetracker/pkg/logger"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // lookupProviderAPIKey 는 provider 별 표준 환경변수의 *값* 을 반환합니다.
@@ -102,7 +102,7 @@ func BuildProvider(log *logger.Logger) llm.Provider {
 //
 // llmgen 과 refiner 가 동일 provider 를 공유 — 환경변수 1세트 (LLM_*) 로 두 컴포넌트 동시 제어.
 func BuildProviderWithOptions(log *logger.Logger, opts Options) llm.Provider {
-	cfg, err := config.LoadLLM()
+	cfg, err := llmcfg.LoadLLM()
 	if err != nil {
 		log.WithError(err).Warn("failed to load LLM config, llm provider disabled")
 		return nil
