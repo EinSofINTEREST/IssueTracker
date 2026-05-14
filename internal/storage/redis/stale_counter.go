@@ -11,7 +11,8 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/primitive"
 	"issuetracker/pkg/logger"
 )
 
@@ -32,7 +33,7 @@ type staleCounter struct {
 //
 // client nil / threshold<1 / window<=0 시 error.
 // keyPrefix 가 빈 문자열이면 "stale:relearn" 사용.
-func NewStaleCounter(client *goredis.Client, threshold int, window time.Duration, keyPrefix string, log *logger.Logger) (storage.StaleCounter, error) {
+func NewStaleCounter(client *goredis.Client, threshold int, window time.Duration, keyPrefix string, log *logger.Logger) (primitive.StaleCounter, error) {
 	if client == nil {
 		return nil, errors.New("redisstore: NewStaleCounter requires non-nil redis client")
 	}
@@ -54,11 +55,11 @@ func NewStaleCounter(client *goredis.Client, threshold int, window time.Duration
 	}, nil
 }
 
-func (r *staleCounter) keyFor(host string, t storage.TargetType) string {
+func (r *staleCounter) keyFor(host string, t model.TargetType) string {
 	return r.keyPrefix + ":" + host + ":" + string(t)
 }
 
-func (r *staleCounter) Record(ctx context.Context, host string, t storage.TargetType) (int, bool, error) {
+func (r *staleCounter) Record(ctx context.Context, host string, t model.TargetType) (int, bool, error) {
 	if host == "" {
 		return 0, false, nil
 	}

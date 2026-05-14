@@ -13,6 +13,8 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -23,7 +25,7 @@ type pgRawContentRepository struct {
 }
 
 // NewRawContentRepository는 pgxpool을 사용하는 RawContentRepository를 생성합니다.
-func NewRawContentRepository(pool *pgxpool.Pool, log *logger.Logger) storage.RawContentRepository {
+func NewRawContentRepository(pool *pgxpool.Pool, log *logger.Logger) repository.RawContentRepository {
 	return &pgRawContentRepository{pool: pool, log: log}
 }
 
@@ -107,7 +109,7 @@ func (r *pgRawContentRepository) GetByURL(ctx context.Context, url string) (*cor
 }
 
 // List는 필터 조건에 맞는 RawContent 목록을 반환합니다.
-func (r *pgRawContentRepository) List(ctx context.Context, filter storage.RawContentFilter) ([]*core.RawContent, error) {
+func (r *pgRawContentRepository) List(ctx context.Context, filter model.RawContentFilter) ([]*core.RawContent, error) {
 	query, args := buildRawContentListQuery(filter)
 
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -194,7 +196,7 @@ func scanRawContent(row pgx.Row) (*core.RawContent, error) {
 }
 
 // buildRawContentListQuery는 RawContentFilter를 기반으로 동적 SELECT 쿼리를 생성합니다.
-func buildRawContentListQuery(filter storage.RawContentFilter) (string, []any) {
+func buildRawContentListQuery(filter model.RawContentFilter) (string, []any) {
 	base := `
     SELECT id, url, html, status_code, fetched_at,
            source_country, source_type, source_name, source_base_url, source_language,
@@ -215,7 +217,7 @@ func buildRawContentListQuery(filter storage.RawContentFilter) (string, []any) {
 }
 
 // buildRawContentWhere는 RawContentFilter를 기반으로 WHERE 절과 인자 목록을 반환합니다.
-func buildRawContentWhere(filter storage.RawContentFilter) (string, []any) {
+func buildRawContentWhere(filter model.RawContentFilter) (string, []any) {
 	var conditions []string
 	var args []any
 	n := 1

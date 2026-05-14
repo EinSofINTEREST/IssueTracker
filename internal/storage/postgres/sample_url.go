@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -22,7 +24,7 @@ type pgSampleURLRepository struct {
 //
 // log 는 다른 Repository 와 시그니처 일관성을 위해 인자에 유지하지만 현재 미사용 (NewParserRuleRepository
 // 와 동일 패턴 — Gemini code review #8).
-func NewSampleURLRepository(pool *pgxpool.Pool, log *logger.Logger) storage.SampleURLRepository {
+func NewSampleURLRepository(pool *pgxpool.Pool, log *logger.Logger) repository.SampleURLRepository {
 	_ = log
 	return &pgSampleURLRepository{pool: pool}
 }
@@ -52,7 +54,7 @@ func (r *pgSampleURLRepository) Insert(ctx context.Context, ruleID int64, url st
 	if err != nil {
 		return fmt.Errorf("count samples for cap check: %w", err)
 	}
-	if count >= storage.SampleCapPerRule {
+	if count >= model.SampleCapPerRule {
 		return nil // skip — 정상 흐름
 	}
 
@@ -84,7 +86,7 @@ LIMIT $2
 `
 
 // List 는 rule_id 의 sample 들을 observed_at DESC 순으로 limit 만큼 반환합니다.
-func (r *pgSampleURLRepository) List(ctx context.Context, ruleID int64, limit int) ([]*storage.SampleURL, error) {
+func (r *pgSampleURLRepository) List(ctx context.Context, ruleID int64, limit int) ([]*model.SampleURL, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -94,9 +96,9 @@ func (r *pgSampleURLRepository) List(ctx context.Context, ruleID int64, limit in
 	}
 	defer rows.Close()
 
-	var out []*storage.SampleURL
+	var out []*model.SampleURL
 	for rows.Next() {
-		s := &storage.SampleURL{}
+		s := &model.SampleURL{}
 		if scanErr := rows.Scan(&s.ID, &s.RuleID, &s.URL, &s.ObservedAt); scanErr != nil {
 			return nil, fmt.Errorf("scan sample row: %w", scanErr)
 		}

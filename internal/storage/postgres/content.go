@@ -13,6 +13,8 @@ import (
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -36,7 +38,7 @@ type pgContentRepository struct {
 }
 
 // NewContentRepository는 pgxpool을 사용하는 ContentRepository를 생성합니다.
-func NewContentRepository(pool *pgxpool.Pool, log *logger.Logger) storage.ContentRepository {
+func NewContentRepository(pool *pgxpool.Pool, log *logger.Logger) repository.ContentRepository {
 	return &pgContentRepository{pool: pool, log: log}
 }
 
@@ -129,7 +131,7 @@ func (r *pgContentRepository) GetByContentHash(ctx context.Context, hash string)
 // List는 필터 조건에 맞는 content 목록을 반환합니다.
 // contents + content_bodies(summary, word_count만) LEFT JOIN.
 // body, image_urls, extra는 목록에서 제외됩니다.
-func (r *pgContentRepository) List(ctx context.Context, filter storage.ContentFilter) ([]*core.Content, error) {
+func (r *pgContentRepository) List(ctx context.Context, filter model.ContentFilter) ([]*core.Content, error) {
 	query, args := buildContentListQuery(filter)
 
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -151,7 +153,7 @@ func (r *pgContentRepository) List(ctx context.Context, filter storage.ContentFi
 }
 
 // Count는 필터 조건에 맞는 content 총 개수를 반환합니다.
-func (r *pgContentRepository) Count(ctx context.Context, filter storage.ContentFilter) (int64, error) {
+func (r *pgContentRepository) Count(ctx context.Context, filter model.ContentFilter) (int64, error) {
 	query, args := buildContentCountQuery(filter)
 
 	var count int64
@@ -204,7 +206,7 @@ func (r *pgContentRepository) UpdateValidationStatus(ctx context.Context, id, st
 		codeArg   any
 		detailArg any
 	)
-	if status == storage.ValidationStatusRejected {
+	if status == model.ValidationStatusRejected {
 		if code != "" {
 			codeArg = code
 		}
@@ -425,7 +427,7 @@ func scanContentList(row pgx.Row) (*core.Content, error) {
 }
 
 // buildContentListQuery는 ContentFilter를 기반으로 동적 SELECT 쿼리를 생성합니다.
-func buildContentListQuery(filter storage.ContentFilter) (string, []any) {
+func buildContentListQuery(filter model.ContentFilter) (string, []any) {
 	where, args := buildContentWhere(filter)
 
 	limit := filter.Pagination.Limit
@@ -445,14 +447,14 @@ func buildContentListQuery(filter storage.ContentFilter) (string, []any) {
 }
 
 // buildContentCountQuery는 ContentFilter를 기반으로 COUNT 쿼리를 생성합니다.
-func buildContentCountQuery(filter storage.ContentFilter) (string, []any) {
+func buildContentCountQuery(filter model.ContentFilter) (string, []any) {
 	where, args := buildContentWhere(filter)
 	return "SELECT COUNT(*) FROM contents c" + where, args
 }
 
 // buildContentWhere는 ContentFilter를 기반으로 WHERE 절과 인자 목록을 반환합니다.
 // 제로값 필드는 조건에서 제외됩니다.
-func buildContentWhere(filter storage.ContentFilter) (string, []any) {
+func buildContentWhere(filter model.ContentFilter) (string, []any) {
 	var conditions []string
 	var args []any
 	n := 1

@@ -6,12 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/primitive"
 	"sync"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-
-	"issuetracker/internal/storage"
 )
 
 // DefaultInflightLockTTL 은 Redis 분산 Lock 의 기본 TTL 입니다.
@@ -47,7 +47,7 @@ type inflightLocker struct {
 //
 // rdb 가 nil 이면 error 반환 — wiring 시 panic-on-nil 정책 (다른 redisstore 생성자와 일관).
 // ttl ≤ 0 이면 DefaultInflightLockTTL 로 보정.
-func NewInflightLocker(rdb *goredis.Client, ttl time.Duration) (storage.InflightLocker, error) {
+func NewInflightLocker(rdb *goredis.Client, ttl time.Duration) (primitive.InflightLocker, error) {
 	if rdb == nil {
 		return nil, errors.New("redisstore: NewInflightLocker requires non-nil redis client")
 	}
@@ -57,7 +57,7 @@ func NewInflightLocker(rdb *goredis.Client, ttl time.Duration) (storage.Inflight
 	return &inflightLocker{rdb: rdb, ttl: ttl, tokens: make(map[string]string)}, nil
 }
 
-func (r *inflightLocker) TryAcquire(ctx context.Context, host string, targetType storage.TargetType) (bool, error) {
+func (r *inflightLocker) TryAcquire(ctx context.Context, host string, targetType model.TargetType) (bool, error) {
 	key := r.key(host, targetType)
 	token := newLockToken()
 
@@ -79,7 +79,7 @@ func (r *inflightLocker) TryAcquire(ctx context.Context, host string, targetType
 	return true, nil
 }
 
-func (r *inflightLocker) Release(ctx context.Context, host string, targetType storage.TargetType) error {
+func (r *inflightLocker) Release(ctx context.Context, host string, targetType model.TargetType) error {
 	key := r.key(host, targetType)
 
 	r.mu.Lock()
@@ -100,7 +100,7 @@ func (r *inflightLocker) Release(ctx context.Context, host string, targetType st
 	return nil
 }
 
-func (r *inflightLocker) key(host string, targetType storage.TargetType) string {
+func (r *inflightLocker) key(host string, targetType model.TargetType) string {
 	return inflightKeyPrefix + host + ":" + string(targetType)
 }
 

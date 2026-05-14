@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -21,7 +23,7 @@ type pgSearchKeywordRepository struct {
 // NewSearchKeywordRepository 는 pgxpool 을 사용하는 SearchKeywordRepository 를 생성합니다.
 //
 // log 는 다른 Repository 들과 시그니처 일관성 유지용 — 현재 미사용.
-func NewSearchKeywordRepository(pool *pgxpool.Pool, log *logger.Logger) (storage.SearchKeywordRepository, error) {
+func NewSearchKeywordRepository(pool *pgxpool.Pool, log *logger.Logger) (repository.SearchKeywordRepository, error) {
 	if pool == nil {
 		return nil, errors.New("postgres: NewSearchKeywordRepository requires non-nil pool")
 	}
@@ -42,14 +44,14 @@ ORDER BY id
 `
 
 // ListEnabled 는 enabled=TRUE keyword 를 반환합니다.
-func (r *pgSearchKeywordRepository) ListEnabled(ctx context.Context, language, region string) ([]*storage.SearchKeywordRecord, error) {
+func (r *pgSearchKeywordRepository) ListEnabled(ctx context.Context, language, region string) ([]*model.SearchKeywordRecord, error) {
 	rows, err := r.pool.Query(ctx, sqlListEnabledSearchKeywords, language, region)
 	if err != nil {
 		return nil, fmt.Errorf("query search_keywords: %w", err)
 	}
 	defer rows.Close()
 
-	var out []*storage.SearchKeywordRecord
+	var out []*model.SearchKeywordRecord
 	for rows.Next() {
 		rec, err := scanSearchKeyword(rows)
 		if err != nil {
@@ -70,12 +72,12 @@ RETURNING id, created_at, updated_at
 `
 
 // Insert 는 새 keyword 를 INSERT 합니다. UNIQUE 충돌 시 ErrDuplicate.
-func (r *pgSearchKeywordRepository) Insert(ctx context.Context, rec *storage.SearchKeywordRecord) error {
+func (r *pgSearchKeywordRepository) Insert(ctx context.Context, rec *model.SearchKeywordRecord) error {
 	if rec.Keyword == "" {
 		return fmt.Errorf("%w: keyword must be non-empty", storage.ErrInvalid)
 	}
 	if rec.Source == "" {
-		rec.Source = storage.SearchKeywordSourceManual
+		rec.Source = model.SearchKeywordSourceManual
 	}
 	row := r.pool.QueryRow(ctx, sqlInsertSearchKeyword,
 		rec.Keyword, rec.Enabled, string(rec.Source), rec.Language, rec.Region, rec.Notes,
@@ -97,9 +99,9 @@ RETURNING updated_at
 `
 
 // Update 는 ID 기준으로 row 를 갱신합니다 (keyword 자체는 변경 불가).
-func (r *pgSearchKeywordRepository) Update(ctx context.Context, rec *storage.SearchKeywordRecord) error {
+func (r *pgSearchKeywordRepository) Update(ctx context.Context, rec *model.SearchKeywordRecord) error {
 	if rec.Source == "" {
-		rec.Source = storage.SearchKeywordSourceManual
+		rec.Source = model.SearchKeywordSourceManual
 	}
 	row := r.pool.QueryRow(ctx, sqlUpdateSearchKeyword,
 		rec.ID, rec.Enabled, string(rec.Source), rec.Language, rec.Region, rec.Notes,
@@ -142,8 +144,8 @@ func (r *pgSearchKeywordRepository) MarkSearched(ctx context.Context, id int64, 
 }
 
 // scanSearchKeyword 는 Row/Rows 에서 SearchKeywordRecord 를 스캔합니다.
-func scanSearchKeyword(s scanner) (*storage.SearchKeywordRecord, error) {
-	rec := &storage.SearchKeywordRecord{}
+func scanSearchKeyword(s scanner) (*model.SearchKeywordRecord, error) {
+	rec := &model.SearchKeywordRecord{}
 	var source string
 	if err := s.Scan(
 		&rec.ID, &rec.Keyword, &rec.Enabled, &source, &rec.Language, &rec.Region,
@@ -151,6 +153,6 @@ func scanSearchKeyword(s scanner) (*storage.SearchKeywordRecord, error) {
 	); err != nil {
 		return nil, err
 	}
-	rec.Source = storage.SearchKeywordSource(source)
+	rec.Source = model.SearchKeywordSource(source)
 	return rec, nil
 }

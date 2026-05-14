@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
@@ -23,7 +25,7 @@ type pgSchedulerEntryRepository struct {
 // NewSchedulerEntryRepository 는 pgxpool 을 사용하는 SchedulerEntryRepository 를 생성합니다.
 //
 // log 인자는 다른 Repository 들의 시그니처 일관성 유지용 — 현재 구현은 미사용.
-func NewSchedulerEntryRepository(pool *pgxpool.Pool, log *logger.Logger) (storage.SchedulerEntryRepository, error) {
+func NewSchedulerEntryRepository(pool *pgxpool.Pool, log *logger.Logger) (repository.SchedulerEntryRepository, error) {
 	if pool == nil {
 		return nil, errors.New("postgres: NewSchedulerEntryRepository requires non-nil pool")
 	}
@@ -48,7 +50,7 @@ ORDER BY id
 `
 
 // ListEnabled 는 enabled=TRUE row 를 반환합니다. category 가 빈 문자열이면 전체.
-func (r *pgSchedulerEntryRepository) ListEnabled(ctx context.Context, category storage.SchedulerCategory) ([]*storage.SchedulerEntryRecord, error) {
+func (r *pgSchedulerEntryRepository) ListEnabled(ctx context.Context, category model.SchedulerCategory) ([]*model.SchedulerEntryRecord, error) {
 	var (
 		rows pgx.Rows
 		err  error
@@ -63,7 +65,7 @@ func (r *pgSchedulerEntryRepository) ListEnabled(ctx context.Context, category s
 	}
 	defer rows.Close()
 
-	var out []*storage.SchedulerEntryRecord
+	var out []*model.SchedulerEntryRecord
 	for rows.Next() {
 		rec, err := scanSchedulerEntry(rows)
 		if err != nil {
@@ -87,7 +89,7 @@ RETURNING id, created_at, updated_at
 `
 
 // Insert 는 새 entry 를 INSERT 합니다. (category, source_name, url) UNIQUE 충돌 시 ErrDuplicate.
-func (r *pgSchedulerEntryRepository) Insert(ctx context.Context, rec *storage.SchedulerEntryRecord) error {
+func (r *pgSchedulerEntryRepository) Insert(ctx context.Context, rec *model.SchedulerEntryRecord) error {
 	if rec.Interval < time.Second {
 		// sub-second interval 은 INTEGER seconds 컬럼 변환 시 truncate 되어 0 또는 정확하지 않은
 		// 값으로 저장됨 (CodeRabbit Minor 반영). 1초 미만 interval 은 무의미하므로 명시 거부.
@@ -121,7 +123,7 @@ RETURNING updated_at
 `
 
 // Update 는 ID 기준으로 row 를 갱신합니다 (자연키 변경 불가).
-func (r *pgSchedulerEntryRepository) Update(ctx context.Context, rec *storage.SchedulerEntryRecord) error {
+func (r *pgSchedulerEntryRepository) Update(ctx context.Context, rec *model.SchedulerEntryRecord) error {
 	if rec.Interval < time.Second {
 		// sub-second interval 은 INTEGER seconds 컬럼 변환 시 truncate 되어 0 또는 정확하지 않은
 		// 값으로 저장됨 (CodeRabbit Minor 반영). 1초 미만 interval 은 무의미하므로 명시 거부.
@@ -155,8 +157,8 @@ func (r *pgSchedulerEntryRepository) Delete(ctx context.Context, id int64) error
 }
 
 // scanSchedulerEntry 는 Row/Rows 에서 SchedulerEntryRecord 를 스캔합니다.
-func scanSchedulerEntry(s scanner) (*storage.SchedulerEntryRecord, error) {
-	rec := &storage.SchedulerEntryRecord{}
+func scanSchedulerEntry(s scanner) (*model.SchedulerEntryRecord, error) {
+	rec := &model.SchedulerEntryRecord{}
 	var category string
 	var intervalSec int
 	if err := s.Scan(
@@ -166,7 +168,7 @@ func scanSchedulerEntry(s scanner) (*storage.SchedulerEntryRecord, error) {
 	); err != nil {
 		return nil, err
 	}
-	rec.Category = storage.SchedulerCategory(category)
+	rec.Category = model.SchedulerCategory(category)
 	rec.Interval = time.Duration(intervalSec) * time.Second
 	return rec, nil
 }
