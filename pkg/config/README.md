@@ -6,7 +6,7 @@ IssueTracker 의 모든 환경 설정을 **도메인별 sub-package** 로 그룹
 
 ## 디렉토리 구조
 
-```
+```text
 pkg/config/
 ├── app/         (package appcfg)        → log / metrics / shutdown
 ├── storage/     (package storagecfg)    → db / redis
