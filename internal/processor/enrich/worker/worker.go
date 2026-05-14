@@ -189,15 +189,21 @@ func (w *Worker) publishEnriched(ctx context.Context, ref *core.ContentRef, pm *
 		return fmt.Errorf("marshal processing message: %w", err)
 	}
 
+	// 원본 메시지 헤더 (trace ID / request ID 등 observability 메타데이터) 를 base 로 복사 후
+	// stage-specific 키만 덮어쓰기 — sendToDLQ 패턴과 일관 (gemini-review #451 반영).
+	headers := make(map[string]string, len(orig.Headers)+3)
+	for k, v := range orig.Headers {
+		headers[k] = v
+	}
+	headers["source"] = ref.SourceInfo.Name
+	headers["country"] = ref.Country
+	headers["stage"] = "enriched"
+
 	outMsg := queue.Message{
-		Topic: queue.TopicEnriched,
-		Key:   orig.Key,
-		Value: outBytes,
-		Headers: map[string]string{
-			"source":  ref.SourceInfo.Name,
-			"country": ref.Country,
-			"stage":   "enriched",
-		},
+		Topic:   queue.TopicEnriched,
+		Key:     orig.Key,
+		Value:   outBytes,
+		Headers: headers,
 	}
 
 	return w.pub.Forward(ctx, outMsg)

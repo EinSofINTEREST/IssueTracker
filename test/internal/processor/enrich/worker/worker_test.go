@@ -172,6 +172,42 @@ func TestEnrichWorker_Passthrough_ForwardsToEnrichedTopic(t *testing.T) {
 	assert.Equal(t, "example", published.Headers["source"])
 }
 
+// TestEnrichWorker_Passthrough_PreservesOriginalHeaders — 입력 메시지의 헤더 (trace ID
+// 등 observability 메타데이터) 가 forward 시 보존되는지 검증 (gemini PR #451 피드백).
+func TestEnrichWorker_Passthrough_PreservesOriginalHeaders(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	w := newEnrichWorker(consumer, producer)
+
+	msg := makeValidatedMessage(t, "content-002", "https://example.com/b", "KR", "example-kr")
+	msg.Headers = map[string]string{
+		"x-trace-id":   "trace-abc-123",
+		"x-request-id": "req-xyz-789",
+		"stage":        "validated", // stage-specific 키는 덮어써져야 함
+	}
+
+	var published queue.Message
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		if m.Topic != queue.TopicEnriched {
+			return false
+		}
+		published = m
+		return true
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	// observability 헤더는 보존
+	assert.Equal(t, "trace-abc-123", published.Headers["x-trace-id"])
+	assert.Equal(t, "req-xyz-789", published.Headers["x-request-id"])
+	// stage-specific 헤더는 덮어쓰기
+	assert.Equal(t, "enriched", published.Headers["stage"])
+	assert.Equal(t, "example-kr", published.Headers["source"])
+	assert.Equal(t, "KR", published.Headers["country"])
+}
+
 // TestEnrichWorker_MalformedMessage_SendsToDLQ — 잘못된 JSON 은 DLQ 로 라우팅.
 func TestEnrichWorker_MalformedMessage_SendsToDLQ(t *testing.T) {
 	consumer := new(mockConsumer)
