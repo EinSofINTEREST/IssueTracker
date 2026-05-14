@@ -88,12 +88,44 @@ withTimeout := decorator.WrapContentWithTimeout(base, dbCfg.QueryTimeout)
 contentSvc := service.NewContentService(withTimeout, log)
 ```
 
+## Service vs Repository 직접 호출 정책
+
+`service/` 는 모든 Repository 에 대응되는 layer 가 **아닙니다**. 비즈니스 가치 (cross-cutting 로직 / 묶음 정책 / dedup / 외부 service 통합 등) 가 명확한 도메인만 service 를 추가합니다. 단순 CRUD pass-through 는 호출자가 Repository 를 직접 사용하는 것이 over-engineering 을 회피하는 권장 패턴입니다.
+
+### 현재 정책
+
+| Repository | Service 존재? | 호출자 / 사유 |
+|---|---|---|
+| `ContentRepository` | ✓ `ContentService` | dedup (ContentHash 검사) / validation status 갱신 / 다중 호출자 (11) |
+| `RawContentRepository` | ✓ `RawContentService` | Claim Check 패턴 (저장 + 로드 + 삭제 사이클) |
+| `ParserRuleRepository` | ✓ `ParserRuleService` (이슈 #431) | decorator chain 합성 + 11 메서드 / 7 호출자 통합 boundary |
+| `BlacklistRepository` | ✓ `BlacklistService` (이슈 #431) | `HandleLLMDecision` 비즈니스 로직 (path_pattern 변환 + ErrDuplicate 흡수) + decorator chain |
+| `FetcherRuleRepository` | ✗ (직접 호출) | `fetcher/rule/{Resolver,Upgrader,Downgrader}` + `rate_limiter.SourceConfigResolver` 가 각자 cache + policy 로직 보유 — 이미 도메인 service 역할 (이슈 #432 audit) |
+| `SampleURLRepository` | ✗ (직접 호출) | `refiner.Refiner` 가 묶음 정책 (Count + List + Purge) 캡슐화, `parser_worker` 는 단일 Insert (이슈 #432 audit) |
+| `SchedulerEntryRepository` | ✗ (직접 호출) | `scheduler.EntryResolver` 가 cache + diff 정책 보유 (이슈 #432 audit) |
+| `SearchKeywordRepository` | ✗ (직접 호출) | `search.SearchHandler` 의 단일 `ListEnabled` 호출 (이슈 #432 audit) |
+
+### Repository 직접 호출 시 decorator chain
+
+Service 가 없는 경우 main.go 등 wiring 단계에서 decorator 를 직접 합성합니다:
+
+```go
+import (
+    pgstore "issuetracker/internal/storage/postgres"
+    "issuetracker/internal/storage/decorator"
+)
+
+base := pgstore.NewFetcherRuleRepository(pool, log)
+fetcherRuleRepo := decorator.WrapFetcherRuleWithTimeout(base, dbCfg.QueryTimeout)
+resolver, _ := fetcherRule.NewResolver(fetcherRuleRepo, log, 0)
+```
+
 ## 추가 / 변경 시 규칙
 
 1. **새 Record / Filter / Enum** 추가 → `model/` 에 파일 추가
 2. **새 Repository 인터페이스** 추가 → `repository/` 에 파일 추가 + postgres 구현
 3. **새 cross-cutting decorator** → `decorator/` 에 파일 추가 (interface signature 변경 없이 합성)
-4. **새 service** → 비즈니스 가치 (cross-cutting 또는 dedup / status 갱신 등) 가 있을 때만 추가 — thin pass-through 회피
+4. **새 service** → 비즈니스 가치 (cross-cutting 또는 dedup / status 갱신 등) 가 있을 때만 추가 — thin pass-through 회피. 위 "정책 표" 갱신
 5. **`storage` 패키지 root 에 새 파일 추가 금지** — errors.go 외에는 sub-package 로 분류
 
 ## 관련 이슈
@@ -101,4 +133,4 @@ contentSvc := service.NewContentService(withTimeout, log)
 - 메타: #429 (storage 패키지 layering 정리)
 - Phase 1 (본 README 의 구조 분리): #430
 - Phase 2 (BlacklistService + ParserRuleService): #431
-- Phase 3 (단순 CRUD service 검토): #432
+- Phase 3 (단순 CRUD service 검토 audit): #432
