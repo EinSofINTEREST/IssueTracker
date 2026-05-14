@@ -12,22 +12,26 @@ func TestLoadStageGate_DefaultValues(t *testing.T) {
 	t.Setenv("FETCHER_MAX_CONCURRENT_PER_STAGE", "")
 	t.Setenv("PARSER_MAX_CONCURRENT_PER_STAGE", "")
 	t.Setenv("VALIDATE_MAX_CONCURRENT_PER_STAGE", "")
+	t.Setenv("ENRICH_MAX_CONCURRENT_PER_STAGE", "")
 	cfg, err := runtimecfg.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	require.Equal(t, 0, cfg.FetcherMaxConcurrentPerStage)
 	require.Equal(t, 0, cfg.ParserMaxConcurrentPerStage)
 	require.Equal(t, 0, cfg.ValidateMaxConcurrentPerStage)
+	require.Equal(t, 0, cfg.EnrichMaxConcurrentPerStage)
 }
 
 func TestLoadStageGate_EnvOverride(t *testing.T) {
 	t.Setenv("FETCHER_MAX_CONCURRENT_PER_STAGE", "2")
 	t.Setenv("PARSER_MAX_CONCURRENT_PER_STAGE", "4")
 	t.Setenv("VALIDATE_MAX_CONCURRENT_PER_STAGE", "5")
+	t.Setenv("ENRICH_MAX_CONCURRENT_PER_STAGE", "3")
 	cfg, err := runtimecfg.LoadStageGate("/tmp/nonexistent-env-file.env")
 	require.NoError(t, err)
 	require.Equal(t, 2, cfg.FetcherMaxConcurrentPerStage)
 	require.Equal(t, 4, cfg.ParserMaxConcurrentPerStage)
 	require.Equal(t, 5, cfg.ValidateMaxConcurrentPerStage)
+	require.Equal(t, 3, cfg.EnrichMaxConcurrentPerStage)
 }
 
 func TestLoadStageGate_InvalidValue(t *testing.T) {

@@ -26,6 +26,10 @@ type StageGateConfig struct {
 	// ValidateMaxConcurrentPerStage: validate stage 의 Semaphore capacity 상한.
 	// 0 이하면 worker_count/2 (floor) 사용. 양수면 min(value, worker_count/2) 채택.
 	ValidateMaxConcurrentPerStage int
+
+	// EnrichMaxConcurrentPerStage: enrich stage 의 Semaphore capacity 상한 (이슈 #446).
+	// 0 이하면 worker_count/2 (floor) 사용. 양수면 min(value, worker_count/2) 채택.
+	EnrichMaxConcurrentPerStage int
 }
 
 // DefaultStageGateConfig 는 모든 stage 가 0 (worker_count/2 자동) 인 기본값을 반환합니다.
@@ -34,6 +38,7 @@ func DefaultStageGateConfig() StageGateConfig {
 		FetcherMaxConcurrentPerStage:  0,
 		ParserMaxConcurrentPerStage:   0,
 		ValidateMaxConcurrentPerStage: 0,
+		EnrichMaxConcurrentPerStage:   0,
 	}
 }
 
@@ -61,6 +66,7 @@ func LoadStageGate(envFiles ...string) (StageGateConfig, error) {
 		parseInt("FETCHER_MAX_CONCURRENT_PER_STAGE", &cfg.FetcherMaxConcurrentPerStage),
 		parseInt("PARSER_MAX_CONCURRENT_PER_STAGE", &cfg.ParserMaxConcurrentPerStage),
 		parseInt("VALIDATE_MAX_CONCURRENT_PER_STAGE", &cfg.ValidateMaxConcurrentPerStage),
+		parseInt("ENRICH_MAX_CONCURRENT_PER_STAGE", &cfg.EnrichMaxConcurrentPerStage),
 	} {
 		if op != nil {
 			return StageGateConfig{}, op

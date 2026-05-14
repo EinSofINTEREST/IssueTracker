@@ -38,6 +38,11 @@ type WorkerCountsConfig struct {
 	// Validate: validate worker (issuetracker.normalized consumer) 의 worker 수.
 	// 환경변수 VALIDATE_WORKER_COUNT (default 8).
 	Validate int
+
+	// Enrich: enrich worker (issuetracker.validated consumer) 의 worker 수 (이슈 #446).
+	// 환경변수 ENRICH_WORKER_COUNT (default 4).
+	// LLM 호출 비용이 큰 단계라 validate 보다 작게 잡음 — 후속 sub-issue 가 backlog 모니터링 후 조정.
+	Enrich int
 }
 
 // DefaultWorkerCountsConfig 는 운영 기본값을 반환합니다.
@@ -49,6 +54,7 @@ func DefaultWorkerCountsConfig() WorkerCountsConfig {
 		FetcherLow:    2,
 		Parser:        6,
 		Validate:      8,
+		Enrich:        4,
 	}
 }
 
@@ -80,6 +86,7 @@ func LoadWorkerCounts(envFiles ...string) (WorkerCountsConfig, error) {
 		{"FETCHER_LOW_WORKER_COUNT", &cfg.FetcherLow},
 		{"PARSER_WORKER_COUNT", &cfg.Parser},
 		{"VALIDATE_WORKER_COUNT", &cfg.Validate},
+		{"ENRICH_WORKER_COUNT", &cfg.Enrich},
 	}
 	for _, b := range bindings {
 		v := os.Getenv(b.envKey)
