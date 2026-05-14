@@ -32,6 +32,10 @@ type StagesConfig struct {
 	// 환경변수 STAGES_VALIDATE_ENABLED (default true).
 	ValidateEnabled bool
 
+	// EnrichEnabled: enrich worker (issuetracker.validated consumer) 기동 여부 (이슈 #446).
+	// 환경변수 STAGES_ENRICH_ENABLED (default true).
+	EnrichEnabled bool
+
 	// SchedulerEnabled: scheduler (crawl job emitter) 기동 여부.
 	// 환경변수 STAGES_SCHEDULER_ENABLED (default true).
 	SchedulerEnabled bool
@@ -43,6 +47,7 @@ func DefaultStagesConfig() StagesConfig {
 		FetcherEnabled:   true,
 		ParserEnabled:    true,
 		ValidateEnabled:  true,
+		EnrichEnabled:    true,
 		SchedulerEnabled: true,
 	}
 }
@@ -64,6 +69,7 @@ func LoadStages(envFiles ...string) (StagesConfig, error) {
 		parse.Bool("STAGES_FETCHER_ENABLED", &cfg.FetcherEnabled),
 		parse.Bool("STAGES_PARSER_ENABLED", &cfg.ParserEnabled),
 		parse.Bool("STAGES_VALIDATE_ENABLED", &cfg.ValidateEnabled),
+		parse.Bool("STAGES_ENRICH_ENABLED", &cfg.EnrichEnabled),
 		parse.Bool("STAGES_SCHEDULER_ENABLED", &cfg.SchedulerEnabled),
 	} {
 		if op != nil {
@@ -71,11 +77,12 @@ func LoadStages(envFiles ...string) (StagesConfig, error) {
 		}
 	}
 
-	if !cfg.FetcherEnabled && !cfg.ParserEnabled && !cfg.ValidateEnabled && !cfg.SchedulerEnabled {
+	if !cfg.FetcherEnabled && !cfg.ParserEnabled && !cfg.ValidateEnabled &&
+		!cfg.EnrichEnabled && !cfg.SchedulerEnabled {
 		return StagesConfig{}, fmt.Errorf(
-			"all stages disabled — at least one of " +
-				"STAGES_FETCHER_ENABLED/STAGES_PARSER_ENABLED/" +
-				"STAGES_VALIDATE_ENABLED/STAGES_SCHEDULER_ENABLED must be true",
+			"all stages disabled — at least one of STAGES_FETCHER_ENABLED/" +
+				"STAGES_PARSER_ENABLED/STAGES_VALIDATE_ENABLED/" +
+				"STAGES_ENRICH_ENABLED/STAGES_SCHEDULER_ENABLED must be true",
 		)
 	}
 
