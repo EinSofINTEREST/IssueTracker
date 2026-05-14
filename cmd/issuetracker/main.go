@@ -918,13 +918,28 @@ func main() {
 		log.Info("enrich extractor: noop (claudegen pool or prompt loader unavailable)")
 	}
 
-	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichGate, workerCountsCfg.Enrich)
+	// 이슈 #448 — claudegen 기반 enricher verifier (cross-verification) wiring. extractor 와
+	// 동일 fallback 정책.
+	var enrichVerifier enrichextractor.Verifier = enrichextractor.NewNoopVerifier()
+	if claudegenPool != nil && promptLoader != nil {
+		cv, cvErr := enrichextractor.NewClaudegenVerifier(claudegenPool, promptLoader)
+		if cvErr != nil {
+			log.WithError(cvErr).Warn("claudegen enrich verifier construction failed, using noop")
+		} else {
+			enrichVerifier = cv
+			log.Info("enrich verifier: claudegen-backed")
+		}
+	} else {
+		log.Info("enrich verifier: noop (claudegen pool or prompt loader unavailable)")
+	}
+
+	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichVerifier, enrichGate, workerCountsCfg.Enrich)
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": workerCountsCfg.Enrich,
 		"input_topic":  queue.TopicValidated,
 		"output_topic": queue.TopicEnriched,
-	}).Info("enrich worker constructed (#447 — claudegen extractor)")
+	}).Info("enrich worker constructed (#447 extractor + #448 verifier)")
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리
