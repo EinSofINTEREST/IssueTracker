@@ -260,13 +260,15 @@ func TestString(t *testing.T) {
 	t.Run("non-empty applies", func(t *testing.T) {
 		setEnv(t, "PARSE_TEST_STR_OK", "hello")
 		dest := "default"
-		parse.String("PARSE_TEST_STR_OK", &dest)
+		err := parse.String("PARSE_TEST_STR_OK", &dest)
+		assert.NoError(t, err)
 		assert.Equal(t, "hello", dest)
 	})
 
 	t.Run("empty preserves default", func(t *testing.T) {
 		dest := "default"
-		parse.String("PARSE_TEST_STR_EMPTY", &dest)
+		err := parse.String("PARSE_TEST_STR_EMPTY", &dest)
+		assert.NoError(t, err)
 		assert.Equal(t, "default", dest)
 	})
 }

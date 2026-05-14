@@ -199,10 +199,14 @@ func Bool(key string, dest *bool) error {
 }
 
 // String 은 env 를 string 으로 그대로 적용 (비어있지 않을 때만).
-func String(key string, dest *string) {
+//
+// 다른 helper 와 시그니처 일관성을 위해 error 를 반환 — 실제 실패 케이스는 없어 항상 nil.
+// 호출부에서 `for _, op := range []error{...}` 패턴에 합류시킬 수 있도록 하기 위함.
+func String(key string, dest *string) error {
 	if v := os.Getenv(key); v != "" {
 		*dest = v
 	}
+	return nil
 }
 
 // Enum 은 env 를 string 으로 파싱하되 allowed 집합에 포함되어야 함.

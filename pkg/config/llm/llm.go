@@ -68,8 +68,8 @@ func LoadLLM(envFiles ...string) (LLMConfig, error) {
 
 	// 검증 강화 (이슈 #439): provider enum, 양수 timeout.
 	// LLM_PROVIDER 미설정 시 default "gemini" 유지 — 빈 문자열만 skip.
-	parse.String("LLM_MODEL", &cfg.Model)
 	for _, op := range []error{
+		parse.String("LLM_MODEL", &cfg.Model),
 		parse.Bool("LLM_ENABLED", &cfg.Enabled),
 		parse.Enum("LLM_PROVIDER", []string{"gemini", "openai", "anthropic", "claude"}, &cfg.Provider),
 		parse.PositiveDuration("LLM_TIMEOUT", &cfg.Timeout),
