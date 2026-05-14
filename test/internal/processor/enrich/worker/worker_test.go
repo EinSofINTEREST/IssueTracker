@@ -109,12 +109,28 @@ func (f *fakeExtractor) Extract(_ context.Context, in extractor.Input) (*extract
 	return f.facts, nil
 }
 
+// fakeVerifier 는 verify 입력 추적 + 미리 정의된 verifications 또는 err 반환.
+type fakeVerifier struct {
+	verifications []extractor.Verification
+	err           error
+	callsLog      []extractor.VerifyInput
+}
+
+func (v *fakeVerifier) Verify(_ context.Context, in extractor.VerifyInput) ([]extractor.Verification, error) {
+	v.callsLog = append(v.callsLog, in)
+	if v.err != nil {
+		return nil, v.err
+	}
+	return v.verifications, nil
+}
+
 func newEnrichWorker(consumer queue.Consumer, producer queue.Producer) *worker.Worker {
 	return worker.NewWorker(
 		consumer,
 		newTestPublisher(producer),
 		&stubContentService{},
 		extractor.NewNoopExtractor(),
+		extractor.NewNoopVerifier(),
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -279,6 +295,7 @@ func TestEnrichWorker_Extraction_AttachesFactsToMetadata(t *testing.T) {
 		newTestPublisher(producer),
 		contentSvc,
 		fake,
+		extractor.NewNoopVerifier(),
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -337,6 +354,7 @@ func TestEnrichWorker_ExtractionFailure_StillForwards(t *testing.T) {
 		newTestPublisher(producer),
 		contentSvc,
 		fake,
+		extractor.NewNoopVerifier(),
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -359,6 +377,172 @@ func assertAnError() error { return assertError{} }
 type assertError struct{}
 
 func (assertError) Error() string { return "extractor failure" }
+
+// listingStubContentService 는 GetByID + ListByCountry 를 모두 stub 합니다 — 이슈 #448 verification.
+type listingStubContentService struct {
+	service.ContentService
+	primary *core.Content
+	listed  []*core.Content
+	listErr error
+}
+
+func (s *listingStubContentService) GetByID(_ context.Context, id string) (*core.Content, error) {
+	if s.primary != nil && s.primary.ID == id {
+		return s.primary, nil
+	}
+	return nil, storage.ErrNotFound
+}
+
+func (s *listingStubContentService) ListByCountry(_ context.Context, _ string, _ model.ContentFilter) ([]*core.Content, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.listed, nil
+}
+
+// TestEnrichWorker_Verification_AttachesVerificationsToFacts — claims 가 있으면 verifier
+// 가 호출되고 결과가 facts.Verifications 에 첨부.
+func TestEnrichWorker_Verification_AttachesVerificationsToFacts(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+
+	publishedAt := time.Now().Add(-1 * time.Hour)
+	primary := &core.Content{
+		ID:          "c-primary",
+		Title:       "Election turnout breaks record in city",
+		Body:        "...",
+		URL:         "https://example.com/p",
+		Country:     "US",
+		PublishedAt: publishedAt,
+	}
+	related := []*core.Content{
+		{ID: "c-rel1", Title: "City election turnout sets new record", URL: "https://other.com/a", PublishedAt: publishedAt},
+		{ID: "c-rel2", Title: "Local sports match results", URL: "https://other.com/b", PublishedAt: publishedAt},
+		{ID: "c-primary", Title: "self should be skipped", URL: "https://example.com/p", PublishedAt: publishedAt},
+	}
+	contentSvc := &listingStubContentService{primary: primary, listed: related}
+
+	extractedFacts := &extractor.EnrichedFacts{
+		Claims: []extractor.Claim{{Text: "Turnout reached 60% in city"}},
+	}
+	fakeExt := &fakeExtractor{facts: extractedFacts}
+	fakeVer := &fakeVerifier{verifications: []extractor.Verification{
+		{ClaimIdx: 0, Verdict: "supported", Sources: []string{"https://news.example.org/x"}},
+	}}
+
+	w := worker.NewWorker(
+		consumer,
+		newTestPublisher(producer),
+		contentSvc,
+		fakeExt,
+		fakeVer,
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-primary", "https://example.com/p", "US", "example")
+
+	var published queue.Message
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		if m.Topic != queue.TopicEnriched {
+			return false
+		}
+		published = m
+		return true
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	// verifier 호출 검증 — candidate ranking: rel1 (overlap: city,election,turnout,record) 가 rel2 보다 우선
+	if assert.Len(t, fakeVer.callsLog, 1, "verifier should be called once") {
+		in := fakeVer.callsLog[0]
+		assert.Equal(t, "https://example.com/p", in.URL)
+		assert.Len(t, in.Claims, 1)
+		// 본인 (c-primary URL) 은 candidate 에서 제외, rel1 이 rel2 보다 token overlap 높음
+		assert.NotEmpty(t, in.Candidates)
+		topCandidate := in.Candidates[0]
+		assert.Equal(t, "https://other.com/a", topCandidate.URL)
+		// 본인 URL 이 candidate 에 없음
+		for _, c := range in.Candidates {
+			assert.NotEqual(t, "https://example.com/p", c.URL, "source URL must be excluded")
+		}
+	}
+
+	// metadata.enriched_facts.verifications 첨부 검증
+	var pm core.ProcessingMessage
+	if err := json.Unmarshal(published.Value, &pm); err != nil {
+		t.Fatalf("unmarshal pm: %v", err)
+	}
+	rawFacts, ok := pm.Metadata["enriched_facts"].(map[string]interface{})
+	if assert.True(t, ok, "metadata should contain enriched_facts map") {
+		verifs, vok := rawFacts["verifications"].([]interface{})
+		assert.True(t, vok)
+		assert.Len(t, verifs, 1)
+	}
+}
+
+// TestEnrichWorker_NoClaims_SkipsVerifier — claims 가 없으면 verifier 호출 안 함.
+func TestEnrichWorker_NoClaims_SkipsVerifier(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-empty", Title: "t", Body: "b", URL: "https://example.com/e", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	emptyFacts := &extractor.EnrichedFacts{Claims: []extractor.Claim{}}
+	fakeVer := &fakeVerifier{}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: emptyFacts},
+		fakeVer,
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-empty", "https://example.com/e", "US", "example")
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicEnriched
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	assert.Empty(t, fakeVer.callsLog, "verifier must not be called when no claims")
+}
+
+// TestEnrichWorker_VerificationFailure_StillForwards — verifier error 도 pipeline 진행 보장.
+func TestEnrichWorker_VerificationFailure_StillForwards(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-v-fail", Title: "t", Body: "b", URL: "https://example.com/x", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	facts := &extractor.EnrichedFacts{Claims: []extractor.Claim{{Text: "claim A"}}}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: facts},
+		&fakeVerifier{err: assertAnError()},
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-v-fail", "https://example.com/x", "US", "example")
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicEnriched
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	consumer.AssertExpectations(t)
+	producer.AssertExpectations(t)
+}
 
 // TestEnrichWorker_MalformedMessage_SendsToDLQ — 잘못된 JSON 은 DLQ 로 라우팅.
 func TestEnrichWorker_MalformedMessage_SendsToDLQ(t *testing.T) {

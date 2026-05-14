@@ -187,3 +187,93 @@ func TestNewClaudegenExtractor_NilArgs(t *testing.T) {
 	_, err = extractor.NewClaudegenExtractor(&stubRunner{stdout: "{}"}, nil)
 	assert.Error(t, err)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Verifier (이슈 #448)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestClaudegenVerifier_Success(t *testing.T) {
+	stdout := `{"verifications":[
+		{"claim_idx": 0, "verdict": "supported", "sources": ["https://news.example.com/a"], "note": "matches AP"},
+		{"claim_idx": 1, "verdict": "unverified"}
+	]}`
+	runner := &stubRunner{stdout: stdout}
+	v, err := extractor.NewClaudegenVerifier(runner, &stubLoader{tpl: "verify {{CLAIMS_JSON}} {{CANDIDATES_JSON}}"})
+	require.NoError(t, err)
+
+	got, err := v.Verify(context.Background(), extractor.VerifyInput{
+		URL:    "https://example.com/p",
+		Host:   "example.com",
+		Title:  "T",
+		Claims: []extractor.Claim{{Text: "c0"}, {Text: "c1"}},
+		Candidates: []extractor.CandidateRef{
+			{URL: "https://other.com/x", Title: "other"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, 0, got[0].ClaimIdx)
+	assert.Equal(t, "supported", got[0].Verdict)
+	assert.Equal(t, "unverified", got[1].Verdict)
+	assert.Equal(t, 1, runner.calls)
+}
+
+func TestClaudegenVerifier_UnknownVerdict_FallsBackToUnverified(t *testing.T) {
+	stdout := `{"verifications":[
+		{"claim_idx": 0, "verdict": "maybe"}
+	]}`
+	v, err := extractor.NewClaudegenVerifier(
+		&stubRunner{stdout: stdout},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+
+	got, err := v.Verify(context.Background(), extractor.VerifyInput{
+		Claims: []extractor.Claim{{Text: "c"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "unverified", got[0].Verdict)
+}
+
+func TestClaudegenVerifier_EmptyClaims_SkipsRunner(t *testing.T) {
+	runner := &stubRunner{stdout: "this should never be parsed"}
+	v, err := extractor.NewClaudegenVerifier(
+		runner,
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+
+	got, err := v.Verify(context.Background(), extractor.VerifyInput{Claims: nil})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	assert.Equal(t, 0, runner.calls, "runner must not be called when claims empty")
+}
+
+func TestClaudegenVerifier_SessionError_Propagates(t *testing.T) {
+	v, err := extractor.NewClaudegenVerifier(
+		&stubRunner{err: errors.New("exec failure")},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+
+	_, err = v.Verify(context.Background(), extractor.VerifyInput{
+		Claims: []extractor.Claim{{Text: "c"}},
+	})
+	require.Error(t, err)
+}
+
+func TestNoopVerifier_ReturnsEmpty(t *testing.T) {
+	got, err := extractor.NewNoopVerifier().Verify(context.Background(), extractor.VerifyInput{
+		Claims: []extractor.Claim{{Text: "c"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestNewClaudegenVerifier_NilArgs(t *testing.T) {
+	_, err := extractor.NewClaudegenVerifier(nil, &stubLoader{tpl: "t"})
+	assert.Error(t, err)
+	_, err = extractor.NewClaudegenVerifier(&stubRunner{stdout: "{}"}, nil)
+	assert.Error(t, err)
+}
