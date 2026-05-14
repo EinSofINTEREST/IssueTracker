@@ -34,6 +34,7 @@ import (
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/processor/parser/types"
+	"issuetracker/internal/processor/precheck"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/model"
 	"issuetracker/internal/storage/primitive"
@@ -93,7 +94,15 @@ type Worker struct {
 	// blacklist: page-parse 블랙리스트 Matcher.
 	// nil 허용 — nil 이면 차단 비활성 (모든 카테고리 링크가 그대로 발행).
 	// processCategoryPage 의 bus.PublishChained 직전에 Filter 호출.
+	//
+	// Deprecated: 신규 코드는 precheck.Decider 사용 (이슈 #425). 본 필드는 호환을 위해 잔존 —
+	// 향후 BlacklistMatcher 가 precheck.Source 로 통합되면 제거.
 	blacklist *rule.BlacklistMatcher
+
+	// precheck: URL 처리 가부 일괄 게이트 (이슈 #425).
+	// nil 허용 — nil 이면 게이트 비활성. processArticlePage / processCategoryPage 진입 직후 검사 +
+	// outgoing chained URL filter 에서 batch 검사.
+	precheck precheck.Decider
 
 	// staleCounter: stale rule 재학습 트리거 카운터.
 	// nil 허용 — nil 이면 stale 재학습 비활성 (chromedp 자동 전환만 동작).
@@ -200,8 +209,22 @@ func (w *Worker) SetPipelineGuard(g PipelineGuard) {
 //
 // nil 주입 시 차단 비활성 (모든 카테고리 링크가 그대로 article job 으로 발행).
 // Start 호출 전 wiring 단계에서 1회 설정.
+//
+// Deprecated: 신규 wiring 은 SetPrecheck 사용 (이슈 #425).
 func (w *Worker) SetBlacklist(b *rule.BlacklistMatcher) {
 	w.blacklist = b
+}
+
+// SetPrecheck 는 URL 처리 가부 일괄 게이트를 주입합니다 (이슈 #425).
+//
+// nil 주입 시 게이트 비활성. Start 호출 전 wiring 단계에서 1회 설정.
+//
+// 적용 위치:
+//   - processArticlePage / processCategoryPage 진입 시 raw.URL 검사 (이미 blacklist 인 URL 의
+//     LLM 재호출 회피)
+//   - processCategoryPage 의 outgoing chained URL filter (기존 blacklist.Classify 대체)
+func (w *Worker) SetPrecheck(d precheck.Decider) {
+	w.precheck = d
 }
 
 // SetStaleCounter 는 stale rule 재학습 트리거 카운터 + 임계값을 주입합니다.
@@ -409,6 +432,20 @@ func (w *Worker) processCategoryPage(ctx context.Context, raw *core.RawContent, 
 		return nil
 	}
 
+	// Precheck 진입 게이트 (이슈 #425): blacklist 등 이미 차단된 URL 이 파서에 도달했을 때
+	// LLM 재호출 / Resolver lookup 모두 회피. drop 결정이면 raw 삭제 + commit.
+	if w.precheck != nil {
+		if dec := w.precheck.CheckURL(ctx, raw.URL); dec.Verdict == precheck.VerdictDrop {
+			mlog.WithFields(map[string]interface{}{
+				"url":    raw.URL,
+				"source": dec.Source,
+				"reason": dec.Reason,
+			}).Info("precheck dropped raw url at parser entry, skipping parse")
+			w.deleteRaw(ctx, rawID, mlog)
+			return nil
+		}
+	}
+
 	items, err := w.parser.ParseLinks(ctx, raw)
 	if err != nil {
 		return w.handleRuleError(ctx, raw, rawID, "parse_links", model.TargetTypeList, err, llmRetryCount, crawlerName, jobTimeout, mlog)
@@ -421,15 +458,32 @@ func (w *Worker) processCategoryPage(ctx context.Context, raw *core.RawContent, 
 
 	urls := uniqueURLs(items, maxChainedURLs)
 
-	// page-parse 블랙리스트 적용 — mode 별 분기:
-	//   - 'drop' 매칭     : 어느 슬라이스에도 미포함 (완전 drop, fetch / parse 안 함)
-	//   - 'extract_links_only' 매칭 : list 로 강제 발행 → fetch + ParseLinks 만 진행 (ParsePage skip)
-	//   - 매칭 X         : 정상 article 로 발행
-	// Matcher 미설정 (nil) 이면 모든 URL 을 article 로 통과 (기능 OFF).
+	// Outgoing chained URL filter (이슈 #425): precheck decider 가 verdict 별로 분기:
+	//   - VerdictAllow             : 정상 article 로 발행
+	//   - VerdictExtractLinksOnly  : list 로 강제 발행 → fetch + ParseLinks 만 진행 (ParsePage skip)
+	//   - VerdictDrop              : 어느 슬라이스에도 미포함 (완전 drop, fetch / parse 안 함)
+	// Decider 미설정 (nil) 이면 모든 URL 을 article 로 통과 (기능 OFF).
+	//
+	// Legacy compat: precheck 미설정 + blacklist Matcher 설정 (SetBlacklist 호환 호출자) 시
+	// 기존 blacklist.Classify 경로로 fallback — 호출자 영향 없음 (gemini high 피드백, PR #436).
 	articleURLs := urls
 	var listURLs []string
 	droppedCount := 0
-	if w.blacklist != nil && len(urls) > 0 {
+	if w.precheck != nil && len(urls) > 0 {
+		decisions := w.precheck.CheckURLs(ctx, urls)
+		articleURLs = articleURLs[:0]
+		for i, dec := range decisions {
+			switch dec.Verdict {
+			case precheck.VerdictAllow:
+				articleURLs = append(articleURLs, urls[i])
+			case precheck.VerdictExtractLinksOnly:
+				listURLs = append(listURLs, urls[i])
+			case precheck.VerdictDrop:
+				droppedCount++
+			}
+		}
+	} else if w.blacklist != nil && len(urls) > 0 {
+		// SetBlacklist 만 호출한 호환 경로 — 본 PR (#436) 이전 동작 보존.
 		decision := w.blacklist.Classify(ctx, urls)
 		articleURLs = decision.Allowed
 		listURLs = decision.ExtractLinksOnly
@@ -490,6 +544,23 @@ func (w *Worker) processArticlePage(ctx context.Context, raw *core.RawContent, r
 		mlog.Debug("parser not configured, skipping article")
 		w.deleteRaw(ctx, rawID, mlog)
 		return nil
+	}
+
+	// Precheck 진입 게이트 (이슈 #425): blacklist 등 이미 차단된 URL 이 파서에 도달했을 때
+	// LLM 재호출 / Resolver lookup 모두 회피. drop / extract_links_only 모두 drop 처리 —
+	// article path 에서 list verdict 는 부적합 (raw 가 article 으로 fetch 된 후 policy 변경 race
+	// window). 가장 보수적 동작: deleteRaw + commit (gemini medium 피드백, PR #436).
+	if w.precheck != nil {
+		if dec := w.precheck.CheckURL(ctx, raw.URL); dec.Verdict != precheck.VerdictAllow {
+			mlog.WithFields(map[string]interface{}{
+				"url":     raw.URL,
+				"source":  dec.Source,
+				"reason":  dec.Reason,
+				"verdict": dec.Verdict.String(),
+			}).Info("precheck blocked raw url at parser entry, skipping parse")
+			w.deleteRaw(ctx, rawID, mlog)
+			return nil
+		}
 	}
 
 	page, err := w.parser.ParsePage(ctx, raw)

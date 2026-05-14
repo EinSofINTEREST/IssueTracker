@@ -17,6 +17,7 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/precheck"
 	"issuetracker/internal/storage/service"
 	"issuetracker/internal/workerpool"
 	"issuetracker/pkg/links"
@@ -80,6 +81,14 @@ type KafkaConsumerPool struct {
 	// Handle 진입 직후 검사하여 차단된 URL 의 처리를 skip 하고 message 만 commit.
 	// atomic.Pointer 로 race-safe 한 lock-free 설정/조회.
 	gate atomic.Pointer[urlguard.Gate]
+
+	// precheck 는 URL 처리 가부 일괄 게이트 (이슈 #425). nil 이면 게이트 비활성.
+	// URL 가드 이후 backoff 대기 전에 검사하여 blacklist / 향후 rate_limit 등이 결정한
+	// Drop 을 즉시 commit-only 로 처리, 불필요한 fetch / rate_limit budget 소모 회피.
+	//
+	// atomic.Pointer 로 race-safe 설정 — Start 이후 SetPrecheck 호출에도 안전.
+	// precheckHolder 는 인터페이스를 wrap 한 struct (atomic.Pointer 가 concrete type 만 지원).
+	precheckGate atomic.Pointer[precheckHolder]
 	// retryScheduler 는 재시도 발행 시점을 관리하는 RetryScheduler 입니다.
 	// 미설정(nil) 이면 lazy 로 KafkaImmediateRetryScheduler 가 사용되어 기존 동작 유지 —
 	// 즉시 priority 토픽에 publish + worker 가 ScheduledAt 까지 sleep.
@@ -180,6 +189,20 @@ func (p *KafkaConsumerPool) SetRetryScheduler(rs bus.RetryScheduler) {
 // 미설정(nil) 시 가드 비활성 — 모든 job 이 정상 처리됩니다.
 func (p *KafkaConsumerPool) SetGate(g *urlguard.Gate) {
 	p.gate.Store(g)
+}
+
+// precheckHolder 는 precheck.Decider 인터페이스를 atomic.Pointer 에 담기 위한 wrap struct 입니다.
+// (atomic.Pointer[T] 가 concrete type 만 지원하기 때문).
+type precheckHolder struct{ Decider precheck.Decider }
+
+// SetPrecheck 는 Handle 진입 시 URL 처리 가부를 결정할 precheck.Decider 를 설정합니다 (이슈 #425).
+// 미설정(nil) 시 게이트 비활성 — 모든 job 이 정상 처리됩니다.
+func (p *KafkaConsumerPool) SetPrecheck(d precheck.Decider) {
+	if d == nil {
+		p.precheckGate.Store(nil)
+		return
+	}
+	p.precheckGate.Store(&precheckHolder{Decider: d})
 }
 
 // SetNormalizer는 URL 정규화기를 설정합니다.
@@ -361,6 +384,24 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, msg *queue.Message, 
 			"job_id":  job.ID,
 			"stage":   "consumer",
 		}) {
+			return p.pool.Commit(ctx, msg)
+		}
+	}
+
+	// Precheck 게이트 (이슈 #425): URL 가드 이후 backoff 대기 / StageGate 진입 전에 검사.
+	// VerdictDrop → fetch / rate_limit budget 소모 회피 + commit-only.
+	// VerdictExtractLinksOnly → fetcher 단계는 정상 fetch 진행 (target_type=Category 강제 변환은
+	//   parser worker outgoing filter 가 처리; 본 stage 는 fetch 만 보장하면 됨).
+	if ph := p.precheckGate.Load(); ph != nil && ph.Decider != nil {
+		dec := ph.Decider.CheckURL(ctx, job.Target.URL)
+		if dec.Verdict == precheck.VerdictDrop {
+			log.WithFields(map[string]interface{}{
+				"job_id":  job.ID,
+				"crawler": job.CrawlerName,
+				"url":     job.Target.URL,
+				"source":  dec.Source,
+				"reason":  dec.Reason,
+			}).Info("precheck dropped url, skipping fetch")
 			return p.pool.Commit(ctx, msg)
 		}
 	}
