@@ -12,11 +12,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
+	"issuetracker/internal/processor/enrich/extractor"
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/storage"
+	"issuetracker/internal/storage/service"
 	"issuetracker/internal/workerpool"
 	"issuetracker/pkg/logger"
 	"issuetracker/pkg/queue"
@@ -31,12 +35,18 @@ const drainTimeout = workerpool.DefaultDrainTimeout
 
 // Worker 는 issuetracker.validated 토픽을 소비하여 enrich 후 issuetracker.enriched 에 발행합니다.
 //
-// 본 sub-issue (#446) 에서는 enrichment 미적용 — passthrough 로 메시지를 그대로 forward.
-// 후속 sub-issue 에서 claudegen 호출 / DB 조회 / 신뢰도 산출이 process 메소드 내부에 점진적으로
-// 추가됩니다.
+// 이슈 #447 에서 추가된 동작:
+//   - ContentService 로 ref.ID 의 Content (Title/Body 포함) 조회
+//   - extractor.Extract 로 EnrichedFacts 추출
+//   - 결과를 ProcessingMessage.Metadata["enriched_facts"] 에 JSON 으로 첨부 후 forward
+//
+// 추출 실패는 파이프라인을 멈추지 않습니다 — warn 로깅 + 빈 facts 로 fallback + forward 진행.
+// content 조회 실패 (ErrNotFound) 는 idempotent 정상 분기 — 이미 처리된 메시지로 보고 commit.
 type Worker struct {
 	consumer    bus.Consumer
 	pub         *bus.Publisher
+	contentSvc  service.ContentService
+	extractor   extractor.Extractor
 	gate        locks.StageGate // nil 허용 → NoopStageGate 로 fallback
 	workerCount int
 
@@ -44,15 +54,25 @@ type Worker struct {
 }
 
 // NewWorker 는 새로운 Worker 를 생성합니다.
-// pub 이 nil 이면 panic — validate worker 패턴과 일관 (fail-fast).
+//
+// pub / contentSvc / extractor 가 nil 이면 panic — fail-fast (silent failure 회피).
+// gate 가 nil 이면 NoopStageGate 로 fallback.
 func NewWorker(
 	consumer bus.Consumer,
 	pub *bus.Publisher,
+	contentSvc service.ContentService,
+	ex extractor.Extractor,
 	gate locks.StageGate,
 	workerCount int,
 ) *Worker {
 	if pub == nil {
 		panic("enrich.NewWorker: pub must not be nil")
+	}
+	if contentSvc == nil {
+		panic("enrich.NewWorker: contentSvc must not be nil")
+	}
+	if ex == nil {
+		panic("enrich.NewWorker: extractor must not be nil (use extractor.NoopExtractor for disabled enrichment)")
 	}
 	if gate == nil {
 		gate = locks.NewNoopStageGate()
@@ -60,6 +80,8 @@ func NewWorker(
 	return &Worker{
 		consumer:    consumer,
 		pub:         pub,
+		contentSvc:  contentSvc,
+		extractor:   ex,
 		gate:        gate,
 		workerCount: workerCount,
 	}
@@ -151,7 +173,13 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		defer release()
 	}
 
-	// 이슈 #446 — 본 sub-issue 는 passthrough 만. enrichment 로직은 후속 sub-issue 에서 삽입.
+	// 이슈 #447 — Content 조회 + extractor 호출 + facts 첨부.
+	// 본 단계 어떤 실패도 forward 를 막지 않음 — pipeline 진행이 enrichment 보다 우선.
+	facts := w.runExtraction(ctx, &pm, &ref)
+	if facts != nil {
+		w.attachFacts(&pm, facts)
+	}
+
 	if err := w.publishEnriched(ctx, &ref, &pm, msg); err != nil {
 		if errors.Is(err, context.Canceled) {
 			drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
@@ -167,8 +195,82 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 	return w.commit(ctx, msg)
 }
 
+// runExtraction 은 content 를 조회하고 extractor 를 호출합니다.
+// 모든 실패 경로는 nil 을 반환 — 호출자가 facts 첨부 skip 하고 forward 진행.
+// 즉 enrichment 실패는 pipeline 을 멈추지 않음 (forward-first 정책).
+func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, ref *core.ContentRef) *extractor.EnrichedFacts {
+	log := logger.FromContext(ctx)
+
+	content, err := w.contentSvc.GetByID(ctx, ref.ID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			log.WithFields(map[string]interface{}{
+				"job_id": pm.ID,
+				"ref_id": ref.ID,
+			}).Info("content not found, skipping enrichment (already deleted or duplicate)")
+			return nil
+		}
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+		}).WithError(err).Warn("failed to fetch content for enrichment, forwarding without facts")
+		return nil
+	}
+
+	host := ""
+	// url.Parse 실패 시 host 가 빈 문자열로 남고 extractor 가 degraded 입력을 받는데,
+	// 이는 forward-first 정책 일관 — 다만 진단을 위해 DEBUG 로깅 (coderabbit-review PR #452).
+	if u, perr := url.Parse(ref.URL); perr != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+			"url":    ref.URL,
+		}).WithError(perr).Debug("url parse failed for host extraction, using empty host")
+	} else {
+		host = u.Host
+	}
+
+	in := extractor.Input{
+		URL:   ref.URL,
+		Host:  host,
+		Title: content.Title,
+		HTML:  content.Body,
+	}
+
+	facts, err := w.extractor.Extract(ctx, in)
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+			"host":   host,
+		}).WithError(err).Warn("enrichment extraction failed, forwarding without facts")
+		return nil
+	}
+
+	log.WithFields(map[string]interface{}{
+		"job_id":       pm.ID,
+		"ref_id":       ref.ID,
+		"entity_count": len(facts.Entities),
+		"claim_count":  len(facts.Claims),
+		"fact_count":   len(facts.Facts),
+	}).Debug("enrichment extraction completed")
+	return facts
+}
+
+// attachFacts 는 추출된 facts 를 ProcessingMessage.Metadata 에 JSON 으로 저장합니다.
+//
+// 본 sub-issue 는 wire format 으로 metadata 활용 — 후속 #450 sub-issue 가 별도
+// enriched_contents 테이블에 영속화하면 metadata 의존을 줄일 수 있음.
+//
+// 직렬화 실패 시 best-effort — 메시지는 그대로 forward (warn 로깅 후 skip).
+func (w *Worker) attachFacts(pm *core.ProcessingMessage, facts *extractor.EnrichedFacts) {
+	if pm.Metadata == nil {
+		pm.Metadata = map[string]interface{}{}
+	}
+	pm.Metadata["enriched_facts"] = facts
+}
+
 // publishEnriched 는 ContentRef 를 TopicEnriched 에 발행합니다.
-// 본 sub-issue 에서는 payload 가 입력 ref 와 동일 — 후속 sub-issue 가 EnrichedFacts 등을 첨부.
 func (w *Worker) publishEnriched(ctx context.Context, ref *core.ContentRef, pm *core.ProcessingMessage, orig *queue.Message) error {
 	data, err := json.Marshal(ref)
 	if err != nil {

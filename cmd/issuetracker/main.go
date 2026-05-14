@@ -17,6 +17,7 @@ import (
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/enrich"
+	enrichextractor "issuetracker/internal/processor/enrich/extractor"
 	enrichWorkerPkg "issuetracker/internal/processor/enrich/worker"
 	"issuetracker/internal/processor/fetcher"
 	"issuetracker/internal/processor/fetcher/core"
@@ -901,13 +902,29 @@ func main() {
 		log.Warn("processing lock unavailable, enrich stage gate falls back to noop")
 	}
 
-	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, enrichGate, workerCountsCfg.Enrich)
+	// 이슈 #447 — claudegen 기반 enricher extractor wiring. claudegen pool 이 미활성이거나
+	// prompt loader 가 없으면 NoopExtractor 로 fallback (worker 는 항상 forward 보장 — extract
+	// 실패가 파이프라인을 막지 않음).
+	var enrichExtractor enrichextractor.Extractor = enrichextractor.NewNoopExtractor()
+	if claudegenPool != nil && promptLoader != nil {
+		ce, ceErr := enrichextractor.NewClaudegenExtractor(claudegenPool, promptLoader)
+		if ceErr != nil {
+			log.WithError(ceErr).Warn("claudegen enrich extractor construction failed, using noop")
+		} else {
+			enrichExtractor = ce
+			log.Info("enrich extractor: claudegen-backed")
+		}
+	} else {
+		log.Info("enrich extractor: noop (claudegen pool or prompt loader unavailable)")
+	}
+
+	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichGate, workerCountsCfg.Enrich)
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": workerCountsCfg.Enrich,
 		"input_topic":  queue.TopicValidated,
 		"output_topic": queue.TopicEnriched,
-	}).Info("enrich worker constructed (passthrough skeleton — #446)")
+	}).Info("enrich worker constructed (#447 — claudegen extractor)")
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리
