@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
@@ -18,7 +19,7 @@ import (
 
 // pgParserRuleRepository 는 pgx/v5 기반 ParserRuleRepository 구현체입니다.
 type pgParserRuleRepository struct {
-	pool *TimedPool
+	pool *pgxpool.Pool
 }
 
 // NewParserRuleRepository 는 pgxpool 을 사용하는 ParserRuleRepository 를 생성합니다.
@@ -26,7 +27,7 @@ type pgParserRuleRepository struct {
 // log 인자는 향후 query latency / error log 등 운영 가시성 추가를 대비해 시그니처에 유지하되,
 // 현재 구현에서는 사용하지 않습니다 (Gemini code review #8 — 미사용 필드 정리).
 // 다른 Repository 들 (NewContentRepository 등) 의 시그니처와 일관성을 위해 인자는 보존.
-func NewParserRuleRepository(pool *TimedPool, log *logger.Logger) storage.ParserRuleRepository {
+func NewParserRuleRepository(pool *pgxpool.Pool, log *logger.Logger) storage.ParserRuleRepository {
 	_ = log
 	return &pgParserRuleRepository{pool: pool}
 }

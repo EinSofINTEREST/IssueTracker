@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
@@ -30,12 +31,12 @@ func nullablePublishedAt(t time.Time) any {
 // pgContentRepository는 pgx/v5 기반 ContentRepository 구현체입니다.
 // 3개 테이블(contents, content_bodies, content_meta)을 투명하게 관리합니다.
 type pgContentRepository struct {
-	pool *TimedPool
+	pool *pgxpool.Pool
 	log  *logger.Logger
 }
 
 // NewContentRepository는 pgxpool을 사용하는 ContentRepository를 생성합니다.
-func NewContentRepository(pool *TimedPool, log *logger.Logger) storage.ContentRepository {
+func NewContentRepository(pool *pgxpool.Pool, log *logger.Logger) storage.ContentRepository {
 	return &pgContentRepository{pool: pool, log: log}
 }
 

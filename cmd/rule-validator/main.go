@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/parser/rule/validator"
+	"issuetracker/internal/storage"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/llm"
@@ -55,9 +56,7 @@ func main() {
 	defer pool.Close()
 
 	// query-level timeout 적용 (이슈 #427).
-	pgstore.SetQueryTimeout(dbCfg.QueryTimeout)
-
-	ruleRepo := pgstore.NewParserRuleRepository(pool, log)
+	ruleRepo := storage.WrapParserRuleWithTimeout(pgstore.NewParserRuleRepository(pool, log), dbCfg.QueryTimeout)
 
 	// parsing_rule 조회
 	record, err := ruleRepo.GetByID(ctx, *ruleID)

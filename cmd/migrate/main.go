@@ -37,7 +37,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	if err := migrations.Run(ctx, pool.Pool, log); err != nil {
+	if err := migrations.Run(ctx, pool, log); err != nil {
 		log.WithError(err).Fatal("migration failed")
 		os.Exit(1)
 	}

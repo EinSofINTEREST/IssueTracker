@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -17,51 +16,11 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// queryTimeoutNanos 는 본 패키지 모든 repository 메서드가 적용하는 query-level timeout (이슈 #427).
-//
-// pgxpool.Acquire 가 MaxConns 고갈 상황에서 무한 대기하는 시나리오 차단용.
-// SetQueryTimeout 으로 startup 1회 설정 — atomic.Int64 로 안전한 동시 read.
-// 0 이면 timeout 미적용 (legacy 호환).
-var queryTimeoutNanos atomic.Int64
-
-// SetQueryTimeout 은 패키지 전역 query timeout 을 설정합니다 (startup 1회).
-//
-// d <= 0 면 timeout 미적용. NewPool 호출 직후 또는 main 의 wiring 단계에서 1회 호출 권장.
-func SetQueryTimeout(d time.Duration) {
-	if d < 0 {
-		d = 0
-	}
-	queryTimeoutNanos.Store(int64(d))
-}
-
-// withQueryTimeout 은 repository 메서드 진입 시 query timeout 을 적용한 ctx 를 반환합니다 (이슈 #427).
-//
-// 정책:
-//   - 패키지 timeout 미설정 (0) → ctx 그대로 + no-op cancel
-//   - 호출자 ctx 가 이미 더 짧은 deadline 보유 → ctx 그대로 + no-op cancel (caller-priority)
-//   - 그 외 → context.WithTimeout 적용
-//
-// 사용 패턴 (모든 repository 메서드 첫 줄):
-//
-//	ctx, cancel := withQueryTimeout(ctx)
-//	defer cancel()
-func withQueryTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	d := time.Duration(queryTimeoutNanos.Load())
-	if d <= 0 {
-		return ctx, func() {}
-	}
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < d {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, d)
-}
-
-// NewPool은 DBConfig를 기반으로 pgxpool.Pool을 생성하고 TimedPool 로 감쌉니다.
+// NewPool은 DBConfig를 기반으로 pgxpool.Pool을 생성하고 연결을 확인합니다.
 // 연결이 실패하면 즉시 에러를 반환합니다.
 //
-// 반환 타입 *TimedPool 은 *pgxpool.Pool 을 embed 하므로 기존 메서드 (Ping, Close, Stat 등) 는
-// 그대로 호출 가능 + Query/Exec/QueryRow/Begin/SendBatch 는 query-level timeout 적용 (이슈 #427).
-func NewPool(ctx context.Context, cfg config.DBConfig, log *logger.Logger) (*TimedPool, error) {
+// query-level timeout (이슈 #427) 은 Repository decorator 에서 적용 — WrapXxxWithTimeout 사용.
+func NewPool(ctx context.Context, cfg config.DBConfig, log *logger.Logger) (*pgxpool.Pool, error) {
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN())
 	if err != nil {
 		return nil, fmt.Errorf("parse db config: %w", err)
@@ -95,7 +54,7 @@ func NewPool(ctx context.Context, cfg config.DBConfig, log *logger.Logger) (*Tim
 		"max_conns": cfg.MaxConns,
 	}).Info("postgresql pool connected")
 
-	return NewTimedPool(pool), nil
+	return pool, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

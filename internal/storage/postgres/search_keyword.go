@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
@@ -14,13 +15,13 @@ import (
 
 // pgSearchKeywordRepository 는 pgx/v5 기반 SearchKeywordRepository 구현체입니다.
 type pgSearchKeywordRepository struct {
-	pool *TimedPool
+	pool *pgxpool.Pool
 }
 
 // NewSearchKeywordRepository 는 pgxpool 을 사용하는 SearchKeywordRepository 를 생성합니다.
 //
 // log 는 다른 Repository 들과 시그니처 일관성 유지용 — 현재 미사용.
-func NewSearchKeywordRepository(pool *TimedPool, log *logger.Logger) (storage.SearchKeywordRepository, error) {
+func NewSearchKeywordRepository(pool *pgxpool.Pool, log *logger.Logger) (storage.SearchKeywordRepository, error) {
 	if pool == nil {
 		return nil, errors.New("postgres: NewSearchKeywordRepository requires non-nil pool")
 	}

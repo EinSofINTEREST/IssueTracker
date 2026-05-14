@@ -134,14 +134,13 @@ func main() {
 	}
 	defer pool.Close()
 
-	// query-level timeout 적용 (이슈 #427) — pgxpool.Acquire 무한 대기 차단.
-	pgstore.SetQueryTimeout(dbCfg.QueryTimeout)
-
 	jobPublisher := bus.New(crawlerProducer, resolver, log)
 
 	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
-	parserRuleRepo := pgstore.NewParserRuleRepository(pool, log)
+	// 모든 Repository 는 WrapXxxWithTimeout 으로 감싸 query-level timeout 적용 (이슈 #427).
+	// pgxpool.Acquire 가 MaxConns 고갈 상황에서 무한 대기하는 시나리오 차단.
+	parserRuleRepo := storage.WrapParserRuleWithTimeout(pgstore.NewParserRuleRepository(pool, log), dbCfg.QueryTimeout)
 	ruleResolver, err := rule.NewResolver(parserRuleRepo)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")
@@ -165,7 +164,7 @@ func main() {
 		blacklistRepo    storage.BlacklistRepository // llmGen.SetBlacklistRepo 에 전달 (#326).
 	)
 	if blacklistCfg.Enabled {
-		repo := pgstore.NewBlacklistRepository(pool, log)
+		repo := storage.WrapBlacklistWithTimeout(pgstore.NewBlacklistRepository(pool, log), dbCfg.QueryTimeout)
 		bm, bmErr := rule.NewBlacklistMatcher(repo)
 		if bmErr != nil {
 			log.WithError(bmErr).Fatal("failed to construct blacklist matcher")
@@ -186,18 +185,19 @@ func main() {
 	}
 
 	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제.
-	rawRepo := pgstore.NewRawContentRepository(pool, log)
+	rawRepo := storage.WrapRawContentWithTimeout(pgstore.NewRawContentRepository(pool, log), dbCfg.QueryTimeout)
 	rawSvc := service.NewRawContentService(rawRepo, log)
 
-	contentRepo := pgstore.NewContentRepository(pool, log)
+	contentRepo := storage.WrapContentWithTimeout(pgstore.NewContentRepository(pool, log), dbCfg.QueryTimeout)
 	contentSvc := service.NewContentService(contentRepo, log)
 
 	// host 단위 fetcher 룰 — fetcher_rules 테이블 + Resolver wiring.
 	// 룰 부재 host 는 default chain (현재 동작 100% 보존).
-	fetcherRuleRepo, err := pgstore.NewFetcherRuleRepository(pool, log)
+	fetcherRuleRepoBase, err := pgstore.NewFetcherRuleRepository(pool, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct fetcher rule repository")
 	}
+	fetcherRuleRepo := storage.WrapFetcherRuleWithTimeout(fetcherRuleRepoBase, dbCfg.QueryTimeout)
 	fetcherResolver, err := fetcherRule.NewResolver(fetcherRuleRepo, log, 0)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct fetcher rule resolver")
@@ -244,10 +244,11 @@ func main() {
 	} else if !googleCSECfg.IsConfigured() {
 		log.Info("google cse not configured (GOOGLE_CSE_API_KEY/CX) — search handler disabled")
 	} else {
-		searchKeywordRepo, kwErr := pgstore.NewSearchKeywordRepository(pool, log)
+		searchKeywordRepoBase, kwErr := pgstore.NewSearchKeywordRepository(pool, log)
 		if kwErr != nil {
 			log.WithError(kwErr).Warn("search keyword repo construction failed — search handler disabled")
 		} else {
+			searchKeywordRepo := storage.WrapSearchKeywordWithTimeout(searchKeywordRepoBase, dbCfg.QueryTimeout)
 			cseClient, cseErr := search.NewCSEClient(search.CSEClientOptions{
 				APIKey:  googleCSECfg.APIKey,
 				CX:      googleCSECfg.CX,
@@ -554,7 +555,7 @@ func main() {
 	parserKafkaCfg.GroupID = queue.GroupParsers
 	parserConsumer := queue.NewConsumer(parserKafkaCfg, queue.TopicFetched)
 	// sample URL 누적 — parser_worker 가 정상 파싱 후 누적, 단계 4-2 의 정밀화 트리거 입력.
-	sampleRepo := pgstore.NewSampleURLRepository(pool, log)
+	sampleRepo := storage.WrapSampleURLWithTimeout(pgstore.NewSampleURLRepository(pool, log), dbCfg.QueryTimeout)
 
 	// Parser StageGate (이슈 #355) — ProcessingLock + per-stage Semaphore 합성.
 	// Semaphore capacity 는 PARSER_MAX_CONCURRENT_PER_STAGE 와 worker_count/2 의 min.
@@ -739,10 +740,11 @@ func main() {
 	entries := scheduler.DefaultEntries(schedulerCfg)
 	sched := scheduler.New(entries, jobPublisher, log, schedulerCfg.MaxRetries)
 
-	schedulerEntryRepo, schedRepoErr := pgstore.NewSchedulerEntryRepository(pool, log)
+	schedulerEntryRepoBase, schedRepoErr := pgstore.NewSchedulerEntryRepository(pool, log)
 	if schedRepoErr != nil {
 		log.WithError(schedRepoErr).Warn("scheduler entry repo construction failed — using static DefaultEntries fallback")
 	} else {
+		schedulerEntryRepo := storage.WrapSchedulerEntryWithTimeout(schedulerEntryRepoBase, dbCfg.QueryTimeout)
 		entryConverter := scheduler.NewDefaultEntryConverter(schedulerCfg.JobTimeout)
 		entryResolver, resErr := scheduler.NewEntryResolver(schedulerEntryRepo, entryConverter, log, 0)
 		if resErr != nil {

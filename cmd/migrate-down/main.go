@@ -37,7 +37,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	if err := migrations.Rollback(ctx, pool.Pool, log); err != nil {
+	if err := migrations.Rollback(ctx, pool, log); err != nil {
 		log.WithError(err).Fatal("rollback failed")
 		os.Exit(1)
 	}

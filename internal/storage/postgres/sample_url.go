@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
@@ -14,14 +15,14 @@ import (
 
 // pgSampleURLRepository 는 pgx/v5 기반 SampleURLRepository 구현체입니다.
 type pgSampleURLRepository struct {
-	pool *TimedPool
+	pool *pgxpool.Pool
 }
 
 // NewSampleURLRepository 는 pgxpool 을 사용하는 SampleURLRepository 를 생성합니다.
 //
 // log 는 다른 Repository 와 시그니처 일관성을 위해 인자에 유지하지만 현재 미사용 (NewParserRuleRepository
 // 와 동일 패턴 — Gemini code review #8).
-func NewSampleURLRepository(pool *TimedPool, log *logger.Logger) storage.SampleURLRepository {
+func NewSampleURLRepository(pool *pgxpool.Pool, log *logger.Logger) storage.SampleURLRepository {
 	_ = log
 	return &pgSampleURLRepository{pool: pool}
 }

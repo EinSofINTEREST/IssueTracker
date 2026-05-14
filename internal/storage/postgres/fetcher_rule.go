@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
@@ -21,7 +22,7 @@ func canonicalizeHost(host string) string {
 
 // pgFetcherRuleRepository 는 pgx/v5 기반 FetcherRuleRepository 구현체입니다.
 type pgFetcherRuleRepository struct {
-	pool *TimedPool
+	pool *pgxpool.Pool
 }
 
 // NewFetcherRuleRepository 는 pgxpool 을 사용하는 FetcherRuleRepository 를 생성합니다.
@@ -30,7 +31,7 @@ type pgFetcherRuleRepository struct {
 // 현재 구현에서는 사용하지 않습니다 — 다른 Repository 들과 일관된 시그니처.
 //
 // pool 이 nil 이면 error 반환.
-func NewFetcherRuleRepository(pool *TimedPool, log *logger.Logger) (storage.FetcherRuleRepository, error) {
+func NewFetcherRuleRepository(pool *pgxpool.Pool, log *logger.Logger) (storage.FetcherRuleRepository, error) {
 	if pool == nil {
 		return nil, errors.New("postgres: NewFetcherRuleRepository requires non-nil pool")
 	}

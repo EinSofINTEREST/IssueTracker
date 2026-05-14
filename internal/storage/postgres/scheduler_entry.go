@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
@@ -16,13 +17,13 @@ import (
 
 // pgSchedulerEntryRepository 는 pgx/v5 기반 SchedulerEntryRepository 구현체입니다.
 type pgSchedulerEntryRepository struct {
-	pool *TimedPool
+	pool *pgxpool.Pool
 }
 
 // NewSchedulerEntryRepository 는 pgxpool 을 사용하는 SchedulerEntryRepository 를 생성합니다.
 //
 // log 인자는 다른 Repository 들의 시그니처 일관성 유지용 — 현재 구현은 미사용.
-func NewSchedulerEntryRepository(pool *TimedPool, log *logger.Logger) (storage.SchedulerEntryRepository, error) {
+func NewSchedulerEntryRepository(pool *pgxpool.Pool, log *logger.Logger) (storage.SchedulerEntryRepository, error) {
 	if pool == nil {
 		return nil, errors.New("postgres: NewSchedulerEntryRepository requires non-nil pool")
 	}
