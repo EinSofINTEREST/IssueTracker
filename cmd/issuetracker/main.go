@@ -31,7 +31,6 @@ import (
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
-	"issuetracker/internal/storage/repository"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/config"
 	"issuetracker/pkg/links"
@@ -141,16 +140,21 @@ func main() {
 
 	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
-	// 모든 Repository 는 WrapXxxWithTimeout 으로 감싸 query-level timeout 적용 (이슈 #427).
-	// pgxpool.Acquire 가 MaxConns 고갈 상황에서 무한 대기하는 시나리오 차단.
-	parserRuleRepo := decorator.WrapParserRuleWithTimeout(pgstore.NewParserRuleRepository(pool, log), dbCfg.QueryTimeout)
-	ruleResolver, err := rule.NewResolver(parserRuleRepo)
+	//
+	// ParserRuleService (이슈 #431) 가 decorator chain (timeout + invalidating) 을 자동 합성 —
+	// resolver / invalidator wiring 은 service 내부에서 처리.
+	parserRuleRepoRaw := pgstore.NewParserRuleRepository(pool, log)
+	// resolver 는 timeout decorator 만 적용된 repo 로 lookup (cache invalidate 는 service 가 처리).
+	ruleResolver, err := rule.NewResolver(decorator.WrapParserRuleWithTimeout(parserRuleRepoRaw, dbCfg.QueryTimeout))
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")
 	}
-	// parser_rules mutation → cache invalidate 자동 결합 (decorator 패턴).
-	// 호출처가 명시적 Invalidate 를 까먹어도 stale cache 발생 X — single source of truth.
-	parserRuleRepo = decorator.WrapWithInvalidator(parserRuleRepo, ruleResolver)
+	parserRuleSvc := service.NewParserRuleService(
+		parserRuleRepoRaw,
+		log,
+		service.WithParserRuleQueryTimeout(dbCfg.QueryTimeout),
+		service.WithParserRuleInvalidator(ruleResolver),
+	)
 	ruleParser, err := rule.NewParser(ruleResolver)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule parser")
@@ -158,23 +162,31 @@ func main() {
 
 	// page-parse 블랙리스트 — 카테고리 → article job 발행 단계에서 매칭 URL 차단.
 	// Enabled=false 시 Matcher 미주입 → parser_worker 가 모든 링크 그대로 발행 (기능 OFF).
+	//
+	// BlacklistService (이슈 #431) 가 decorator chain (timeout + invalidating cache) 을 내부 합성 +
+	// HandleLLMDecision 비즈니스 로직 캡슐화. Matcher 는 별도 구성 — read-only cache + match.
 	blacklistCfg, err := config.LoadBlacklist()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load blacklist config")
 	}
 	var (
 		blacklistMatcher *rule.BlacklistMatcher
-		blacklistRepo    repository.BlacklistRepository // llmGen.SetBlacklistRepo 에 전달 (#326).
+		blacklistSvc     service.BlacklistService // llmGen.SetBlacklistService 에 전달 (#326, #431).
 	)
 	if blacklistCfg.Enabled {
-		repo := decorator.WrapBlacklistWithTimeout(pgstore.NewBlacklistRepository(pool, log), dbCfg.QueryTimeout)
-		bm, bmErr := rule.NewBlacklistMatcher(repo)
+		blacklistRepoRaw := pgstore.NewBlacklistRepository(pool, log)
+		// Matcher 는 timeout decorator 만 적용된 repo 로 lookup (cache invalidate 는 service 가 처리).
+		bm, bmErr := rule.NewBlacklistMatcher(decorator.WrapBlacklistWithTimeout(blacklistRepoRaw, dbCfg.QueryTimeout))
 		if bmErr != nil {
 			log.WithError(bmErr).Fatal("failed to construct blacklist matcher")
 		}
-		// invalidatingBlacklistRepo decorator: claudegen 자동 INSERT (#326) 시 Matcher cache flush.
-		blacklistRepo = decorator.WrapBlacklistWithInvalidator(repo, bm)
 		blacklistMatcher = bm
+		blacklistSvc = service.NewBlacklistService(
+			blacklistRepoRaw,
+			log,
+			service.WithBlacklistQueryTimeout(dbCfg.QueryTimeout),
+			service.WithBlacklistInvalidator(bm),
+		)
 		log.Info("page-parse blacklist enabled (parser_blacklist DB-backed)")
 	} else {
 		log.Info("page-parse blacklist disabled (BLACKLIST_ENABLED=false)")
@@ -462,7 +474,7 @@ func main() {
 		}).Info("LLM prompt loader enabled (file → embed chain)")
 	}
 
-	llmGen, err := llmgenwiring.Build(llmProvider, parserRuleRepo, ruleResolver, promptLoader, redisClientShared, log)
+	llmGen, err := llmgenwiring.Build(llmProvider, parserRuleSvc, ruleResolver, promptLoader, redisClientShared, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build llmgen generator")
 	}
@@ -706,10 +718,10 @@ func main() {
 	}
 
 	// claudegen 의 EnrichedExtractor 분기에서 페이지를 blacklist 로 판정 시 자동 등록할
-	// repository 주입 (#326). blacklistRepo 가 nil (BLACKLIST_ENABLED=false) 이면
+	// service 주입 (이슈 #326, #431). blacklistSvc 가 nil (BLACKLIST_ENABLED=false) 이면
 	// Generator 내부 분기가 셀렉터 INSERT skip 만 보장.
-	if blacklistRepo != nil && llmGen != nil {
-		llmGen.SetBlacklistRepo(blacklistRepo)
+	if blacklistSvc != nil && llmGen != nil {
+		llmGen.SetBlacklistService(blacklistSvc)
 		log.Info("llmgen: 자동 blacklist 등록 활성화 (claudegen multi-step extraction)")
 	}
 
@@ -717,7 +729,7 @@ func main() {
 	// catch-all + llm-auto rule 의 누적 sample URL 로부터 path_pattern 정밀화.
 	// REFINEMENT_ENABLED=false 또는 config 실패 시 nil — 기존 catch-all rule 그대로 동작.
 	// metricsRegistry 는 nil 허용 — Record* 호출이 noop.
-	pathRefiner, err := refinerwiring.Build(llmProvider, promptLoader, parserRuleRepo, sampleRepo, ruleResolver, metricsRegistry, log)
+	pathRefiner, err := refinerwiring.Build(llmProvider, promptLoader, parserRuleSvc, sampleRepo, ruleResolver, metricsRegistry, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build refiner")
 	}
