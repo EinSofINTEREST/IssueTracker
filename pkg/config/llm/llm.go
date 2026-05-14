@@ -4,10 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"issuetracker/pkg/config/internal/parse"
 )
 
 // LLMConfig 는 LLM rule generator wiring 설정입니다.
@@ -65,25 +66,17 @@ func LoadLLM(envFiles ...string) (LLMConfig, error) {
 
 	cfg := DefaultLLMConfig()
 
-	if v := os.Getenv("LLM_ENABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return LLMConfig{}, fmt.Errorf("parse LLM_ENABLED %q: %w", v, err)
+	// 검증 강화 (이슈 #439): provider enum, 양수 timeout.
+	// LLM_PROVIDER 미설정 시 default "gemini" 유지 — 빈 문자열만 skip.
+	for _, op := range []error{
+		parse.String("LLM_MODEL", &cfg.Model),
+		parse.Bool("LLM_ENABLED", &cfg.Enabled),
+		parse.Enum("LLM_PROVIDER", []string{"gemini", "openai", "anthropic", "claude"}, &cfg.Provider),
+		parse.PositiveDuration("LLM_TIMEOUT", &cfg.Timeout),
+	} {
+		if op != nil {
+			return LLMConfig{}, op
 		}
-		cfg.Enabled = b
-	}
-	if v := os.Getenv("LLM_PROVIDER"); v != "" {
-		cfg.Provider = v
-	}
-	if v := os.Getenv("LLM_MODEL"); v != "" {
-		cfg.Model = v
-	}
-	if v := os.Getenv("LLM_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return LLMConfig{}, fmt.Errorf("parse LLM_TIMEOUT %q: %w", v, err)
-		}
-		cfg.Timeout = d
 	}
 
 	cfg.APIKey = lookupLLMAPIKey(cfg.Provider)

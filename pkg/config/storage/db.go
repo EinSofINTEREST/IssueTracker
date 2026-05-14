@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"issuetracker/pkg/config/internal/parse"
 )
 
 // DBConfig는 PostgreSQL 연결 설정을 나타냅니다.
@@ -70,55 +71,27 @@ func Load(envFiles ...string) (DBConfig, error) {
 
 	cfg := DefaultDBConfig()
 
-	if v := os.Getenv("POSTGRES_HOST"); v != "" {
-		cfg.Host = v
-	}
-	if v := os.Getenv("POSTGRES_PORT"); v != "" {
-		p, err := strconv.Atoi(v)
-		if err != nil {
-			return DBConfig{}, fmt.Errorf("parse POSTGRES_PORT %q: %w", v, err)
+	// 검증 강화 (이슈 #439): port 범위, 양수 timeout, 비음수 conn 수.
+	for _, op := range []error{
+		parse.String("POSTGRES_HOST", &cfg.Host),
+		parse.String("POSTGRES_USER", &cfg.User),
+		parse.String("POSTGRES_PASSWORD", &cfg.Password),
+		parse.String("POSTGRES_DB", &cfg.Database),
+		parse.String("POSTGRES_SSLMODE", &cfg.SSLMode),
+		parse.Port("POSTGRES_PORT", &cfg.Port),
+		parse.PositiveInt32("POSTGRES_MAX_CONNS", &cfg.MaxConns),    // > 0 — 0 면 connection 획득 불가
+		parse.NonNegativeInt32("POSTGRES_MIN_CONNS", &cfg.MinConns), // >= 0 — 0 면 idle pool 없음
+		parse.PositiveDuration("POSTGRES_CONN_TIMEOUT", &cfg.ConnTimeout),
+		parse.NonNegativeDuration("POSTGRES_QUERY_TIMEOUT", &cfg.QueryTimeout), // 0 = legacy 호환 미적용
+	} {
+		if op != nil {
+			return DBConfig{}, op
 		}
-		cfg.Port = p
 	}
-	if v := os.Getenv("POSTGRES_USER"); v != "" {
-		cfg.User = v
-	}
-	if v := os.Getenv("POSTGRES_PASSWORD"); v != "" {
-		cfg.Password = v
-	}
-	if v := os.Getenv("POSTGRES_DB"); v != "" {
-		cfg.Database = v
-	}
-	if v := os.Getenv("POSTGRES_SSLMODE"); v != "" {
-		cfg.SSLMode = v
-	}
-	if v := os.Getenv("POSTGRES_MAX_CONNS"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 32)
-		if err != nil {
-			return DBConfig{}, fmt.Errorf("parse POSTGRES_MAX_CONNS %q: %w", v, err)
-		}
-		cfg.MaxConns = int32(n)
-	}
-	if v := os.Getenv("POSTGRES_MIN_CONNS"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 32)
-		if err != nil {
-			return DBConfig{}, fmt.Errorf("parse POSTGRES_MIN_CONNS %q: %w", v, err)
-		}
-		cfg.MinConns = int32(n)
-	}
-	if v := os.Getenv("POSTGRES_CONN_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return DBConfig{}, fmt.Errorf("parse POSTGRES_CONN_TIMEOUT %q: %w", v, err)
-		}
-		cfg.ConnTimeout = d
-	}
-	if v := os.Getenv("POSTGRES_QUERY_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return DBConfig{}, fmt.Errorf("parse POSTGRES_QUERY_TIMEOUT %q: %w", v, err)
-		}
-		cfg.QueryTimeout = d
+
+	// MinConns > MaxConns 면 pgxpool 이 거부하므로 사전 검증으로 친절한 메시지 제공.
+	if cfg.MinConns > cfg.MaxConns {
+		return DBConfig{}, fmt.Errorf("POSTGRES_MIN_CONNS (%d) cannot exceed POSTGRES_MAX_CONNS (%d)", cfg.MinConns, cfg.MaxConns)
 	}
 
 	return cfg, nil
