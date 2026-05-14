@@ -88,6 +88,20 @@ func main() {
 		"validate":       workerCountsCfg.Validate,
 	}).Info("worker counts loaded")
 
+	// Stage toggle (이슈 #443) — env 로 stage 별 활성/비활성 제어. 모두 true 가 default
+	// 이므로 env 미설정 시 동작 100% 보존. fetcher-only / parser-only / validate-only
+	// 노드를 같은 바이너리로 띄울 수 있도록 stage Start 호출만 gating.
+	stagesCfg, err := runtimecfg.LoadStages()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load stages config")
+	}
+	log.WithFields(map[string]interface{}{
+		"fetcher":   stagesCfg.FetcherEnabled,
+		"parser":    stagesCfg.ParserEnabled,
+		"validate":  stagesCfg.ValidateEnabled,
+		"scheduler": stagesCfg.SchedulerEnabled,
+	}).Info("stage toggles loaded")
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -800,12 +814,18 @@ func main() {
 		}).Info("scheduler backlog throttle enabled")
 	}
 
-	sched.Start(ctx)
-	// Resolver 가 wiring 되어 있으면 30s 주기 refresh — DB 변경 자동 반영.
-	// resolver 자체 5min TTL cache 가 DB 부하 흡수, 짧은 refresh 가 stall 빈도 줄임.
-	sched.StartRefreshLoop(ctx, 30*time.Second)
+	// 이슈 #443 — scheduler stage 비활성 시 Start 호출만 skip.
+	// 구성요소 (entries / resolver / publisher) 는 그대로 둠 — DB 부하·메모리 미미.
+	if stagesCfg.SchedulerEnabled {
+		sched.Start(ctx)
+		// Resolver 가 wiring 되어 있으면 30s 주기 refresh — DB 변경 자동 반영.
+		// resolver 자체 5min TTL cache 가 DB 부하 흡수, 짧은 refresh 가 stall 빈도 줄임.
+		sched.StartRefreshLoop(ctx, 30*time.Second)
 
-	log.WithField("entry_count", len(entries)).Info("scheduler started")
+		log.WithField("entry_count", len(entries)).Info("scheduler started")
+	} else {
+		log.Info("scheduler disabled by STAGES_SCHEDULER_ENABLED=false")
+	}
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Processor (Validate)
@@ -867,20 +887,42 @@ func main() {
 		log.WithError(err).Fatal("failed to construct validate stage")
 	}
 
+	// 이슈 #443 — stage 별 활성 플래그에 따라 selective Start.
+	// 구성은 위에서 항상 진행 (Kafka Reader 는 FetchMessage 호출 전까지 group 미참여 —
+	// 비활성 stage 의 phantom consumer 우려 없음). 비활성 시 Start 만 skip.
+	stages := []processor.Stage{}
+	if stagesCfg.FetcherEnabled {
+		stages = append(stages, fetcherStage)
+	} else {
+		log.Info("fetcher stage disabled by STAGES_FETCHER_ENABLED=false")
+	}
+	if stagesCfg.ParserEnabled {
+		stages = append(stages, parserStg)
+	} else {
+		log.Info("parser stage disabled by STAGES_PARSER_ENABLED=false")
+	}
+	if stagesCfg.ValidateEnabled {
+		stages = append(stages, validateStage)
+	} else {
+		log.Info("validate stage disabled by STAGES_VALIDATE_ENABLED=false")
+	}
+
 	// chromedp 자동 upgrade 의 자가 회복 안전장치 — interval 마다 reason='auto_upgrade_validation'
 	// row 를 goquery 로 reset. ENABLED=false 시 stage 미등록 (단계 3 의 upgrade-only 동작 유지).
-	stages := []processor.Stage{fetcherStage, parserStg, validateStage}
+	// fetcher stage 비활성 시 downgrader 도 의미 없으므로 함께 skip.
 	downgradeCfg, err := fetchercfg.LoadFetcherAutoDowngrade()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load fetcher auto-downgrade config")
 	}
-	if downgradeCfg.Enabled {
+	if stagesCfg.FetcherEnabled && downgradeCfg.Enabled {
 		downgrader, err := fetcherRule.NewDowngrader(fetcherRuleRepo, fetcherResolver, downgradeCfg.Interval, log)
 		if err != nil {
 			log.WithError(err).Fatal("failed to construct fetcher auto-downgrade stage")
 		}
 		stages = append(stages, downgrader)
 		log.WithField("interval", downgradeCfg.Interval.String()).Info("fetcher auto-downgrade enabled")
+	} else if !stagesCfg.FetcherEnabled {
+		log.Info("fetcher auto-downgrade skipped (fetcher stage disabled)")
 	} else {
 		log.Info("fetcher auto-downgrade disabled (FETCHER_AUTO_DOWNGRADE_ENABLED=false)")
 	}
