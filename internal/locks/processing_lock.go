@@ -47,6 +47,7 @@ const (
 	StageFetcher   = "fetcher"
 	StageParser    = "parser"
 	StageValidator = "validator"
+	StageEnricher  = "enricher"
 )
 
 // ProcessingKey 는 (stage, normalized_url) 페어로 ProcessingLock 의 Redis 키를 생성합니다.
