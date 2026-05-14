@@ -16,6 +16,8 @@ import (
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor"
+	"issuetracker/internal/processor/enrich"
+	enrichWorkerPkg "issuetracker/internal/processor/enrich/worker"
 	"issuetracker/internal/processor/fetcher"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/processor/fetcher/domain/general/sources"
@@ -99,6 +101,7 @@ func main() {
 		"fetcher":   stagesCfg.FetcherEnabled,
 		"parser":    stagesCfg.ParserEnabled,
 		"validate":  stagesCfg.ValidateEnabled,
+		"enrich":    stagesCfg.EnrichEnabled,
 		"scheduler": stagesCfg.SchedulerEnabled,
 	}).Info("stage toggles loaded")
 
@@ -871,6 +874,42 @@ func main() {
 	}).Info("validate worker constructed")
 
 	// ══════════════════════════════════════════════════════════════════════════
+	// Processor (Enrich) — sub-issue #446 skeleton (passthrough only)
+	// ══════════════════════════════════════════════════════════════════════════
+
+	enrichKafkaCfg := queue.DefaultConfig()
+	enrichKafkaCfg.GroupID = queue.GroupEnrichers
+
+	enrichConsumer := queue.NewConsumer(enrichKafkaCfg, queue.TopicValidated)
+	defer enrichConsumer.Close()
+
+	enrichProducer := queue.NewProducer(enrichKafkaCfg)
+	defer enrichProducer.Close()
+
+	// publisher facade — enrich 는 Forward (validated → enriched) 만 사용.
+	enrichPublisher := bus.New(enrichProducer, nil, log)
+
+	enrichCap := runtimecfg.CapPerStage(workerCountsCfg.Enrich, stageGateCfg.EnrichMaxConcurrentPerStage)
+	enrichGate := locks.BuildStageGate(locks.StageEnricher, enrichCap, procLock, log)
+	if procLock != nil {
+		log.WithFields(map[string]interface{}{
+			"worker_count": workerCountsCfg.Enrich,
+			"capacity":     enrichCap,
+			"configured":   stageGateCfg.EnrichMaxConcurrentPerStage,
+		}).Info("enrich stage gate enabled (ProcessingLock + Semaphore)")
+	} else {
+		log.Warn("processing lock unavailable, enrich stage gate falls back to noop")
+	}
+
+	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, enrichGate, workerCountsCfg.Enrich)
+
+	log.WithFields(map[string]interface{}{
+		"worker_count": workerCountsCfg.Enrich,
+		"input_topic":  queue.TopicValidated,
+		"output_topic": queue.TopicEnriched,
+	}).Info("enrich worker constructed (passthrough skeleton — #446)")
+
+	// ══════════════════════════════════════════════════════════════════════════
 	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리
 	// ══════════════════════════════════════════════════════════════════════════
 
@@ -885,6 +924,10 @@ func main() {
 	validateStage, err := validate.NewStage(validateWorker)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct validate stage")
+	}
+	enrichStage, err := enrich.NewStage(enrichW)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct enrich stage")
 	}
 
 	// 이슈 #443 — stage 별 활성 플래그에 따라 selective Start.
@@ -905,6 +948,11 @@ func main() {
 		stages = append(stages, validateStage)
 	} else {
 		log.Info("validate stage disabled by STAGES_VALIDATE_ENABLED=false")
+	}
+	if stagesCfg.EnrichEnabled {
+		stages = append(stages, enrichStage)
+	} else {
+		log.Info("enrich stage disabled by STAGES_ENRICH_ENABLED=false")
 	}
 
 	// chromedp 자동 upgrade 의 자가 회복 안전장치 — interval 마다 reason='auto_upgrade_validation'
