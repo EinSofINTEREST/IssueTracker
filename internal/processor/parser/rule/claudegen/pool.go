@@ -242,6 +242,18 @@ func (p *ClaudeWorkerPool) ExtractEnriched(ctx context.Context, host string, tar
 	return p.pick().ExtractEnriched(ctx, host, targetType, html)
 }
 
+// RunEnrichSession 은 round-robin worker 선택 후 RunEnrichSession 위임 (이슈 #447).
+//
+// enrich.Extractor 구현체 (extractor/claudegen.go) 가 호출하는 진입점.
+func (p *ClaudeWorkerPool) RunEnrichSession(
+	ctx context.Context,
+	sessionLabel string,
+	files map[string][]byte,
+	promptText string,
+) (string, error) {
+	return p.pick().RunEnrichSession(ctx, sessionLabel, files, promptText)
+}
+
 // pick 는 round-robin 분배로 다음 worker 를 선택합니다.
 //
 // atomic.Uint64 의 ADD-AND-MODULO 패턴 — lock-free + counter wrap-around 시 modulo 정상 동작.
