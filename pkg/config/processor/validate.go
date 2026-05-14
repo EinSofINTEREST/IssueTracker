@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 
 	"github.com/joho/godotenv"
+
+	"issuetracker/pkg/config/internal/parse"
 )
 
 // ValidateConfig는 Content 검증 단계의 임계값 설정을 나타냅니다.
@@ -71,56 +72,36 @@ func LoadValidate(envFiles ...string) (ValidateConfig, error) {
 
 	cfg := DefaultValidateConfig()
 
-	parseInt := func(key string, dest *int) error {
-		if v := os.Getenv(key); v != "" {
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return fmt.Errorf("parse %s %q: %w", key, v, err)
-			}
-			*dest = n
-		}
-		return nil
-	}
-
-	parseFloat := func(key string, dest *float64) error {
-		if v := os.Getenv(key); v != "" {
-			f, err := strconv.ParseFloat(v, 64)
-			if err != nil {
-				return fmt.Errorf("parse %s %q: %w", key, v, err)
-			}
-			*dest = f
-		}
-		return nil
-	}
-
-	if v := os.Getenv("VALIDATE_REPARSE_ENABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return ValidateConfig{}, fmt.Errorf("parse VALIDATE_REPARSE_ENABLED %q: %w", v, err)
-		}
-		cfg.ReparseEnabled = b
-	}
-
+	// 검증 강화 (이슈 #439): 모든 길이/카운트는 양수, 모든 ratio/threshold/weight 는 [0.0, 1.0].
 	for _, op := range []error{
-		parseInt("VALIDATE_NEWS_TITLE_MIN_LEN", &cfg.NewsTitleMinLen),
-		parseInt("VALIDATE_NEWS_TITLE_MAX_LEN", &cfg.NewsTitleMaxLen),
-		parseInt("VALIDATE_NEWS_BODY_MIN_LEN", &cfg.NewsBodyMinLen),
-		parseInt("VALIDATE_NEWS_BODY_MAX_LEN", &cfg.NewsBodyMaxLen),
-		parseInt("VALIDATE_NEWS_MIN_WORD_COUNT", &cfg.NewsMinWordCount),
-		parseFloat("VALIDATE_NEWS_QUALITY_THRESHOLD", &cfg.NewsQualityThreshold),
-		parseFloat("VALIDATE_NEWS_MAX_CAP_RATIO", &cfg.NewsMaxCapRatio),
-		parseFloat("VALIDATE_NEWS_MAX_PUNCT_RATIO", &cfg.NewsMaxPunctRatio),
-		parseFloat("VALIDATE_NEWS_WEIGHT_WORD_COUNT", &cfg.NewsWeightWordCount),
-		parseFloat("VALIDATE_NEWS_WEIGHT_META", &cfg.NewsWeightMeta),
-		parseFloat("VALIDATE_NEWS_WEIGHT_STRUCTURE", &cfg.NewsWeightStructure),
-		parseInt("VALIDATE_COMMUNITY_BODY_MIN_LEN", &cfg.CommunityBodyMinLen),
-		parseFloat("VALIDATE_COMMUNITY_QUALITY_THRESHOLD", &cfg.CommunityQualityThreshold),
-		parseFloat("VALIDATE_COMMUNITY_MAX_REPEAT_RATIO", &cfg.CommunityMaxRepeatRatio),
-		parseInt("VALIDATE_COMMUNITY_MIN_REPEAT_RUN", &cfg.CommunityMinRepeatRun),
+		parse.Bool("VALIDATE_REPARSE_ENABLED", &cfg.ReparseEnabled),
+		parse.PositiveInt("VALIDATE_NEWS_TITLE_MIN_LEN", &cfg.NewsTitleMinLen),
+		parse.PositiveInt("VALIDATE_NEWS_TITLE_MAX_LEN", &cfg.NewsTitleMaxLen),
+		parse.PositiveInt("VALIDATE_NEWS_BODY_MIN_LEN", &cfg.NewsBodyMinLen),
+		parse.PositiveInt("VALIDATE_NEWS_BODY_MAX_LEN", &cfg.NewsBodyMaxLen),
+		parse.PositiveInt("VALIDATE_NEWS_MIN_WORD_COUNT", &cfg.NewsMinWordCount),
+		parse.Ratio("VALIDATE_NEWS_QUALITY_THRESHOLD", &cfg.NewsQualityThreshold),
+		parse.Ratio("VALIDATE_NEWS_MAX_CAP_RATIO", &cfg.NewsMaxCapRatio),
+		parse.Ratio("VALIDATE_NEWS_MAX_PUNCT_RATIO", &cfg.NewsMaxPunctRatio),
+		parse.Ratio("VALIDATE_NEWS_WEIGHT_WORD_COUNT", &cfg.NewsWeightWordCount),
+		parse.Ratio("VALIDATE_NEWS_WEIGHT_META", &cfg.NewsWeightMeta),
+		parse.Ratio("VALIDATE_NEWS_WEIGHT_STRUCTURE", &cfg.NewsWeightStructure),
+		parse.PositiveInt("VALIDATE_COMMUNITY_BODY_MIN_LEN", &cfg.CommunityBodyMinLen),
+		parse.Ratio("VALIDATE_COMMUNITY_QUALITY_THRESHOLD", &cfg.CommunityQualityThreshold),
+		parse.Ratio("VALIDATE_COMMUNITY_MAX_REPEAT_RATIO", &cfg.CommunityMaxRepeatRatio),
+		parse.PositiveInt("VALIDATE_COMMUNITY_MIN_REPEAT_RUN", &cfg.CommunityMinRepeatRun),
 	} {
 		if op != nil {
 			return ValidateConfig{}, op
 		}
+	}
+
+	// 의미적 일관성 검사: Min < Max.
+	if cfg.NewsTitleMinLen > cfg.NewsTitleMaxLen {
+		return ValidateConfig{}, fmt.Errorf("VALIDATE_NEWS_TITLE_MIN_LEN (%d) cannot exceed _MAX_LEN (%d)", cfg.NewsTitleMinLen, cfg.NewsTitleMaxLen)
+	}
+	if cfg.NewsBodyMinLen > cfg.NewsBodyMaxLen {
+		return ValidateConfig{}, fmt.Errorf("VALIDATE_NEWS_BODY_MIN_LEN (%d) cannot exceed _MAX_LEN (%d)", cfg.NewsBodyMinLen, cfg.NewsBodyMaxLen)
 	}
 
 	return cfg, nil

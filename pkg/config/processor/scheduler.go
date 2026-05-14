@@ -4,10 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"issuetracker/pkg/config/internal/parse"
 )
 
 // SchedulerConfig는 Job Scheduler의 크롤 주기 설정을 나타냅니다.
@@ -49,45 +50,13 @@ func LoadScheduler(envFiles ...string) (SchedulerConfig, error) {
 
 	cfg := DefaultSchedulerConfig()
 
-	parseDuration := func(key string, dest *time.Duration) error {
-		if v := os.Getenv(key); v != "" {
-			d, err := time.ParseDuration(v)
-			if err != nil {
-				return fmt.Errorf("parse %s %q: %w", key, v, err)
-			}
-			*dest = d
-		}
-		return nil
-	}
-
-	parseInt := func(key string, dest *int) error {
-		if v := os.Getenv(key); v != "" {
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return fmt.Errorf("parse %s %q: %w", key, v, err)
-			}
-			*dest = n
-		}
-		return nil
-	}
-
-	parseInt64 := func(key string, dest *int64) error {
-		if v := os.Getenv(key); v != "" {
-			n, err := strconv.ParseInt(v, 10, 64)
-			if err != nil {
-				return fmt.Errorf("parse %s %q: %w", key, v, err)
-			}
-			*dest = n
-		}
-		return nil
-	}
-
+	// 검증 강화 (이슈 #439): duration 양수 / retries 비음수 / backlog 비음수.
 	for _, op := range []error{
-		parseDuration("SCHEDULER_CATEGORY_INTERVAL", &cfg.CategoryInterval),
-		parseDuration("SCHEDULER_JOB_TIMEOUT", &cfg.JobTimeout),
-		parseInt("SCHEDULER_MAX_RETRIES", &cfg.MaxRetries),
-		parseInt64("SCHEDULER_MAX_BACKLOG", &cfg.MaxBacklog),
-		parseDuration("SCHEDULER_BACKLOG_CHECK_TIMEOUT", &cfg.BacklogCheckTimeout),
+		parse.PositiveDuration("SCHEDULER_CATEGORY_INTERVAL", &cfg.CategoryInterval),
+		parse.PositiveDuration("SCHEDULER_JOB_TIMEOUT", &cfg.JobTimeout),
+		parse.NonNegativeInt("SCHEDULER_MAX_RETRIES", &cfg.MaxRetries),
+		parse.NonNegativeInt64("SCHEDULER_MAX_BACKLOG", &cfg.MaxBacklog), // 0 = throttle disabled
+		parse.PositiveDuration("SCHEDULER_BACKLOG_CHECK_TIMEOUT", &cfg.BacklogCheckTimeout),
 	} {
 		if op != nil {
 			return SchedulerConfig{}, op
