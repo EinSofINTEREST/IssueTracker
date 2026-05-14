@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
@@ -18,12 +17,12 @@ import (
 
 // pgRawContentRepository는 pgx/v5 기반 RawContentRepository 구현체입니다.
 type pgRawContentRepository struct {
-	pool *pgxpool.Pool
+	pool *TimedPool
 	log  *logger.Logger
 }
 
 // NewRawContentRepository는 pgxpool을 사용하는 RawContentRepository를 생성합니다.
-func NewRawContentRepository(pool *pgxpool.Pool, log *logger.Logger) storage.RawContentRepository {
+func NewRawContentRepository(pool *TimedPool, log *logger.Logger) storage.RawContentRepository {
 	return &pgRawContentRepository{pool: pool, log: log}
 }
 

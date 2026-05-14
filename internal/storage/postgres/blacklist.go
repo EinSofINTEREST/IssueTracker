@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"issuetracker/internal/storage"
 	"issuetracker/pkg/logger"
@@ -18,12 +17,12 @@ import (
 
 // pgBlacklistRepository 는 pgx/v5 기반 BlacklistRepository 구현체입니다.
 type pgBlacklistRepository struct {
-	pool *pgxpool.Pool
+	pool *TimedPool
 }
 
 // NewBlacklistRepository 는 pgxpool 기반 BlacklistRepository 를 생성합니다.
 // log 인자는 향후 query latency / error log 등 운영 가시성 추가용 — 현재 미사용.
-func NewBlacklistRepository(pool *pgxpool.Pool, log *logger.Logger) storage.BlacklistRepository {
+func NewBlacklistRepository(pool *TimedPool, log *logger.Logger) storage.BlacklistRepository {
 	_ = log
 	return &pgBlacklistRepository{pool: pool}
 }
