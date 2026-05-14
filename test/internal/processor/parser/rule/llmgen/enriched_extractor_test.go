@@ -2,6 +2,8 @@ package llmgen_test
 
 import (
 	"context"
+	"net/url"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -49,35 +51,43 @@ func (e *fakeEnrichedExtractor) callCount() int {
 	return e.calls
 }
 
-// recordingBlacklistRepo 는 Insert 호출을 기록하는 BlacklistRepository stub.
+// recordingBlacklistRepo 는 HandleLLMDecision 호출을 기록하는 BlacklistAutoRegister stub (이슈 #431).
+//
+// 이전 (#326) 에는 Generator 가 BlacklistRepository 를 직접 호출했으나, #431 에서 service
+// boundary 로 의존성 역전 — 본 stub 은 service interface 만 만족하면 됨.
 type recordingBlacklistRepo struct {
 	mu       sync.Mutex
 	inserts  []*model.BlacklistRecord
-	insertOK bool // false 면 ErrDuplicate 반환 (멱등성 검증)
+	insertOK bool // false 면 (false, ErrDuplicate) 반환 (멱등성 검증)
 }
 
-func (r *recordingBlacklistRepo) Insert(_ context.Context, rec *model.BlacklistRecord) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.inserts = append(r.inserts, rec)
-	if !r.insertOK {
-		return storage.ErrDuplicate
+// HandleLLMDecision 은 BlacklistAutoRegister 인터페이스를 만족합니다 (llmgen.Generator 가 의존).
+// 본 stub 은 실제 service 와 같은 path_pattern 변환 로직을 직접 수행 — 기존 테스트의 검증 부분
+// (rec.PathPattern Contains "/promo/123") 이 그대로 통과되도록.
+func (r *recordingBlacklistRepo) HandleLLMDecision(_ context.Context, host, sampleURL string, _ model.TargetType, reason string) (bool, error) {
+	u, err := url.Parse(sampleURL)
+	if err != nil {
+		return false, nil
 	}
-	return nil
-}
-
-func (r *recordingBlacklistRepo) Update(_ context.Context, _ *model.BlacklistRecord) error {
-	return nil
-}
-func (r *recordingBlacklistRepo) Delete(_ context.Context, _ int64) error { return nil }
-func (r *recordingBlacklistRepo) GetByID(_ context.Context, _ int64) (*model.BlacklistRecord, error) {
-	return nil, storage.ErrNotFound
-}
-func (r *recordingBlacklistRepo) FindEnabledByHost(_ context.Context, _ string) ([]*model.BlacklistRecord, error) {
-	return nil, nil
-}
-func (r *recordingBlacklistRepo) List(_ context.Context, _ model.BlacklistFilter) ([]*model.BlacklistRecord, error) {
-	return nil, nil
+	path := u.Path
+	if path == "" {
+		path = "/"
+	}
+	rec := &model.BlacklistRecord{
+		HostPattern: host,
+		PathPattern: "^" + regexp.QuoteMeta(path) + "$",
+		Reason:      reason,
+		Source:      model.BlacklistSourceAuto,
+		Mode:        model.BlacklistModeDrop,
+		Enabled:     true,
+	}
+	r.mu.Lock()
+	r.inserts = append(r.inserts, rec)
+	r.mu.Unlock()
+	if !r.insertOK {
+		return false, storage.ErrDuplicate
+	}
+	return true, nil
 }
 
 func (r *recordingBlacklistRepo) callCount() int {
@@ -103,7 +113,7 @@ func TestGenerator_EnrichedExtractor_BlacklistBranch(t *testing.T) {
 	g.SetExtractor(extractor)
 
 	blRepo := &recordingBlacklistRepo{insertOK: true}
-	g.SetBlacklistRepo(blRepo)
+	g.SetBlacklistService(blRepo)
 
 	g.Enqueue(context.Background(), "ads.example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://ads.example.com/promo/123", HTML: samplePageHTML,
@@ -172,7 +182,7 @@ func TestGenerator_EnrichedExtractor_BlacklistRepoNil_StillSkipsInsert(t *testin
 		},
 	}
 	g.SetExtractor(extractor)
-	// SetBlacklistRepo 미호출 — nil 상태.
+	// SetBlacklistService 미호출 — nil 상태.
 
 	g.Enqueue(context.Background(), "loginwall.example.com", model.TargetTypePage, &core.RawContent{
 		URL: "https://loginwall.example.com/secure", HTML: samplePageHTML,
