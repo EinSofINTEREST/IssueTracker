@@ -1,0 +1,32 @@
+Read the HTML file at {{SESSION_PATH}}/page.html from the {{HOST}} website.
+
+Your task: extract structured facts from this page. Return a single JSON object — no explanation, no markdown, no code blocks.
+
+Page URL: {{URL}}
+Page title: {{TITLE}}
+
+Output schema:
+{
+  "entities": [
+    {"type": "person" | "org" | "location" | "event" | "product", "name": "<entity name>", "mentions": <int — number of times referenced>}
+  ],
+  "claims": [
+    {"text": "<full claim as written in the page>", "subject": "<who/what>", "predicate": "<verb/action>", "object": "<target/result>"}
+  ],
+  "facts": [
+    {"key": "<machine-readable key, e.g., death_toll>", "value": "<extracted value>", "unit": "<optional unit, e.g., people, %, USD>"}
+  ],
+  "topics": ["<top-level topic, e.g., politics, technology, environment>", ...],
+  "sentiment": "positive" | "negative" | "neutral"
+}
+
+Extraction rules:
+1. entities — only those clearly named in the page. Aggregate mentions across the body (case-insensitive). Skip generic terms (e.g., "the president" without a name).
+2. claims — declarative statements the page makes (not quotes from interviewees unless presented as fact). 3-10 most central claims. Keep "text" verbatim from the page (truncate to 300 chars).
+3. facts — numerical / quantitative / dated / measurable claims. Extract value as the page presents it (e.g., "32", "1.5 million", "2024-03-15"). Unit is optional.
+4. topics — 1-5 high-level topics. Lowercase. Prefer broad categories (politics, economy, technology, society, environment, culture, sports, health).
+5. sentiment — overall tone of the page towards its subject. neutral by default; positive/negative only when clearly biased.
+
+Empty arrays are acceptable when the page lacks signal. Do not invent.
+
+Return ONLY the JSON object.
