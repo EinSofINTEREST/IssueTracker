@@ -72,7 +72,11 @@ func LoadStages(envFiles ...string) (StagesConfig, error) {
 	}
 
 	if !cfg.FetcherEnabled && !cfg.ParserEnabled && !cfg.ValidateEnabled && !cfg.SchedulerEnabled {
-		return StagesConfig{}, fmt.Errorf("all stages disabled — at least one of STAGES_FETCHER_ENABLED/STAGES_PARSER_ENABLED/STAGES_VALIDATE_ENABLED/STAGES_SCHEDULER_ENABLED must be true")
+		return StagesConfig{}, fmt.Errorf(
+			"all stages disabled — at least one of " +
+				"STAGES_FETCHER_ENABLED/STAGES_PARSER_ENABLED/" +
+				"STAGES_VALIDATE_ENABLED/STAGES_SCHEDULER_ENABLED must be true",
+		)
 	}
 
 	return cfg, nil
