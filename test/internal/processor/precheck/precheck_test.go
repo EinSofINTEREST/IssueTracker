@@ -73,11 +73,6 @@ func TestDecider_EmptySources_AllowsAll(t *testing.T) {
 }
 
 func TestDecider_CheckURLs_BatchOrder(t *testing.T) {
-	// 첫 번째 URL 만 차단하는 Source — index 별 다른 verdict 반환을 위한 inline 구현.
-	type batchSource struct {
-		blockHost string
-	}
-	// 위 inline 구조체는 메서드 정의를 못 하므로 별도 함수형 source.
 	src := dynamicSource{blockedURL: "https://block.example.com"}
 	d := precheck.New(src)
 
@@ -91,7 +86,6 @@ func TestDecider_CheckURLs_BatchOrder(t *testing.T) {
 	assert.Equal(t, precheck.VerdictAllow, decisions[0].Verdict)
 	assert.Equal(t, precheck.VerdictDrop, decisions[1].Verdict)
 	assert.Equal(t, precheck.VerdictAllow, decisions[2].Verdict)
-	_ = batchSource{} // 사용하지 않음 — type assertion 위해 정의했으나 dynamicSource 로 대체
 }
 
 func TestDecider_CheckURLs_EmptyInput(t *testing.T) {
