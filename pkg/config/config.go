@@ -1057,6 +1057,11 @@ type DBConfig struct {
 	MaxConns    int32
 	MinConns    int32
 	ConnTimeout time.Duration
+	// QueryTimeout: 단일 repository 메서드 호출의 timeout (이슈 #427).
+	// repository 진입 시 context.WithTimeout 으로 일괄 적용 — pgxpool.Acquire 가 MaxConns 고갈
+	// 상황에서 무한 대기하는 시나리오를 차단. 0 이면 timeout 미적용 (legacy 호환).
+	// 환경변수: POSTGRES_QUERY_TIMEOUT (default 10s).
+	QueryTimeout time.Duration
 }
 
 // DSN은 pgx/v5에서 사용하는 PostgreSQL connection string을 반환합니다.
@@ -1071,15 +1076,16 @@ func (c DBConfig) DSN() string {
 // 프로덕션에서는 환경변수 또는 Load()로 값을 덮어써야 합니다.
 func DefaultDBConfig() DBConfig {
 	return DBConfig{
-		Host:        "localhost",
-		Port:        5432,
-		User:        "postgres",
-		Password:    "postgres",
-		Database:    "issuetracker",
-		SSLMode:     "disable",
-		MaxConns:    25,
-		MinConns:    5,
-		ConnTimeout: 5 * time.Second,
+		Host:         "localhost",
+		Port:         5432,
+		User:         "postgres",
+		Password:     "postgres",
+		Database:     "issuetracker",
+		SSLMode:      "disable",
+		MaxConns:     25,
+		MinConns:     5,
+		ConnTimeout:  5 * time.Second,
+		QueryTimeout: 10 * time.Second,
 	}
 }
 
@@ -1280,6 +1286,13 @@ func Load(envFiles ...string) (DBConfig, error) {
 			return DBConfig{}, fmt.Errorf("parse POSTGRES_CONN_TIMEOUT %q: %w", v, err)
 		}
 		cfg.ConnTimeout = d
+	}
+	if v := os.Getenv("POSTGRES_QUERY_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return DBConfig{}, fmt.Errorf("parse POSTGRES_QUERY_TIMEOUT %q: %w", v, err)
+		}
+		cfg.QueryTimeout = d
 	}
 
 	return cfg, nil
