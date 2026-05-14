@@ -54,6 +54,9 @@ func main() {
 	}
 	defer pool.Close()
 
+	// query-level timeout 적용 (이슈 #427).
+	pgstore.SetQueryTimeout(dbCfg.QueryTimeout)
+
 	ruleRepo := pgstore.NewParserRuleRepository(pool, log)
 
 	// parsing_rule 조회

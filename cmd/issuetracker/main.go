@@ -134,6 +134,9 @@ func main() {
 	}
 	defer pool.Close()
 
+	// query-level timeout 적용 (이슈 #427) — pgxpool.Acquire 무한 대기 차단.
+	pgstore.SetQueryTimeout(dbCfg.QueryTimeout)
+
 	jobPublisher := bus.New(crawlerProducer, resolver, log)
 
 	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.

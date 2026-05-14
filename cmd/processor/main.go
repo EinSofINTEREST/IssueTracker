@@ -83,6 +83,9 @@ func main() {
 	}
 	defer pool.Close()
 
+	// query-level timeout 적용 (이슈 #427).
+	pgstore.SetQueryTimeout(dbCfg.QueryTimeout)
+
 	contentRepo := pgstore.NewContentRepository(pool, log)
 	contentSvc := service.NewContentService(contentRepo, log)
 
