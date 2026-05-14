@@ -78,6 +78,17 @@ type Source interface {
 	Check(ctx context.Context, rawURL string) Decision
 }
 
+// BatchSource 는 batch 호출을 native 로 처리할 수 있는 Source 의 optional 확장 인터페이스입니다 (이슈 #425, PR #436 gemini medium).
+//
+// Source 가 본 인터페이스도 구현하면 Decider.CheckURLs 가 개별 Check 루프 대신 batch 호출을 사용 —
+// mutex 잠금 / map lookup / SQL round-trip 등 per-call 오버헤드를 amortize.
+//
+// 구현 의무는 없음 (Source 만 구현해도 됨). Decider 가 type assertion 으로 자동 분기.
+type BatchSource interface {
+	Source
+	CheckBatch(ctx context.Context, urls []string) []Decision
+}
+
 // Decider 는 등록된 Source chain 으로 URL 처리 가부를 일괄 판정하는 boundary 입니다.
 //
 // 호출자는 본 인터페이스만 의존 — Source 구현체 / 추가는 wiring 단계에서 처리.
@@ -129,6 +140,19 @@ func (d *chainDecider) CheckURL(ctx context.Context, rawURL string) Decision {
 func (d *chainDecider) CheckURLs(ctx context.Context, urls []string) []Decision {
 	if len(urls) == 0 {
 		return nil
+	}
+	// 단일 Source 가 BatchSource 도 구현하면 native batch 사용 — per-call mutex/lookup 오버헤드 amortize.
+	// 다중 Source 의 chain short-circuit 은 per-URL loop 가 자연스러우므로 fallback.
+	if len(d.sources) == 1 {
+		if bs, ok := d.sources[0].(BatchSource); ok {
+			out := bs.CheckBatch(ctx, urls)
+			for i := range out {
+				if out[i].Verdict != VerdictAllow && out[i].Source == "" {
+					out[i].Source = bs.Name()
+				}
+			}
+			return out
+		}
 	}
 	out := make([]Decision, len(urls))
 	for i, u := range urls {

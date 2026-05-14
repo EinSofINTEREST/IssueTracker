@@ -463,6 +463,9 @@ func (w *Worker) processCategoryPage(ctx context.Context, raw *core.RawContent, 
 	//   - VerdictExtractLinksOnly  : list 로 강제 발행 → fetch + ParseLinks 만 진행 (ParsePage skip)
 	//   - VerdictDrop              : 어느 슬라이스에도 미포함 (완전 drop, fetch / parse 안 함)
 	// Decider 미설정 (nil) 이면 모든 URL 을 article 로 통과 (기능 OFF).
+	//
+	// Legacy compat: precheck 미설정 + blacklist Matcher 설정 (SetBlacklist 호환 호출자) 시
+	// 기존 blacklist.Classify 경로로 fallback — 호출자 영향 없음 (gemini high 피드백, PR #436).
 	articleURLs := urls
 	var listURLs []string
 	droppedCount := 0
@@ -479,6 +482,12 @@ func (w *Worker) processCategoryPage(ctx context.Context, raw *core.RawContent, 
 				droppedCount++
 			}
 		}
+	} else if w.blacklist != nil && len(urls) > 0 {
+		// SetBlacklist 만 호출한 호환 경로 — 본 PR (#436) 이전 동작 보존.
+		decision := w.blacklist.Classify(ctx, urls)
+		articleURLs = decision.Allowed
+		listURLs = decision.ExtractLinksOnly
+		droppedCount = len(urls) - len(decision.Allowed) - len(decision.ExtractLinksOnly)
 	}
 
 	if len(articleURLs) == 0 && len(listURLs) == 0 {
@@ -538,14 +547,17 @@ func (w *Worker) processArticlePage(ctx context.Context, raw *core.RawContent, r
 	}
 
 	// Precheck 진입 게이트 (이슈 #425): blacklist 등 이미 차단된 URL 이 파서에 도달했을 때
-	// LLM 재호출 / Resolver lookup 모두 회피. drop 결정이면 raw 삭제 + commit.
+	// LLM 재호출 / Resolver lookup 모두 회피. drop / extract_links_only 모두 drop 처리 —
+	// article path 에서 list verdict 는 부적합 (raw 가 article 으로 fetch 된 후 policy 변경 race
+	// window). 가장 보수적 동작: deleteRaw + commit (gemini medium 피드백, PR #436).
 	if w.precheck != nil {
-		if dec := w.precheck.CheckURL(ctx, raw.URL); dec.Verdict == precheck.VerdictDrop {
+		if dec := w.precheck.CheckURL(ctx, raw.URL); dec.Verdict != precheck.VerdictAllow {
 			mlog.WithFields(map[string]interface{}{
-				"url":    raw.URL,
-				"source": dec.Source,
-				"reason": dec.Reason,
-			}).Info("precheck dropped raw url at parser entry, skipping parse")
+				"url":     raw.URL,
+				"source":  dec.Source,
+				"reason":  dec.Reason,
+				"verdict": dec.Verdict.String(),
+			}).Info("precheck blocked raw url at parser entry, skipping parse")
 			w.deleteRaw(ctx, rawID, mlog)
 			return nil
 		}

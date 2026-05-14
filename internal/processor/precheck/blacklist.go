@@ -4,17 +4,19 @@ import (
 	"context"
 
 	"issuetracker/internal/processor/parser/rule"
+	"issuetracker/internal/storage/model"
 )
 
 // blacklistSource 는 parser_blacklist 매칭을 precheck Source 로 노출합니다 (이슈 #425).
 //
-// rule.BlacklistMatcher 의 Classify 결과를 단일 URL 기준 Decision 으로 변환:
+// rule.BlacklistMatcher.MatchedMode (single-URL hot path) 로 mode 를 받아 Decision 으로 변환:
 //
-//   - Classify.Allowed         (매칭 X)  → VerdictAllow
-//   - Classify.ExtractLinksOnly (mode=extract_links_only) → VerdictExtractLinksOnly
-//   - 둘 다 미포함 (mode=drop)            → VerdictDrop
+//   - 매칭 없음 (또는 lookup 에러)     → VerdictAllow (fail-open, Matcher 기존 정책 일관)
+//   - mode='extract_links_only'        → VerdictExtractLinksOnly
+//   - mode='drop'                      → VerdictDrop
 //
-// best-effort: lookup 에러 등으로 인한 internal 실패 시 Allow (fail-open) — Matcher 의 기존 정책 일관.
+// 이전 구현은 Classify(슬라이스) 를 1-URL 로 호출하여 매 호출마다 두 슬라이스 alloc — fetcher/
+// parser 의 hot path 라 부담. MatchedMode 직접 호출로 alloc 0 (gemini medium 피드백, PR #436).
 type blacklistSource struct {
 	matcher *rule.BlacklistMatcher
 }
@@ -33,21 +35,41 @@ func NewBlacklistSource(matcher *rule.BlacklistMatcher) Source {
 func (s *blacklistSource) Name() string { return "blacklist" }
 
 func (s *blacklistSource) Check(ctx context.Context, rawURL string) Decision {
-	decision := s.matcher.Classify(ctx, []string{rawURL})
-	if len(decision.Allowed) == 1 {
+	mode, err := s.matcher.MatchedMode(ctx, rawURL)
+	if err != nil {
+		// lookup 에러 → Allow (fail-open). Matcher.Classify / Filter 와 동일 정책.
 		return Decision{Verdict: VerdictAllow, Source: "blacklist"}
 	}
-	if len(decision.ExtractLinksOnly) == 1 {
-		return Decision{
-			Verdict: VerdictExtractLinksOnly,
-			Source:  "blacklist",
-			Reason:  "blacklist:extract_links_only",
-		}
+	return modeToDecision(mode)
+}
+
+// CheckBatch 는 BatchSource 의 구현 — Classify (slice-returning batch) 결과를 Decision 슬라이스로 변환.
+//
+// urls 의 모든 entry 가 동일 인덱스로 정확히 매핑 — Classify 의 Allowed/ExtractLinksOnly 슬라이스
+// 에서 두 번 lookup 보다 set membership 검사로 단순화.
+func (s *blacklistSource) CheckBatch(ctx context.Context, urls []string) []Decision {
+	if len(urls) == 0 {
+		return nil
 	}
-	// 둘 다 미포함 → drop 매칭
-	return Decision{
-		Verdict: VerdictDrop,
-		Source:  "blacklist",
-		Reason:  "blacklist:drop",
+	out := make([]Decision, len(urls))
+	for i, u := range urls {
+		mode, err := s.matcher.MatchedMode(ctx, u)
+		if err != nil {
+			out[i] = Decision{Verdict: VerdictAllow, Source: "blacklist"}
+			continue
+		}
+		out[i] = modeToDecision(mode)
+	}
+	return out
+}
+
+func modeToDecision(mode model.BlacklistMode) Decision {
+	switch mode {
+	case model.BlacklistModeExtractLinksOnly:
+		return Decision{Verdict: VerdictExtractLinksOnly, Source: "blacklist", Reason: "blacklist:extract_links_only"}
+	case model.BlacklistModeDrop:
+		return Decision{Verdict: VerdictDrop, Source: "blacklist", Reason: "blacklist:drop"}
+	default:
+		return Decision{Verdict: VerdictAllow, Source: "blacklist"}
 	}
 }

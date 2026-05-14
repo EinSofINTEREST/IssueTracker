@@ -230,6 +230,12 @@ func (m *BlacklistMatcher) Classify(ctx context.Context, urls []string) Blacklis
 //
 // 매칭 없음: ("", nil). lookup 에러: ("", err). 매칭됨: (mode, nil).
 // LENGTH(path_pattern) DESC 정렬 후보에서 첫 매칭 row 의 mode 사용 — 더 구체적 path 우선.
+//
+// MatchedMode 는 본 함수의 exported 별칭입니다 (precheck.blacklistSource 등 단일 URL hot-path 호출용).
+func (m *BlacklistMatcher) MatchedMode(ctx context.Context, rawURL string) (model.BlacklistMode, error) {
+	return m.matchedMode(ctx, rawURL)
+}
+
 func (m *BlacklistMatcher) matchedMode(ctx context.Context, rawURL string) (model.BlacklistMode, error) {
 	host, path, err := extractHostPath(rawURL)
 	if err != nil {

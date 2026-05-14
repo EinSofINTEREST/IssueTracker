@@ -136,3 +136,45 @@ func (emptySourceSource) Name() string { return "empty" }
 func (emptySourceSource) Check(_ context.Context, _ string) precheck.Decision {
 	return precheck.Decision{Verdict: precheck.VerdictDrop}
 }
+
+// batchableSource 는 Source + BatchSource 모두 구현 — CheckBatch 우선 호출 검증용.
+type batchableSource struct {
+	checkCalls int
+	batchCalls int
+}
+
+func (b *batchableSource) Name() string { return "batchable" }
+func (b *batchableSource) Check(_ context.Context, _ string) precheck.Decision {
+	b.checkCalls++
+	return precheck.Decision{Verdict: precheck.VerdictAllow}
+}
+func (b *batchableSource) CheckBatch(_ context.Context, urls []string) []precheck.Decision {
+	b.batchCalls++
+	out := make([]precheck.Decision, len(urls))
+	for i := range urls {
+		out[i] = precheck.Decision{Verdict: precheck.VerdictAllow}
+	}
+	return out
+}
+
+func TestDecider_CheckURLs_UsesBatchSource_WhenSingleSource(t *testing.T) {
+	src := &batchableSource{}
+	d := precheck.New(src)
+
+	decisions := d.CheckURLs(context.Background(), []string{"a", "b", "c"})
+	assert.Len(t, decisions, 3)
+	assert.Equal(t, 1, src.batchCalls, "단일 Source + BatchSource → CheckBatch 1회 호출")
+	assert.Equal(t, 0, src.checkCalls, "Check 개별 호출 회피")
+}
+
+func TestDecider_CheckURLs_FallsBackToPerURL_WhenMultiSource(t *testing.T) {
+	src := &batchableSource{}
+	allow := &fakeSource{name: "allow", verdict: precheck.VerdictAllow}
+	d := precheck.New(src, allow)
+
+	decisions := d.CheckURLs(context.Background(), []string{"a", "b"})
+	assert.Len(t, decisions, 2)
+	// 다중 Source chain → per-URL Check (BatchSource 활용 안 함).
+	assert.Equal(t, 0, src.batchCalls, "다중 Source 일 때는 BatchSource fast-path 비활성")
+	assert.Equal(t, 2, src.checkCalls, "각 URL 에 대해 Check 1회씩")
+}
