@@ -352,7 +352,7 @@ func (w *Worker) ProcessMessage(ctx context.Context, msg *queue.Message) error {
 	// validator → parser 재학습 cycle (이슈 #366):
 	//   1. inbox headers 를 ctx 에 첨부 — publishContents 가 reparse_* 를 normalized 메시지로 전파
 	//   2. validate_reparse_reason 헤더가 있으면 ctx 에 llmgen.WithRejectReason 으로 주입 —
-	//      claudegen.ExtractEnriched 가 prompt 에 reason context 포함 (Sub B #365 메커니즘)
+	//      claude.Worker.ExtractEnriched 가 prompt 에 reason context 포함 (Sub B #365 메커니즘)
 	ctx = core.WithInboxHeaders(ctx, msg.Headers)
 	if reason := msg.Headers[core.HeaderValidateReparseReason]; reason != "" {
 		ctx = llmgen.WithRejectReason(ctx, reason)

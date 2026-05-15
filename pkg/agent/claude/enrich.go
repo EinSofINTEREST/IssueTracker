@@ -8,7 +8,7 @@
 //
 // ExtractEnriched 의 session lifecycle 과 의도적으로 분리 — 기존 parser 경로에 무영향.
 
-package claudegen
+package claude
 
 import (
 	"context"
@@ -34,7 +34,7 @@ import (
 //
 // 호출자 역할: stdout 을 자체 schema 로 파싱. RunEnrichSession 은 JSON 파싱 / blacklist 분기
 // 등을 일체 수행하지 않습니다 (parser-specific 인 ExtractEnriched 와 다른 점).
-func (w *ClaudeWorker) RunEnrichSession(
+func (w *Worker) RunEnrichSession(
 	ctx context.Context,
 	sessionLabel string,
 	files map[string][]byte,
@@ -49,7 +49,7 @@ func (w *ClaudeWorker) RunEnrichSession(
 	w.mu.RUnlock()
 
 	if containerID == "" {
-		return "", errors.New("claudegen: worker not started — call Start() first")
+		return "", errors.New("claude: worker not started — call Start() first")
 	}
 
 	sessionID, err := newSessionID()

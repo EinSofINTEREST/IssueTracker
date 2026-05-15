@@ -48,7 +48,7 @@ var _ Contextualizer = (*NoopContextualizer)(nil)
 // contextPromptName 은 외부 맥락 수집 prompt asset 경로입니다.
 const contextPromptName = "claudegen/enricher_context"
 
-// ClaudegenContextualizer 는 claudegen.ClaudeWorkerPool 로 context session 을 실행합니다.
+// ClaudegenContextualizer 는 claude.Pool 로 context session 을 실행합니다.
 type ClaudegenContextualizer struct {
 	runner SessionRunner
 	loader prompt.Loader

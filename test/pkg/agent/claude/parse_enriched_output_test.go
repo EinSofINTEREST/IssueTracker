@@ -1,4 +1,4 @@
-package claudegen_test
+package claude_test
 
 // parseEnrichedOutput 은 claudegen 패키지의 unexported 헬퍼라 동일 구조의 동작은 통합 테스트
 // (worker_test.go 의 ExtractEnriched flow) 로 검증됩니다. 본 파일은 ExtractResult 의 schema

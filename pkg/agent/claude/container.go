@@ -1,4 +1,4 @@
-package claudegen
+package claude
 
 import (
 	"bytes"

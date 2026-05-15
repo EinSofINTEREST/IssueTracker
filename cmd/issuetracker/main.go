@@ -28,7 +28,6 @@ import (
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
 	"issuetracker/internal/processor/parser"
 	"issuetracker/internal/processor/parser/rule"
-	"issuetracker/internal/processor/parser/rule/claudegen"
 	llmgenwiring "issuetracker/internal/processor/parser/rule/llmgen/wiring"
 	refinerwiring "issuetracker/internal/processor/parser/rule/refiner/wiring"
 	"issuetracker/internal/processor/parser/rule/validator"
@@ -42,6 +41,7 @@ import (
 	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/internal/storage/service"
+	"issuetracker/pkg/agent/claude"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/llm/prompt"
 	llmwiring "issuetracker/pkg/llm/wiring"
@@ -719,9 +719,9 @@ func main() {
 	// 미지정 / gemini (기본) 일 때는 buildLLMGenerator 가 설정한 기본 LLM provider 추출.
 	// Start 실패 시 Gemini 경로로 graceful fallback (fatal 아님).
 	// 종료 시 stages.Stop 이후 worker.Stop 호출 — llmGen.Stop 으로 in-flight Extract 완료 보장 후 컨테이너 정리.
-	// 이슈 #352 — 단일 worker → ClaudeWorkerPool (N replica, default 2) 로 throughput 향상.
+	// 이슈 #352 — 단일 worker → Pool (N replica, default 2) 로 throughput 향상.
 	// CLAUDE_CODE_WORKER_COUNT 로 운영자 조정 가능. 기존 단일 worker 동작은 N=1 로 동등 재현 가능.
-	var claudegenPool *claudegen.ClaudeWorkerPool
+	var claudegenPool *claude.Pool
 	llmExtractor := os.Getenv("LLM_EXTRACTOR")
 	switch {
 	case llmExtractor != "claude-code":
@@ -732,7 +732,7 @@ func main() {
 	case promptLoader == nil:
 		log.Warn("LLM_EXTRACTOR=claude-code requested but prompt loader is disabled; claudegen extractor not registered")
 	default:
-		pool, perr := claudegen.NewPoolFromEnv(promptLoader, log)
+		pool, perr := claude.NewPoolFromEnv(promptLoader, log)
 		if perr != nil {
 			log.WithError(perr).Warn("claudegen pool construction failed, falling back to default extractor")
 		} else if serr := pool.Start(ctx); serr != nil {

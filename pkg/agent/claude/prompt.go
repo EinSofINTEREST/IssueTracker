@@ -1,4 +1,4 @@
-package claudegen
+package claude
 
 import (
 	"errors"
@@ -18,7 +18,7 @@ const rejectReasonPlaceholder = "{{VALIDATION_REJECT_REASON_CONTEXT}}"
 // 운영자가 LLM_PROMPT_DIR 로 외부 prompt 를 override 했는데 본 placeholder 를 추가하지 않은
 // 경우 — reason 블록이 silently drop 되어 reparse cycle 이 reason 없이 LLM 을 호출하는
 // 잠재 버그. fail-fast 로 운영자에게 즉시 알림.
-var ErrRejectReasonPlaceholderMissing = errors.New("claudegen: prompt template missing " + rejectReasonPlaceholder + " placeholder (LLM_PROMPT_DIR override may need update)")
+var ErrRejectReasonPlaceholderMissing = errors.New("claude: prompt template missing " + rejectReasonPlaceholder + " placeholder (LLM_PROMPT_DIR override may need update)")
 
 // buildPrompt 는 Claude Code 에 전달할 프롬프트를 생성합니다.
 // sessionPath 는 컨테이너 내 세션 디렉토리 경로 (예: /workspace/<sessionID>) 입니다.
@@ -32,13 +32,13 @@ func buildPrompt(loader prompt.Loader, host string, targetType model.TargetType,
 	name := promptNameFor(targetType)
 	template, err := loader.Load(name)
 	if err != nil {
-		return "", fmt.Errorf("load claudegen prompt %q: %w", name, err)
+		return "", fmt.Errorf("load claude prompt %q: %w", name, err)
 	}
 
 	// reparse 경로 인데 템플릿에 placeholder 미포함 — silent drop 위험 차단.
 	// 정상 경로 (reason 빈 문자열) 에서는 placeholder 부재여도 결과 동일하므로 검증 skip.
 	if rejectReason != "" && !strings.Contains(template, rejectReasonPlaceholder) {
-		return "", fmt.Errorf("build claudegen prompt %q: %w", name, ErrRejectReasonPlaceholderMissing)
+		return "", fmt.Errorf("build claude prompt %q: %w", name, ErrRejectReasonPlaceholderMissing)
 	}
 
 	return prompt.Render(template,

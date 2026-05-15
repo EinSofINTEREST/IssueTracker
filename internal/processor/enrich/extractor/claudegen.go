@@ -10,7 +10,7 @@ import (
 	"issuetracker/pkg/llm/prompt"
 )
 
-// SessionRunner 는 claudegen.ClaudeWorkerPool 의 RunEnrichSession 시그니처와 일치하는 추상.
+// SessionRunner 는 claude.Pool 의 RunEnrichSession 시그니처와 일치하는 추상.
 //
 // 본 패키지가 claudegen 패키지를 직접 import 하면 enrich → claudegen 의존이 추가됨.
 // 인터페이스로 추상화하여 enrich 패키지가 claudegen 을 모르도록 — 테스트도 mock 으로 간단.
@@ -26,7 +26,7 @@ type SessionRunner interface {
 // promptName 은 enrich extraction 에 사용할 prompt asset 경로입니다.
 const promptName = "claudegen/enricher_extract"
 
-// ClaudegenExtractor 는 claudegen.ClaudeWorkerPool 을 통해 EnrichedFacts 를 추출합니다.
+// ClaudegenExtractor 는 claude.Pool 을 통해 EnrichedFacts 를 추출합니다.
 type ClaudegenExtractor struct {
 	runner SessionRunner
 	loader prompt.Loader

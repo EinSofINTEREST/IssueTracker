@@ -1,4 +1,4 @@
-package claudegen_test
+package claude_test
 
 // reject_reason_test.go — Sub B (#365) — claudegen prompt 에 reason context 주입 검증.
 //
@@ -16,9 +16,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/processor/parser/rule/claudegen"
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage/model"
+	"issuetracker/pkg/agent/claude"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -102,7 +102,7 @@ func TestExtractEnriched_TemplateMissingPlaceholder_FailsFast(t *testing.T) {
 	}
 	log := logger.New(logger.DefaultConfig())
 	authDir := makeAuthDir(t)
-	w, err := claudegen.NewWithRunner(
+	w, err := claude.NewWithRunner(
 		"ghcr.io/anthropics/claude-code:latest",
 		"claude-sonnet-4-6",
 		authDir,
@@ -136,7 +136,7 @@ func TestExtractEnriched_TemplateMissingPlaceholder_NoReason_OK(t *testing.T) {
 	runner := &mockContainerRunner{
 		execStdout: `{"validity":"ok","page_type":"news","selectors":{"title":{"css":"h1"},"main_content":{"css":"article","multi":true}},"self_check":{"title_sample":"x","body_word_count_estimate":200}}`,
 	}
-	w, err := claudegen.NewWithRunner(
+	w, err := claude.NewWithRunner(
 		"ghcr.io/anthropics/claude-code:latest",
 		"claude-sonnet-4-6",
 		authDir,

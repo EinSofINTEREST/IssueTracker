@@ -3,7 +3,7 @@
 // Extractor 는 page 메타데이터를 받아 EnrichedFacts 를 반환하는 단일 메소드 인터페이스입니다.
 // 구현체:
 //   - NoopExtractor: 빈 EnrichedFacts 반환. claudegen 미configured / disabled 환경의 fallback.
-//   - ClaudegenExtractor: claudegen.ClaudeWorkerPool 을 통해 Claude Code 호출 (실제 추출).
+//   - ClaudegenExtractor: claude.Pool 을 통해 Claude Code 호출 (실제 추출).
 package extractor
 
 import (

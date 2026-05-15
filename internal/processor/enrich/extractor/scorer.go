@@ -68,7 +68,7 @@ var _ Scorer = (*NoopScorer)(nil)
 // scorerPromptName 은 신뢰도 점수 prompt asset 경로입니다.
 const scorerPromptName = "claudegen/enricher_score"
 
-// ClaudegenScorer 는 claudegen.ClaudeWorkerPool 로 scoring session 을 실행합니다.
+// ClaudegenScorer 는 claude.Pool 로 scoring session 을 실행합니다.
 type ClaudegenScorer struct {
 	runner SessionRunner
 	loader prompt.Loader
