@@ -17,7 +17,7 @@ import (
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor"
 	"issuetracker/internal/processor/enrich"
-	enrichextractor "issuetracker/internal/processor/enrich/extractor"
+	enrichcore "issuetracker/internal/processor/enrich/core"
 	enrichWorkerPkg "issuetracker/internal/processor/enrich/worker"
 	"issuetracker/internal/processor/fetcher"
 	"issuetracker/internal/processor/fetcher/core"
@@ -905,9 +905,9 @@ func main() {
 	// 이슈 #447 — claudegen 기반 enricher extractor wiring. claudegen pool 이 미활성이거나
 	// prompt loader 가 없으면 NoopExtractor 로 fallback (worker 는 항상 forward 보장 — extract
 	// 실패가 파이프라인을 막지 않음).
-	var enrichExtractor enrichextractor.Extractor = enrichextractor.NewNoopExtractor()
+	var enrichExtractor enrichcore.Extractor = enrichcore.NewNoopExtractor()
 	if claudegenPool != nil && promptLoader != nil {
-		ce, ceErr := enrichextractor.NewClaudegenExtractor(claudegenPool, promptLoader)
+		ce, ceErr := enrichcore.NewClaudegenExtractor(claudegenPool, promptLoader)
 		if ceErr != nil {
 			log.WithError(ceErr).Warn("claudegen enrich extractor construction failed, using noop")
 		} else {
@@ -920,9 +920,9 @@ func main() {
 
 	// 이슈 #448 — claudegen 기반 enricher verifier (cross-verification) wiring. extractor 와
 	// 동일 fallback 정책.
-	var enrichVerifier enrichextractor.Verifier = enrichextractor.NewNoopVerifier()
+	var enrichVerifier enrichcore.Verifier = enrichcore.NewNoopVerifier()
 	if claudegenPool != nil && promptLoader != nil {
-		cv, cvErr := enrichextractor.NewClaudegenVerifier(claudegenPool, promptLoader)
+		cv, cvErr := enrichcore.NewClaudegenVerifier(claudegenPool, promptLoader)
 		if cvErr != nil {
 			log.WithError(cvErr).Warn("claudegen enrich verifier construction failed, using noop")
 		} else {
@@ -935,9 +935,9 @@ func main() {
 
 	// 이슈 #449 — claudegen 기반 enricher contextualizer (외부 맥락 수집) wiring.
 	// extractor / verifier 와 동일 fallback 정책.
-	var enrichContextualizer enrichextractor.Contextualizer = enrichextractor.NewNoopContextualizer()
+	var enrichContextualizer enrichcore.Contextualizer = enrichcore.NewNoopContextualizer()
 	if claudegenPool != nil && promptLoader != nil {
-		cc, ccErr := enrichextractor.NewClaudegenContextualizer(claudegenPool, promptLoader)
+		cc, ccErr := enrichcore.NewClaudegenContextualizer(claudegenPool, promptLoader)
 		if ccErr != nil {
 			log.WithError(ccErr).Warn("claudegen enrich contextualizer construction failed, using noop")
 		} else {
@@ -949,9 +949,9 @@ func main() {
 	}
 
 	// 이슈 #450 — claudegen 기반 enricher scorer (trust_score) + enriched_contents 영속화 wiring.
-	var enrichScorer enrichextractor.Scorer = enrichextractor.NewNoopScorer()
+	var enrichScorer enrichcore.Scorer = enrichcore.NewNoopScorer()
 	if claudegenPool != nil && promptLoader != nil {
-		cs, csErr := enrichextractor.NewClaudegenScorer(claudegenPool, promptLoader)
+		cs, csErr := enrichcore.NewClaudegenScorer(claudegenPool, promptLoader)
 		if csErr != nil {
 			log.WithError(csErr).Warn("claudegen enrich scorer construction failed, using noop")
 		} else {
