@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
@@ -131,9 +132,25 @@ func newEnrichWorker(consumer queue.Consumer, producer queue.Producer) *worker.W
 		&stubContentService{},
 		extractor.NewNoopExtractor(),
 		extractor.NewNoopVerifier(),
+		extractor.NewNoopContextualizer(),
 		locks.NewNoopStageGate(),
 		1,
 	)
+}
+
+// fakeContextualizer 는 context 입력을 캡쳐하고 미리 정의된 PageContext / err 를 반환합니다.
+type fakeContextualizer struct {
+	page     *extractor.PageContext
+	err      error
+	callsLog []extractor.ContextInput
+}
+
+func (c *fakeContextualizer) Provide(_ context.Context, in extractor.ContextInput) (*extractor.PageContext, error) {
+	c.callsLog = append(c.callsLog, in)
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.page, nil
 }
 
 func makeValidatedMessage(t *testing.T, refID, url, country, sourceName string) *queue.Message {
@@ -296,6 +313,7 @@ func TestEnrichWorker_Extraction_AttachesFactsToMetadata(t *testing.T) {
 		contentSvc,
 		fake,
 		extractor.NewNoopVerifier(),
+		extractor.NewNoopContextualizer(),
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -355,6 +373,7 @@ func TestEnrichWorker_ExtractionFailure_StillForwards(t *testing.T) {
 		contentSvc,
 		fake,
 		extractor.NewNoopVerifier(),
+		extractor.NewNoopContextualizer(),
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -436,6 +455,7 @@ func TestEnrichWorker_Verification_AttachesVerificationsToFacts(t *testing.T) {
 		contentSvc,
 		fakeExt,
 		fakeVer,
+		extractor.NewNoopContextualizer(),
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -497,6 +517,7 @@ func TestEnrichWorker_NoClaims_SkipsVerifier(t *testing.T) {
 		consumer, newTestPublisher(producer), contentSvc,
 		&fakeExtractor{facts: emptyFacts},
 		fakeVer,
+		extractor.NewNoopContextualizer(),
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -527,10 +548,142 @@ func TestEnrichWorker_VerificationFailure_StillForwards(t *testing.T) {
 		consumer, newTestPublisher(producer), contentSvc,
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{err: assertAnError()},
+		extractor.NewNoopContextualizer(),
 		locks.NewNoopStageGate(),
 		1,
 	)
 	msg := makeValidatedMessage(t, "c-v-fail", "https://example.com/x", "US", "example")
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicEnriched
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	consumer.AssertExpectations(t)
+	producer.AssertExpectations(t)
+}
+
+// TestEnrichWorker_Context_AttachesPageContext — context provider 가 PageContext 를 반환하면
+// facts.Context 에 첨부되어 forward 메시지의 metadata 에 포함 (이슈 #449).
+func TestEnrichWorker_Context_AttachesPageContext(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-ctx", Title: "Sample", Body: "B", URL: "https://example.com/c", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	facts := &extractor.EnrichedFacts{
+		Entities: []extractor.Entity{{Type: extractor.EntityTypeOrg, Name: "Acme"}},
+		Claims:   []extractor.Claim{{Text: "Acme is global"}},
+	}
+	contextResp := &extractor.PageContext{
+		Background:   []extractor.BackgroundItem{{Subject: "Acme", Category: "org", Summary: "Founded 1980"}},
+		Implications: &extractor.Implications{Social: "Workforce concerns"},
+	}
+	fakeCtx := &fakeContextualizer{page: contextResp}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: facts},
+		&fakeVerifier{},
+		fakeCtx,
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-ctx", "https://example.com/c", "US", "example")
+
+	var published queue.Message
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		if m.Topic != queue.TopicEnriched {
+			return false
+		}
+		published = m
+		return true
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	// contextualizer 호출 입력 검증
+	if assert.Len(t, fakeCtx.callsLog, 1) {
+		in := fakeCtx.callsLog[0]
+		assert.Equal(t, "https://example.com/c", in.URL)
+		assert.Len(t, in.Entities, 1)
+		assert.Len(t, in.Claims, 1)
+	}
+
+	// metadata.enriched_facts.context 첨부 검증
+	var pm core.ProcessingMessage
+	if err := json.Unmarshal(published.Value, &pm); err != nil {
+		t.Fatalf("unmarshal pm: %v", err)
+	}
+	rawFacts, ok := pm.Metadata["enriched_facts"].(map[string]interface{})
+	require.True(t, ok)
+	pageCtx, ok := rawFacts["context"].(map[string]interface{})
+	if assert.True(t, ok, "context should be attached") {
+		bg, bgOK := pageCtx["background"].([]interface{})
+		assert.True(t, bgOK)
+		assert.Len(t, bg, 1)
+	}
+}
+
+// TestEnrichWorker_NoEntitiesOrClaims_SkipsContext — 둘 다 없으면 contextualizer 미호출.
+func TestEnrichWorker_NoEntitiesOrClaims_SkipsContext(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-skip", Title: "t", Body: "b", URL: "https://example.com/s", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	facts := &extractor.EnrichedFacts{} // entities + claims 모두 nil/empty
+	fakeCtx := &fakeContextualizer{}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: facts},
+		&fakeVerifier{},
+		fakeCtx,
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-skip", "https://example.com/s", "US", "example")
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicEnriched
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	assert.Empty(t, fakeCtx.callsLog, "contextualizer must not be called when entities/claims both empty")
+}
+
+// TestEnrichWorker_ContextFailure_StillForwards — context error 도 pipeline 진행 보장.
+func TestEnrichWorker_ContextFailure_StillForwards(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-ctx-fail", Title: "t", Body: "b", URL: "https://example.com/x", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	facts := &extractor.EnrichedFacts{
+		Entities: []extractor.Entity{{Name: "X"}},
+	}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: facts},
+		&fakeVerifier{},
+		&fakeContextualizer{err: assertAnError()},
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-ctx-fail", "https://example.com/x", "US", "example")
 
 	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
 		return m.Topic == queue.TopicEnriched

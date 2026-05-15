@@ -277,3 +277,135 @@ func TestNewClaudegenVerifier_NilArgs(t *testing.T) {
 	_, err = extractor.NewClaudegenVerifier(&stubRunner{stdout: "{}"}, nil)
 	assert.Error(t, err)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Contextualizer (이슈 #449)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestClaudegenContextualizer_Success(t *testing.T) {
+	stdout := `{
+		"background": [
+			{"subject": "Acme Corp", "category": "org", "summary": "Founded in 1980 — global manufacturer.", "sources": ["https://en.wikipedia.org/wiki/Acme"]}
+		],
+		"timeline": [
+			{"date": "2025-01-15", "event": "Quarterly results announced", "source": "https://news.example.org/q"}
+		],
+		"implications": {
+			"political": "",
+			"social": "Workforce concerns in two regions.",
+			"technical": ""
+		}
+	}`
+	runner := &stubRunner{stdout: stdout}
+	c, err := extractor.NewClaudegenContextualizer(runner, &stubLoader{tpl: "ctx {{ENTITIES_JSON}} {{CLAIMS_JSON}}"})
+	require.NoError(t, err)
+
+	got, err := c.Provide(context.Background(), extractor.ContextInput{
+		URL:      "https://example.com/p",
+		Host:     "example.com",
+		Title:    "T",
+		Entities: []extractor.Entity{{Type: extractor.EntityTypeOrg, Name: "Acme"}},
+		Claims:   []extractor.Claim{{Text: "Acme announced X"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Len(t, got.Background, 1)
+	assert.Equal(t, "Acme Corp", got.Background[0].Subject)
+	assert.Len(t, got.Timeline, 1)
+	require.NotNil(t, got.Implications)
+	assert.Equal(t, "Workforce concerns in two regions.", got.Implications.Social)
+	assert.Equal(t, 1, runner.calls)
+}
+
+func TestClaudegenContextualizer_EmptyImplications_NormalizedToNil(t *testing.T) {
+	// 모든 implications 필드가 빈 문자열이면 Implications 자체가 nil 로 정규화.
+	stdout := `{
+		"background": [],
+		"timeline": [],
+		"implications": {"political": "", "social": "", "technical": ""}
+	}`
+	c, err := extractor.NewClaudegenContextualizer(
+		&stubRunner{stdout: stdout},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+
+	got, err := c.Provide(context.Background(), extractor.ContextInput{
+		Entities: []extractor.Entity{{Name: "X"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.Implications)
+	assert.True(t, got.IsEmpty())
+}
+
+func TestClaudegenContextualizer_NoEntitiesOrClaims_SkipsRunner(t *testing.T) {
+	runner := &stubRunner{stdout: "should not be parsed"}
+	c, err := extractor.NewClaudegenContextualizer(
+		runner,
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+
+	got, err := c.Provide(context.Background(), extractor.ContextInput{})
+	require.NoError(t, err)
+	assert.Nil(t, got, "no entities/claims → runner skip, nil context")
+	assert.Equal(t, 0, runner.calls)
+}
+
+func TestClaudegenContextualizer_SessionError_Propagates(t *testing.T) {
+	c, err := extractor.NewClaudegenContextualizer(
+		&stubRunner{err: errors.New("exec failure")},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+	_, err = c.Provide(context.Background(), extractor.ContextInput{
+		Entities: []extractor.Entity{{Name: "X"}},
+	})
+	require.Error(t, err)
+}
+
+func TestClaudegenContextualizer_MalformedOutput_ReturnsError(t *testing.T) {
+	c, err := extractor.NewClaudegenContextualizer(
+		&stubRunner{stdout: "not json"},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+	_, err = c.Provide(context.Background(), extractor.ContextInput{
+		Entities: []extractor.Entity{{Name: "X"}},
+	})
+	require.Error(t, err)
+}
+
+func TestNoopContextualizer_ReturnsNil(t *testing.T) {
+	got, err := extractor.NewNoopContextualizer().Provide(context.Background(), extractor.ContextInput{
+		Entities: []extractor.Entity{{Name: "X"}},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestNewClaudegenContextualizer_NilArgs(t *testing.T) {
+	_, err := extractor.NewClaudegenContextualizer(nil, &stubLoader{tpl: "t"})
+	assert.Error(t, err)
+	_, err = extractor.NewClaudegenContextualizer(&stubRunner{stdout: "{}"}, nil)
+	assert.Error(t, err)
+}
+
+func TestPageContext_IsEmpty(t *testing.T) {
+	// nil receiver
+	var nilPC *extractor.PageContext
+	assert.True(t, nilPC.IsEmpty())
+
+	// 모두 empty
+	pc := &extractor.PageContext{Background: nil, Timeline: nil, Implications: nil}
+	assert.True(t, pc.IsEmpty())
+
+	// background 있음 → not empty
+	pc2 := &extractor.PageContext{Background: []extractor.BackgroundItem{{Subject: "X"}}}
+	assert.False(t, pc2.IsEmpty())
+
+	// implications 있음 → not empty
+	pc3 := &extractor.PageContext{Implications: &extractor.Implications{Social: "x"}}
+	assert.False(t, pc3.IsEmpty())
+}
