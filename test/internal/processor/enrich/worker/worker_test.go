@@ -803,7 +803,7 @@ func TestEnrichWorker_Scoring_PersistsToEnrichedContents(t *testing.T) {
 		assert.NotEmpty(t, in.Facts)
 	}
 
-	// DB upsert 호출 검증
+	// DB upsert 호출 검증 — 이슈 #457: rationale + factors 도 함께 영속화 확인.
 	if assert.Len(t, repo.upsertCalls, 1) {
 		rec := repo.upsertCalls[0]
 		assert.Equal(t, "c-score", rec.ContentID)
@@ -811,9 +811,17 @@ func TestEnrichWorker_Scoring_PersistsToEnrichedContents(t *testing.T) {
 		assert.NotEmpty(t, rec.Facts)
 		assert.NotEmpty(t, rec.Verifications)
 		assert.NotEmpty(t, rec.Context)
+		assert.Equal(t, "Two sources corroborate.", rec.Rationale)
+		assert.NotEmpty(t, rec.Factors, "factors JSONB should be marshaled")
+		// factors JSON 의 내부 구조 검증
+		var factorsMap map[string]float64
+		require.NoError(t, json.Unmarshal(rec.Factors, &factorsMap))
+		assert.InDelta(t, 1.0, factorsMap["claim_support_ratio"], 1e-9)
+		assert.InDelta(t, 0.8, factorsMap["source_diversity"], 1e-9)
+		assert.InDelta(t, 0.6, factorsMap["context_completeness"], 1e-9)
 	}
 
-	// metadata.enriched_facts.trust_score 첨부 검증
+	// metadata.enriched_facts.trust_score / rationale / trust_factors 첨부 검증
 	var pm core.ProcessingMessage
 	require.NoError(t, json.Unmarshal(published.Value, &pm))
 	rawFacts, ok := pm.Metadata["enriched_facts"].(map[string]interface{})
@@ -821,6 +829,10 @@ func TestEnrichWorker_Scoring_PersistsToEnrichedContents(t *testing.T) {
 		ts, tsOK := rawFacts["trust_score"].(float64)
 		assert.True(t, tsOK)
 		assert.InDelta(t, 0.85, ts, 1e-9)
+		assert.Equal(t, "Two sources corroborate.", rawFacts["rationale"])
+		// trust_factors 도 metadata 에 동행
+		_, factorsOK := rawFacts["trust_factors"].(map[string]interface{})
+		assert.True(t, factorsOK, "trust_factors should be attached to metadata")
 	}
 }
 
