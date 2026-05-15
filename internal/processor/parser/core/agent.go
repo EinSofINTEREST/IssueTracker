@@ -48,11 +48,6 @@ type RuleAgent interface {
 // RawAgent 는 selector / enriched 가 아닌 임의 prompt 호출이 필요할 때 사용.
 type RawAgent = agent.Agent
 
-// 컴파일 타임 검증: model.TargetType 이 정상 import 되었음을 표시 (외부 패키지가
-// 본 패키지를 import 했을 때 model.TargetType 을 RuleAgent 메소드 시그니처 일치 위해
-// 같은 패키지에서 접근 가능하도록).
-var _ = model.TargetTypePage
-
 // RuleAgentClient 는 RuleAgent 의 default wiring 구조체입니다.
 //
 // 인스턴스 자체는 RuleAgent 인터페이스를 만족하는 backend (claude.Pool 등) 의 단순 wrapper

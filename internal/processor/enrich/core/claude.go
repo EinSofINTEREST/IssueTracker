@@ -33,10 +33,10 @@ type ClaudegenExtractor struct {
 // loader 가 nil 이면 error — prompt asset 로드 불가.
 func NewClaudegenExtractor(runner agent.Agent, loader prompt.Loader) (*ClaudegenExtractor, error) {
 	if runner == nil {
-		return nil, errors.New("extractor: agent runner must not be nil")
+		return nil, errors.New("enrich/core: agent runner must not be nil")
 	}
 	if loader == nil {
-		return nil, errors.New("extractor: prompt loader must not be nil")
+		return nil, errors.New("enrich/core: prompt loader must not be nil")
 	}
 	return &ClaudegenExtractor{runner: runner, loader: loader}, nil
 }

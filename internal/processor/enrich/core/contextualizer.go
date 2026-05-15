@@ -57,10 +57,10 @@ type ClaudegenContextualizer struct {
 // NewClaudegenContextualizer 는 claudegen-backed Contextualizer 를 생성합니다.
 func NewClaudegenContextualizer(runner SessionRunner, loader prompt.Loader) (*ClaudegenContextualizer, error) {
 	if runner == nil {
-		return nil, errors.New("extractor: claudegen runner must not be nil")
+		return nil, errors.New("enrich/core: agent runner must not be nil")
 	}
 	if loader == nil {
-		return nil, errors.New("extractor: prompt loader must not be nil")
+		return nil, errors.New("enrich/core: prompt loader must not be nil")
 	}
 	return &ClaudegenContextualizer{runner: runner, loader: loader}, nil
 }
