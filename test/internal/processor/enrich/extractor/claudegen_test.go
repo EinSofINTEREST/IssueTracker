@@ -392,6 +392,135 @@ func TestNewClaudegenContextualizer_NilArgs(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Scorer (이슈 #450)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestClaudegenScorer_Success(t *testing.T) {
+	stdout := `{
+		"trust_score": 0.78,
+		"rationale": "Two independent sources corroborate the main claim.",
+		"factors": {
+			"claim_support_ratio":  0.8,
+			"source_diversity":     0.7,
+			"context_completeness": 0.6
+		}
+	}`
+	runner := &stubRunner{stdout: stdout}
+	s, err := extractor.NewClaudegenScorer(runner, &stubLoader{tpl: "score {{FACTS_JSON}}"})
+	require.NoError(t, err)
+
+	got, err := s.Score(context.Background(), extractor.ScoreInput{
+		URL:           "https://example.com/p",
+		Facts:         []byte(`{"entities":[]}`),
+		Verifications: []byte(`[]`),
+		Context:       []byte(`{}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.InDelta(t, 0.78, got.TrustScore, 1e-9)
+	assert.Contains(t, got.Rationale, "Two independent sources")
+	assert.InDelta(t, 0.8, got.Factors.ClaimSupportRatio, 1e-9)
+}
+
+func TestClaudegenScorer_OutOfRange_ReturnsError(t *testing.T) {
+	for _, sc := range []string{`{"trust_score": 1.5}`, `{"trust_score": -0.1}`} {
+		s, err := extractor.NewClaudegenScorer(
+			&stubRunner{stdout: sc},
+			&stubLoader{tpl: "t"},
+		)
+		require.NoError(t, err)
+		_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+		require.Error(t, err, "stdout=%q", sc)
+	}
+}
+
+func TestClaudegenScorer_MissingTrustScore_ReturnsError(t *testing.T) {
+	// trust_score 누락 → 0 으로 fabricated 안 되도록 error.
+	s, err := extractor.NewClaudegenScorer(
+		&stubRunner{stdout: `{"rationale": "ok"}`},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trust_score")
+}
+
+func TestClaudegenScorer_MissingRationale_ReturnsError(t *testing.T) {
+	s, err := extractor.NewClaudegenScorer(
+		&stubRunner{stdout: `{"trust_score": 0.5}`},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rationale")
+}
+
+func TestClaudegenScorer_AllEmpty_SkipsRunner(t *testing.T) {
+	cases := []struct {
+		name                      string
+		facts, verifications, ctx []byte
+	}{
+		{"exact empty", []byte(`{}`), []byte(`[]`), []byte(`null`)},
+		{"whitespace empty", []byte(" {}\n"), []byte(" [] "), []byte("  null  ")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			runner := &stubRunner{stdout: "this should never be parsed"}
+			s, err := extractor.NewClaudegenScorer(
+				runner,
+				&stubLoader{tpl: "t"},
+			)
+			require.NoError(t, err)
+			got, err := s.Score(context.Background(), extractor.ScoreInput{
+				Facts:         c.facts,
+				Verifications: c.verifications,
+				Context:       c.ctx,
+			})
+			require.NoError(t, err)
+			assert.Nil(t, got)
+			assert.Equal(t, 0, runner.calls, "case %q", c.name)
+		})
+	}
+}
+
+func TestClaudegenScorer_SessionError_Propagates(t *testing.T) {
+	s, err := extractor.NewClaudegenScorer(
+		&stubRunner{err: errors.New("exec failure")},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	require.Error(t, err)
+}
+
+func TestClaudegenScorer_MalformedOutput_ReturnsError(t *testing.T) {
+	s, err := extractor.NewClaudegenScorer(
+		&stubRunner{stdout: "not json"},
+		&stubLoader{tpl: "t"},
+	)
+	require.NoError(t, err)
+	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	require.Error(t, err)
+}
+
+func TestNoopScorer_ReturnsNil(t *testing.T) {
+	got, err := extractor.NewNoopScorer().Score(context.Background(), extractor.ScoreInput{
+		Facts: []byte(`{"a":1}`),
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestNewClaudegenScorer_NilArgs(t *testing.T) {
+	_, err := extractor.NewClaudegenScorer(nil, &stubLoader{tpl: "t"})
+	assert.Error(t, err)
+	_, err = extractor.NewClaudegenScorer(&stubRunner{stdout: "{}"}, nil)
+	assert.Error(t, err)
+}
+
 func TestPageContext_IsEmpty(t *testing.T) {
 	// nil receiver
 	var nilPC *extractor.PageContext

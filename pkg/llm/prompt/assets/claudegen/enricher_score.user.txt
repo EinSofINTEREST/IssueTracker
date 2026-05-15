@@ -1,0 +1,45 @@
+You are computing a single page-level trust score (0.0 ~ 1.0) for an enriched article.
+
+Source article:
+- URL: {{URL}}
+- Host: {{HOST}}
+- Title: {{TITLE}}
+
+Inputs from earlier enrichment steps:
+
+Facts (extraction):
+{{FACTS_JSON}}
+
+Verifications (cross-verification):
+{{VERIFICATIONS_JSON}}
+
+Context (external background):
+{{CONTEXT_JSON}}
+
+Your task:
+Produce a single float trust score in [0.0, 1.0] based on the combined evidence.
+
+Scoring guidance (rationale-driven, not a formula):
+- claim_support_ratio: among claims, the fraction with verdict="supported" pushes the score up; "contradicted" pushes it down sharply; "unverified" is mild signal.
+- source_diversity: how many distinct domains appear across verifications and context sources (more independent sources = higher).
+- context_completeness: presence of background + timeline + implications grounded in cited sources (richer context = higher).
+- Apply penalties for: zero claims (cannot assess), zero verifications (no corroboration possible), zero external sources, contradictory verdicts.
+
+Output a single JSON object — no explanation, no markdown, no code blocks:
+
+{
+  "trust_score": <float between 0.0 and 1.0 inclusive>,
+  "rationale": "<short paragraph explaining the score, max 400 chars>",
+  "factors": {
+    "claim_support_ratio":   <float between 0.0 and 1.0>,
+    "source_diversity":      <float between 0.0 and 1.0>,
+    "context_completeness":  <float between 0.0 and 1.0>
+  }
+}
+
+Output rules:
+- trust_score MUST be a number in [0.0, 1.0] (inclusive). Out-of-range values are rejected upstream.
+- factors fields MUST also be in [0.0, 1.0] — they are diagnostic only, do not have to combine linearly to trust_score.
+- rationale is required and must be non-empty. No invented citations.
+
+Return ONLY the JSON object.
