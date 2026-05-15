@@ -64,11 +64,15 @@ type EnrichedFacts struct {
 	Topics    []string  `json:"topics"`
 	Sentiment Sentiment `json:"sentiment"`
 
-	// Verifications / Context / TrustScore: 후속 sub-issue 에서 채움 (#448 / #449 / #450).
-	// 본 sub-issue 에서는 nil/empty 로 출발.
+	// Verifications / Context / TrustScore: sub-issue #448 / #449 / #450 에서 채움.
 	Verifications []Verification `json:"verifications,omitempty"`
 	Context       *PageContext   `json:"context,omitempty"`
 	TrustScore    *float64       `json:"trust_score,omitempty"`
+
+	// Rationale / TrustFactors: 이슈 #457 — scorer 진단 정보 영속화.
+	// TrustScore 가 nil 이면 두 필드도 zero-value (omitempty 로 wire 생략).
+	Rationale    string        `json:"rationale,omitempty"`
+	TrustFactors *ScoreFactors `json:"trust_factors,omitempty"`
 }
 
 // Verification 은 claim 별 외부 소스 대조 결과입니다 (#448 에서 사용).

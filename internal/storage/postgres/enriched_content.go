@@ -29,15 +29,18 @@ func NewEnrichedContentRepository(pool *pgxpool.Pool, log *logger.Logger) reposi
 // Upsert SQL — content_id UNIQUE 충돌 시 ON CONFLICT 로 UPDATE (재처리 안전).
 //
 // enriched_at 은 항상 NOW() 로 refresh — 마지막 enrich 시점 추적.
-// trust_score / facts / verifications / context 는 caller 가 매번 전달한 값으로 덮어쓰기.
+// trust_score / facts / verifications / context / rationale / factors 는 caller 가 매번 전달한 값으로 덮어쓰기.
+// rationale / factors 는 이슈 #457 (migration 030) 에서 추가된 scorer 진단 컬럼.
 const sqlUpsertEnrichedContent = `
-INSERT INTO enriched_contents (content_id, trust_score, facts, verifications, context)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO enriched_contents (content_id, trust_score, facts, verifications, context, rationale, factors)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (content_id) DO UPDATE
 SET trust_score   = EXCLUDED.trust_score,
     facts         = EXCLUDED.facts,
     verifications = EXCLUDED.verifications,
     context       = EXCLUDED.context,
+    rationale     = EXCLUDED.rationale,
+    factors       = EXCLUDED.factors,
     enriched_at   = NOW()
 RETURNING id, enriched_at
 `
@@ -49,9 +52,10 @@ func (r *pgEnrichedContentRepository) Upsert(ctx context.Context, rec *model.Enr
 	facts := nonNilJSONB(rec.Facts, "{}")
 	verifications := nonNilJSONB(rec.Verifications, "[]")
 	contextJSON := nonNilJSONB(rec.Context, "{}")
+	factors := nonNilJSONB(rec.Factors, "{}")
 
 	row := r.pool.QueryRow(ctx, sqlUpsertEnrichedContent,
-		rec.ContentID, rec.TrustScore, facts, verifications, contextJSON,
+		rec.ContentID, rec.TrustScore, facts, verifications, contextJSON, rec.Rationale, factors,
 	)
 	if err := row.Scan(&rec.ID, &rec.EnrichedAt); err != nil {
 		return fmt.Errorf("upsert enriched_content: %w", err)
@@ -60,7 +64,7 @@ func (r *pgEnrichedContentRepository) Upsert(ctx context.Context, rec *model.Enr
 }
 
 const sqlGetEnrichedContentByContentID = `
-SELECT id, content_id, trust_score, facts, verifications, context, enriched_at
+SELECT id, content_id, trust_score, facts, verifications, context, rationale, factors, enriched_at
 FROM enriched_contents
 WHERE content_id = $1
 `
@@ -71,6 +75,7 @@ func (r *pgEnrichedContentRepository) GetByContentID(ctx context.Context, conten
 	if err := row.Scan(
 		&rec.ID, &rec.ContentID, &rec.TrustScore,
 		&rec.Facts, &rec.Verifications, &rec.Context,
+		&rec.Rationale, &rec.Factors,
 		&rec.EnrichedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

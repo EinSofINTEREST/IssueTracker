@@ -481,6 +481,10 @@ func (w *Worker) runScoring(
 	}
 	score := res.TrustScore
 	facts.TrustScore = &score
+	// 이슈 #457: scorer 진단 정보 (rationale + factors) 도 facts 에 첨부 → 후속 persistEnriched 가 DB 영속화.
+	facts.Rationale = res.Rationale
+	factors := res.Factors
+	facts.TrustFactors = &factors
 	log.WithFields(map[string]interface{}{
 		"job_id":      pm.ID,
 		"ref_id":      ref.ID,
@@ -518,12 +522,27 @@ func (w *Worker) persistEnriched(
 		return
 	}
 
+	// 이슈 #457 — scorer 진단 정보 영속화. TrustFactors 가 nil 이면 빈 객체.
+	var factorsJSON []byte
+	if facts.TrustFactors != nil {
+		factorsJSON, err = json.Marshal(facts.TrustFactors)
+		if err != nil {
+			log.WithFields(map[string]interface{}{
+				"job_id": pm.ID,
+				"ref_id": ref.ID,
+			}).WithError(err).Warn("marshal trust factors failed, persisting with empty factors")
+			factorsJSON = nil
+		}
+	}
+
 	rec := &model.EnrichedContentRecord{
 		ContentID:     ref.ID,
 		TrustScore:    *facts.TrustScore,
 		Facts:         factsJSON,
 		Verifications: verificationsJSON,
 		Context:       contextJSON,
+		Rationale:     facts.Rationale,
+		Factors:       factorsJSON,
 	}
 	if err := w.enrichedRepo.Upsert(ctx, rec); err != nil {
 		log.WithFields(map[string]interface{}{
