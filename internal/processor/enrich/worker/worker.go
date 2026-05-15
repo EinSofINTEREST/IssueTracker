@@ -23,6 +23,7 @@ import (
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/model"
+	"issuetracker/internal/storage/repository"
 	"issuetracker/internal/storage/service"
 	"issuetracker/internal/workerpool"
 	"issuetracker/pkg/logger"
@@ -57,6 +58,8 @@ type Worker struct {
 	extractor      extractor.Extractor
 	verifier       extractor.Verifier
 	contextualizer extractor.Contextualizer
+	scorer         extractor.Scorer
+	enrichedRepo   repository.EnrichedContentRepository
 	gate           locks.StageGate // nil 허용 → NoopStageGate 로 fallback
 	workerCount    int
 
@@ -65,7 +68,8 @@ type Worker struct {
 
 // NewWorker 는 새로운 Worker 를 생성합니다.
 //
-// pub / contentSvc / extractor / verifier / contextualizer 가 nil 이면 panic — fail-fast.
+// pub / contentSvc / extractor / verifier / contextualizer / scorer 가 nil 이면 panic — fail-fast.
+// enrichedRepo 는 nil 허용 — nil 이면 DB write skip + metadata 첨부만 (sub-issue #450 도입 전 동작 호환).
 // gate 가 nil 이면 NoopStageGate 로 fallback.
 func NewWorker(
 	consumer bus.Consumer,
@@ -74,6 +78,8 @@ func NewWorker(
 	ex extractor.Extractor,
 	vr extractor.Verifier,
 	cz extractor.Contextualizer,
+	sc extractor.Scorer,
+	enrichedRepo repository.EnrichedContentRepository,
 	gate locks.StageGate,
 	workerCount int,
 ) *Worker {
@@ -92,6 +98,9 @@ func NewWorker(
 	if cz == nil {
 		panic("enrich.NewWorker: contextualizer must not be nil (use extractor.NoopContextualizer for disabled context)")
 	}
+	if sc == nil {
+		panic("enrich.NewWorker: scorer must not be nil (use extractor.NoopScorer for disabled scoring)")
+	}
 	if gate == nil {
 		gate = locks.NewNoopStageGate()
 	}
@@ -102,6 +111,8 @@ func NewWorker(
 		extractor:      ex,
 		verifier:       vr,
 		contextualizer: cz,
+		scorer:         sc,
+		enrichedRepo:   enrichedRepo,
 		gate:           gate,
 		workerCount:    workerCount,
 	}
@@ -193,12 +204,14 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		defer release()
 	}
 
-	// 이슈 #447 / #448 / #449 — Content 조회 + extractor 호출 + cross-verify + context + facts 첨부.
+	// 이슈 #447 / #448 / #449 / #450 — Content 조회 + extractor + cross-verify + context + score + DB upsert + facts 첨부.
 	// 본 단계 어떤 실패도 forward 를 막지 않음 — pipeline 진행이 enrichment 보다 우선.
 	content, facts := w.runExtraction(ctx, &pm, &ref)
 	if facts != nil {
 		w.runVerification(ctx, &pm, &ref, content, facts)
 		w.runContextEnrichment(ctx, &pm, &ref, content, facts)
+		w.runScoring(ctx, &pm, &ref, content, facts)
+		w.persistEnriched(ctx, &pm, &ref, facts)
 		w.attachFacts(&pm, facts)
 	}
 
@@ -409,6 +422,143 @@ func (w *Worker) runContextEnrichment(
 		"timeline_count":   len(pageCtx.Timeline),
 		"has_implications": pageCtx.Implications != nil,
 	}).Debug("enrichment context completed")
+}
+
+// runScoring 은 추출 + 검증 + 외부 맥락 결과를 종합하여 trust_score 를 산출하고 facts.TrustScore
+// 에 첨부합니다 (이슈 #450).
+//
+// facts 가 nil 이거나 facts 가 모두 empty (claims / verifications / context 부재) 면 skip.
+// scorer error 시 미첨부 + forward 계속 (forward-first 정책).
+func (w *Worker) runScoring(
+	ctx context.Context,
+	pm *core.ProcessingMessage,
+	ref *core.ContentRef,
+	content *core.Content,
+	facts *extractor.EnrichedFacts,
+) {
+	log := logger.FromContext(ctx)
+
+	if facts == nil {
+		return
+	}
+	// 점수 산출 근거가 전혀 없으면 skip — extractor 가 빈 facts 만 반환한 경우 등.
+	if len(facts.Claims) == 0 && len(facts.Verifications) == 0 && facts.Context.IsEmpty() {
+		return
+	}
+
+	factsJSON, _ := json.Marshal(struct {
+		Entities  []extractor.Entity  `json:"entities,omitempty"`
+		Claims    []extractor.Claim   `json:"claims,omitempty"`
+		Facts     []extractor.Fact    `json:"facts,omitempty"`
+		Topics    []string            `json:"topics,omitempty"`
+		Sentiment extractor.Sentiment `json:"sentiment,omitempty"`
+	}{facts.Entities, facts.Claims, facts.Facts, facts.Topics, facts.Sentiment})
+	verificationsJSON, _ := json.Marshal(facts.Verifications)
+	var contextJSON []byte
+	if facts.Context != nil {
+		contextJSON, _ = json.Marshal(facts.Context)
+	}
+
+	title := ""
+	if content != nil {
+		title = content.Title
+	}
+	in := extractor.ScoreInput{
+		URL:           ref.URL,
+		Host:          hostOf(ref.URL),
+		Title:         title,
+		Facts:         factsJSON,
+		Verifications: verificationsJSON,
+		Context:       contextJSON,
+	}
+
+	res, err := w.scorer.Score(ctx, in)
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+		}).WithError(err).Warn("enrichment scoring failed, forwarding without trust_score")
+		return
+	}
+	if res == nil {
+		return
+	}
+	score := res.TrustScore
+	facts.TrustScore = &score
+	log.WithFields(map[string]interface{}{
+		"job_id":      pm.ID,
+		"ref_id":      ref.ID,
+		"trust_score": score,
+	}).Debug("enrichment scoring completed")
+}
+
+// persistEnriched 는 facts 결과를 enriched_contents 테이블에 UPSERT 합니다 (이슈 #450).
+//
+// 다음 조건들에서는 skip (forward 만 계속):
+//   - enrichedRepo 가 nil (미configured 환경)
+//   - facts.TrustScore 가 nil (scoring 실패 / Noop)
+//
+// DB 쓰기 실패는 warn 로깅 후 forward — DB 일시 장애가 pipeline 을 막지 않도록 (forward-first).
+func (w *Worker) persistEnriched(
+	ctx context.Context,
+	pm *core.ProcessingMessage,
+	ref *core.ContentRef,
+	facts *extractor.EnrichedFacts,
+) {
+	log := logger.FromContext(ctx)
+	if w.enrichedRepo == nil {
+		return
+	}
+	if facts == nil || facts.TrustScore == nil {
+		return
+	}
+
+	factsJSON, err := json.Marshal(struct {
+		Entities  []extractor.Entity  `json:"entities"`
+		Claims    []extractor.Claim   `json:"claims"`
+		Facts     []extractor.Fact    `json:"facts"`
+		Topics    []string            `json:"topics"`
+		Sentiment extractor.Sentiment `json:"sentiment"`
+	}{facts.Entities, facts.Claims, facts.Facts, facts.Topics, facts.Sentiment})
+	if err != nil {
+		log.WithError(err).Warn("marshal facts for persistence failed, skipping enriched upsert")
+		return
+	}
+	verificationsJSON, err := json.Marshal(facts.Verifications)
+	if err != nil {
+		log.WithError(err).Warn("marshal verifications for persistence failed, skipping enriched upsert")
+		return
+	}
+	var contextJSON []byte
+	if facts.Context != nil {
+		contextJSON, err = json.Marshal(facts.Context)
+		if err != nil {
+			log.WithError(err).Warn("marshal context for persistence failed, skipping enriched upsert")
+			return
+		}
+	}
+
+	rec := &model.EnrichedContentRecord{
+		ContentID:     ref.ID,
+		TrustScore:    *facts.TrustScore,
+		Facts:         factsJSON,
+		Verifications: verificationsJSON,
+		Context:       contextJSON,
+	}
+	if err := w.enrichedRepo.Upsert(ctx, rec); err != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id":      pm.ID,
+			"ref_id":      ref.ID,
+			"trust_score": *facts.TrustScore,
+		}).WithError(err).Warn("enriched_contents upsert failed, forwarding anyway")
+		return
+	}
+	log.WithFields(map[string]interface{}{
+		"job_id":      pm.ID,
+		"ref_id":      ref.ID,
+		"enriched_id": rec.ID,
+		"trust_score": *facts.TrustScore,
+	}).Debug("enriched_contents upsert completed")
 }
 
 // findCandidates 는 본 content 와 같은 country + 시간 윈도우의 후보 article 들을 조회하고

@@ -948,13 +948,32 @@ func main() {
 		log.Info("enrich contextualizer: noop (claudegen pool or prompt loader unavailable)")
 	}
 
-	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichVerifier, enrichContextualizer, enrichGate, workerCountsCfg.Enrich)
+	// 이슈 #450 — claudegen 기반 enricher scorer (trust_score) + enriched_contents 영속화 wiring.
+	var enrichScorer enrichextractor.Scorer = enrichextractor.NewNoopScorer()
+	if claudegenPool != nil && promptLoader != nil {
+		cs, csErr := enrichextractor.NewClaudegenScorer(claudegenPool, promptLoader)
+		if csErr != nil {
+			log.WithError(csErr).Warn("claudegen enrich scorer construction failed, using noop")
+		} else {
+			enrichScorer = cs
+			log.Info("enrich scorer: claudegen-backed")
+		}
+	} else {
+		log.Info("enrich scorer: noop (claudegen pool or prompt loader unavailable)")
+	}
+
+	// enriched_contents repository — pgxpool 사용. nil 허용 (Worker 가 nil 시 DB write skip).
+	enrichedRepo := decorator.WrapEnrichedContentWithTimeout(
+		pgstore.NewEnrichedContentRepository(pool, log), dbCfg.QueryTimeout,
+	)
+
+	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichVerifier, enrichContextualizer, enrichScorer, enrichedRepo, enrichGate, workerCountsCfg.Enrich)
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": workerCountsCfg.Enrich,
 		"input_topic":  queue.TopicValidated,
 		"output_topic": queue.TopicEnriched,
-	}).Info("enrich worker constructed (#447 extractor + #448 verifier + #449 contextualizer)")
+	}).Info("enrich worker constructed (#447 extractor + #448 verifier + #449 contextualizer + #450 scorer/persistence)")
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리
