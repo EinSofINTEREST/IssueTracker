@@ -7,20 +7,18 @@ import (
 	"regexp"
 	"strings"
 
+	"issuetracker/internal/processor/parser/core"
 	"issuetracker/pkg/llm/prompt"
 )
 
-// LLMClient 는 InferLLM 이 사용하는 최소 LLM 호출 인터페이스입니다.
+// LLMClient 는 InferLLM 이 사용하는 LLM 호출 인터페이스 — parser/core.PromptCompletor 의 alias.
 //
-// pathinfer 가 pkg/llm 을 직접 import 하지 않도록 작은 abstraction —
-// 호출자 (단계 4 의 hybrid 흐름) 가 pkg/llm.Provider 위에 adapter 를 만들어 주입합니다.
+// 이슈 #463: pathinfer 와 llmgen 의 LLM 추상 layer 를 parser/core 에서 단일 source 로 정의.
+// 본 alias 로 기존 caller 호환 보존 + 의미적 통합. 후속 PR 에서 caller 가 직접
+// core.PromptCompletor 를 import 하도록 점진 마이그레이션 가능.
 //
 // 구현체는 goroutine-safe 해야 합니다.
-type LLMClient interface {
-	// Generate 는 system + user 프롬프트로 LLM 호출 후 응답 텍스트를 반환합니다.
-	// 호출자는 timeout / cancel 을 ctx 로 제어.
-	Generate(ctx context.Context, system, user string) (string, error)
-}
+type LLMClient = core.PromptCompletor
 
 // LLMSamples 는 InferLLM 의 입력 샘플입니다.
 //

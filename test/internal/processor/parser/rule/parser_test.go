@@ -232,3 +232,68 @@ func TestNewParser_NilResolver_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-nil resolver")
 }
+
+// stubRuleLookup 은 RuleLookup 인터페이스의 mock 구현입니다 (이슈 #463).
+//
+// concrete *Resolver 대신 mock 주입으로 Parser 단위 테스트 가능 — interface 추상화 후
+// 가능해진 새 패턴.
+type stubRuleLookup struct {
+	rule *model.ParserRuleRecord
+	err  error
+}
+
+func (s *stubRuleLookup) ResolveByURL(_ context.Context, _ string, _ model.TargetType) (*model.ParserRuleRecord, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.rule, nil
+}
+
+// TestParser_RuleLookupMock_DirectInjection 은 RuleLookup 인터페이스 추상화로 mock 주입이
+// 가능함을 검증합니다 (이슈 #463 — interface 의존 전환의 핵심 가치).
+//
+// 기존 테스트는 *Resolver concrete + fake repo 패턴 사용 — Resolver 의 cache / Redis /
+// 비교 로직까지 거쳐야 했음. 본 테스트는 RuleLookup mock 으로 그 의존 일체 제거.
+func TestParser_RuleLookupMock_DirectInjection(t *testing.T) {
+	mockLookup := &stubRuleLookup{rule: pageRule()}
+	p, err := rule.NewParser(mockLookup)
+	require.NoError(t, err)
+
+	page, err := p.ParsePage(context.Background(), makeRaw("https://example.com/article/1", articleHTML))
+	require.NoError(t, err)
+	assert.Equal(t, "Breaking News Today", page.Title)
+}
+
+// TestParser_RuleLookupMock_LookupError 는 mock 의 error 가 그대로 호출자에 propagate
+// 되는지 검증.
+func TestParser_RuleLookupMock_LookupError(t *testing.T) {
+	expectedErr := errors.New("synthetic lookup failure")
+	mockLookup := &stubRuleLookup{err: expectedErr}
+	p, err := rule.NewParser(mockLookup)
+	require.NoError(t, err)
+
+	_, err = p.ParsePage(context.Background(), makeRaw("https://example.com/article/1", articleHTML))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, expectedErr)
+}
+
+// TestParser_RuleLookupMock_NilRuleSuccess_NoPanic 은 RuleLookup 이 (nil, nil) 반환 시
+// dereferencing panic 대신 ErrNoRule 로 안전하게 처리되는지 검증 (coderabbit-review PR #464).
+func TestParser_RuleLookupMock_NilRuleSuccess_NoPanic(t *testing.T) {
+	mockLookup := &stubRuleLookup{rule: nil, err: nil}
+	p, err := rule.NewParser(mockLookup)
+	require.NoError(t, err)
+
+	// ParsePage
+	_, err = p.ParsePage(context.Background(), makeRaw("https://example.com/a", articleHTML))
+	require.Error(t, err)
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrNoRule, rerr.Code)
+
+	// ParseLinks
+	_, err = p.ParseLinks(context.Background(), makeRaw("https://example.com/list", listHTML))
+	require.Error(t, err)
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrNoRule, rerr.Code)
+}

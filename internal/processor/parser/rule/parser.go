@@ -3,7 +3,6 @@ package rule
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -32,14 +31,25 @@ const resolveTimeout = 5 * time.Second
 //
 // stateless / goroutine-safe — 모든 worker 가 단일 인스턴스 공유 가능.
 type Parser struct {
-	resolver    *Resolver
+	resolver    RuleLookup
 	discovery   *PageLinkDiscovery // full-page link discovery
 	dateLayouts []string           // PublishedAt try-list (앞쪽 우선)
 }
 
-// NewParser 는 Resolver 를 사용하는 Parser 를 생성합니다.
+// RuleLookup 은 URL + target_type 으로 활성 ParserRule 을 조회하는 추상 (이슈 #463).
+//
+// *Resolver 가 자연스럽게 본 인터페이스를 만족 — Parser 는 concrete 대신 interface 의존으로
+// 단위 테스트 시 mock 주입 가능. 운영 wiring (main.go) 은 변경 없음.
+type RuleLookup interface {
+	ResolveByURL(ctx context.Context, rawURL string, targetType model.TargetType) (*model.ParserRuleRecord, error)
+}
+
+// 컴파일 타임 검증: *Resolver 가 RuleLookup 을 만족.
+var _ RuleLookup = (*Resolver)(nil)
+
+// NewParser 는 RuleLookup 을 사용하는 Parser 를 생성합니다.
 // resolver 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
-func NewParser(resolver *Resolver) (*Parser, error) {
+func NewParser(resolver RuleLookup) (*Parser, error) {
 	if resolver == nil {
 		return nil, errors.New("rule: NewParser requires non-nil resolver")
 	}
@@ -48,22 +58,6 @@ func NewParser(resolver *Resolver) (*Parser, error) {
 		discovery:   NewPageLinkDiscovery(),
 		dateLayouts: defaultDateLayouts(),
 	}, nil
-}
-
-// defaultDateLayouts 는 PublishedAt 추출 시 시도할 layout 목록입니다.
-// 사이트별 차이 (RFC3339 / Korean / ISO 8601 etc) 를 일반화. 운영 중 새 형식 발견 시 확장.
-func defaultDateLayouts() []string {
-	return []string{
-		time.RFC3339,
-		time.RFC3339Nano,
-		"2006-01-02T15:04:05Z07:00",
-		"2006-01-02 15:04:05",
-		"2006-01-02 15:04",
-		"2006.01.02 15:04",
-		"2006.01.02. 15:04",
-		"2006.01.02",
-		"2006/01/02 15:04:05",
-	}
 }
 
 // ParsePage 는 RawContent 를 DB rule 기반으로 Page 로 파싱합니다 (types.ContentParser 구현).
@@ -84,6 +78,16 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 	rule, err := p.resolver.ResolveByURL(resolveCtx, raw.URL, model.TargetTypePage)
 	if err != nil {
 		return nil, err
+	}
+	// RuleLookup interface contract 가 nil-success 를 명시적으로 금지하지 않으므로 mock /
+	// 향후 구현체가 (nil, nil) 반환 시 dereferencing panic 방어 (coderabbit-review #464).
+	if rule == nil {
+		return nil, &Error{
+			Code:       ErrNoRule,
+			Message:    "rule lookup returned nil rule",
+			URL:        raw.URL,
+			TargetType: string(model.TargetTypePage),
+		}
 	}
 
 	// Title + MainContent 둘 다 필수 — nil 또는 CSS 빈 문자열 모두 ErrEmptySelector 로 분류
@@ -153,6 +157,15 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 	rule, err := p.resolver.ResolveByURL(resolveCtx, raw.URL, model.TargetTypeList)
 	if err != nil {
 		return nil, err
+	}
+	// RuleLookup interface contract 가 nil-success 를 명시적으로 금지하지 않으므로 방어 (coderabbit-review #464).
+	if rule == nil {
+		return nil, &Error{
+			Code:       ErrNoRule,
+			Message:    "rule lookup returned nil rule",
+			URL:        raw.URL,
+			TargetType: string(model.TargetTypeList),
+		}
 	}
 
 	// LinkDiscovery 모드 — opt-in.
@@ -224,121 +237,6 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 		}
 	}
 	return items, nil
-}
-
-// hasRequiredSelector 는 selector 가 lookup 가능한지 검사합니다 (Coderabbit 피드백).
-// nil 이거나 CSS 가 trim 후 빈 문자열이면 false — DB 의 zero-value row 도 명확히 reject.
-func hasRequiredSelector(fs *model.FieldSelector) bool {
-	return fs != nil && strings.TrimSpace(fs.CSS) != ""
-}
-
-// validateRaw 는 ParsePage / ParseLinks 의 공통 raw 검증입니다.
-// raw 가 nil 이거나 HTML 이 비어있으면 (whitespace-only 도 빈 것으로 간주) raw.URL 진단 정보 포함 Error 반환.
-// (Coderabbit 피드백: "   \n" 같은 whitespace-only 가 통과해 stale-rule 오인 회피)
-func validateRaw(raw *core.RawContent) error {
-	if raw != nil && strings.TrimSpace(raw.HTML) != "" {
-		return nil
-	}
-	var u string
-	if raw != nil {
-		u = raw.URL
-	}
-	return &Error{Code: ErrParseFailure, Message: "raw content empty", URL: u}
-}
-
-// extractField 는 단일 필드를 추출합니다 (selector 가 nil 이면 빈 문자열).
-//
-// Multi=false (기본): 첫 매칭 element 의 값 반환.
-// Multi=true: 모든 매칭 element 의 값을 줄바꿈으로 합쳐 반환 (MainContent 다중 단락 등).
-func extractField(doc *goquery.Document, fs *model.FieldSelector) string {
-	if fs == nil || fs.CSS == "" {
-		return ""
-	}
-	return extractFromSelection(doc.Selection, fs)
-}
-
-// extractFieldFromSelection 은 sub-selection 안에서 필드를 추출합니다 (list item 내부 lookup).
-func extractFieldFromSelection(s *goquery.Selection, fs *model.FieldSelector) string {
-	if fs == nil || fs.CSS == "" {
-		return ""
-	}
-	return extractFromSelection(s, fs)
-}
-
-// extractFromSelection 은 selection 범위에서 selector 적용 결과를 반환합니다.
-func extractFromSelection(scope *goquery.Selection, fs *model.FieldSelector) string {
-	matched := scope.Find(fs.CSS)
-	if matched.Length() == 0 {
-		return ""
-	}
-	if !fs.Multi {
-		return strings.TrimSpace(extractValue(matched.First(), fs.Attribute))
-	}
-	var parts []string
-	matched.Each(func(_ int, sel *goquery.Selection) {
-		v := strings.TrimSpace(extractValue(sel, fs.Attribute))
-		if v != "" {
-			parts = append(parts, v)
-		}
-	})
-	return strings.Join(parts, "\n")
-}
-
-// extractFieldMulti 는 multi 결과를 string 슬라이스로 반환합니다 (Tags / Images 용).
-//
-// extractField 의 multi 모드는 줄바꿈으로 합치지만, 본 함수는 각 element 를 별도 항목으로 보존.
-func extractFieldMulti(doc *goquery.Document, fs *model.FieldSelector) []string {
-	if fs == nil || fs.CSS == "" {
-		return nil
-	}
-	matched := doc.Find(fs.CSS)
-	if matched.Length() == 0 {
-		return nil
-	}
-	out := make([]string, 0, matched.Length())
-	matched.Each(func(_ int, sel *goquery.Selection) {
-		v := strings.TrimSpace(extractValue(sel, fs.Attribute))
-		if v != "" {
-			out = append(out, v)
-		}
-	})
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// extractValue 는 element 의 text (Attribute=="") 또는 attribute 값을 반환합니다.
-func extractValue(sel *goquery.Selection, attribute string) string {
-	if attribute == "" {
-		return sel.Text()
-	}
-	v, _ := sel.Attr(attribute)
-	return v
-}
-
-// extractDate 는 PublishedAt 필드를 추출하고 dateLayouts 를 순회 시도합니다.
-// 추출 실패 시 zero time 반환 — 호출자 (validator 등) 가 zero 검사로 분기.
-func (p *Parser) extractDate(doc *goquery.Document, fs *model.FieldSelector) time.Time {
-	raw := extractField(doc, fs)
-	if raw == "" {
-		return time.Time{}
-	}
-	for _, layout := range p.dateLayouts {
-		if t, err := time.Parse(layout, raw); err == nil {
-			return t
-		}
-	}
-	return time.Time{}
-}
-
-// absoluteURL 은 link 를 base 기준 절대 URL 로 변환합니다.
-func absoluteURL(base *url.URL, link string) (string, error) {
-	ref, err := url.Parse(link)
-	if err != nil {
-		return "", fmt.Errorf("parse link: %w", err)
-	}
-	return base.ResolveReference(ref).String(), nil
 }
 
 // 컴파일 시 인터페이스 구현 검증 — 두 인터페이스 모두 만족해야 함.

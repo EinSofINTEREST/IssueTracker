@@ -48,6 +48,28 @@ type RuleAgent interface {
 // RawAgent 는 selector / enriched 가 아닌 임의 prompt 호출이 필요할 때 사용.
 type RawAgent = agent.Agent
 
+// PromptCompletor 는 system + user prompt 로 단일-step text 생성 API 의 추상입니다 (이슈 #463).
+//
+// 의도된 abstraction layer 비교:
+//
+//	┌─────────────────────────────────────────────────────────────────────┐
+//	│ Layer                              Interface              구현체      │
+//	├─────────────────────────────────────────────────────────────────────┤
+//	│ Domain (selector / enriched 추출)  RuleAgent              claude.Pool│
+//	│ Domain (path regex 추론)           PromptCompletor        pkg/llm.*  │
+//	│ Vendor primitive (RunSession)      RawAgent (=agent.Agent) claude.Pool│
+//	└─────────────────────────────────────────────────────────────────────┘
+//
+// PromptCompletor 는 API-based LLM provider (Gemini / OpenAI 등) 의 호출 패턴 —
+// pathinfer 가 path regex 추론에 사용하고, llmgen 의 SelectorExtractor 가 그 위 layer.
+//
+// pathinfer.LLMClient 가 본 인터페이스의 alias 로 유지되어 의미적 통합 — 본 PR 에서는
+// 실제 흡수까지는 진행 안 함 (caller 변경 최소화). 후속 PR 에서 pathinfer 가 본
+// PromptCompletor 를 직접 import 하도록 단계 마이그레이션 가능.
+type PromptCompletor interface {
+	Generate(ctx context.Context, system, user string) (string, error)
+}
+
 // RuleAgentClient 는 RuleAgent 의 default wiring 구조체입니다.
 //
 // 인스턴스 자체는 RuleAgent 인터페이스를 만족하는 backend (claude.Pool 등) 의 단순 wrapper
