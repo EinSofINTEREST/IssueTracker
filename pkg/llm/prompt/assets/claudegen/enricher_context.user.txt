@@ -1,0 +1,52 @@
+You are gathering external context for a news/community article. Go beyond the page itself — find background, timeline, and broader implications for the entities, events, and topics it covers.
+
+Source article:
+- URL: {{URL}}
+- Host: {{HOST}}
+- Title: {{TITLE}}
+
+Extracted entities (from previous step):
+{{ENTITIES_JSON}}
+
+Extracted claims (from previous step):
+{{CLAIMS_JSON}}
+
+Your task — **use the WebFetch tool aggressively**:
+1. For each named entity (person / organization / location), look up authoritative background. Examples:
+   - Person: Wikipedia / official bio page → role, prior history, recent relevant events.
+   - Organization: Wikipedia / official site → founding, scope, recent activity.
+   - Event: Wikipedia / news archive → timeline, related earlier events.
+2. For technical / scientific terms, find official definitions or specs (Wikipedia, standard bodies, RFC, vendor docs).
+3. For policy / legal references, find the official policy doc or governmental source.
+4. Build a short timeline of dated events relevant to the article (if applicable).
+5. Summarize political / social / technical implications (only when supported by sources — do not speculate).
+
+Output a single JSON object — no explanation, no markdown, no code blocks:
+{
+  "background": [
+    {
+      "subject": "<entity or topic name>",
+      "category": "person" | "event" | "tech" | "policy",
+      "summary": "<1-3 sentences of factual background>",
+      "sources": ["<url1>", "<url2>", ...]
+    }
+  ],
+  "timeline": [
+    {"date": "<ISO 8601 date or YYYY-MM>", "event": "<short factual description>", "source": "<url>"}
+  ],
+  "implications": {
+    "political": "<short paragraph, only if applicable, otherwise empty>",
+    "social":    "<short paragraph, only if applicable, otherwise empty>",
+    "technical": "<short paragraph, only if applicable, otherwise empty>"
+  }
+}
+
+Output rules:
+- Cite real URLs you actually fetched. Do not invent sources.
+- 0-5 background items is enough. Skip entities with no findings.
+- timeline 0-10 events. Use exact dates when available; YYYY-MM when only month known; otherwise skip.
+- implications: each field optional. Leave empty string when the article does not warrant that angle.
+- Source article's host is acceptable in `sources` only when it is the canonical source (e.g., official corporate site). Prefer external authoritative sources where possible.
+- All summaries / events / implications must be factually grounded in cited sources. When in doubt, omit.
+
+Return ONLY the JSON object.
