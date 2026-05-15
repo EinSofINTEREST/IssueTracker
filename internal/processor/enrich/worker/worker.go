@@ -446,17 +446,13 @@ func (w *Worker) runScoring(
 		return
 	}
 
-	factsJSON, _ := json.Marshal(struct {
-		Entities  []extractor.Entity  `json:"entities,omitempty"`
-		Claims    []extractor.Claim   `json:"claims,omitempty"`
-		Facts     []extractor.Fact    `json:"facts,omitempty"`
-		Topics    []string            `json:"topics,omitempty"`
-		Sentiment extractor.Sentiment `json:"sentiment,omitempty"`
-	}{facts.Entities, facts.Claims, facts.Facts, facts.Topics, facts.Sentiment})
-	verificationsJSON, _ := json.Marshal(facts.Verifications)
-	var contextJSON []byte
-	if facts.Context != nil {
-		contextJSON, _ = json.Marshal(facts.Context)
+	factsJSON, verificationsJSON, contextJSON, err := marshalFactsTriple(facts)
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+		}).WithError(err).Warn("marshal facts triple for scoring failed, forwarding without trust_score")
+		return
 	}
 
 	title := ""
@@ -513,29 +509,13 @@ func (w *Worker) persistEnriched(
 		return
 	}
 
-	factsJSON, err := json.Marshal(struct {
-		Entities  []extractor.Entity  `json:"entities"`
-		Claims    []extractor.Claim   `json:"claims"`
-		Facts     []extractor.Fact    `json:"facts"`
-		Topics    []string            `json:"topics"`
-		Sentiment extractor.Sentiment `json:"sentiment"`
-	}{facts.Entities, facts.Claims, facts.Facts, facts.Topics, facts.Sentiment})
+	factsJSON, verificationsJSON, contextJSON, err := marshalFactsTriple(facts)
 	if err != nil {
-		log.WithError(err).Warn("marshal facts for persistence failed, skipping enriched upsert")
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+		}).WithError(err).Warn("marshal facts triple for persistence failed, skipping enriched upsert")
 		return
-	}
-	verificationsJSON, err := json.Marshal(facts.Verifications)
-	if err != nil {
-		log.WithError(err).Warn("marshal verifications for persistence failed, skipping enriched upsert")
-		return
-	}
-	var contextJSON []byte
-	if facts.Context != nil {
-		contextJSON, err = json.Marshal(facts.Context)
-		if err != nil {
-			log.WithError(err).Warn("marshal context for persistence failed, skipping enriched upsert")
-			return
-		}
 	}
 
 	rec := &model.EnrichedContentRecord{
@@ -759,4 +739,47 @@ func (w *Worker) commit(ctx context.Context, msg *queue.Message) error {
 		return workerpool.CommitWithDrain(ctx, w.consumer, msg, drainTimeout)
 	}
 	return w.pool.Commit(ctx, msg)
+}
+
+// promptFactsPayload 는 facts 의 LLM/DB 직렬화 공통 wire format 입니다 (이슈 #450).
+//
+// runScoring (LLM 입력) / persistEnriched (DB JSONB) 두 곳에서 동일한 facts schema 를
+// 사용해야 하므로 익명 구조체 중복을 제거하고 본 타입으로 통합 (gemini-review PR #455).
+//
+// json 태그는 omitempty 미사용 — DB 영속화 시 일관된 schema (모든 필드 항상 존재) 보장.
+// LLM 입력 측에서도 빈 배열이 명시적으로 보여 prompt 가 부재 vs zero-count 를 구분 가능.
+type promptFactsPayload struct {
+	Entities  []extractor.Entity  `json:"entities"`
+	Claims    []extractor.Claim   `json:"claims"`
+	Facts     []extractor.Fact    `json:"facts"`
+	Topics    []string            `json:"topics"`
+	Sentiment extractor.Sentiment `json:"sentiment"`
+}
+
+// marshalFactsTriple 은 facts / verifications / context 를 LLM 입력 + DB 영속화에 공통으로
+// 쓰이는 JSON triple 로 직렬화합니다 (gemini-review PR #455).
+//
+// 직렬화 실패 시 첫 에러 즉시 반환 — caller (runScoring / persistEnriched) 는 forward 만 진행.
+func marshalFactsTriple(facts *extractor.EnrichedFacts) (factsJSON, verificationsJSON, contextJSON []byte, err error) {
+	factsJSON, err = json.Marshal(promptFactsPayload{
+		Entities:  facts.Entities,
+		Claims:    facts.Claims,
+		Facts:     facts.Facts,
+		Topics:    facts.Topics,
+		Sentiment: facts.Sentiment,
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("marshal facts: %w", err)
+	}
+	verificationsJSON, err = json.Marshal(facts.Verifications)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("marshal verifications: %w", err)
+	}
+	if facts.Context != nil {
+		contextJSON, err = json.Marshal(facts.Context)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("marshal context: %w", err)
+		}
+	}
+	return factsJSON, verificationsJSON, contextJSON, nil
 }
