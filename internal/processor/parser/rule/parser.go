@@ -79,6 +79,16 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 	if err != nil {
 		return nil, err
 	}
+	// RuleLookup interface contract 가 nil-success 를 명시적으로 금지하지 않으므로 mock /
+	// 향후 구현체가 (nil, nil) 반환 시 dereferencing panic 방어 (coderabbit-review #464).
+	if rule == nil {
+		return nil, &Error{
+			Code:       ErrNoRule,
+			Message:    "rule lookup returned nil rule",
+			URL:        raw.URL,
+			TargetType: string(model.TargetTypePage),
+		}
+	}
 
 	// Title + MainContent 둘 다 필수 — nil 또는 CSS 빈 문자열 모두 ErrEmptySelector 로 분류
 	// (Coderabbit 피드백: nil 만 검사하면 zero-value selector 가 ErrParseFailure 로 잘못 분류됨)
@@ -147,6 +157,15 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 	rule, err := p.resolver.ResolveByURL(resolveCtx, raw.URL, model.TargetTypeList)
 	if err != nil {
 		return nil, err
+	}
+	// RuleLookup interface contract 가 nil-success 를 명시적으로 금지하지 않으므로 방어 (coderabbit-review #464).
+	if rule == nil {
+		return nil, &Error{
+			Code:       ErrNoRule,
+			Message:    "rule lookup returned nil rule",
+			URL:        raw.URL,
+			TargetType: string(model.TargetTypeList),
+		}
 	}
 
 	// LinkDiscovery 모드 — opt-in.

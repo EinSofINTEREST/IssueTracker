@@ -41,11 +41,10 @@ func validateRaw(raw *core.RawContent) error {
 //
 // Multi=false (기본): 첫 매칭 element 의 값 반환.
 // Multi=true: 모든 매칭 element 의 값을 줄바꿈으로 합쳐 반환 (MainContent 다중 단락 등).
+//
+// extractFieldFromSelection 위임 — document 전체 selection 을 scope 로 전달 (gemini-review #464).
 func extractField(doc *goquery.Document, fs *model.FieldSelector) string {
-	if fs == nil || fs.CSS == "" {
-		return ""
-	}
-	return extractFromSelection(doc.Selection, fs)
+	return extractFieldFromSelection(doc.Selection, fs)
 }
 
 // extractFieldFromSelection 은 sub-selection 안에서 필드를 추출합니다 (list item 내부 lookup).
@@ -124,7 +123,13 @@ func (p *Parser) extractDate(doc *goquery.Document, fs *model.FieldSelector) tim
 }
 
 // absoluteURL 은 link 를 base 기준 절대 URL 로 변환합니다.
+//
+// base 가 nil 이면 변환 없이 link 를 그대로 반환 — caller 호환 견고화 (gemini-review #464).
+// 호출부 (parser.go) 가 이미 nil-check 후 호출하지만 함수 자체 panic 안전 보장.
 func absoluteURL(base *url.URL, link string) (string, error) {
+	if base == nil {
+		return link, nil
+	}
 	ref, err := url.Parse(link)
 	if err != nil {
 		return "", fmt.Errorf("parse link: %w", err)
@@ -134,11 +139,12 @@ func absoluteURL(base *url.URL, link string) (string, error) {
 
 // defaultDateLayouts 는 PublishedAt 추출 시 시도할 layout 목록입니다.
 // 사이트별 차이 (RFC3339 / Korean / ISO 8601 etc) 를 일반화. 운영 중 새 형식 발견 시 확장.
+//
+// 참고: time.RFC3339 = "2006-01-02T15:04:05Z07:00" 와 동일 — 중복 항목 제거 (gemini-review #464).
 func defaultDateLayouts() []string {
 	return []string{
 		time.RFC3339,
 		time.RFC3339Nano,
-		"2006-01-02T15:04:05Z07:00",
 		"2006-01-02 15:04:05",
 		"2006-01-02 15:04",
 		"2006.01.02 15:04",

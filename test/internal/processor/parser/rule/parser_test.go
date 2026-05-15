@@ -276,3 +276,24 @@ func TestParser_RuleLookupMock_LookupError(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, expectedErr)
 }
+
+// TestParser_RuleLookupMock_NilRuleSuccess_NoPanic 은 RuleLookup 이 (nil, nil) 반환 시
+// dereferencing panic 대신 ErrNoRule 로 안전하게 처리되는지 검증 (coderabbit-review PR #464).
+func TestParser_RuleLookupMock_NilRuleSuccess_NoPanic(t *testing.T) {
+	mockLookup := &stubRuleLookup{rule: nil, err: nil}
+	p, err := rule.NewParser(mockLookup)
+	require.NoError(t, err)
+
+	// ParsePage
+	_, err = p.ParsePage(context.Background(), makeRaw("https://example.com/a", articleHTML))
+	require.Error(t, err)
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrNoRule, rerr.Code)
+
+	// ParseLinks
+	_, err = p.ParseLinks(context.Background(), makeRaw("https://example.com/list", listHTML))
+	require.Error(t, err)
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrNoRule, rerr.Code)
+}
