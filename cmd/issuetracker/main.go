@@ -933,13 +933,28 @@ func main() {
 		log.Info("enrich verifier: noop (claudegen pool or prompt loader unavailable)")
 	}
 
-	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichVerifier, enrichGate, workerCountsCfg.Enrich)
+	// 이슈 #449 — claudegen 기반 enricher contextualizer (외부 맥락 수집) wiring.
+	// extractor / verifier 와 동일 fallback 정책.
+	var enrichContextualizer enrichextractor.Contextualizer = enrichextractor.NewNoopContextualizer()
+	if claudegenPool != nil && promptLoader != nil {
+		cc, ccErr := enrichextractor.NewClaudegenContextualizer(claudegenPool, promptLoader)
+		if ccErr != nil {
+			log.WithError(ccErr).Warn("claudegen enrich contextualizer construction failed, using noop")
+		} else {
+			enrichContextualizer = cc
+			log.Info("enrich contextualizer: claudegen-backed")
+		}
+	} else {
+		log.Info("enrich contextualizer: noop (claudegen pool or prompt loader unavailable)")
+	}
+
+	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichVerifier, enrichContextualizer, enrichGate, workerCountsCfg.Enrich)
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": workerCountsCfg.Enrich,
 		"input_topic":  queue.TopicValidated,
 		"output_topic": queue.TopicEnriched,
-	}).Info("enrich worker constructed (#447 extractor + #448 verifier)")
+	}).Info("enrich worker constructed (#447 extractor + #448 verifier + #449 contextualizer)")
 
 	// ══════════════════════════════════════════════════════════════════════════
 	// Stage 통합 — processor.Stage 인터페이스로 모든 단계 균일 관리

@@ -51,20 +51,21 @@ const drainTimeout = workerpool.DefaultDrainTimeout
 // 추출/검증 실패는 파이프라인을 멈추지 않습니다 — warn 로깅 + 빈 결과로 fallback + forward 진행.
 // content 조회 실패 (ErrNotFound) 는 idempotent 정상 분기 — 이미 처리된 메시지로 보고 commit.
 type Worker struct {
-	consumer    bus.Consumer
-	pub         *bus.Publisher
-	contentSvc  service.ContentService
-	extractor   extractor.Extractor
-	verifier    extractor.Verifier
-	gate        locks.StageGate // nil 허용 → NoopStageGate 로 fallback
-	workerCount int
+	consumer       bus.Consumer
+	pub            *bus.Publisher
+	contentSvc     service.ContentService
+	extractor      extractor.Extractor
+	verifier       extractor.Verifier
+	contextualizer extractor.Contextualizer
+	gate           locks.StageGate // nil 허용 → NoopStageGate 로 fallback
+	workerCount    int
 
 	pool *workerpool.ConsumerPool
 }
 
 // NewWorker 는 새로운 Worker 를 생성합니다.
 //
-// pub / contentSvc / extractor / verifier 가 nil 이면 panic — fail-fast (silent failure 회피).
+// pub / contentSvc / extractor / verifier / contextualizer 가 nil 이면 panic — fail-fast.
 // gate 가 nil 이면 NoopStageGate 로 fallback.
 func NewWorker(
 	consumer bus.Consumer,
@@ -72,6 +73,7 @@ func NewWorker(
 	contentSvc service.ContentService,
 	ex extractor.Extractor,
 	vr extractor.Verifier,
+	cz extractor.Contextualizer,
 	gate locks.StageGate,
 	workerCount int,
 ) *Worker {
@@ -87,17 +89,21 @@ func NewWorker(
 	if vr == nil {
 		panic("enrich.NewWorker: verifier must not be nil (use extractor.NoopVerifier for disabled verification)")
 	}
+	if cz == nil {
+		panic("enrich.NewWorker: contextualizer must not be nil (use extractor.NoopContextualizer for disabled context)")
+	}
 	if gate == nil {
 		gate = locks.NewNoopStageGate()
 	}
 	return &Worker{
-		consumer:    consumer,
-		pub:         pub,
-		contentSvc:  contentSvc,
-		extractor:   ex,
-		verifier:    vr,
-		gate:        gate,
-		workerCount: workerCount,
+		consumer:       consumer,
+		pub:            pub,
+		contentSvc:     contentSvc,
+		extractor:      ex,
+		verifier:       vr,
+		contextualizer: cz,
+		gate:           gate,
+		workerCount:    workerCount,
 	}
 }
 
@@ -187,11 +193,12 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		defer release()
 	}
 
-	// 이슈 #447 / #448 — Content 조회 + extractor 호출 + cross-verify + facts 첨부.
+	// 이슈 #447 / #448 / #449 — Content 조회 + extractor 호출 + cross-verify + context + facts 첨부.
 	// 본 단계 어떤 실패도 forward 를 막지 않음 — pipeline 진행이 enrichment 보다 우선.
 	content, facts := w.runExtraction(ctx, &pm, &ref)
 	if facts != nil {
 		w.runVerification(ctx, &pm, &ref, content, facts)
+		w.runContextEnrichment(ctx, &pm, &ref, content, facts)
 		w.attachFacts(&pm, facts)
 	}
 
@@ -341,6 +348,74 @@ func (w *Worker) runVerification(
 		"candidate_count":    len(candidates),
 		"verification_count": len(verifications),
 	}).Debug("enrichment verification completed")
+}
+
+// runContextEnrichment 는 entities + claims 를 입력으로 외부 맥락을 수집하고
+// facts.Context 에 첨부합니다 (이슈 #449).
+//
+// entities/claims 가 모두 비어있으면 skip. contextualizer error / 빈 결과는 미첨부 — forward 보장.
+func (w *Worker) runContextEnrichment(
+	ctx context.Context,
+	pm *core.ProcessingMessage,
+	ref *core.ContentRef,
+	content *core.Content,
+	facts *extractor.EnrichedFacts,
+) {
+	log := logger.FromContext(ctx)
+
+	if facts == nil {
+		return
+	}
+	if len(facts.Entities) == 0 && len(facts.Claims) == 0 {
+		return
+	}
+
+	title := ""
+	if content != nil {
+		title = content.Title
+	}
+	in := extractor.ContextInput{
+		URL:      ref.URL,
+		Host:     hostOf(ref.URL),
+		Title:    title,
+		Entities: facts.Entities,
+		Claims:   facts.Claims,
+	}
+
+	pageCtx, err := w.contextualizer.Provide(ctx, in)
+	if err != nil {
+		log.WithFields(map[string]interface{}{
+			"job_id":       pm.ID,
+			"ref_id":       ref.ID,
+			"entity_count": len(facts.Entities),
+			"claim_count":  len(facts.Claims),
+		}).WithError(err).Warn("enrichment context provider failed, forwarding without context")
+		return
+	}
+	if pageCtx.IsEmpty() {
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+		}).Debug("context provider returned empty result, skipping attach")
+		return
+	}
+	facts.Context = pageCtx
+
+	bgCount := 0
+	tlCount := 0
+	hasImpl := false
+	if pageCtx != nil {
+		bgCount = len(pageCtx.Background)
+		tlCount = len(pageCtx.Timeline)
+		hasImpl = pageCtx.Implications != nil
+	}
+	log.WithFields(map[string]interface{}{
+		"job_id":           pm.ID,
+		"ref_id":           ref.ID,
+		"background_count": bgCount,
+		"timeline_count":   tlCount,
+		"has_implications": hasImpl,
+	}).Debug("enrichment context completed")
 }
 
 // findCandidates 는 본 content 와 같은 country + 시간 윈도우의 후보 article 들을 조회하고
