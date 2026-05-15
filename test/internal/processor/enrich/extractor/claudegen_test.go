@@ -435,23 +435,55 @@ func TestClaudegenScorer_OutOfRange_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestClaudegenScorer_AllEmpty_SkipsRunner(t *testing.T) {
-	runner := &stubRunner{stdout: "this should never be parsed"}
+func TestClaudegenScorer_MissingTrustScore_ReturnsError(t *testing.T) {
+	// trust_score 누락 → 0 으로 fabricated 안 되도록 error.
 	s, err := extractor.NewClaudegenScorer(
-		runner,
+		&stubRunner{stdout: `{"rationale": "ok"}`},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
+	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trust_score")
+}
 
-	// 모든 input 이 empty/null
-	got, err := s.Score(context.Background(), extractor.ScoreInput{
-		Facts:         []byte(`{}`),
-		Verifications: []byte(`[]`),
-		Context:       []byte(`null`),
-	})
+func TestClaudegenScorer_MissingRationale_ReturnsError(t *testing.T) {
+	s, err := extractor.NewClaudegenScorer(
+		&stubRunner{stdout: `{"trust_score": 0.5}`},
+		&stubLoader{tpl: "t"},
+	)
 	require.NoError(t, err)
-	assert.Nil(t, got)
-	assert.Equal(t, 0, runner.calls)
+	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rationale")
+}
+
+func TestClaudegenScorer_AllEmpty_SkipsRunner(t *testing.T) {
+	cases := []struct {
+		name                      string
+		facts, verifications, ctx []byte
+	}{
+		{"exact empty", []byte(`{}`), []byte(`[]`), []byte(`null`)},
+		{"whitespace empty", []byte(" {}\n"), []byte(" [] "), []byte("  null  ")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			runner := &stubRunner{stdout: "this should never be parsed"}
+			s, err := extractor.NewClaudegenScorer(
+				runner,
+				&stubLoader{tpl: "t"},
+			)
+			require.NoError(t, err)
+			got, err := s.Score(context.Background(), extractor.ScoreInput{
+				Facts:         c.facts,
+				Verifications: c.verifications,
+				Context:       c.ctx,
+			})
+			require.NoError(t, err)
+			assert.Nil(t, got)
+			assert.Equal(t, 0, runner.calls, "case %q", c.name)
+		})
+	}
 }
 
 func TestClaudegenScorer_SessionError_Propagates(t *testing.T) {

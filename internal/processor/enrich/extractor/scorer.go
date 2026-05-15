@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"issuetracker/pkg/llm/prompt"
 )
@@ -122,15 +123,22 @@ func (s *ClaudegenScorer) Score(ctx context.Context, in ScoreInput) (*TrustScore
 var _ Scorer = (*ClaudegenScorer)(nil)
 
 // scoreResponse 는 claudegen scorer 응답의 wire format 입니다.
+//
+// TrustScore 는 pointer 타입 — 응답에서 필드가 누락되면 0 으로 fallback 되지 않고 nil 로 잡혀
+// 명시적 missing 검출 가능 (coderabbit-review PR #455). DB 에 fabricated 0 점수가 저장되는
+// 사고 회피.
 type scoreResponse struct {
-	TrustScore float64      `json:"trust_score"`
+	TrustScore *float64     `json:"trust_score"`
 	Rationale  string       `json:"rationale"`
 	Factors    ScoreFactors `json:"factors"`
 }
 
 // parseScoreOutput 는 claudegen stdout JSON 을 TrustScoreResult 로 파싱합니다.
 //
-// trust_score 가 [0.0, 1.0] 밖이면 error — DB CHECK constraint 위반 회피 (caller 에서 미첨부 결정).
+// 필수 필드 검증:
+//   - trust_score 필드 누락 → error (zero-value fabricated score 회피)
+//   - rationale 누락 또는 whitespace-only → error (운영자 진단 정보 결핍 회피)
+//   - trust_score 범위 [0.0, 1.0] 위반 → error (DB CHECK 와 일관)
 func parseScoreOutput(output string) (*TrustScoreResult, error) {
 	body := stripFences(output)
 	if body == "" {
@@ -140,22 +148,30 @@ func parseScoreOutput(output string) (*TrustScoreResult, error) {
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
-	if raw.TrustScore < 0 || raw.TrustScore > 1 {
-		return nil, fmt.Errorf("trust_score %v out of range [0.0, 1.0]", raw.TrustScore)
+	if raw.TrustScore == nil {
+		return nil, errors.New("missing trust_score")
+	}
+	if strings.TrimSpace(raw.Rationale) == "" {
+		return nil, errors.New("missing rationale")
+	}
+	if *raw.TrustScore < 0 || *raw.TrustScore > 1 {
+		return nil, fmt.Errorf("trust_score %v out of range [0.0, 1.0]", *raw.TrustScore)
 	}
 	return &TrustScoreResult{
-		TrustScore: raw.TrustScore,
+		TrustScore: *raw.TrustScore,
 		Rationale:  raw.Rationale,
 		Factors:    raw.Factors,
 	}, nil
 }
 
 // isEmptyJSON 는 byte slice 가 비어있거나 빈 JSON ({}, [], null) 인지 검사합니다.
+//
+// whitespace 도 흡수 — `" {}\n"` 같은 변형도 empty 로 인식 (coderabbit-review PR #455).
 func isEmptyJSON(b []byte) bool {
-	if len(b) == 0 {
+	s := strings.TrimSpace(string(b))
+	if s == "" {
 		return true
 	}
-	s := string(b)
 	switch s {
 	case "{}", "[]", "null":
 		return true
