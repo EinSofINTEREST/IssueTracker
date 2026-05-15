@@ -49,7 +49,7 @@ func (w *Worker) RunEnrichSession(
 	w.mu.RUnlock()
 
 	if containerID == "" {
-		return "", errors.New("claudegen: worker not started — call Start() first")
+		return "", errors.New("claude: worker not started — call Start() first")
 	}
 
 	sessionID, err := newSessionID()

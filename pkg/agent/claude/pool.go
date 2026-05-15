@@ -15,7 +15,7 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// 이슈 #352 — claudegen Worker pool.
+// 이슈 #352 — claude Worker pool.
 //
 // 라이브 분석 (2026-05-11 22:39~) 6시간 누적 검증 실패율 88% 중 핵심 사유는 published_at
 // selector 부재 (1174건 / 83%). LLM rule generator throughput 을 높여 stale/missing selector
@@ -55,14 +55,14 @@ type Pool struct {
 // 모든 worker 가 동일한 model 사용을 가정 — ModelName() 은 workers[0].ModelName() 반환.
 func NewPool(workers []*Worker, log *logger.Logger) (*Pool, error) {
 	if log == nil {
-		return nil, errors.New("claudegen: NewPool requires non-nil logger")
+		return nil, errors.New("claude: NewPool requires non-nil logger")
 	}
 	if len(workers) == 0 {
-		return nil, errors.New("claudegen: NewPool requires at least 1 worker")
+		return nil, errors.New("claude: NewPool requires at least 1 worker")
 	}
 	for i, w := range workers {
 		if w == nil {
-			return nil, fmt.Errorf("claudegen: NewPool workers[%d] is nil", i)
+			return nil, fmt.Errorf("claude: NewPool workers[%d] is nil", i)
 		}
 	}
 	return &Pool{workers: workers, log: log}, nil
@@ -75,17 +75,17 @@ func NewPool(workers []*Worker, log *logger.Logger) (*Pool, error) {
 // 각 worker 는 동일 환경변수 set (image / model / authDir / timeout) 으로 구성.
 func NewPoolFromEnv(loader prompt.Loader, log *logger.Logger) (*Pool, error) {
 	if log == nil {
-		return nil, errors.New("claudegen: NewPoolFromEnv requires non-nil logger")
+		return nil, errors.New("claude: NewPoolFromEnv requires non-nil logger")
 	}
 	if loader == nil {
-		return nil, errors.New("claudegen: NewPoolFromEnv requires non-nil prompt loader")
+		return nil, errors.New("claude: NewPoolFromEnv requires non-nil prompt loader")
 	}
 	count := resolveWorkerCount(log)
 	workers := make([]*Worker, 0, count)
 	for i := 0; i < count; i++ {
 		w, err := NewFromEnv(loader, log)
 		if err != nil {
-			return nil, fmt.Errorf("claudegen: NewPoolFromEnv worker[%d]: %w", i, err)
+			return nil, fmt.Errorf("claude: NewPoolFromEnv worker[%d]: %w", i, err)
 		}
 		workers = append(workers, w)
 	}
@@ -96,7 +96,7 @@ func NewPoolFromEnv(loader prompt.Loader, log *logger.Logger) (*Pool, error) {
 	// 생성 시점 — 아직 컨테이너 기동 전. Start() 가 성공해야 warm container 상태가 됨.
 	log.WithFields(map[string]interface{}{
 		"worker_count": count,
-	}).Info("claudegen worker pool constructed (containers not started yet)")
+	}).Info("claude worker pool constructed (containers not started yet)")
 	return pool, nil
 }
 
@@ -160,7 +160,7 @@ func (p *Pool) Start(ctx context.Context) error {
 	failedAny := false
 	for i, err := range errs {
 		if err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("claudegen: pool worker[%d] start failed: %w", i, err)
+			firstErr = fmt.Errorf("claude: pool worker[%d] start failed: %w", i, err)
 		}
 		if err != nil {
 			failedAny = true
@@ -191,7 +191,7 @@ func (p *Pool) Start(ctx context.Context) error {
 	}
 	p.log.WithFields(map[string]interface{}{
 		"worker_count": len(p.workers),
-	}).Info("claudegen worker pool started (warm containers)")
+	}).Info("claude worker pool started (warm containers)")
 	return nil
 }
 
@@ -216,14 +216,14 @@ func (p *Pool) Stop(ctx context.Context) error {
 		if err != nil {
 			p.log.WithFields(map[string]interface{}{
 				"worker_idx": i,
-			}).WithError(err).Warn("claudegen pool worker stop failed")
+			}).WithError(err).Warn("claude pool worker stop failed")
 			if firstErr == nil {
-				firstErr = fmt.Errorf("claudegen: pool worker[%d] stop failed: %w", i, err)
+				firstErr = fmt.Errorf("claude: pool worker[%d] stop failed: %w", i, err)
 			}
 		}
 	}
 	if firstErr == nil {
-		p.log.Info("claudegen worker pool stopped")
+		p.log.Info("claude worker pool stopped")
 	}
 	return firstErr
 }
