@@ -11,6 +11,7 @@ import (
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage/model"
+	"issuetracker/pkg/agent"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -242,16 +243,16 @@ func (p *Pool) ExtractEnriched(ctx context.Context, host string, targetType mode
 	return p.pick().ExtractEnriched(ctx, host, targetType, html)
 }
 
-// RunEnrichSession 은 round-robin worker 선택 후 RunEnrichSession 위임 (이슈 #447).
+// RunSession 은 round-robin worker 선택 후 RunSession 위임 (이슈 #447).
 //
 // enrich.Extractor 구현체 (extractor/claudegen.go) 가 호출하는 진입점.
-func (p *Pool) RunEnrichSession(
+func (p *Pool) RunSession(
 	ctx context.Context,
 	sessionLabel string,
 	files map[string][]byte,
 	promptText string,
 ) (string, error) {
-	return p.pick().RunEnrichSession(ctx, sessionLabel, files, promptText)
+	return p.pick().RunSession(ctx, sessionLabel, files, promptText)
 }
 
 // pick 는 round-robin 분배로 다음 worker 를 선택합니다.
@@ -263,8 +264,9 @@ func (p *Pool) pick() *Worker {
 	return p.workers[idx%uint64(len(p.workers))]
 }
 
-// 컴파일 타임 contract — pool 이 두 인터페이스 모두 구현하는지 검증.
+// 컴파일 타임 contract — pool 이 두 stage 인터페이스 + pkg/agent.Agent 를 구현하는지 검증 (이슈 #460).
 var (
 	_ llmgen.SelectorExtractor = (*Pool)(nil)
 	_ llmgen.EnrichedExtractor = (*Pool)(nil)
+	_ agent.Agent              = (*Pool)(nil)
 )
