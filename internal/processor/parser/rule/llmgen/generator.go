@@ -75,7 +75,7 @@ type SelectorValidatorResult struct {
 // SelectorExtractor 는 HTML 에서 CSS 셀렉터를 추출하는 인터페이스입니다.
 //
 // 기본 구현: pkg/llm.Provider 기반 LLM 호출 (Gemini Flash 등).
-// 대체 구현: claudegen.ClaudeWorker (Claude Code 웜 컨테이너).
+// 대체 구현: claude.Worker (Claude Code 웜 컨테이너).
 // SetExtractor 로 교체하면 추출 단계만 대체되고 나머지 흐름 (validation, INSERT) 은 동일.
 type SelectorExtractor interface {
 	Extract(ctx context.Context, host string, targetType model.TargetType, html string) (model.SelectorMap, error)

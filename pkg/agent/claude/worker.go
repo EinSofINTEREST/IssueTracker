@@ -20,7 +20,7 @@
 //   - CLAUDE_CODE_MODEL                : 모델 ID (기본: claude-sonnet-4-6)
 //   - CLAUDE_CODE_IMAGE                : Docker 이미지 (기본: issuetracker-claudegen:local — `make claudegen-build` 필요)
 //   - CLAUDE_CODE_TIMEOUT              : 세션 단위 타임아웃 (기본: 120s, Go duration 형식)
-package claudegen
+package claude
 
 import (
 	"context"
@@ -68,7 +68,7 @@ type ContainerRunner interface {
 	StopContainer(ctx context.Context, containerID string) error
 }
 
-// ClaudeWorker 는 상시 기동된 Claude Code 컨테이너에 세션을 생성해 CSS 셀렉터를 추출합니다.
+// Worker 는 상시 기동된 Claude Code 컨테이너에 세션을 생성해 CSS 셀렉터를 추출합니다.
 //
 // Lifecycle:
 //   - Start(ctx): 컨테이너 기동 + workspace 디렉토리 생성
@@ -77,7 +77,7 @@ type ContainerRunner interface {
 //
 // Extract 는 동시 호출에 안전합니다 — 각 세션이 고유 디렉토리를 사용합니다.
 // Stop 은 진행 중인 모든 Extract 완료를 대기합니다 (graceful shutdown).
-type ClaudeWorker struct {
+type Worker struct {
 	image             string
 	model             string
 	authDir           string // 호스트 인증 디렉토리
@@ -95,14 +95,14 @@ type ClaudeWorker struct {
 
 // ModelName 은 이 Worker 가 사용하는 모델 ID 를 반환합니다.
 // llmgen.Generator 가 DB description 에 기록할 때 사용합니다.
-func (w *ClaudeWorker) ModelName() string { return w.model }
+func (w *Worker) ModelName() string { return w.model }
 
-// NewFromEnv 는 환경변수 기반 ClaudeWorker 를 생성합니다.
+// NewFromEnv 는 환경변수 기반 Worker 를 생성합니다.
 // Start() 를 호출하기 전까지는 컨테이너가 기동되지 않습니다.
 //
 // CLAUDE_CODE_AUTH_DIR 미지정 시 $HOME/.claude 를 사용합니다.
 // 인증 디렉토리가 없거나 접근 불가하면 fail-fast — 호스트 `claude` CLI 사전 로그인 필요.
-func NewFromEnv(loader prompt.Loader, log *logger.Logger) (*ClaudeWorker, error) {
+func NewFromEnv(loader prompt.Loader, log *logger.Logger) (*Worker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewFromEnv requires non-nil logger")
 	}
@@ -126,7 +126,7 @@ func NewFromEnv(loader prompt.Loader, log *logger.Logger) (*ClaudeWorker, error)
 			timeout = d
 		}
 	}
-	return &ClaudeWorker{
+	return &Worker{
 		image:             envOr("CLAUDE_CODE_IMAGE", defaultImage),
 		model:             envOr("CLAUDE_CODE_MODEL", defaultModel),
 		authDir:           authDir,
@@ -138,12 +138,12 @@ func NewFromEnv(loader prompt.Loader, log *logger.Logger) (*ClaudeWorker, error)
 	}, nil
 }
 
-// New 는 명시적 파라미터로 ClaudeWorker 를 생성합니다 (DI 용).
+// New 는 명시적 파라미터로 Worker 를 생성합니다 (DI 용).
 //
 // authDir 은 호스트의 Claude 인증 디렉토리, containerAuthPath 는 컨테이너 내 마운트 대상 경로.
 // containerAuthPath 가 빈 문자열이면 defaultContainerAuthPath 사용.
 // authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증.
-func New(image, model, authDir, containerAuthPath string, timeout time.Duration, loader prompt.Loader, log *logger.Logger) (*ClaudeWorker, error) {
+func New(image, model, authDir, containerAuthPath string, timeout time.Duration, loader prompt.Loader, log *logger.Logger) (*Worker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: New requires non-nil logger")
 	}
@@ -157,7 +157,7 @@ func New(image, model, authDir, containerAuthPath string, timeout time.Duration,
 	if containerAuthPath == "" {
 		containerAuthPath = defaultContainerAuthPath
 	}
-	return &ClaudeWorker{
+	return &Worker{
 		image: image, model: model,
 		authDir: resolved, containerAuthPath: containerAuthPath,
 		sessionTimeout: timeout, runner: &execContainerRunner{}, loader: loader, log: log,
@@ -166,7 +166,7 @@ func New(image, model, authDir, containerAuthPath string, timeout time.Duration,
 
 // NewWithRunner 는 ContainerRunner 를 주입하는 생성자입니다 (테스트/DI 용).
 // authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증.
-func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time.Duration, runner ContainerRunner, loader prompt.Loader, log *logger.Logger) (*ClaudeWorker, error) {
+func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time.Duration, runner ContainerRunner, loader prompt.Loader, log *logger.Logger) (*Worker, error) {
 	if log == nil {
 		return nil, errors.New("claudegen: NewWithRunner requires non-nil logger")
 	}
@@ -183,7 +183,7 @@ func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time
 	if containerAuthPath == "" {
 		containerAuthPath = defaultContainerAuthPath
 	}
-	return &ClaudeWorker{
+	return &Worker{
 		image: image, model: model,
 		authDir: resolved, containerAuthPath: containerAuthPath,
 		sessionTimeout: timeout, runner: runner, loader: loader, log: log,
@@ -233,7 +233,7 @@ func validateAuthDir(authDir string) (string, error) {
 
 // Start 는 Claude Code 컨테이너를 기동하고 workspace 를 준비합니다.
 // 서비스 초기화 시 한 번 호출합니다.
-func (w *ClaudeWorker) Start(ctx context.Context) error {
+func (w *Worker) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -271,7 +271,7 @@ func (w *ClaudeWorker) Start(ctx context.Context) error {
 // Stop 은 진행 중인 Extract 호출 완료를 대기한 뒤 컨테이너를 종료하고 workspace 를 정리합니다.
 // graceful shutdown 시 호출합니다. 멱등(이미 정지된 경우 noop).
 // StopContainer 실패 시 state 를 소거하지 않아 재시도가 가능합니다.
-func (w *ClaudeWorker) Stop(ctx context.Context) error {
+func (w *Worker) Stop(ctx context.Context) error {
 	w.mu.Lock()
 	if w.containerID == "" {
 		w.mu.Unlock()
@@ -315,8 +315,8 @@ func (w *ClaudeWorker) Stop(ctx context.Context) error {
 // Blacklist 결정은 무시 (호출자가 ExtractEnriched 직접 호출하도록 권장).
 //
 // llmgen.Generator 는 EnrichedExtractor 인터페이스 type assertion 으로 자동 분기 —
-// claudegen.ClaudeWorker 는 두 인터페이스 모두 구현.
-func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType model.TargetType, html string) (model.SelectorMap, error) {
+// claudegen.Worker 는 두 인터페이스 모두 구현.
+func (w *Worker) Extract(ctx context.Context, host string, targetType model.TargetType, html string) (model.SelectorMap, error) {
 	res, err := w.ExtractEnriched(ctx, host, targetType, html)
 	if err != nil {
 		return model.SelectorMap{}, err
@@ -338,7 +338,7 @@ func (w *ClaudeWorker) Extract(ctx context.Context, host string, targetType mode
 //
 // validity == "blacklist" 면 ExtractResult.Blacklist 비-nil — 호출자가 셀렉터 INSERT skip
 // + parser_blacklist Upsert 분기. Selectors / PageType 은 의미 없음.
-func (w *ClaudeWorker) ExtractEnriched(ctx context.Context, host string, targetType model.TargetType, html string) (*llmgen.ExtractResult, error) {
+func (w *Worker) ExtractEnriched(ctx context.Context, host string, targetType model.TargetType, html string) (*llmgen.ExtractResult, error) {
 	// wg.Add 를 락 획득보다 먼저 수행 — Stop() 의 wg.Wait() 이 이 Extract 호출을 놓치지 않도록 함.
 	w.wg.Add(1)
 	defer w.wg.Done()

@@ -1,6 +1,6 @@
-package claudegen_test
+package claude_test
 
-// pool_test.go — 이슈 #352 ClaudeWorkerPool 단위 테스트.
+// pool_test.go — 이슈 #352 Pool 단위 테스트.
 //
 // 검증 항목:
 //  1. Start: 모든 worker 컨테이너 기동 + 부분 실패 시 cleanup
@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/processor/parser/rule/claudegen"
 	"issuetracker/internal/storage/model"
+	"issuetracker/pkg/agent/claude"
 	"issuetracker/pkg/logger"
 )
 
@@ -60,12 +60,12 @@ func (m *poolMockRunner) StopContainer(_ context.Context, _ string) error {
 	return nil
 }
 
-// newTestPoolWorker 는 ID 가 다른 runner 와 함께 ClaudeWorker 를 생성하는 헬퍼.
-func newTestPoolWorker(t *testing.T, runner *poolMockRunner) *claudegen.ClaudeWorker {
+// newTestPoolWorker 는 ID 가 다른 runner 와 함께 Worker 를 생성하는 헬퍼.
+func newTestPoolWorker(t *testing.T, runner *poolMockRunner) *claude.Worker {
 	t.Helper()
 	log := logger.New(logger.DefaultConfig())
 	authDir := makeAuthDir(t)
-	w, err := claudegen.NewWithRunner(
+	w, err := claude.NewWithRunner(
 		"ghcr.io/anthropics/claude-code:latest",
 		"claude-sonnet-4-6",
 		authDir,
@@ -84,14 +84,14 @@ const successStdout = `{"title":{"css":"h1.article-title"},"main_content":{"css"
 
 // TestPool_NewPool_NilLogger 는 nil logger 입력 시 error 반환.
 func TestPool_NewPool_NilLogger(t *testing.T) {
-	_, err := claudegen.NewPool([]*claudegen.ClaudeWorker{nil}, nil)
+	_, err := claude.NewPool([]*claude.Worker{nil}, nil)
 	require.Error(t, err)
 }
 
 // TestPool_NewPool_EmptyWorkers 는 빈 slice 입력 시 error 반환.
 func TestPool_NewPool_EmptyWorkers(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
-	_, err := claudegen.NewPool([]*claudegen.ClaudeWorker{}, log)
+	_, err := claude.NewPool([]*claude.Worker{}, log)
 	require.Error(t, err)
 }
 
@@ -100,7 +100,7 @@ func TestPool_NewPool_NilWorker(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	r := &poolMockRunner{id: "c1", execStdout: successStdout}
 	w := newTestPoolWorker(t, r)
-	_, err := claudegen.NewPool([]*claudegen.ClaudeWorker{w, nil}, log)
+	_, err := claude.NewPool([]*claude.Worker{w, nil}, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "workers[1] is nil")
 }
@@ -111,12 +111,12 @@ func TestPool_StartStop_AllContainers(t *testing.T) {
 	r1 := &poolMockRunner{id: "c1", execStdout: successStdout}
 	r2 := &poolMockRunner{id: "c2", execStdout: successStdout}
 	r3 := &poolMockRunner{id: "c3", execStdout: successStdout}
-	workers := []*claudegen.ClaudeWorker{
+	workers := []*claude.Worker{
 		newTestPoolWorker(t, r1),
 		newTestPoolWorker(t, r2),
 		newTestPoolWorker(t, r3),
 	}
-	pool, err := claudegen.NewPool(workers, log)
+	pool, err := claude.NewPool(workers, log)
 	require.NoError(t, err)
 
 	require.NoError(t, pool.Start(context.Background()))
@@ -138,12 +138,12 @@ func TestPool_Start_PartialFailure_CleansUpStarted(t *testing.T) {
 	r1 := &poolMockRunner{id: "c1"}
 	r2 := &poolMockRunner{id: "c2", startErr: errors.New("docker daemon down")}
 	r3 := &poolMockRunner{id: "c3"}
-	workers := []*claudegen.ClaudeWorker{
+	workers := []*claude.Worker{
 		newTestPoolWorker(t, r1),
 		newTestPoolWorker(t, r2),
 		newTestPoolWorker(t, r3),
 	}
-	pool, err := claudegen.NewPool(workers, log)
+	pool, err := claude.NewPool(workers, log)
 	require.NoError(t, err)
 
 	err = pool.Start(context.Background())
@@ -162,7 +162,7 @@ func TestPool_Extract_RoundRobin(t *testing.T) {
 	const poolSize = 3
 	const callCount = 9 // 3 worker × 3 call
 	runners := make([]*poolMockRunner, poolSize)
-	workers := make([]*claudegen.ClaudeWorker, poolSize)
+	workers := make([]*claude.Worker, poolSize)
 	for i := 0; i < poolSize; i++ {
 		runners[i] = &poolMockRunner{
 			id:         "c" + string(rune('1'+i)),
@@ -171,7 +171,7 @@ func TestPool_Extract_RoundRobin(t *testing.T) {
 		}
 		workers[i] = newTestPoolWorker(t, runners[i])
 	}
-	pool, err := claudegen.NewPool(workers, log)
+	pool, err := claude.NewPool(workers, log)
 	require.NoError(t, err)
 	require.NoError(t, pool.Start(context.Background()))
 	t.Cleanup(func() { _ = pool.Stop(context.Background()) })
@@ -211,11 +211,11 @@ func TestPool_Extract_SequentialDistributesRoundRobin(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	r1 := &poolMockRunner{id: "c1", execStdout: successStdout}
 	r2 := &poolMockRunner{id: "c2", execStdout: successStdout}
-	workers := []*claudegen.ClaudeWorker{
+	workers := []*claude.Worker{
 		newTestPoolWorker(t, r1),
 		newTestPoolWorker(t, r2),
 	}
-	pool, err := claudegen.NewPool(workers, log)
+	pool, err := claude.NewPool(workers, log)
 	require.NoError(t, err)
 	require.NoError(t, pool.Start(context.Background()))
 	t.Cleanup(func() { _ = pool.Stop(context.Background()) })
@@ -235,8 +235,8 @@ func TestPool_Extract_SequentialDistributesRoundRobin(t *testing.T) {
 func TestPool_ModelName(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	r := &poolMockRunner{id: "c1"}
-	workers := []*claudegen.ClaudeWorker{newTestPoolWorker(t, r)}
-	pool, err := claudegen.NewPool(workers, log)
+	workers := []*claude.Worker{newTestPoolWorker(t, r)}
+	pool, err := claude.NewPool(workers, log)
 	require.NoError(t, err)
 	assert.Equal(t, "claude-sonnet-4-6", pool.ModelName())
 }
@@ -249,7 +249,7 @@ func TestPool_NewPoolFromEnv_DefaultCount(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_WORKER_COUNT", "")
 	t.Setenv("CLAUDE_CODE_AUTH_DIR", makeAuthDir(t))
 
-	pool, err := claudegen.NewPoolFromEnv(claudegenLoader, log)
+	pool, err := claude.NewPoolFromEnv(claudegenLoader, log)
 	require.NoError(t, err)
 	assert.Equal(t, 2, pool.WorkerCount(), "default worker count must be 2")
 }
@@ -260,7 +260,7 @@ func TestPool_NewPoolFromEnv_EnvOverride(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_WORKER_COUNT", "4")
 	t.Setenv("CLAUDE_CODE_AUTH_DIR", makeAuthDir(t))
 
-	pool, err := claudegen.NewPoolFromEnv(claudegenLoader, log)
+	pool, err := claude.NewPoolFromEnv(claudegenLoader, log)
 	require.NoError(t, err)
 	assert.Equal(t, 4, pool.WorkerCount())
 }
@@ -274,7 +274,7 @@ func TestPool_NewPoolFromEnv_InvalidValueFallsBack(t *testing.T) {
 	for _, raw := range []string{"abc", "-1", "0"} {
 		t.Run("raw="+raw, func(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_WORKER_COUNT", raw)
-			pool, err := claudegen.NewPoolFromEnv(claudegenLoader, log)
+			pool, err := claude.NewPoolFromEnv(claudegenLoader, log)
 			require.NoError(t, err)
 			assert.Equal(t, 2, pool.WorkerCount(), "invalid input must fallback to default 2")
 		})
@@ -288,7 +288,7 @@ func TestPool_NewPoolFromEnv_ExceedsMax_ClampsToCap(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_WORKER_COUNT", "999")
 	t.Setenv("CLAUDE_CODE_AUTH_DIR", makeAuthDir(t))
 
-	pool, err := claudegen.NewPoolFromEnv(claudegenLoader, log)
+	pool, err := claude.NewPoolFromEnv(claudegenLoader, log)
 	require.NoError(t, err)
 	assert.LessOrEqual(t, pool.WorkerCount(), 16, "must be clamped to maxWorkerCount")
 }
