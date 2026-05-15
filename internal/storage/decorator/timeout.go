@@ -452,3 +452,29 @@ func (t *timeoutFetcherRuleRepo) BulkDowngradeAutoUpgraded(ctx context.Context) 
 	defer cancel()
 	return t.inner.BulkDowngradeAutoUpgraded(ctx)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// repository.EnrichedContentRepository (이슈 #450)
+// ─────────────────────────────────────────────────────────────────────────────
+
+type timeoutEnrichedContentRepo struct {
+	inner   repository.EnrichedContentRepository
+	timeout time.Duration
+}
+
+// WrapEnrichedContentWithTimeout 은 repository.EnrichedContentRepository 의 모든 메서드 진입에 timeout 을 적용합니다.
+func WrapEnrichedContentWithTimeout(r repository.EnrichedContentRepository, d time.Duration) repository.EnrichedContentRepository {
+	return &timeoutEnrichedContentRepo{inner: r, timeout: d}
+}
+
+func (t *timeoutEnrichedContentRepo) Upsert(ctx context.Context, rec *model.EnrichedContentRecord) error {
+	ctx, cancel := withTimeout(ctx, t.timeout)
+	defer cancel()
+	return t.inner.Upsert(ctx, rec)
+}
+
+func (t *timeoutEnrichedContentRepo) GetByContentID(ctx context.Context, contentID string) (*model.EnrichedContentRecord, error) {
+	ctx, cancel := withTimeout(ctx, t.timeout)
+	defer cancel()
+	return t.inner.GetByContentID(ctx, contentID)
+}
