@@ -133,6 +133,8 @@ func newEnrichWorker(consumer queue.Consumer, producer queue.Producer) *worker.W
 		extractor.NewNoopExtractor(),
 		extractor.NewNoopVerifier(),
 		extractor.NewNoopContextualizer(),
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -151,6 +153,40 @@ func (c *fakeContextualizer) Provide(_ context.Context, in extractor.ContextInpu
 		return nil, c.err
 	}
 	return c.page, nil
+}
+
+// fakeScorer 는 score 입력 추적 + 미리 정의된 result / err 반환.
+type fakeScorer struct {
+	result   *extractor.TrustScoreResult
+	err      error
+	callsLog []extractor.ScoreInput
+}
+
+func (s *fakeScorer) Score(_ context.Context, in extractor.ScoreInput) (*extractor.TrustScoreResult, error) {
+	s.callsLog = append(s.callsLog, in)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.result, nil
+}
+
+// fakeEnrichedRepo 는 EnrichedContentRepository stub — Upsert 호출 캡쳐 + err 반환.
+type fakeEnrichedRepo struct {
+	upsertCalls []*model.EnrichedContentRecord
+	upsertErr   error
+}
+
+func (r *fakeEnrichedRepo) Upsert(_ context.Context, rec *model.EnrichedContentRecord) error {
+	r.upsertCalls = append(r.upsertCalls, rec)
+	if r.upsertErr != nil {
+		return r.upsertErr
+	}
+	rec.ID = 42 // pretend assigned by DB
+	return nil
+}
+
+func (r *fakeEnrichedRepo) GetByContentID(_ context.Context, _ string) (*model.EnrichedContentRecord, error) {
+	return nil, storage.ErrNotFound
 }
 
 func makeValidatedMessage(t *testing.T, refID, url, country, sourceName string) *queue.Message {
@@ -314,6 +350,8 @@ func TestEnrichWorker_Extraction_AttachesFactsToMetadata(t *testing.T) {
 		fake,
 		extractor.NewNoopVerifier(),
 		extractor.NewNoopContextualizer(),
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -374,6 +412,8 @@ func TestEnrichWorker_ExtractionFailure_StillForwards(t *testing.T) {
 		fake,
 		extractor.NewNoopVerifier(),
 		extractor.NewNoopContextualizer(),
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -456,6 +496,8 @@ func TestEnrichWorker_Verification_AttachesVerificationsToFacts(t *testing.T) {
 		fakeExt,
 		fakeVer,
 		extractor.NewNoopContextualizer(),
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -518,6 +560,8 @@ func TestEnrichWorker_NoClaims_SkipsVerifier(t *testing.T) {
 		&fakeExtractor{facts: emptyFacts},
 		fakeVer,
 		extractor.NewNoopContextualizer(),
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -549,6 +593,8 @@ func TestEnrichWorker_VerificationFailure_StillForwards(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{err: assertAnError()},
 		extractor.NewNoopContextualizer(),
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -590,6 +636,8 @@ func TestEnrichWorker_Context_AttachesPageContext(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		fakeCtx,
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -647,6 +695,8 @@ func TestEnrichWorker_NoEntitiesOrClaims_SkipsContext(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		fakeCtx,
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -680,6 +730,8 @@ func TestEnrichWorker_ContextFailure_StillForwards(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		&fakeContextualizer{err: assertAnError()},
+		extractor.NewNoopScorer(),
+		nil,
 		locks.NewNoopStageGate(),
 		1,
 	)
@@ -695,6 +747,183 @@ func TestEnrichWorker_ContextFailure_StillForwards(t *testing.T) {
 
 	consumer.AssertExpectations(t)
 	producer.AssertExpectations(t)
+}
+
+// TestEnrichWorker_Scoring_PersistsToEnrichedContents — score 산출 후 enriched_contents
+// 에 upsert 되고 metadata 에 trust_score 가 첨부되는지 검증 (이슈 #450).
+func TestEnrichWorker_Scoring_PersistsToEnrichedContents(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-score", Title: "T", Body: "B", URL: "https://example.com/s", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	facts := &extractor.EnrichedFacts{
+		Entities: []extractor.Entity{{Name: "Acme"}},
+		Claims:   []extractor.Claim{{Text: "Acme did X"}},
+	}
+	scorer := &fakeScorer{result: &extractor.TrustScoreResult{
+		TrustScore: 0.85,
+		Rationale:  "Two sources corroborate.",
+		Factors: extractor.ScoreFactors{
+			ClaimSupportRatio: 1.0, SourceDiversity: 0.8, ContextCompleteness: 0.6,
+		},
+	}}
+	repo := &fakeEnrichedRepo{}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: facts},
+		&fakeVerifier{verifications: []extractor.Verification{{ClaimIdx: 0, Verdict: "supported"}}},
+		&fakeContextualizer{page: &extractor.PageContext{Background: []extractor.BackgroundItem{{Subject: "Acme"}}}},
+		scorer,
+		repo,
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-score", "https://example.com/s", "US", "example")
+
+	var published queue.Message
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		if m.Topic != queue.TopicEnriched {
+			return false
+		}
+		published = m
+		return true
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	// scorer 호출 입력 검증
+	if assert.Len(t, scorer.callsLog, 1) {
+		in := scorer.callsLog[0]
+		assert.Equal(t, "https://example.com/s", in.URL)
+		assert.NotEmpty(t, in.Facts)
+	}
+
+	// DB upsert 호출 검증
+	if assert.Len(t, repo.upsertCalls, 1) {
+		rec := repo.upsertCalls[0]
+		assert.Equal(t, "c-score", rec.ContentID)
+		assert.InDelta(t, 0.85, rec.TrustScore, 1e-9)
+		assert.NotEmpty(t, rec.Facts)
+		assert.NotEmpty(t, rec.Verifications)
+		assert.NotEmpty(t, rec.Context)
+	}
+
+	// metadata.enriched_facts.trust_score 첨부 검증
+	var pm core.ProcessingMessage
+	require.NoError(t, json.Unmarshal(published.Value, &pm))
+	rawFacts, ok := pm.Metadata["enriched_facts"].(map[string]interface{})
+	if assert.True(t, ok) {
+		ts, tsOK := rawFacts["trust_score"].(float64)
+		assert.True(t, tsOK)
+		assert.InDelta(t, 0.85, ts, 1e-9)
+	}
+}
+
+// TestEnrichWorker_NoScorer_NoPersistence — scorer Noop 또는 score result nil 이면 DB 미저장.
+func TestEnrichWorker_NoScorerResult_SkipsPersistence(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-noscore", Title: "T", Body: "B", URL: "https://example.com/n", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	facts := &extractor.EnrichedFacts{Claims: []extractor.Claim{{Text: "x"}}}
+	repo := &fakeEnrichedRepo{}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: facts},
+		&fakeVerifier{},
+		&fakeContextualizer{},
+		extractor.NewNoopScorer(), // result nil
+		repo,
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-noscore", "https://example.com/n", "US", "example")
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicEnriched
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	assert.Empty(t, repo.upsertCalls, "no score → no DB upsert")
+}
+
+// TestEnrichWorker_NilRepo_StillForwards — enrichedRepo 가 nil 이어도 forward 보장.
+func TestEnrichWorker_NilRepo_StillForwards(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-nilrepo", Title: "T", Body: "B", URL: "https://example.com/r", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	facts := &extractor.EnrichedFacts{Claims: []extractor.Claim{{Text: "x"}}}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: facts},
+		&fakeVerifier{},
+		&fakeContextualizer{},
+		&fakeScorer{result: &extractor.TrustScoreResult{TrustScore: 0.5}},
+		nil, // enrichedRepo nil
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-nilrepo", "https://example.com/r", "US", "example")
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicEnriched
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	consumer.AssertExpectations(t)
+	producer.AssertExpectations(t)
+}
+
+// TestEnrichWorker_RepoUpsertFailure_StillForwards — DB upsert 실패도 forward 보장.
+func TestEnrichWorker_RepoUpsertFailure_StillForwards(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := &listingStubContentService{primary: &core.Content{
+		ID: "c-dberr", Title: "T", Body: "B", URL: "https://example.com/d", Country: "US",
+		PublishedAt: time.Now(),
+	}}
+	facts := &extractor.EnrichedFacts{Claims: []extractor.Claim{{Text: "x"}}}
+	repo := &fakeEnrichedRepo{upsertErr: assertAnError()}
+
+	w := worker.NewWorker(
+		consumer, newTestPublisher(producer), contentSvc,
+		&fakeExtractor{facts: facts},
+		&fakeVerifier{},
+		&fakeContextualizer{},
+		&fakeScorer{result: &extractor.TrustScoreResult{TrustScore: 0.5}},
+		repo,
+		locks.NewNoopStageGate(),
+		1,
+	)
+	msg := makeValidatedMessage(t, "c-dberr", "https://example.com/d", "US", "example")
+
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicEnriched
+	})).Return(nil).Once()
+	producer.On("Close").Return(nil).Maybe()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	runWorker(t, consumer, w, msg)
+
+	assert.Len(t, repo.upsertCalls, 1, "upsert should still be attempted")
 }
 
 // TestEnrichWorker_MalformedMessage_SendsToDLQ — 잘못된 JSON 은 DLQ 로 라우팅.
