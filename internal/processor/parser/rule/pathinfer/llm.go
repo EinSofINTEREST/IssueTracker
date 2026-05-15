@@ -60,7 +60,7 @@ func InferLLM(ctx context.Context, samples LLMSamples, client LLMClient, loader 
 		return "", false, errors.New("InferLLM: nil prompt loader")
 	}
 
-	system, err := loader.Load("pathinfer/system")
+	system, err := loader.Load("parser/pathinfer/system")
 	if err != nil {
 		return "", false, fmt.Errorf("load pathinfer system prompt: %w", err)
 	}
@@ -90,7 +90,7 @@ func InferLLM(ctx context.Context, samples LLMSamples, client LLMClient, loader 
 // Articles / NonArticles 가 비어있으면 "(none)" 으로 표시 — LLM 이 빈 슬라이스를 "negative 없음"
 // 으로 정확히 해석하도록.
 func buildUserPrompt(samples LLMSamples, loader prompt.Loader) (string, error) {
-	template, err := loader.Load("pathinfer/user")
+	template, err := loader.Load("parser/pathinfer/user")
 	if err != nil {
 		return "", fmt.Errorf("load pathinfer user prompt: %w", err)
 	}

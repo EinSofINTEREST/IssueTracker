@@ -69,7 +69,7 @@ article body or published_at metadata), return validity="blacklist".`, reason)
 
 func promptNameFor(targetType model.TargetType) string {
 	if targetType == model.TargetTypeList {
-		return "claudegen/list.user"
+		return "parser/claude/list.user"
 	}
-	return "claudegen/page.user"
+	return "parser/claude/page.user"
 }

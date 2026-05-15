@@ -19,7 +19,7 @@ import (
 type SessionRunner = agent.Agent
 
 // promptName 은 enrich extraction 에 사용할 prompt asset 경로입니다.
-const promptName = "claudegen/enricher_extract"
+const promptName = "enrich/claude/extract.user"
 
 // ClaudegenExtractor 는 agent.Agent (예: claude.Pool) 을 통해 EnrichedFacts 를 추출합니다.
 type ClaudegenExtractor struct {
