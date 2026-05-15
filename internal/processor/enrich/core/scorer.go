@@ -3,7 +3,7 @@
 // Scorer 는 추출 + 검증 + 외부 맥락 결과를 종합하여 page 단위 0.0 ~ 1.0 신뢰도 점수와
 // rationale / factors 를 반환합니다. claudegen 의 LLM 추론을 활용.
 
-package extractor
+package core
 
 import (
 	"context"
@@ -107,7 +107,7 @@ func (s *ClaudegenScorer) Score(ctx context.Context, in ScoreInput) (*TrustScore
 		"{{CONTEXT_JSON}}", jsonOrEmptyObject(in.Context),
 	)
 
-	stdout, err := s.runner.RunEnrichSession(ctx, "enrich-score", nil, promptText)
+	stdout, err := s.runner.RunSession(ctx, "enrich-score", nil, promptText)
 	if err != nil {
 		return nil, fmt.Errorf("claudegen score session: %w", err)
 	}

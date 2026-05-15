@@ -4,7 +4,7 @@
 // Claude WebFetch 도구를 적극 활용하도록 prompt 가 유도 — 후보 URL 외에도 추가 신규 페치
 // 가능. Extractor 와 마찬가지로 실패 시 빈 verifications 로 fallback 하고 pipeline 진행.
 
-package extractor
+package core
 
 import (
 	"context"
@@ -102,7 +102,7 @@ func (v *ClaudegenVerifier) Verify(ctx context.Context, in VerifyInput) ([]Verif
 		"{{CANDIDATES_JSON}}", candidatesJSON,
 	)
 
-	stdout, err := v.runner.RunEnrichSession(ctx, "enrich-verify", nil, promptText)
+	stdout, err := v.runner.RunSession(ctx, "enrich-verify", nil, promptText)
 	if err != nil {
 		return nil, fmt.Errorf("claudegen verify session: %w", err)
 	}

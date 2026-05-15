@@ -4,7 +4,7 @@
 // 구현체:
 //   - NoopExtractor: 빈 EnrichedFacts 반환. claudegen 미configured / disabled 환경의 fallback.
 //   - ClaudegenExtractor: claude.Pool 을 통해 Claude Code 호출 (실제 추출).
-package extractor
+package core
 
 import (
 	"context"

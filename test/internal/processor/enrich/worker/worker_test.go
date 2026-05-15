@@ -16,7 +16,7 @@ import (
 
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
-	"issuetracker/internal/processor/enrich/extractor"
+	enrichcore "issuetracker/internal/processor/enrich/core"
 	"issuetracker/internal/processor/enrich/worker"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
@@ -97,12 +97,12 @@ var _ = model.ValidationStatusPassed // model import keep — 외부 테스트�
 
 // fakeExtractor 는 호출 카운트를 추적하는 간단한 Extractor 입니다.
 type fakeExtractor struct {
-	facts    *extractor.EnrichedFacts
+	facts    *enrichcore.EnrichedFacts
 	err      error
-	callsLog []extractor.Input
+	callsLog []enrichcore.Input
 }
 
-func (f *fakeExtractor) Extract(_ context.Context, in extractor.Input) (*extractor.EnrichedFacts, error) {
+func (f *fakeExtractor) Extract(_ context.Context, in enrichcore.Input) (*enrichcore.EnrichedFacts, error) {
 	f.callsLog = append(f.callsLog, in)
 	if f.err != nil {
 		return nil, f.err
@@ -112,12 +112,12 @@ func (f *fakeExtractor) Extract(_ context.Context, in extractor.Input) (*extract
 
 // fakeVerifier 는 verify 입력 추적 + 미리 정의된 verifications 또는 err 반환.
 type fakeVerifier struct {
-	verifications []extractor.Verification
+	verifications []enrichcore.Verification
 	err           error
-	callsLog      []extractor.VerifyInput
+	callsLog      []enrichcore.VerifyInput
 }
 
-func (v *fakeVerifier) Verify(_ context.Context, in extractor.VerifyInput) ([]extractor.Verification, error) {
+func (v *fakeVerifier) Verify(_ context.Context, in enrichcore.VerifyInput) ([]enrichcore.Verification, error) {
 	v.callsLog = append(v.callsLog, in)
 	if v.err != nil {
 		return nil, v.err
@@ -130,10 +130,10 @@ func newEnrichWorker(consumer queue.Consumer, producer queue.Producer) *worker.W
 		consumer,
 		newTestPublisher(producer),
 		&stubContentService{},
-		extractor.NewNoopExtractor(),
-		extractor.NewNoopVerifier(),
-		extractor.NewNoopContextualizer(),
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopExtractor(),
+		enrichcore.NewNoopVerifier(),
+		enrichcore.NewNoopContextualizer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -142,12 +142,12 @@ func newEnrichWorker(consumer queue.Consumer, producer queue.Producer) *worker.W
 
 // fakeContextualizer 는 context 입력을 캡쳐하고 미리 정의된 PageContext / err 를 반환합니다.
 type fakeContextualizer struct {
-	page     *extractor.PageContext
+	page     *enrichcore.PageContext
 	err      error
-	callsLog []extractor.ContextInput
+	callsLog []enrichcore.ContextInput
 }
 
-func (c *fakeContextualizer) Provide(_ context.Context, in extractor.ContextInput) (*extractor.PageContext, error) {
+func (c *fakeContextualizer) Provide(_ context.Context, in enrichcore.ContextInput) (*enrichcore.PageContext, error) {
 	c.callsLog = append(c.callsLog, in)
 	if c.err != nil {
 		return nil, c.err
@@ -157,12 +157,12 @@ func (c *fakeContextualizer) Provide(_ context.Context, in extractor.ContextInpu
 
 // fakeScorer 는 score 입력 추적 + 미리 정의된 result / err 반환.
 type fakeScorer struct {
-	result   *extractor.TrustScoreResult
+	result   *enrichcore.TrustScoreResult
 	err      error
-	callsLog []extractor.ScoreInput
+	callsLog []enrichcore.ScoreInput
 }
 
-func (s *fakeScorer) Score(_ context.Context, in extractor.ScoreInput) (*extractor.TrustScoreResult, error) {
+func (s *fakeScorer) Score(_ context.Context, in enrichcore.ScoreInput) (*enrichcore.TrustScoreResult, error) {
 	s.callsLog = append(s.callsLog, in)
 	if s.err != nil {
 		return nil, s.err
@@ -335,10 +335,10 @@ func TestEnrichWorker_Extraction_AttachesFactsToMetadata(t *testing.T) {
 		Body:  "Body text of the article",
 		URL:   "https://example.com/a",
 	}}
-	expectedFacts := &extractor.EnrichedFacts{
-		Entities: []extractor.Entity{{Type: extractor.EntityTypeOrg, Name: "ACME", Mentions: 3}},
-		Claims:   []extractor.Claim{{Text: "ACME announced X"}},
-		Facts:    []extractor.Fact{{Key: "amount", Value: "100", Unit: "USD"}},
+	expectedFacts := &enrichcore.EnrichedFacts{
+		Entities: []enrichcore.Entity{{Type: enrichcore.EntityTypeOrg, Name: "ACME", Mentions: 3}},
+		Claims:   []enrichcore.Claim{{Text: "ACME announced X"}},
+		Facts:    []enrichcore.Fact{{Key: "amount", Value: "100", Unit: "USD"}},
 		Topics:   []string{"business"},
 	}
 	fake := &fakeExtractor{facts: expectedFacts}
@@ -348,9 +348,9 @@ func TestEnrichWorker_Extraction_AttachesFactsToMetadata(t *testing.T) {
 		newTestPublisher(producer),
 		contentSvc,
 		fake,
-		extractor.NewNoopVerifier(),
-		extractor.NewNoopContextualizer(),
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopVerifier(),
+		enrichcore.NewNoopContextualizer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -410,9 +410,9 @@ func TestEnrichWorker_ExtractionFailure_StillForwards(t *testing.T) {
 		newTestPublisher(producer),
 		contentSvc,
 		fake,
-		extractor.NewNoopVerifier(),
-		extractor.NewNoopContextualizer(),
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopVerifier(),
+		enrichcore.NewNoopContextualizer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -481,11 +481,11 @@ func TestEnrichWorker_Verification_AttachesVerificationsToFacts(t *testing.T) {
 	}
 	contentSvc := &listingStubContentService{primary: primary, listed: related}
 
-	extractedFacts := &extractor.EnrichedFacts{
-		Claims: []extractor.Claim{{Text: "Turnout reached 60% in city"}},
+	extractedFacts := &enrichcore.EnrichedFacts{
+		Claims: []enrichcore.Claim{{Text: "Turnout reached 60% in city"}},
 	}
 	fakeExt := &fakeExtractor{facts: extractedFacts}
-	fakeVer := &fakeVerifier{verifications: []extractor.Verification{
+	fakeVer := &fakeVerifier{verifications: []enrichcore.Verification{
 		{ClaimIdx: 0, Verdict: "supported", Sources: []string{"https://news.example.org/x"}},
 	}}
 
@@ -495,8 +495,8 @@ func TestEnrichWorker_Verification_AttachesVerificationsToFacts(t *testing.T) {
 		contentSvc,
 		fakeExt,
 		fakeVer,
-		extractor.NewNoopContextualizer(),
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopContextualizer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -552,15 +552,15 @@ func TestEnrichWorker_NoClaims_SkipsVerifier(t *testing.T) {
 		ID: "c-empty", Title: "t", Body: "b", URL: "https://example.com/e", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	emptyFacts := &extractor.EnrichedFacts{Claims: []extractor.Claim{}}
+	emptyFacts := &enrichcore.EnrichedFacts{Claims: []enrichcore.Claim{}}
 	fakeVer := &fakeVerifier{}
 
 	w := worker.NewWorker(
 		consumer, newTestPublisher(producer), contentSvc,
 		&fakeExtractor{facts: emptyFacts},
 		fakeVer,
-		extractor.NewNoopContextualizer(),
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopContextualizer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -586,14 +586,14 @@ func TestEnrichWorker_VerificationFailure_StillForwards(t *testing.T) {
 		ID: "c-v-fail", Title: "t", Body: "b", URL: "https://example.com/x", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	facts := &extractor.EnrichedFacts{Claims: []extractor.Claim{{Text: "claim A"}}}
+	facts := &enrichcore.EnrichedFacts{Claims: []enrichcore.Claim{{Text: "claim A"}}}
 
 	w := worker.NewWorker(
 		consumer, newTestPublisher(producer), contentSvc,
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{err: assertAnError()},
-		extractor.NewNoopContextualizer(),
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopContextualizer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -621,13 +621,13 @@ func TestEnrichWorker_Context_AttachesPageContext(t *testing.T) {
 		ID: "c-ctx", Title: "Sample", Body: "B", URL: "https://example.com/c", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	facts := &extractor.EnrichedFacts{
-		Entities: []extractor.Entity{{Type: extractor.EntityTypeOrg, Name: "Acme"}},
-		Claims:   []extractor.Claim{{Text: "Acme is global"}},
+	facts := &enrichcore.EnrichedFacts{
+		Entities: []enrichcore.Entity{{Type: enrichcore.EntityTypeOrg, Name: "Acme"}},
+		Claims:   []enrichcore.Claim{{Text: "Acme is global"}},
 	}
-	contextResp := &extractor.PageContext{
-		Background:   []extractor.BackgroundItem{{Subject: "Acme", Category: "org", Summary: "Founded 1980"}},
-		Implications: &extractor.Implications{Social: "Workforce concerns"},
+	contextResp := &enrichcore.PageContext{
+		Background:   []enrichcore.BackgroundItem{{Subject: "Acme", Category: "org", Summary: "Founded 1980"}},
+		Implications: &enrichcore.Implications{Social: "Workforce concerns"},
 	}
 	fakeCtx := &fakeContextualizer{page: contextResp}
 
@@ -636,7 +636,7 @@ func TestEnrichWorker_Context_AttachesPageContext(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		fakeCtx,
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -687,7 +687,7 @@ func TestEnrichWorker_NoEntitiesOrClaims_SkipsContext(t *testing.T) {
 		ID: "c-skip", Title: "t", Body: "b", URL: "https://example.com/s", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	facts := &extractor.EnrichedFacts{} // entities + claims 모두 nil/empty
+	facts := &enrichcore.EnrichedFacts{} // entities + claims 모두 nil/empty
 	fakeCtx := &fakeContextualizer{}
 
 	w := worker.NewWorker(
@@ -695,7 +695,7 @@ func TestEnrichWorker_NoEntitiesOrClaims_SkipsContext(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		fakeCtx,
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -721,8 +721,8 @@ func TestEnrichWorker_ContextFailure_StillForwards(t *testing.T) {
 		ID: "c-ctx-fail", Title: "t", Body: "b", URL: "https://example.com/x", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	facts := &extractor.EnrichedFacts{
-		Entities: []extractor.Entity{{Name: "X"}},
+	facts := &enrichcore.EnrichedFacts{
+		Entities: []enrichcore.Entity{{Name: "X"}},
 	}
 
 	w := worker.NewWorker(
@@ -730,7 +730,7 @@ func TestEnrichWorker_ContextFailure_StillForwards(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		&fakeContextualizer{err: assertAnError()},
-		extractor.NewNoopScorer(),
+		enrichcore.NewNoopScorer(),
 		nil,
 		locks.NewNoopStageGate(),
 		1,
@@ -758,14 +758,14 @@ func TestEnrichWorker_Scoring_PersistsToEnrichedContents(t *testing.T) {
 		ID: "c-score", Title: "T", Body: "B", URL: "https://example.com/s", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	facts := &extractor.EnrichedFacts{
-		Entities: []extractor.Entity{{Name: "Acme"}},
-		Claims:   []extractor.Claim{{Text: "Acme did X"}},
+	facts := &enrichcore.EnrichedFacts{
+		Entities: []enrichcore.Entity{{Name: "Acme"}},
+		Claims:   []enrichcore.Claim{{Text: "Acme did X"}},
 	}
-	scorer := &fakeScorer{result: &extractor.TrustScoreResult{
+	scorer := &fakeScorer{result: &enrichcore.TrustScoreResult{
 		TrustScore: 0.85,
 		Rationale:  "Two sources corroborate.",
-		Factors: extractor.ScoreFactors{
+		Factors: enrichcore.ScoreFactors{
 			ClaimSupportRatio: 1.0, SourceDiversity: 0.8, ContextCompleteness: 0.6,
 		},
 	}}
@@ -774,8 +774,8 @@ func TestEnrichWorker_Scoring_PersistsToEnrichedContents(t *testing.T) {
 	w := worker.NewWorker(
 		consumer, newTestPublisher(producer), contentSvc,
 		&fakeExtractor{facts: facts},
-		&fakeVerifier{verifications: []extractor.Verification{{ClaimIdx: 0, Verdict: "supported"}}},
-		&fakeContextualizer{page: &extractor.PageContext{Background: []extractor.BackgroundItem{{Subject: "Acme"}}}},
+		&fakeVerifier{verifications: []enrichcore.Verification{{ClaimIdx: 0, Verdict: "supported"}}},
+		&fakeContextualizer{page: &enrichcore.PageContext{Background: []enrichcore.BackgroundItem{{Subject: "Acme"}}}},
 		scorer,
 		repo,
 		locks.NewNoopStageGate(),
@@ -832,7 +832,7 @@ func TestEnrichWorker_NoScorerResult_SkipsPersistence(t *testing.T) {
 		ID: "c-noscore", Title: "T", Body: "B", URL: "https://example.com/n", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	facts := &extractor.EnrichedFacts{Claims: []extractor.Claim{{Text: "x"}}}
+	facts := &enrichcore.EnrichedFacts{Claims: []enrichcore.Claim{{Text: "x"}}}
 	repo := &fakeEnrichedRepo{}
 
 	w := worker.NewWorker(
@@ -840,7 +840,7 @@ func TestEnrichWorker_NoScorerResult_SkipsPersistence(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		&fakeContextualizer{},
-		extractor.NewNoopScorer(), // result nil
+		enrichcore.NewNoopScorer(), // result nil
 		repo,
 		locks.NewNoopStageGate(),
 		1,
@@ -866,14 +866,14 @@ func TestEnrichWorker_NilRepo_StillForwards(t *testing.T) {
 		ID: "c-nilrepo", Title: "T", Body: "B", URL: "https://example.com/r", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	facts := &extractor.EnrichedFacts{Claims: []extractor.Claim{{Text: "x"}}}
+	facts := &enrichcore.EnrichedFacts{Claims: []enrichcore.Claim{{Text: "x"}}}
 
 	w := worker.NewWorker(
 		consumer, newTestPublisher(producer), contentSvc,
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		&fakeContextualizer{},
-		&fakeScorer{result: &extractor.TrustScoreResult{TrustScore: 0.5}},
+		&fakeScorer{result: &enrichcore.TrustScoreResult{TrustScore: 0.5}},
 		nil, // enrichedRepo nil
 		locks.NewNoopStageGate(),
 		1,
@@ -900,7 +900,7 @@ func TestEnrichWorker_RepoUpsertFailure_StillForwards(t *testing.T) {
 		ID: "c-dberr", Title: "T", Body: "B", URL: "https://example.com/d", Country: "US",
 		PublishedAt: time.Now(),
 	}}
-	facts := &extractor.EnrichedFacts{Claims: []extractor.Claim{{Text: "x"}}}
+	facts := &enrichcore.EnrichedFacts{Claims: []enrichcore.Claim{{Text: "x"}}}
 	repo := &fakeEnrichedRepo{upsertErr: assertAnError()}
 
 	w := worker.NewWorker(
@@ -908,7 +908,7 @@ func TestEnrichWorker_RepoUpsertFailure_StillForwards(t *testing.T) {
 		&fakeExtractor{facts: facts},
 		&fakeVerifier{},
 		&fakeContextualizer{},
-		&fakeScorer{result: &extractor.TrustScoreResult{TrustScore: 0.5}},
+		&fakeScorer{result: &enrichcore.TrustScoreResult{TrustScore: 0.5}},
 		repo,
 		locks.NewNoopStageGate(),
 		1,
