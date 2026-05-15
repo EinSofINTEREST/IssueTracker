@@ -401,20 +401,13 @@ func (w *Worker) runContextEnrichment(
 	}
 	facts.Context = pageCtx
 
-	bgCount := 0
-	tlCount := 0
-	hasImpl := false
-	if pageCtx != nil {
-		bgCount = len(pageCtx.Background)
-		tlCount = len(pageCtx.Timeline)
-		hasImpl = pageCtx.Implications != nil
-	}
+	// pageCtx 는 위 IsEmpty() 가 false → 도달 시점에 non-nil 보장 (gemini-review PR #454).
 	log.WithFields(map[string]interface{}{
 		"job_id":           pm.ID,
 		"ref_id":           ref.ID,
-		"background_count": bgCount,
-		"timeline_count":   tlCount,
-		"has_implications": hasImpl,
+		"background_count": len(pageCtx.Background),
+		"timeline_count":   len(pageCtx.Timeline),
+		"has_implications": pageCtx.Implications != nil,
 	}).Debug("enrichment context completed")
 }
 

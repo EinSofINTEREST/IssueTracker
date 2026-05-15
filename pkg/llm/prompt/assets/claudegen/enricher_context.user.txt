@@ -21,31 +21,34 @@ Your task — **use the WebFetch tool aggressively**:
 4. Build a short timeline of dated events relevant to the article (if applicable).
 5. Summarize political / social / technical implications (only when supported by sources — do not speculate).
 
-Output a single JSON object — no explanation, no markdown, no code blocks:
+Output a single JSON object — no explanation, no markdown, no code blocks. The example below shows the schema; all field values must be concrete strings/arrays — no `|` union syntax, no placeholder brackets in the output:
+
 {
   "background": [
     {
       "subject": "<entity or topic name>",
-      "category": "person" | "event" | "tech" | "policy",
+      "category": "<one of: person, organization, location, event, tech, policy>",
       "summary": "<1-3 sentences of factual background>",
-      "sources": ["<url1>", "<url2>", ...]
+      "sources": ["<url1>"]
     }
   ],
   "timeline": [
     {"date": "<ISO 8601 date or YYYY-MM>", "event": "<short factual description>", "source": "<url>"}
   ],
   "implications": {
-    "political": "<short paragraph, only if applicable, otherwise empty>",
-    "social":    "<short paragraph, only if applicable, otherwise empty>",
-    "technical": "<short paragraph, only if applicable, otherwise empty>"
+    "political": "<short paragraph, empty string if not applicable>",
+    "social":    "<short paragraph, empty string if not applicable>",
+    "technical": "<short paragraph, empty string if not applicable>"
   }
 }
 
 Output rules:
 - Cite real URLs you actually fetched. Do not invent sources.
-- 0-5 background items is enough. Skip entities with no findings.
+- 0-5 background items. Skip entities with no findings.
+- If ENTITIES_JSON or CLAIMS_JSON is non-empty, include at least 1 external source URL across background/timeline. If no external source can be found after reasonable search, return all arrays empty (background=[], timeline=[], implications with all-empty strings).
+- Every `background` item's `sources` array MUST contain at least one URL — do not emit background items without sources.
 - timeline 0-10 events. Use exact dates when available; YYYY-MM when only month known; otherwise skip.
-- implications: each field optional. Leave empty string when the article does not warrant that angle.
+- implications: each field optional. Use empty string when the article does not warrant that angle.
 - Source article's host is acceptable in `sources` only when it is the canonical source (e.g., official corporate site). Prefer external authoritative sources where possible.
 - All summaries / events / implications must be factually grounded in cited sources. When in doubt, omit.
 

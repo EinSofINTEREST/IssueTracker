@@ -78,11 +78,12 @@ func (c *ClaudegenContextualizer) Provide(ctx context.Context, in ContextInput) 
 		return nil, fmt.Errorf("load context prompt %q: %w", contextPromptName, err)
 	}
 
-	entitiesJSON, err := marshalEntitiesForPrompt(in.Entities)
+	entitiesJSON, err := marshalSliceForPrompt(in.Entities)
 	if err != nil {
 		return nil, fmt.Errorf("marshal entities: %w", err)
 	}
-	claimsJSON, err := marshalClaimsForPrompt(in.Claims)
+	// context prompt 는 idx 가 불필요 — 단순 직렬화 사용 (verifier 와 다른 점).
+	claimsJSON, err := marshalSliceForPrompt(in.Claims)
 	if err != nil {
 		return nil, fmt.Errorf("marshal claims: %w", err)
 	}
@@ -148,15 +149,4 @@ func (c *PageContext) IsEmpty() bool {
 		return true
 	}
 	return len(c.Background) == 0 && len(c.Timeline) == 0 && c.Implications == nil
-}
-
-func marshalEntitiesForPrompt(entities []Entity) (string, error) {
-	if len(entities) == 0 {
-		return "[]", nil
-	}
-	b, err := json.Marshal(entities)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }

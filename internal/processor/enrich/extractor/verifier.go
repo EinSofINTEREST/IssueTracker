@@ -85,11 +85,11 @@ func (v *ClaudegenVerifier) Verify(ctx context.Context, in VerifyInput) ([]Verif
 		return nil, fmt.Errorf("load verifier prompt %q: %w", verifierPromptName, err)
 	}
 
-	claimsJSON, err := marshalClaimsForPrompt(in.Claims)
+	claimsJSON, err := marshalIndexedClaimsForPrompt(in.Claims)
 	if err != nil {
 		return nil, fmt.Errorf("marshal claims: %w", err)
 	}
-	candidatesJSON, err := marshalCandidatesForPrompt(in.Candidates)
+	candidatesJSON, err := marshalSliceForPrompt(in.Candidates)
 	if err != nil {
 		return nil, fmt.Errorf("marshal candidates: %w", err)
 	}
@@ -153,8 +153,28 @@ func parseVerifyOutput(output string) ([]Verification, error) {
 	return res.Verifications, nil
 }
 
-func marshalClaimsForPrompt(claims []Claim) (string, error) {
-	// claim_idx 명시 — prompt 가 idx 기반 verdict 를 반환하므로 caller 가 알기 쉬운 배열로 직렬화.
+// marshalSliceForPrompt 는 임의의 슬라이스를 prompt 용 JSON 문자열로 직렬화합니다 (이슈 #449, gemini-review PR #454).
+//
+// 입력 슬라이스가 비어있으면 "[]" 반환. Entities / Candidates / Claims(no-idx) 등 idx 가공이
+// 필요 없는 케이스에서 공통으로 사용. idx 부착이 필요한 claims (verifier 입력) 는
+// marshalIndexedClaimsForPrompt 별도 사용.
+func marshalSliceForPrompt[T any](v []T) (string, error) {
+	if len(v) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// marshalIndexedClaimsForPrompt 는 claims 를 verifier prompt 용으로 idx 부착 직렬화합니다.
+//
+// verifier prompt 의 출력 (verifications) 이 claim_idx 로 입력 claim 을 가리키므로 호출자
+// (verifier) 에게 idx 명시 형태가 필수. contextualizer 처럼 idx 가 불필요한 경로는
+// marshalSliceForPrompt(claims) 직접 사용 가능.
+func marshalIndexedClaimsForPrompt(claims []Claim) (string, error) {
 	type indexedClaim struct {
 		Idx       int    `json:"idx"`
 		Text      string `json:"text"`
@@ -169,17 +189,6 @@ func marshalClaimsForPrompt(claims []Claim) (string, error) {
 		})
 	}
 	b, err := json.Marshal(out)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-func marshalCandidatesForPrompt(cs []CandidateRef) (string, error) {
-	if len(cs) == 0 {
-		return "[]", nil
-	}
-	b, err := json.Marshal(cs)
 	if err != nil {
 		return "", err
 	}
