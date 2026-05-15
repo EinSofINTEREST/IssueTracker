@@ -16,7 +16,7 @@ import (
 )
 
 // validatorLoader 는 LLMValidator 가 요구하는 prompt asset 을 in-memory 로 제공합니다.
-// 운영의 pkg/llm/prompt/assets/validator/{system,page.user,list.user}.txt 와 동일한 placeholder 사용.
+// 운영의 pkg/llm/prompt/assets/parser/validator/{system,page.user,list.user}.txt 와 동일한 placeholder 사용.
 var validatorLoader = prompt.MapLoader{
 	"parser/validator/system":    "You are a CSS selector validator. Respond with JSON.",
 	"parser/validator/page.user": "Article page\ntitle: {{TITLE}}\nbody: {{BODY}}\n{{PUBLISHED_AT_LINE}}criteria\n{{PUBLISHED_AT_CRITERIA}}",

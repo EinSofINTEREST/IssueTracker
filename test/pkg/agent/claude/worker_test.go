@@ -19,7 +19,7 @@ import (
 )
 
 // claudegenLoader 는 claudegen worker 가 요구하는 prompt asset 을 in-memory 로 제공합니다.
-// 운영의 pkg/llm/prompt/assets/claudegen/{page,list}.user.txt 와 동일한 placeholder 사용.
+// 운영의 pkg/llm/prompt/assets/parser/claude/{page,list}.user.txt 와 동일한 placeholder 사용.
 // {{VALIDATION_REJECT_REASON_CONTEXT}} 는 이슈 #365 — reason 부재 시 빈 문자열로 치환.
 var claudegenLoader = prompt.MapLoader{
 	"parser/claude/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.{{VALIDATION_REJECT_REASON_CONTEXT}}",
