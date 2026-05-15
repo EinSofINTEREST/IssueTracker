@@ -1,4 +1,4 @@
-package extractor
+package core
 
 import (
 	"context"
@@ -7,41 +7,36 @@ import (
 	"fmt"
 	"strings"
 
+	"issuetracker/pkg/agent"
 	"issuetracker/pkg/llm/prompt"
 )
 
-// SessionRunner 는 claude.Pool 의 RunEnrichSession 시그니처와 일치하는 추상.
+// SessionRunner 는 호환성 alias 입니다.
 //
-// 본 패키지가 claudegen 패키지를 직접 import 하면 enrich → claudegen 의존이 추가됨.
-// 인터페이스로 추상화하여 enrich 패키지가 claudegen 을 모르도록 — 테스트도 mock 으로 간단.
-type SessionRunner interface {
-	RunEnrichSession(
-		ctx context.Context,
-		sessionLabel string,
-		files map[string][]byte,
-		promptText string,
-	) (string, error)
-}
+// 이슈 #460 — 본 패키지는 vendor-neutral agent.Agent 인터페이스에 직접 의존하도록 전환.
+// 기존 SessionRunner 인터페이스는 alias 로 유지하여 외부 caller (tests 등) 호환 보존.
+// 후속 정리에서 caller 가 직접 agent.Agent 를 쓰도록 마이그레이션 시 본 alias 제거 가능.
+type SessionRunner = agent.Agent
 
 // promptName 은 enrich extraction 에 사용할 prompt asset 경로입니다.
 const promptName = "claudegen/enricher_extract"
 
-// ClaudegenExtractor 는 claude.Pool 을 통해 EnrichedFacts 를 추출합니다.
+// ClaudegenExtractor 는 agent.Agent (예: claude.Pool) 을 통해 EnrichedFacts 를 추출합니다.
 type ClaudegenExtractor struct {
-	runner SessionRunner
+	runner agent.Agent
 	loader prompt.Loader
 }
 
-// NewClaudegenExtractor 는 claudegen-backed Extractor 를 생성합니다.
+// NewClaudegenExtractor 는 agent-backed Extractor 를 생성합니다.
 //
-// runner 가 nil 이면 error — 호출자 (main.go) 가 claudegen pool 부재 시 NoopExtractor 사용.
+// runner 가 nil 이면 error — 호출자 (main.go) 가 agent 부재 시 NoopExtractor 사용.
 // loader 가 nil 이면 error — prompt asset 로드 불가.
-func NewClaudegenExtractor(runner SessionRunner, loader prompt.Loader) (*ClaudegenExtractor, error) {
+func NewClaudegenExtractor(runner agent.Agent, loader prompt.Loader) (*ClaudegenExtractor, error) {
 	if runner == nil {
-		return nil, errors.New("extractor: claudegen runner must not be nil")
+		return nil, errors.New("enrich/core: agent runner must not be nil")
 	}
 	if loader == nil {
-		return nil, errors.New("extractor: prompt loader must not be nil")
+		return nil, errors.New("enrich/core: prompt loader must not be nil")
 	}
 	return &ClaudegenExtractor{runner: runner, loader: loader}, nil
 }
@@ -59,18 +54,18 @@ func (e *ClaudegenExtractor) Extract(ctx context.Context, in Input) (*EnrichedFa
 	// 세션 디렉토리는 /workspace/<sessionID> 에 마운트. 본 path 를 caller 가 알 필요 없도록
 	// claudegen 내부에서 처리하고, prompt 안에서는 sessionPath placeholder 를 사용.
 	//
-	// 다만 RunEnrichSession 은 sessionPath 를 반환하지 않으므로, prompt template 의
+	// 다만 RunSession 은 sessionPath 를 반환하지 않으므로, prompt template 의
 	// {{SESSION_PATH}} 가 컨테이너 표준 경로로 치환되도록 caller 가 placeholder 를 미리 알아야 함.
 	// 현재 단계: prompt 안에서 page.html 을 직접 절대 경로로 참조하는 대신 "Read the HTML file
 	// in your session workspace" 식으로 묶어 처리 가능. 본 sub-issue 는 ExtractEnriched 와
-	// 동일하게 /workspace/<sessionID>/page.html 컨테이너 path 를 사용하나, RunEnrichSession
+	// 동일하게 /workspace/<sessionID>/page.html 컨테이너 path 를 사용하나, RunSession
 	// 이 sessionID 를 외부로 노출하지 않으므로 prompt 에는 상대 경로만 기록한다.
 	//
 	// 단순화: prompt 에서 {{SESSION_PATH}} 를 그대로 두지 않고, page.html 만 사용한다고 명시 →
-	// claude 가 cwd 의 page.html 을 읽도록 한다. RunEnrichSession 은 컨테이너 cwd 를
+	// claude 가 cwd 의 page.html 을 읽도록 한다. RunSession 은 컨테이너 cwd 를
 	// 세션 디렉토리로 두므로 동일 효과.
 	//
-	// 향후 (#448 의 cross-verify) 가 sessionPath 가 필요하면 RunEnrichSession 시그니처 확장.
+	// 향후 (#448 의 cross-verify) 가 sessionPath 가 필요하면 RunSession 시그니처 확장.
 	promptText := prompt.Render(tpl,
 		"{{SESSION_PATH}}", ".", // 컨테이너 cwd 가 세션 디렉토리이므로 상대경로
 		"{{HOST}}", in.Host,
@@ -82,7 +77,7 @@ func (e *ClaudegenExtractor) Extract(ctx context.Context, in Input) (*EnrichedFa
 		"page.html": []byte(in.HTML),
 	}
 
-	stdout, err := e.runner.RunEnrichSession(ctx, "enrich-extract", files, promptText)
+	stdout, err := e.runner.RunSession(ctx, "enrich-extract", files, promptText)
 	if err != nil {
 		return nil, fmt.Errorf("claudegen enrich session: %w", err)
 	}

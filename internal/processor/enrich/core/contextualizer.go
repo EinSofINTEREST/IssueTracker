@@ -4,7 +4,7 @@
 // 함의 정보를 PageContext 로 반환합니다. Claude WebFetch 도구를 적극 활용하도록 prompt 가
 // 유도 — 위키피디아 / 공식 페이지 / 정책 문서 등에서 직접 페치.
 
-package extractor
+package core
 
 import (
 	"context"
@@ -57,10 +57,10 @@ type ClaudegenContextualizer struct {
 // NewClaudegenContextualizer 는 claudegen-backed Contextualizer 를 생성합니다.
 func NewClaudegenContextualizer(runner SessionRunner, loader prompt.Loader) (*ClaudegenContextualizer, error) {
 	if runner == nil {
-		return nil, errors.New("extractor: claudegen runner must not be nil")
+		return nil, errors.New("enrich/core: agent runner must not be nil")
 	}
 	if loader == nil {
-		return nil, errors.New("extractor: prompt loader must not be nil")
+		return nil, errors.New("enrich/core: prompt loader must not be nil")
 	}
 	return &ClaudegenContextualizer{runner: runner, loader: loader}, nil
 }
@@ -96,7 +96,7 @@ func (c *ClaudegenContextualizer) Provide(ctx context.Context, in ContextInput) 
 		"{{CLAIMS_JSON}}", claimsJSON,
 	)
 
-	stdout, err := c.runner.RunEnrichSession(ctx, "enrich-context", nil, promptText)
+	stdout, err := c.runner.RunSession(ctx, "enrich-context", nil, promptText)
 	if err != nil {
 		return nil, fmt.Errorf("claudegen context session: %w", err)
 	}

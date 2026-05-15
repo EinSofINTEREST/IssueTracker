@@ -19,7 +19,7 @@ import (
 
 	"issuetracker/internal/bus"
 	"issuetracker/internal/locks"
-	"issuetracker/internal/processor/enrich/extractor"
+	enrichcore "issuetracker/internal/processor/enrich/core"
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/internal/storage"
 	"issuetracker/internal/storage/model"
@@ -41,7 +41,7 @@ const drainTimeout = workerpool.DefaultDrainTimeout
 //
 // 이슈 #447 에서 추가된 동작:
 //   - ContentService 로 ref.ID 의 Content (Title/Body 포함) 조회
-//   - extractor.Extract 로 EnrichedFacts 추출
+//   - core.Extract 로 EnrichedFacts 추출
 //
 // 이슈 #448 에서 추가된 동작:
 //   - extracted claims 가 있으면 ContentService 로 동일 국가·최근 윈도우 후보 조회
@@ -55,10 +55,10 @@ type Worker struct {
 	consumer       bus.Consumer
 	pub            *bus.Publisher
 	contentSvc     service.ContentService
-	extractor      extractor.Extractor
-	verifier       extractor.Verifier
-	contextualizer extractor.Contextualizer
-	scorer         extractor.Scorer
+	extractor      enrichcore.Extractor
+	verifier       enrichcore.Verifier
+	contextualizer enrichcore.Contextualizer
+	scorer         enrichcore.Scorer
 	enrichedRepo   repository.EnrichedContentRepository
 	gate           locks.StageGate // nil 허용 → NoopStageGate 로 fallback
 	workerCount    int
@@ -75,10 +75,10 @@ func NewWorker(
 	consumer bus.Consumer,
 	pub *bus.Publisher,
 	contentSvc service.ContentService,
-	ex extractor.Extractor,
-	vr extractor.Verifier,
-	cz extractor.Contextualizer,
-	sc extractor.Scorer,
+	ex enrichcore.Extractor,
+	vr enrichcore.Verifier,
+	cz enrichcore.Contextualizer,
+	sc enrichcore.Scorer,
 	enrichedRepo repository.EnrichedContentRepository,
 	gate locks.StageGate,
 	workerCount int,
@@ -90,16 +90,16 @@ func NewWorker(
 		panic("enrich.NewWorker: contentSvc must not be nil")
 	}
 	if ex == nil {
-		panic("enrich.NewWorker: extractor must not be nil (use extractor.NoopExtractor for disabled enrichment)")
+		panic("enrich.NewWorker: extractor must not be nil (use enrichcore.NoopExtractor for disabled enrichment)")
 	}
 	if vr == nil {
-		panic("enrich.NewWorker: verifier must not be nil (use extractor.NoopVerifier for disabled verification)")
+		panic("enrich.NewWorker: verifier must not be nil (use enrichcore.NoopVerifier for disabled verification)")
 	}
 	if cz == nil {
-		panic("enrich.NewWorker: contextualizer must not be nil (use extractor.NoopContextualizer for disabled context)")
+		panic("enrich.NewWorker: contextualizer must not be nil (use enrichcore.NoopContextualizer for disabled context)")
 	}
 	if sc == nil {
-		panic("enrich.NewWorker: scorer must not be nil (use extractor.NoopScorer for disabled scoring)")
+		panic("enrich.NewWorker: scorer must not be nil (use enrichcore.NoopScorer for disabled scoring)")
 	}
 	if gate == nil {
 		gate = locks.NewNoopStageGate()
@@ -234,7 +234,7 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 // 모든 실패 경로는 (nil, nil) 을 반환 — 호출자가 facts 첨부 skip 하고 forward 진행.
 // 성공 시 (content, facts) 를 함께 반환 — 호출자가 verification 단계에서 content 메타데이터
 // (Country/PublishedAt) 를 재사용할 수 있도록.
-func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, ref *core.ContentRef) (*core.Content, *extractor.EnrichedFacts) {
+func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, ref *core.ContentRef) (*core.Content, *enrichcore.EnrichedFacts) {
 	log := logger.FromContext(ctx)
 
 	content, err := w.contentSvc.GetByID(ctx, ref.ID)
@@ -266,7 +266,7 @@ func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, 
 		host = u.Host
 	}
 
-	in := extractor.Input{
+	in := enrichcore.Input{
 		URL:   ref.URL,
 		Host:  host,
 		Title: content.Title,
@@ -321,7 +321,7 @@ func (w *Worker) runVerification(
 	pm *core.ProcessingMessage,
 	ref *core.ContentRef,
 	content *core.Content,
-	facts *extractor.EnrichedFacts,
+	facts *enrichcore.EnrichedFacts,
 ) {
 	log := logger.FromContext(ctx)
 
@@ -335,7 +335,7 @@ func (w *Worker) runVerification(
 	candidates := w.findCandidates(ctx, content)
 	host := hostOf(ref.URL)
 
-	in := extractor.VerifyInput{
+	in := enrichcore.VerifyInput{
 		URL:        ref.URL,
 		Host:       host,
 		Title:      content.Title,
@@ -372,7 +372,7 @@ func (w *Worker) runContextEnrichment(
 	pm *core.ProcessingMessage,
 	ref *core.ContentRef,
 	content *core.Content,
-	facts *extractor.EnrichedFacts,
+	facts *enrichcore.EnrichedFacts,
 ) {
 	log := logger.FromContext(ctx)
 
@@ -387,7 +387,7 @@ func (w *Worker) runContextEnrichment(
 	if content != nil {
 		title = content.Title
 	}
-	in := extractor.ContextInput{
+	in := enrichcore.ContextInput{
 		URL:      ref.URL,
 		Host:     hostOf(ref.URL),
 		Title:    title,
@@ -434,7 +434,7 @@ func (w *Worker) runScoring(
 	pm *core.ProcessingMessage,
 	ref *core.ContentRef,
 	content *core.Content,
-	facts *extractor.EnrichedFacts,
+	facts *enrichcore.EnrichedFacts,
 ) {
 	log := logger.FromContext(ctx)
 
@@ -459,7 +459,7 @@ func (w *Worker) runScoring(
 	if content != nil {
 		title = content.Title
 	}
-	in := extractor.ScoreInput{
+	in := enrichcore.ScoreInput{
 		URL:           ref.URL,
 		Host:          hostOf(ref.URL),
 		Title:         title,
@@ -499,7 +499,7 @@ func (w *Worker) persistEnriched(
 	ctx context.Context,
 	pm *core.ProcessingMessage,
 	ref *core.ContentRef,
-	facts *extractor.EnrichedFacts,
+	facts *enrichcore.EnrichedFacts,
 ) {
 	log := logger.FromContext(ctx)
 	if w.enrichedRepo == nil {
@@ -545,7 +545,7 @@ func (w *Worker) persistEnriched(
 // title token overlap 으로 ranking 한 top-K 를 반환합니다. 본인 article 은 제외.
 //
 // 본 메소드는 DB error 시 빈 slice 반환 — verifier 는 DB 후보 없이도 WebFetch 만으로 진행 가능.
-func (w *Worker) findCandidates(ctx context.Context, src *core.Content) []extractor.CandidateRef {
+func (w *Worker) findCandidates(ctx context.Context, src *core.Content) []enrichcore.CandidateRef {
 	log := logger.FromContext(ctx)
 
 	// PublishedAt zero-value 면 시간 윈도우 적용 불가 — 빈 후보로 진행.
@@ -592,10 +592,10 @@ func (w *Worker) findCandidates(ctx context.Context, src *core.Content) []extrac
 	if len(ranked) < limit {
 		limit = len(ranked)
 	}
-	out := make([]extractor.CandidateRef, 0, limit)
+	out := make([]enrichcore.CandidateRef, 0, limit)
 	for i := 0; i < limit; i++ {
 		c := ranked[i].c
-		out = append(out, extractor.CandidateRef{
+		out = append(out, enrichcore.CandidateRef{
 			URL:   c.URL,
 			Title: c.Title,
 			Host:  hostOf(c.URL),
@@ -654,7 +654,7 @@ func tokenOverlap(a, b map[string]struct{}) int {
 // enriched_contents 테이블에 영속화하면 metadata 의존을 줄일 수 있음.
 //
 // 직렬화 실패 시 best-effort — 메시지는 그대로 forward (warn 로깅 후 skip).
-func (w *Worker) attachFacts(pm *core.ProcessingMessage, facts *extractor.EnrichedFacts) {
+func (w *Worker) attachFacts(pm *core.ProcessingMessage, facts *enrichcore.EnrichedFacts) {
 	if pm.Metadata == nil {
 		pm.Metadata = map[string]interface{}{}
 	}
@@ -749,18 +749,18 @@ func (w *Worker) commit(ctx context.Context, msg *queue.Message) error {
 // json 태그는 omitempty 미사용 — DB 영속화 시 일관된 schema (모든 필드 항상 존재) 보장.
 // LLM 입력 측에서도 빈 배열이 명시적으로 보여 prompt 가 부재 vs zero-count 를 구분 가능.
 type promptFactsPayload struct {
-	Entities  []extractor.Entity  `json:"entities"`
-	Claims    []extractor.Claim   `json:"claims"`
-	Facts     []extractor.Fact    `json:"facts"`
-	Topics    []string            `json:"topics"`
-	Sentiment extractor.Sentiment `json:"sentiment"`
+	Entities  []enrichcore.Entity  `json:"entities"`
+	Claims    []enrichcore.Claim   `json:"claims"`
+	Facts     []enrichcore.Fact    `json:"facts"`
+	Topics    []string             `json:"topics"`
+	Sentiment enrichcore.Sentiment `json:"sentiment"`
 }
 
 // marshalFactsTriple 은 facts / verifications / context 를 LLM 입력 + DB 영속화에 공통으로
 // 쓰이는 JSON triple 로 직렬화합니다 (gemini-review PR #455).
 //
 // 직렬화 실패 시 첫 에러 즉시 반환 — caller (runScoring / persistEnriched) 는 forward 만 진행.
-func marshalFactsTriple(facts *extractor.EnrichedFacts) (factsJSON, verificationsJSON, contextJSON []byte, err error) {
+func marshalFactsTriple(facts *enrichcore.EnrichedFacts) (factsJSON, verificationsJSON, contextJSON []byte, err error) {
 	factsJSON, err = json.Marshal(promptFactsPayload{
 		Entities:  facts.Entities,
 		Claims:    facts.Claims,

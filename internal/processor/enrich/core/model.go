@@ -8,7 +8,7 @@
 // enrich/worker 도 extractor 만 import 하면 facts 타입에 접근 가능. enrich 루트
 // 패키지 (Stage wrapper) 가 worker 를 import 하므로 본 model 을 enrich 루트에 두면
 // import cycle 발생. extractor 가 cycle-free leaf 위치.
-package extractor
+package core
 
 // EntityType 은 추출된 entity 의 분류입니다.
 type EntityType string

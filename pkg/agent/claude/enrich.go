@@ -2,7 +2,7 @@
 //
 // ExtractEnriched 는 parser-rule extraction 전용 시그니처 (host/targetType/html →
 // llmgen.ExtractResult) 라 enrich 의 다른 prompt / 다른 출력 schema 에는 직접 재사용
-// 불가. 본 파일의 RunEnrichSession 은 한 단계 더 generic 한 primitive:
+// 불가. 본 파일의 RunSession 은 한 단계 더 generic 한 primitive:
 // (files + promptText) → raw stdout. enrich 패키지가 자체 prompt template 을 빌드해서
 // 넘기고 자체 출력 schema 로 파싱.
 //
@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 )
 
-// RunEnrichSession 은 새 세션을 만들어 files 를 세션 디렉토리에 기록한 뒤 promptText 로
+// RunSession 은 새 세션을 만들어 files 를 세션 디렉토리에 기록한 뒤 promptText 로
 // claude code 를 호출하고 stdout 을 반환합니다.
 //
 // 매개변수:
@@ -32,9 +32,9 @@ import (
 // 본 메소드는 ExtractEnriched 와 동일하게 wg.Add/Done 으로 진행 중 호출을 추적 — Stop() 의
 // wg.Wait() 이 본 호출을 놓치지 않음.
 //
-// 호출자 역할: stdout 을 자체 schema 로 파싱. RunEnrichSession 은 JSON 파싱 / blacklist 분기
+// 호출자 역할: stdout 을 자체 schema 로 파싱. RunSession 은 JSON 파싱 / blacklist 분기
 // 등을 일체 수행하지 않습니다 (parser-specific 인 ExtractEnriched 와 다른 점).
-func (w *Worker) RunEnrichSession(
+func (w *Worker) RunSession(
 	ctx context.Context,
 	sessionLabel string,
 	files map[string][]byte,

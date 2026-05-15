@@ -1,4 +1,4 @@
-package extractor_test
+package core_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/internal/processor/enrich/extractor"
+	"issuetracker/internal/processor/enrich/core"
 )
 
 // stubLoader 는 항상 같은 template 을 반환하는 prompt.Loader stub.
@@ -26,7 +26,7 @@ type stubRunner struct {
 	calls  int
 }
 
-func (s *stubRunner) RunEnrichSession(
+func (s *stubRunner) RunSession(
 	_ context.Context,
 	_ string,
 	_ map[string][]byte,
@@ -48,13 +48,13 @@ func TestClaudegenExtractor_Success(t *testing.T) {
 		"sentiment": "neutral"
 	}`
 
-	ex, err := extractor.NewClaudegenExtractor(
+	ex, err := core.NewClaudegenExtractor(
 		&stubRunner{stdout: stdout},
 		&stubLoader{tpl: "page at {{HOST}}"},
 	)
 	require.NoError(t, err)
 
-	got, err := ex.Extract(context.Background(), extractor.Input{
+	got, err := ex.Extract(context.Background(), core.Input{
 		URL:   "https://example.com/a",
 		Host:  "example.com",
 		Title: "Hi",
@@ -64,26 +64,26 @@ func TestClaudegenExtractor_Success(t *testing.T) {
 
 	assert.Len(t, got.Entities, 1)
 	assert.Equal(t, "Alice", got.Entities[0].Name)
-	assert.Equal(t, extractor.EntityTypePerson, got.Entities[0].Type)
+	assert.Equal(t, core.EntityTypePerson, got.Entities[0].Type)
 	assert.Len(t, got.Claims, 1)
 	assert.Len(t, got.Facts, 1)
 	assert.Equal(t, "32", got.Facts[0].Value)
 	assert.Equal(t, []string{"politics", "society"}, got.Topics)
-	assert.Equal(t, extractor.SentimentNeutral, got.Sentiment)
+	assert.Equal(t, core.SentimentNeutral, got.Sentiment)
 }
 
 func TestClaudegenExtractor_StripsMarkdownFence(t *testing.T) {
 	stdout := "```json\n" + `{"entities":[],"claims":[],"facts":[],"topics":[],"sentiment":"positive"}` + "\n```"
 
-	ex, err := extractor.NewClaudegenExtractor(
+	ex, err := core.NewClaudegenExtractor(
 		&stubRunner{stdout: stdout},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	got, err := ex.Extract(context.Background(), extractor.Input{})
+	got, err := ex.Extract(context.Background(), core.Input{})
 	require.NoError(t, err)
-	assert.Equal(t, extractor.SentimentPositive, got.Sentiment)
+	assert.Equal(t, core.SentimentPositive, got.Sentiment)
 }
 
 // TestClaudegenExtractor_StripsFenceVariants — gemini-review PR #452 반영.
@@ -113,14 +113,14 @@ func TestClaudegenExtractor_StripsFenceVariants(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ex, err := extractor.NewClaudegenExtractor(
+			ex, err := core.NewClaudegenExtractor(
 				&stubRunner{stdout: c.stdout},
 				&stubLoader{tpl: "t"},
 			)
 			require.NoError(t, err)
-			got, err := ex.Extract(context.Background(), extractor.Input{})
+			got, err := ex.Extract(context.Background(), core.Input{})
 			require.NoError(t, err)
-			assert.Equal(t, extractor.SentimentPositive, got.Sentiment, "case %q", c.name)
+			assert.Equal(t, core.SentimentPositive, got.Sentiment, "case %q", c.name)
 		})
 	}
 }
@@ -129,13 +129,13 @@ func TestClaudegenExtractor_NilFieldsNormalized(t *testing.T) {
 	// 응답에 entities / claims / facts / topics 가 모두 누락 — empty slice 로 정규화.
 	stdout := `{"sentiment": "neutral"}`
 
-	ex, err := extractor.NewClaudegenExtractor(
+	ex, err := core.NewClaudegenExtractor(
 		&stubRunner{stdout: stdout},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	got, err := ex.Extract(context.Background(), extractor.Input{})
+	got, err := ex.Extract(context.Background(), core.Input{})
 	require.NoError(t, err)
 	assert.NotNil(t, got.Entities)
 	assert.NotNil(t, got.Claims)
@@ -148,43 +148,43 @@ func TestClaudegenExtractor_NilFieldsNormalized(t *testing.T) {
 }
 
 func TestClaudegenExtractor_MalformedOutput_ReturnsError(t *testing.T) {
-	ex, err := extractor.NewClaudegenExtractor(
+	ex, err := core.NewClaudegenExtractor(
 		&stubRunner{stdout: "not json"},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	_, err = ex.Extract(context.Background(), extractor.Input{})
+	_, err = ex.Extract(context.Background(), core.Input{})
 	assert.Error(t, err)
 }
 
 func TestClaudegenExtractor_SessionError_Propagates(t *testing.T) {
-	ex, err := extractor.NewClaudegenExtractor(
+	ex, err := core.NewClaudegenExtractor(
 		&stubRunner{err: errors.New("docker exec failed")},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	_, err = ex.Extract(context.Background(), extractor.Input{})
+	_, err = ex.Extract(context.Background(), core.Input{})
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "session")
 }
 
 func TestNoopExtractor_ReturnsEmpty(t *testing.T) {
-	got, err := extractor.NewNoopExtractor().Extract(context.Background(), extractor.Input{})
+	got, err := core.NewNoopExtractor().Extract(context.Background(), core.Input{})
 	require.NoError(t, err)
 	assert.Empty(t, got.Entities)
 	assert.Empty(t, got.Claims)
 	assert.Empty(t, got.Facts)
 	assert.Empty(t, got.Topics)
-	assert.Equal(t, extractor.SentimentNeutral, got.Sentiment)
+	assert.Equal(t, core.SentimentNeutral, got.Sentiment)
 }
 
 func TestNewClaudegenExtractor_NilArgs(t *testing.T) {
-	_, err := extractor.NewClaudegenExtractor(nil, &stubLoader{tpl: "t"})
+	_, err := core.NewClaudegenExtractor(nil, &stubLoader{tpl: "t"})
 	assert.Error(t, err)
 
-	_, err = extractor.NewClaudegenExtractor(&stubRunner{stdout: "{}"}, nil)
+	_, err = core.NewClaudegenExtractor(&stubRunner{stdout: "{}"}, nil)
 	assert.Error(t, err)
 }
 
@@ -198,15 +198,15 @@ func TestClaudegenVerifier_Success(t *testing.T) {
 		{"claim_idx": 1, "verdict": "unverified"}
 	]}`
 	runner := &stubRunner{stdout: stdout}
-	v, err := extractor.NewClaudegenVerifier(runner, &stubLoader{tpl: "verify {{CLAIMS_JSON}} {{CANDIDATES_JSON}}"})
+	v, err := core.NewClaudegenVerifier(runner, &stubLoader{tpl: "verify {{CLAIMS_JSON}} {{CANDIDATES_JSON}}"})
 	require.NoError(t, err)
 
-	got, err := v.Verify(context.Background(), extractor.VerifyInput{
+	got, err := v.Verify(context.Background(), core.VerifyInput{
 		URL:    "https://example.com/p",
 		Host:   "example.com",
 		Title:  "T",
-		Claims: []extractor.Claim{{Text: "c0"}, {Text: "c1"}},
-		Candidates: []extractor.CandidateRef{
+		Claims: []core.Claim{{Text: "c0"}, {Text: "c1"}},
+		Candidates: []core.CandidateRef{
 			{URL: "https://other.com/x", Title: "other"},
 		},
 	})
@@ -222,14 +222,14 @@ func TestClaudegenVerifier_UnknownVerdict_FallsBackToUnverified(t *testing.T) {
 	stdout := `{"verifications":[
 		{"claim_idx": 0, "verdict": "maybe"}
 	]}`
-	v, err := extractor.NewClaudegenVerifier(
+	v, err := core.NewClaudegenVerifier(
 		&stubRunner{stdout: stdout},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	got, err := v.Verify(context.Background(), extractor.VerifyInput{
-		Claims: []extractor.Claim{{Text: "c"}},
+	got, err := v.Verify(context.Background(), core.VerifyInput{
+		Claims: []core.Claim{{Text: "c"}},
 	})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
@@ -238,43 +238,43 @@ func TestClaudegenVerifier_UnknownVerdict_FallsBackToUnverified(t *testing.T) {
 
 func TestClaudegenVerifier_EmptyClaims_SkipsRunner(t *testing.T) {
 	runner := &stubRunner{stdout: "this should never be parsed"}
-	v, err := extractor.NewClaudegenVerifier(
+	v, err := core.NewClaudegenVerifier(
 		runner,
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	got, err := v.Verify(context.Background(), extractor.VerifyInput{Claims: nil})
+	got, err := v.Verify(context.Background(), core.VerifyInput{Claims: nil})
 	require.NoError(t, err)
 	assert.Empty(t, got)
 	assert.Equal(t, 0, runner.calls, "runner must not be called when claims empty")
 }
 
 func TestClaudegenVerifier_SessionError_Propagates(t *testing.T) {
-	v, err := extractor.NewClaudegenVerifier(
+	v, err := core.NewClaudegenVerifier(
 		&stubRunner{err: errors.New("exec failure")},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	_, err = v.Verify(context.Background(), extractor.VerifyInput{
-		Claims: []extractor.Claim{{Text: "c"}},
+	_, err = v.Verify(context.Background(), core.VerifyInput{
+		Claims: []core.Claim{{Text: "c"}},
 	})
 	require.Error(t, err)
 }
 
 func TestNoopVerifier_ReturnsEmpty(t *testing.T) {
-	got, err := extractor.NewNoopVerifier().Verify(context.Background(), extractor.VerifyInput{
-		Claims: []extractor.Claim{{Text: "c"}},
+	got, err := core.NewNoopVerifier().Verify(context.Background(), core.VerifyInput{
+		Claims: []core.Claim{{Text: "c"}},
 	})
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
 
 func TestNewClaudegenVerifier_NilArgs(t *testing.T) {
-	_, err := extractor.NewClaudegenVerifier(nil, &stubLoader{tpl: "t"})
+	_, err := core.NewClaudegenVerifier(nil, &stubLoader{tpl: "t"})
 	assert.Error(t, err)
-	_, err = extractor.NewClaudegenVerifier(&stubRunner{stdout: "{}"}, nil)
+	_, err = core.NewClaudegenVerifier(&stubRunner{stdout: "{}"}, nil)
 	assert.Error(t, err)
 }
 
@@ -297,15 +297,15 @@ func TestClaudegenContextualizer_Success(t *testing.T) {
 		}
 	}`
 	runner := &stubRunner{stdout: stdout}
-	c, err := extractor.NewClaudegenContextualizer(runner, &stubLoader{tpl: "ctx {{ENTITIES_JSON}} {{CLAIMS_JSON}}"})
+	c, err := core.NewClaudegenContextualizer(runner, &stubLoader{tpl: "ctx {{ENTITIES_JSON}} {{CLAIMS_JSON}}"})
 	require.NoError(t, err)
 
-	got, err := c.Provide(context.Background(), extractor.ContextInput{
+	got, err := c.Provide(context.Background(), core.ContextInput{
 		URL:      "https://example.com/p",
 		Host:     "example.com",
 		Title:    "T",
-		Entities: []extractor.Entity{{Type: extractor.EntityTypeOrg, Name: "Acme"}},
-		Claims:   []extractor.Claim{{Text: "Acme announced X"}},
+		Entities: []core.Entity{{Type: core.EntityTypeOrg, Name: "Acme"}},
+		Claims:   []core.Claim{{Text: "Acme announced X"}},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, got)
@@ -324,14 +324,14 @@ func TestClaudegenContextualizer_EmptyImplications_NormalizedToNil(t *testing.T)
 		"timeline": [],
 		"implications": {"political": "", "social": "", "technical": ""}
 	}`
-	c, err := extractor.NewClaudegenContextualizer(
+	c, err := core.NewClaudegenContextualizer(
 		&stubRunner{stdout: stdout},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	got, err := c.Provide(context.Background(), extractor.ContextInput{
-		Entities: []extractor.Entity{{Name: "X"}},
+	got, err := c.Provide(context.Background(), core.ContextInput{
+		Entities: []core.Entity{{Name: "X"}},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, got)
@@ -341,54 +341,54 @@ func TestClaudegenContextualizer_EmptyImplications_NormalizedToNil(t *testing.T)
 
 func TestClaudegenContextualizer_NoEntitiesOrClaims_SkipsRunner(t *testing.T) {
 	runner := &stubRunner{stdout: "should not be parsed"}
-	c, err := extractor.NewClaudegenContextualizer(
+	c, err := core.NewClaudegenContextualizer(
 		runner,
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
 
-	got, err := c.Provide(context.Background(), extractor.ContextInput{})
+	got, err := c.Provide(context.Background(), core.ContextInput{})
 	require.NoError(t, err)
 	assert.Nil(t, got, "no entities/claims → runner skip, nil context")
 	assert.Equal(t, 0, runner.calls)
 }
 
 func TestClaudegenContextualizer_SessionError_Propagates(t *testing.T) {
-	c, err := extractor.NewClaudegenContextualizer(
+	c, err := core.NewClaudegenContextualizer(
 		&stubRunner{err: errors.New("exec failure")},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
-	_, err = c.Provide(context.Background(), extractor.ContextInput{
-		Entities: []extractor.Entity{{Name: "X"}},
+	_, err = c.Provide(context.Background(), core.ContextInput{
+		Entities: []core.Entity{{Name: "X"}},
 	})
 	require.Error(t, err)
 }
 
 func TestClaudegenContextualizer_MalformedOutput_ReturnsError(t *testing.T) {
-	c, err := extractor.NewClaudegenContextualizer(
+	c, err := core.NewClaudegenContextualizer(
 		&stubRunner{stdout: "not json"},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
-	_, err = c.Provide(context.Background(), extractor.ContextInput{
-		Entities: []extractor.Entity{{Name: "X"}},
+	_, err = c.Provide(context.Background(), core.ContextInput{
+		Entities: []core.Entity{{Name: "X"}},
 	})
 	require.Error(t, err)
 }
 
 func TestNoopContextualizer_ReturnsNil(t *testing.T) {
-	got, err := extractor.NewNoopContextualizer().Provide(context.Background(), extractor.ContextInput{
-		Entities: []extractor.Entity{{Name: "X"}},
+	got, err := core.NewNoopContextualizer().Provide(context.Background(), core.ContextInput{
+		Entities: []core.Entity{{Name: "X"}},
 	})
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
 
 func TestNewClaudegenContextualizer_NilArgs(t *testing.T) {
-	_, err := extractor.NewClaudegenContextualizer(nil, &stubLoader{tpl: "t"})
+	_, err := core.NewClaudegenContextualizer(nil, &stubLoader{tpl: "t"})
 	assert.Error(t, err)
-	_, err = extractor.NewClaudegenContextualizer(&stubRunner{stdout: "{}"}, nil)
+	_, err = core.NewClaudegenContextualizer(&stubRunner{stdout: "{}"}, nil)
 	assert.Error(t, err)
 }
 
@@ -407,10 +407,10 @@ func TestClaudegenScorer_Success(t *testing.T) {
 		}
 	}`
 	runner := &stubRunner{stdout: stdout}
-	s, err := extractor.NewClaudegenScorer(runner, &stubLoader{tpl: "score {{FACTS_JSON}}"})
+	s, err := core.NewClaudegenScorer(runner, &stubLoader{tpl: "score {{FACTS_JSON}}"})
 	require.NoError(t, err)
 
-	got, err := s.Score(context.Background(), extractor.ScoreInput{
+	got, err := s.Score(context.Background(), core.ScoreInput{
 		URL:           "https://example.com/p",
 		Facts:         []byte(`{"entities":[]}`),
 		Verifications: []byte(`[]`),
@@ -425,35 +425,35 @@ func TestClaudegenScorer_Success(t *testing.T) {
 
 func TestClaudegenScorer_OutOfRange_ReturnsError(t *testing.T) {
 	for _, sc := range []string{`{"trust_score": 1.5}`, `{"trust_score": -0.1}`} {
-		s, err := extractor.NewClaudegenScorer(
+		s, err := core.NewClaudegenScorer(
 			&stubRunner{stdout: sc},
 			&stubLoader{tpl: "t"},
 		)
 		require.NoError(t, err)
-		_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+		_, err = s.Score(context.Background(), core.ScoreInput{Facts: []byte(`{"a":1}`)})
 		require.Error(t, err, "stdout=%q", sc)
 	}
 }
 
 func TestClaudegenScorer_MissingTrustScore_ReturnsError(t *testing.T) {
 	// trust_score 누락 → 0 으로 fabricated 안 되도록 error.
-	s, err := extractor.NewClaudegenScorer(
+	s, err := core.NewClaudegenScorer(
 		&stubRunner{stdout: `{"rationale": "ok"}`},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
-	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	_, err = s.Score(context.Background(), core.ScoreInput{Facts: []byte(`{"a":1}`)})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "trust_score")
 }
 
 func TestClaudegenScorer_MissingRationale_ReturnsError(t *testing.T) {
-	s, err := extractor.NewClaudegenScorer(
+	s, err := core.NewClaudegenScorer(
 		&stubRunner{stdout: `{"trust_score": 0.5}`},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
-	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	_, err = s.Score(context.Background(), core.ScoreInput{Facts: []byte(`{"a":1}`)})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rationale")
 }
@@ -469,12 +469,12 @@ func TestClaudegenScorer_AllEmpty_SkipsRunner(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			runner := &stubRunner{stdout: "this should never be parsed"}
-			s, err := extractor.NewClaudegenScorer(
+			s, err := core.NewClaudegenScorer(
 				runner,
 				&stubLoader{tpl: "t"},
 			)
 			require.NoError(t, err)
-			got, err := s.Score(context.Background(), extractor.ScoreInput{
+			got, err := s.Score(context.Background(), core.ScoreInput{
 				Facts:         c.facts,
 				Verifications: c.verifications,
 				Context:       c.ctx,
@@ -487,27 +487,27 @@ func TestClaudegenScorer_AllEmpty_SkipsRunner(t *testing.T) {
 }
 
 func TestClaudegenScorer_SessionError_Propagates(t *testing.T) {
-	s, err := extractor.NewClaudegenScorer(
+	s, err := core.NewClaudegenScorer(
 		&stubRunner{err: errors.New("exec failure")},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
-	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	_, err = s.Score(context.Background(), core.ScoreInput{Facts: []byte(`{"a":1}`)})
 	require.Error(t, err)
 }
 
 func TestClaudegenScorer_MalformedOutput_ReturnsError(t *testing.T) {
-	s, err := extractor.NewClaudegenScorer(
+	s, err := core.NewClaudegenScorer(
 		&stubRunner{stdout: "not json"},
 		&stubLoader{tpl: "t"},
 	)
 	require.NoError(t, err)
-	_, err = s.Score(context.Background(), extractor.ScoreInput{Facts: []byte(`{"a":1}`)})
+	_, err = s.Score(context.Background(), core.ScoreInput{Facts: []byte(`{"a":1}`)})
 	require.Error(t, err)
 }
 
 func TestNoopScorer_ReturnsNil(t *testing.T) {
-	got, err := extractor.NewNoopScorer().Score(context.Background(), extractor.ScoreInput{
+	got, err := core.NewNoopScorer().Score(context.Background(), core.ScoreInput{
 		Facts: []byte(`{"a":1}`),
 	})
 	require.NoError(t, err)
@@ -515,26 +515,26 @@ func TestNoopScorer_ReturnsNil(t *testing.T) {
 }
 
 func TestNewClaudegenScorer_NilArgs(t *testing.T) {
-	_, err := extractor.NewClaudegenScorer(nil, &stubLoader{tpl: "t"})
+	_, err := core.NewClaudegenScorer(nil, &stubLoader{tpl: "t"})
 	assert.Error(t, err)
-	_, err = extractor.NewClaudegenScorer(&stubRunner{stdout: "{}"}, nil)
+	_, err = core.NewClaudegenScorer(&stubRunner{stdout: "{}"}, nil)
 	assert.Error(t, err)
 }
 
 func TestPageContext_IsEmpty(t *testing.T) {
 	// nil receiver
-	var nilPC *extractor.PageContext
+	var nilPC *core.PageContext
 	assert.True(t, nilPC.IsEmpty())
 
 	// 모두 empty
-	pc := &extractor.PageContext{Background: nil, Timeline: nil, Implications: nil}
+	pc := &core.PageContext{Background: nil, Timeline: nil, Implications: nil}
 	assert.True(t, pc.IsEmpty())
 
 	// background 있음 → not empty
-	pc2 := &extractor.PageContext{Background: []extractor.BackgroundItem{{Subject: "X"}}}
+	pc2 := &core.PageContext{Background: []core.BackgroundItem{{Subject: "X"}}}
 	assert.False(t, pc2.IsEmpty())
 
 	// implications 있음 → not empty
-	pc3 := &extractor.PageContext{Implications: &extractor.Implications{Social: "x"}}
+	pc3 := &core.PageContext{Implications: &core.Implications{Social: "x"}}
 	assert.False(t, pc3.IsEmpty())
 }
