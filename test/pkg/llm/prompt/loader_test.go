@@ -32,14 +32,14 @@ func TestNewFileLoader_EmptyDir_ReturnsError(t *testing.T) {
 
 func TestFileLoader_Load_Success(t *testing.T) {
 	dir := t.TempDir()
-	subdir := filepath.Join(dir, "llmgen")
+	subdir := filepath.Join(dir, "parser", "llmgen")
 	require.NoError(t, os.MkdirAll(subdir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(subdir, "system.txt"), []byte("hello world"), 0o600))
 
 	l, err := prompt.NewFileLoader(dir)
 	require.NoError(t, err)
 
-	body, err := l.Load("llmgen/system")
+	body, err := l.Load("parser/llmgen/system")
 	require.NoError(t, err)
 	assert.Equal(t, "hello world", body)
 }
@@ -48,7 +48,7 @@ func TestFileLoader_Load_FileMissing_ReturnsError(t *testing.T) {
 	l, err := prompt.NewFileLoader(t.TempDir())
 	require.NoError(t, err)
 
-	_, err = l.Load("llmgen/missing")
+	_, err = l.Load("parser/llmgen/missing")
 	require.Error(t, err)
 }
 

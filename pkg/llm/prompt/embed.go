@@ -35,7 +35,7 @@ func NewEmbedLoader() *EmbedLoader {
 	return &EmbedLoader{}
 }
 
-// Load 는 name (예: "llmgen/system") 에 해당하는 embedded prompt 본문을 반환합니다.
+// Load 는 name (예: "parser/llmgen/system") 에 해당하는 embedded prompt 본문을 반환합니다.
 //
 // FileLoader.Load 와 동일 시맨틱 — name 비어있으면 error, 파일 부재 시 error,
 // 빈 파일은 error (운영 실수 가시화).

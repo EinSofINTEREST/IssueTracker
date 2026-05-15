@@ -18,10 +18,10 @@ func TestEmbedLoader_Load_KnownPrompt(t *testing.T) {
 	l := prompt.NewEmbedLoader()
 
 	for _, name := range []string{
-		"llmgen/system",
-		"pathinfer/system",
-		"validator/system",
-		"claudegen/page.user",
+		"parser/llmgen/system",
+		"parser/pathinfer/system",
+		"parser/validator/system",
+		"parser/claude/page.user",
 	} {
 		t.Run(name, func(t *testing.T) {
 			body, err := l.Load(name)
@@ -108,7 +108,7 @@ func TestNewDefaultLoader_DirUnset_NoDefaultDir_EmbedOnly(t *testing.T) {
 	require.NotNil(t, loader)
 
 	// embed 가 실 동작하는지 한 번 호출 — assets 안의 파일이 로드되어야 함.
-	body, err := loader.Load("llmgen/system")
+	body, err := loader.Load("parser/llmgen/system")
 	require.NoError(t, err)
 	assert.NotEmpty(t, body)
 }
@@ -119,7 +119,7 @@ func TestNewDefaultLoader_DirSetEmpty_EmbedOnly(t *testing.T) {
 	require.NotNil(t, loader)
 	assert.Empty(t, warn, "embed 강제는 warn 없음")
 
-	body, err := loader.Load("llmgen/system")
+	body, err := loader.Load("parser/llmgen/system")
 	require.NoError(t, err)
 	assert.NotEmpty(t, body)
 }
@@ -137,7 +137,7 @@ func TestNewDefaultLoader_DirSetValid_UsesFile(t *testing.T) {
 	assert.Equal(t, "from-file", body)
 
 	// 외부 파일에 없는 prompt 는 embed 로 fallback.
-	body, err = loader.Load("llmgen/system")
+	body, err = loader.Load("parser/llmgen/system")
 	require.NoError(t, err)
 	assert.NotEmpty(t, body)
 }
@@ -147,7 +147,7 @@ func TestNewDefaultLoader_DirSetBad_FallbackToEmbed(t *testing.T) {
 	require.NotNil(t, loader)
 	assert.NotEmpty(t, warn, "잘못된 경로는 warn 메시지로 호출자에게 전달")
 
-	body, err := loader.Load("llmgen/system")
+	body, err := loader.Load("parser/llmgen/system")
 	require.NoError(t, err)
 	assert.NotEmpty(t, body, "embed-only 로 graceful 동작")
 }

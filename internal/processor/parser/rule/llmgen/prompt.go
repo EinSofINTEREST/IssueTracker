@@ -25,14 +25,14 @@ const promptMaxHTMLBytes = 32 * 1024
 // loader 는 외부 파일 또는 binary embed (pkg/llm/prompt/assets/llmgen/...) 에서 prompt 본문을 로드.
 // 반환값: (system, user) — Provider 호출 시 RoleSystem + RoleUser 메시지로 분리 전달.
 func BuildPrompt(loader prompt.Loader, host string, targetType model.TargetType, html string) (system, user string, err error) {
-	system, err = loader.Load("llmgen/system")
+	system, err = loader.Load("parser/llmgen/system")
 	if err != nil {
 		return "", "", fmt.Errorf("load llmgen system prompt: %w", err)
 	}
 
-	userPromptName := "llmgen/page.user"
+	userPromptName := "parser/llmgen/page.user"
 	if targetType == model.TargetTypeList {
-		userPromptName = "llmgen/list.user"
+		userPromptName = "parser/llmgen/list.user"
 	}
 	template, err := loader.Load(userPromptName)
 	if err != nil {

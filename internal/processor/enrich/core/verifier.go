@@ -53,7 +53,7 @@ func (v *NoopVerifier) Verify(_ context.Context, _ VerifyInput) ([]Verification,
 var _ Verifier = (*NoopVerifier)(nil)
 
 // verifierPromptName 은 cross-verify prompt asset 경로입니다.
-const verifierPromptName = "claudegen/enricher_cross_verify"
+const verifierPromptName = "enrich/claude/cross_verify.user"
 
 // ClaudegenVerifier 는 claude.Pool 로 cross-verify session 을 실행합니다.
 type ClaudegenVerifier struct {

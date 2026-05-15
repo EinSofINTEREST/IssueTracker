@@ -162,9 +162,9 @@ const sampleListHTML = `<!DOCTYPE html><html><body>
 // llmgen 의 system / user prompt 를 최소 형태로 stub — placeholder 가 그대로 잔존해도 테스트
 // 단위 (provider 가 fakeProvider 라 실제 LLM 호출 없음) 에선 의미 없음.
 var testPromptLoader = prompt.MapLoader{
-	"llmgen/system":    "test system prompt",
-	"llmgen/page.user": "host={{HOST}} type={{TARGET_TYPE}} html={{HTML}}",
-	"llmgen/list.user": "host={{HOST}} type={{TARGET_TYPE}} html={{HTML}}",
+	"parser/llmgen/system":    "test system prompt",
+	"parser/llmgen/page.user": "host={{HOST}} type={{TARGET_TYPE}} html={{HTML}}",
+	"parser/llmgen/list.user": "host={{HOST}} type={{TARGET_TYPE}} html={{HTML}}",
 }
 
 func newGenerator(t *testing.T, provider llm.Provider, repo repository.ParserRuleRepository) (*llmgen.Generator, *rule.Resolver) {

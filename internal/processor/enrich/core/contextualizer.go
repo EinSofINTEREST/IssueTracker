@@ -46,7 +46,7 @@ func (c *NoopContextualizer) Provide(_ context.Context, _ ContextInput) (*PageCo
 var _ Contextualizer = (*NoopContextualizer)(nil)
 
 // contextPromptName 은 외부 맥락 수집 prompt asset 경로입니다.
-const contextPromptName = "claudegen/enricher_context"
+const contextPromptName = "enrich/claude/context.user"
 
 // ClaudegenContextualizer 는 claude.Pool 로 context session 을 실행합니다.
 type ClaudegenContextualizer struct {

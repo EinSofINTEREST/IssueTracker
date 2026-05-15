@@ -97,8 +97,8 @@ func TestExtractEnriched_EmptyReason_NoFeedbackBlock(t *testing.T) {
 func TestExtractEnriched_TemplateMissingPlaceholder_FailsFast(t *testing.T) {
 	// 외부 override 시뮬레이션 — placeholder 토큰 없는 prompt loader 주입.
 	brokenLoader := prompt.MapLoader{
-		"claudegen/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.",
-		"claudegen/list.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.",
+		"parser/claude/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.",
+		"parser/claude/list.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.",
 	}
 	log := logger.New(logger.DefaultConfig())
 	authDir := makeAuthDir(t)
@@ -128,8 +128,8 @@ func TestExtractEnriched_TemplateMissingPlaceholder_FailsFast(t *testing.T) {
 // reason 부재 시에는 (정상 경로) 통과하는지 검증 — 기존 외부 템플릿 호환성.
 func TestExtractEnriched_TemplateMissingPlaceholder_NoReason_OK(t *testing.T) {
 	brokenLoader := prompt.MapLoader{
-		"claudegen/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.",
-		"claudegen/list.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.",
+		"parser/claude/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.",
+		"parser/claude/list.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.",
 	}
 	log := logger.New(logger.DefaultConfig())
 	authDir := makeAuthDir(t)

@@ -66,7 +66,7 @@ func (s *NoopScorer) Score(_ context.Context, _ ScoreInput) (*TrustScoreResult, 
 var _ Scorer = (*NoopScorer)(nil)
 
 // scorerPromptName 은 신뢰도 점수 prompt asset 경로입니다.
-const scorerPromptName = "claudegen/enricher_score"
+const scorerPromptName = "enrich/claude/score.user"
 
 // ClaudegenScorer 는 claude.Pool 로 scoring session 을 실행합니다.
 type ClaudegenScorer struct {
