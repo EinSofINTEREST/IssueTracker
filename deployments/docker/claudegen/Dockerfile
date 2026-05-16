@@ -34,6 +34,14 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
        else echo "install.cjs not found at $INSTALL_CJS — native binary may already be present"; fi \
     && claude --version
 
+# MCP postgres 서버 사전 설치 (이슈 #472)
+# - enrich agent 가 read-only DB 직접 조회를 위해 사용
+# - 매 세션 npx -y 로 호출하지만, 캐시 누락 시 콜드 스타트가 길어지므로 미리 설치하여 npx 가
+#   캐시된 패키지를 즉시 실행하도록 준비. 버전 고정으로 재현성 확보.
+ARG MCP_POSTGRES_VERSION=0.6.2
+RUN npm install -g @modelcontextprotocol/server-postgres@${MCP_POSTGRES_VERSION} \
+    && command -v mcp-server-postgres || echo "mcp-server-postgres binary not on PATH; will be resolved via npx"
+
 # 인증 디렉토리 마운트 지점 (이슈 #266) — 호스트 ~/.claude 가 read-write 로 마운트됨
 RUN mkdir -p /root/.claude
 

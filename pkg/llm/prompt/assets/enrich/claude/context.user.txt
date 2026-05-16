@@ -11,7 +11,7 @@ Extracted entities (from previous step):
 Extracted claims (from previous step):
 {{CLAIMS_JSON}}
 
-Your task — **use the WebFetch tool aggressively**:
+Your task — **use both WebFetch and the MCP postgres DB tool aggressively**:
 1. For each named entity (person / organization / location), look up authoritative background. Examples:
    - Person: Wikipedia / official bio page → role, prior history, recent relevant events.
    - Organization: Wikipedia / official site → founding, scope, recent activity.
@@ -20,6 +20,11 @@ Your task — **use the WebFetch tool aggressively**:
 3. For policy / legal references, find the official policy doc or governmental source.
 4. Build a short timeline of dated events relevant to the article (if applicable).
 5. Summarize political / social / technical implications (only when supported by sources — do not speculate).
+
+DB tool (`mcp__issuetracker_ro__query` or equivalent) gives you read-only SELECT on:
+- `contents (id, source_id, source_type, country, language, title, author, published_at, updated_at, category, tags, url, canonical_url, content_hash, reliability, created_at)` — every ingested article. Useful for finding earlier coverage of the same entities / events. `body` is NOT exposed; use WebFetch on the `url` when you need full text.
+- `enriched_contents (content_id, trust_score, facts, verifications, context, ...)` — previously scored articles, useful as priors and for `factors` JSONB diagnostics.
+- Query etiquette: always LIMIT (e.g., 20). For non-ASCII titles, query by `tags`, `category`, entity name substring `ILIKE '%<keyword>%'`, or `published_at` window. statement_timeout is 5 seconds.
 
 Output a single JSON object — no explanation, no markdown, no code blocks. The example below shows the schema; all field values must be concrete strings/arrays — no `|` union syntax, no placeholder brackets in the output:
 

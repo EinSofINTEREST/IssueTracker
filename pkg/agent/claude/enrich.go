@@ -73,6 +73,25 @@ func (w *Worker) RunSession(
 		}
 	}
 
+	// 이슈 #472 — MCP 설정이 등록되어 있으면 세션 디렉토리에 .mcp.json 작성. session 종료 시
+	// sessionHostDir 전체가 삭제되므로 자격증명도 함께 사라짐.
+	var mcpConfigContainerPath string
+	if w.mcpConfig != nil {
+		mcpBytes, err := w.mcpConfig.Marshal()
+		if err != nil {
+			return "", fmt.Errorf("marshal mcp config: %w", err)
+		}
+		// 0o600 — 자격증명 포함 파일이므로 user-only.
+		mcpHostPath := filepath.Join(sessionHostDir, ".mcp.json")
+		if err := os.WriteFile(mcpHostPath, mcpBytes, 0o600); err != nil {
+			return "", fmt.Errorf("write mcp config: %w", err)
+		}
+		// 컨테이너 내부 경로 — workDir 이 /workspace 로 마운트되므로 sessionID 만 join.
+		// 컨테이너는 Linux 라 항상 '/' separator 사용 — filepath.Join 은 호스트 separator
+		// (Windows 의 '\') 를 쓸 수 있어 부적합 (gemini-review PR #473).
+		mcpConfigContainerPath = "/workspace/" + sessionID + "/.mcp.json"
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, w.sessionTimeout)
 	defer cancel()
 
@@ -83,8 +102,11 @@ func (w *Worker) RunSession(
 		// 핵심 동작 의존성 (cross-verify / context 단계). 라이브 (2026-05-16) 에서 권한 부재로
 		// 14건 모두 검증 실패 확인 → 본 플래그로 일괄 허가.
 		"--dangerously-skip-permissions",
-		"-p", promptText,
 	}
+	if mcpConfigContainerPath != "" {
+		args = append(args, "--mcp-config", mcpConfigContainerPath)
+	}
+	args = append(args, "-p", promptText)
 
 	w.log.WithFields(map[string]interface{}{
 		"session_label": sessionLabel,

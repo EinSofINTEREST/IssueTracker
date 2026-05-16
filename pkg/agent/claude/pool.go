@@ -12,6 +12,7 @@ import (
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage/model"
 	"issuetracker/pkg/agent"
+	agentdb "issuetracker/pkg/agent/dependency/db"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -128,6 +129,16 @@ func resolveWorkerCount(log *logger.Logger) int {
 		return maxWorkerCount
 	}
 	return n
+}
+
+// WithMCPConfig 는 풀의 모든 worker 에 동일한 MCPConfig 를 등록합니다 (이슈 #472).
+//
+// Start() 전에 1회 호출. nil 전달 시 비활성. 본 메소드는 thread-unsafe — 풀 기동 후 호출 금지.
+func (p *Pool) WithMCPConfig(c *agentdb.MCPConfig) *Pool {
+	for _, w := range p.workers {
+		w.WithMCPConfig(c)
+	}
+	return p
 }
 
 // ModelName 은 pool 의 첫 worker 모델 ID 를 반환합니다 — 모든 worker 가 동일 환경 가정.

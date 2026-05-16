@@ -198,7 +198,7 @@ func TestClaudegenVerifier_Success(t *testing.T) {
 		{"claim_idx": 1, "verdict": "unverified"}
 	]}`
 	runner := &stubRunner{stdout: stdout}
-	v, err := core.NewClaudegenVerifier(runner, &stubLoader{tpl: "verify {{CLAIMS_JSON}} {{CANDIDATES_JSON}}"})
+	v, err := core.NewClaudegenVerifier(runner, &stubLoader{tpl: "verify {{CLAIMS_JSON}}"})
 	require.NoError(t, err)
 
 	got, err := v.Verify(context.Background(), core.VerifyInput{
@@ -206,9 +206,6 @@ func TestClaudegenVerifier_Success(t *testing.T) {
 		Host:   "example.com",
 		Title:  "T",
 		Claims: []core.Claim{{Text: "c0"}, {Text: "c1"}},
-		Candidates: []core.CandidateRef{
-			{URL: "https://other.com/x", Title: "other"},
-		},
 	})
 	require.NoError(t, err)
 	require.Len(t, got, 2)

@@ -42,6 +42,7 @@ import (
 	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/agent/claude"
+	agentdb "issuetracker/pkg/agent/dependency/db"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/llm/prompt"
 	llmwiring "issuetracker/pkg/llm/wiring"
@@ -735,14 +736,24 @@ func main() {
 		pool, perr := claude.NewPoolFromEnv(promptLoader, log)
 		if perr != nil {
 			log.WithError(perr).Warn("claudegen pool construction failed, falling back to default extractor")
-		} else if serr := pool.Start(ctx); serr != nil {
-			log.WithError(serr).Warn("claudegen pool start failed, falling back to default extractor")
 		} else {
-			llmGen.SetExtractor(pool)
-			claudegenPool = pool
-			log.WithFields(map[string]interface{}{
-				"worker_count": pool.WorkerCount(),
-			}).Info("llmgen: Claude Code 웜 컨테이너 pool 활성화")
+			// 이슈 #472 — enricher_ro DSN 이 설정되어 있으면 MCP postgres 도구를 풀에 mount.
+			// DSN 미설정 시 nil 유지 → 기존 동작 (MCP 없이 RunSession) 그대로.
+			if mcp, mErr := buildEnricherROMCPConfig(log); mErr != nil {
+				log.WithError(mErr).Warn("enricher_ro MCP config build failed; claudegen pool will run without DB tool")
+			} else if mcp != nil {
+				pool.WithMCPConfig(mcp)
+				log.Info("claudegen pool: MCP postgres read-only tool mounted (issue #472)")
+			}
+			if serr := pool.Start(ctx); serr != nil {
+				log.WithError(serr).Warn("claudegen pool start failed, falling back to default extractor")
+			} else {
+				llmGen.SetExtractor(pool)
+				claudegenPool = pool
+				log.WithFields(map[string]interface{}{
+					"worker_count": pool.WorkerCount(),
+				}).Info("llmgen: Claude Code 웜 컨테이너 pool 활성화")
+			}
 		}
 	}
 
@@ -1107,4 +1118,31 @@ func main() {
 	}
 
 	log.Info("shutdown completed")
+}
+
+// buildEnricherROMCPConfig 는 ENRICHER_DB_RO_* 환경변수에서 read-only DSN 을 구성하고
+// MCP postgres config 를 반환합니다 (이슈 #472).
+//
+// 반환값:
+//   - (*agentdb.MCPConfig, nil): 환경변수 설정 정상 + MCP 활성화 대상
+//   - (nil, nil): 환경변수 미설정 → MCP 비활성 (기존 동작 유지)
+//   - (nil, error): 부분 설정 / 잘못된 값 → caller 가 warn 로깅
+//
+// 본 함수는 옵션이라 fatal 아님 — MCP 미설정 환경에서 enrich 가 여전히 동작하도록 보장.
+func buildEnricherROMCPConfig(log *logger.Logger) (*agentdb.MCPConfig, error) {
+	dsn, ok, err := agentdb.DSNFromEnv("ENRICHER_DB_RO_")
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	cfg, err := agentdb.PostgresMCPConfig("issuetracker_ro", dsn)
+	if err != nil {
+		return nil, err
+	}
+	log.WithFields(map[string]interface{}{
+		"dsn": dsn.String(),
+	}).Debug("enricher_ro MCP config constructed")
+	return &cfg, nil
 }
