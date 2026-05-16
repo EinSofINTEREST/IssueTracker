@@ -382,8 +382,10 @@ func (w *Worker) ExtractEnriched(ctx context.Context, host string, targetType mo
 	args := []string{
 		"claude",
 		"--model", w.model,
-		// --dangerously-skip-permissions 는 root user 환경에서 동작하지 않고, OAuth 인증 + -p 모드는
-		// 본 플래그 없이 정상 동작 — 라이브 검증 시 발견.
+		// 이슈 #470 — 도구 권한 자동 허가. 컨테이너 환경이므로 모든 tool 사용 허가.
+		// 라이브 검증 (2026-05-16) 에서 WebFetch / WebSearch 권한 부재로 enrich verification /
+		// context 단계가 무력화되는 케이스 확인 — 본 플래그로 자동 허가.
+		"--dangerously-skip-permissions",
 		"-p", promptText,
 	}
 
