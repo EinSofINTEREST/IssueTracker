@@ -52,7 +52,7 @@ Output rules:
 - Source article's host is acceptable in `sources` only when it is the canonical source (e.g., official corporate site). Prefer external authoritative sources where possible.
 - All summaries / events / implications must be factually grounded in cited sources. When in doubt, omit.
 
-Example output (illustrative — your values will differ. Note: starts immediately with `{`, no preamble like "Based on..." or "Here is...":
+Example output (illustrative — your values will differ; starts immediately with `{`, no preamble like "Based on..." or "Here is..."):
 {
   "background": [
     {

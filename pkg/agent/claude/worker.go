@@ -382,9 +382,10 @@ func (w *Worker) ExtractEnriched(ctx context.Context, host string, targetType mo
 	args := []string{
 		"claude",
 		"--model", w.model,
-		// 이슈 #470 — 도구 권한 자동 허가. 컨테이너 환경이므로 모든 tool 사용 허가.
-		// 라이브 검증 (2026-05-16) 에서 WebFetch / WebSearch 권한 부재로 enrich verification /
-		// context 단계가 무력화되는 케이스 확인 — 본 플래그로 자동 허가.
+		// 이슈 #470 — 컨테이너 내 도구 권한 자동 허가. ExtractEnriched 자체는 selector 추출
+		// 단계라 외부 도구 호출이 적지만, 동일 컨테이너 / 동일 CLI 호출 패턴을 enrich 경로
+		// (RunSession) 와 일관되게 유지하기 위해 본 단계도 동일 플래그 적용. 격리된 docker
+		// 컨테이너 환경이므로 권한 prompt 가 prompt 만큼 자율 동작을 막는 비용이 더 크다.
 		"--dangerously-skip-permissions",
 		"-p", promptText,
 	}
