@@ -89,7 +89,7 @@ func newTestWorker(t *testing.T, runner *mockContainerRunner) *claude.Worker {
 		"ghcr.io/anthropics/claude-code:latest",
 		"claude-sonnet-4-6",
 		authDir,
-		"/root/.claude",
+		"/home/node/.claude",
 		10*time.Second,
 		runner,
 		claudegenLoader,
@@ -109,7 +109,7 @@ func TestClaudeWorker_StartStop(t *testing.T) {
 
 	// auth_token 마운트 검증 (이슈 #266) — authDir 과 containerAuthPath 가 StartContainer 에 전달됐는지 확인
 	assert.NotEmpty(t, runner.startedWith.authDir, "authDir must be passed to StartContainer")
-	assert.Equal(t, "/root/.claude", runner.startedWith.containerAuthPath)
+	assert.Equal(t, "/home/node/.claude", runner.startedWith.containerAuthPath)
 
 	require.NoError(t, w.Stop(t.Context()))
 }
@@ -317,7 +317,7 @@ func TestNewFromEnv_ValidAuthDir(t *testing.T) {
 // TestNew_EmptyAuthDir 는 New() 에 빈 authDir 전달 시 에러를 반환하는지 검증합니다.
 func TestNew_EmptyAuthDir(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
-	_, err := claude.New("image", "model", "", "/root/.claude", 10*time.Second, claudegenLoader, log)
+	_, err := claude.New("image", "model", "", "/home/node/.claude", 10*time.Second, claudegenLoader, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "authDir")
 }
@@ -326,7 +326,7 @@ func TestNew_EmptyAuthDir(t *testing.T) {
 func TestNewWithRunner_EmptyAuthDir(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	runner := &mockContainerRunner{}
-	_, err := claude.NewWithRunner("image", "model", "", "/root/.claude", 10*time.Second, runner, claudegenLoader, log)
+	_, err := claude.NewWithRunner("image", "model", "", "/home/node/.claude", 10*time.Second, runner, claudegenLoader, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "authDir")
 }
@@ -335,12 +335,12 @@ func TestNewWithRunner_EmptyAuthDir(t *testing.T) {
 func TestNewWithRunner_NilRunner(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	authDir := makeAuthDir(t)
-	_, err := claude.NewWithRunner("image", "model", authDir, "/root/.claude", 10*time.Second, nil, claudegenLoader, log)
+	_, err := claude.NewWithRunner("image", "model", authDir, "/home/node/.claude", 10*time.Second, nil, claudegenLoader, log)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "runner")
 }
 
-// TestNewWithRunner_DefaultContainerAuthPath 는 빈 containerAuthPath 전달 시 기본값(/root/.claude)이 적용되는지 검증합니다.
+// TestNewWithRunner_DefaultContainerAuthPath 는 빈 containerAuthPath 전달 시 기본값(/home/node/.claude)이 적용되는지 검증합니다.
 func TestNewWithRunner_DefaultContainerAuthPath(t *testing.T) {
 	log := logger.New(logger.DefaultConfig())
 	authDir := makeAuthDir(t)
@@ -350,7 +350,7 @@ func TestNewWithRunner_DefaultContainerAuthPath(t *testing.T) {
 	require.NoError(t, w.Start(t.Context()))
 	t.Cleanup(func() { _ = w.Stop(context.Background()) })
 
-	assert.Equal(t, "/root/.claude", runner.startedWith.containerAuthPath, "빈 containerAuthPath → 기본값 적용")
+	assert.Equal(t, "/home/node/.claude", runner.startedWith.containerAuthPath, "빈 containerAuthPath → 기본값 적용")
 }
 
 func containsStr(s, sub string) bool {

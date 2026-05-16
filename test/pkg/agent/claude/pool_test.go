@@ -69,7 +69,7 @@ func newTestPoolWorker(t *testing.T, runner *poolMockRunner) *claude.Worker {
 		"ghcr.io/anthropics/claude-code:latest",
 		"claude-sonnet-4-6",
 		authDir,
-		"/root/.claude",
+		"/home/node/.claude",
 		10*time.Second,
 		runner,
 		claudegenLoader,

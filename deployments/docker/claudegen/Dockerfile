@@ -4,13 +4,15 @@
 # 호스트의 ~/.claude/ 디렉토리 + ~/.claude.json 파일을 마운트하여 구독 quota 안에서
 # sonnet 호출 (이슈 #266).
 #
-# 기본 user 는 root — Claude CLI 의 OAuth 인증은 HOME 기반 ($HOME/.claude{.json,/}) 로 동작.
-# 호스트 인증 디렉토리가 root 소유인 경우가 일반적이라 root user 가 권한 일관성 면에서 단순.
+# 기본 user 는 node (uid=1000, gid=1000) — node:20-slim 이 제공하는 기본 user.
+# Claude CLI 가 `--dangerously-skip-permissions` 를 root/sudo 환경에서 거부하므로
+# (이슈 #474), non-root 로 실행. 호스트 ~/.claude (uid 1000 소유) 와 컨테이너 node
+# uid 1000 이 일치하므로 mount RW 권한도 일관됨.
 #
 # 빌드:    make claudegen-build
 # 사용:    docker run -d --rm \
-#            -v $HOME/.claude:/root/.claude \
-#            -v $HOME/.claude.json:/root/.claude.json \
+#            -v $HOME/.claude:/home/node/.claude \
+#            -v $HOME/.claude.json:/home/node/.claude.json \
 #            -v /tmp/workspace:/workspace \
 #            issuetracker-claudegen:local tail -f /dev/null
 
@@ -42,11 +44,17 @@ ARG MCP_POSTGRES_VERSION=0.6.2
 RUN npm install -g @modelcontextprotocol/server-postgres@${MCP_POSTGRES_VERSION} \
     && command -v mcp-server-postgres || echo "mcp-server-postgres binary not on PATH; will be resolved via npx"
 
-# 인증 디렉토리 마운트 지점 (이슈 #266) — 호스트 ~/.claude 가 read-write 로 마운트됨
-RUN mkdir -p /root/.claude
+# 인증 디렉토리 마운트 지점 (이슈 #266, #474) — 호스트 ~/.claude 가 read-write 로 마운트됨
+# - node user (uid=1000) 가 마운트 후 RW 가능하도록 미리 ownership 부여
+RUN mkdir -p /home/node/.claude && chown -R node:node /home/node/.claude
 
 # 작업 디렉토리 — 호스트의 임시 workspace 가 마운트됨
+# - node user 가 write 할 수 있도록 사전 생성 + ownership 부여
+RUN mkdir -p /workspace && chown -R node:node /workspace
 WORKDIR /workspace
+
+# non-root 로 전환 (이슈 #474) — claude CLI 의 --dangerously-skip-permissions 거부 회피
+USER node
 
 # 컨테이너는 docker exec 세션이 올 때까지 대기
 ENTRYPOINT []
