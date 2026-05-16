@@ -88,9 +88,26 @@ func NewParser(resolver RuleLookup, opts ...ParserOption) (*Parser, error) {
 		dateLayouts: defaultDateLayouts(),
 	}
 	for _, opt := range opts {
+		if opt == nil {
+			continue // nil 옵션은 skip — 호출자 wiring 사고 방어 (coderabbit PR #479 피드백)
+		}
 		opt(p)
 	}
 	return p, nil
+}
+
+// WaitAutoDemote 는 in-flight auto-demote goroutine 들의 완료를 대기합니다.
+//
+// graceful shutdown 또는 테스트에서 race condition 회피용. autoDemoter 가 nil 이면
+// 즉시 반환 (기능 비활성 상태).
+//
+// ParsePage 가 spawn 한 비동기 demote goroutine 들은 본 메소드가 반환할 때까지 in-flight.
+// 호출 시점 이후 시작되는 새 goroutine 은 wait 대상 X — 명시적 barrier 시멘틱.
+func (p *Parser) WaitAutoDemote() {
+	if p.autoDemoter == nil {
+		return
+	}
+	p.autoDemoter.wg.Wait()
 }
 
 // ParsePage 는 RawContent 를 DB rule 기반으로 Page 로 파싱합니다 (types.ContentParser 구현).
@@ -165,9 +182,12 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 	// 이슈 #477 — index-only 페이지 자동 강등. autoDemoter 가 nil 이면 분기 자체 skip
 	// (기능 비활성 시 기존 동작 100% 유지). 본 호출의 page 자체는 정상 반환 — 다음 호출부터
 	// matcher 가 본 URL 을 extract_links_only 로 라우팅 (publisher 직전).
+	//
+	// demoteAsync 는 별도 goroutine — DB Insert 지연이 ParsePage 호출 워커 throughput 에
+	// 영향 X (gemini PR #479 피드백). 테스트는 Parser.WaitAutoDemote 로 in-flight 완료 대기.
 	if p.autoDemoter != nil {
 		if ok, score := indexonly.IsIndexOnly(page, raw.HTML, indexonly.Config{}); ok {
-			p.autoDemoter.demote(ctx, raw.URL, score)
+			p.autoDemoter.demoteAsync(ctx, raw.URL, score)
 		}
 	}
 	return page, nil

@@ -17,6 +17,8 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"strings"
+	"sync"
 
 	"issuetracker/internal/processor/parser/rule/indexonly"
 	"issuetracker/internal/storage"
@@ -33,17 +35,37 @@ type AutoDemoteRegisterer interface {
 }
 
 // autoDemoter 는 Parser 내부에 boxing 되는 자동 강등 동작. nil 이면 기능 비활성.
+//
+// wg 는 demoteAsync 가 spawn 한 goroutine 들의 in-flight 트래킹용 — Parser.WaitAutoDemote
+// 가 graceful shutdown / 테스트에서 race 회피로 대기.
 type autoDemoter struct {
 	repo    AutoDemoteRegisterer
 	metrics *AutoDemoteMetrics
 	log     *logger.Logger
+	wg      sync.WaitGroup
 }
 
-// demote 는 index-only 로 판정된 URL 을 parser_blacklist 에 등록합니다.
+// demoteAsync 는 demote 를 별도 goroutine 에서 실행합니다 (gemini PR #479 피드백).
+//
+// ParsePage 의 호출 워커가 DB Insert 지연에 발목 잡히지 않도록 비동기 처리. 부모 ctx 가
+// 호출 종료 시 cancel 되더라도 in-flight Insert 가 완료될 수 있도록 context.WithoutCancel
+// 으로 cancellation 만 분리 — logger fields / trace metadata 는 보존.
+func (d *autoDemoter) demoteAsync(ctx context.Context, rawURL string, score indexonly.Score) {
+	if d == nil {
+		return
+	}
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.demote(context.WithoutCancel(ctx), rawURL, score)
+	}()
+}
+
+// demote 는 index-only 로 판정된 URL 을 parser_blacklist 에 동기 등록합니다.
 // 호출자는 score 를 같이 넘겨 로그 가시성 확보.
 //
-// ctx 는 caller (ParsePage) 의 ctx — query timeout / cancellation 전파.
-// 본 함수는 ParsePage 의 호출 후반 단계에서 호출되며 결과가 ParsePage return 값에 영향 X.
+// ctx 는 caller (demoteAsync) 의 ctx — query timeout 전파 (cancellation 은 분리됨).
+// 본 함수는 ParsePage return 값에 영향 X — 실패해도 caller 에 에러 전파 안 함.
 func (d *autoDemoter) demote(ctx context.Context, rawURL string, score indexonly.Score) {
 	if d == nil {
 		return
@@ -108,5 +130,5 @@ func pathPatternFromURL(rawURL string) (host, pathPattern string, ok bool) {
 	if p == "" {
 		p = "/"
 	}
-	return u.Host, "^" + regexp.QuoteMeta(p) + "$", true
+	return strings.ToLower(u.Host), "^" + regexp.QuoteMeta(p) + "$", true
 }

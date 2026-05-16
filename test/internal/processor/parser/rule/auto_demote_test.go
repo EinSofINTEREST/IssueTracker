@@ -77,7 +77,8 @@ func indexOnlyPageRule() *model.ParserRuleRecord {
 // blacklist Insert 가 정확히 1회 호출되고 record 가 올바른 mode/source 인지 검증합니다.
 func TestParser_ParsePage_AutoDemote_TriggersInsert(t *testing.T) {
 	repo := &fakeRepo{rules: []*model.ParserRuleRecord{indexOnlyPageRule()}}
-	res, _ := rule.NewResolver(repo)
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
 	bl := &fakeAutoDemoteRepo{}
 	log := logger.New(logger.DefaultConfig())
 
@@ -89,6 +90,8 @@ func TestParser_ParsePage_AutoDemote_TriggersInsert(t *testing.T) {
 	require.NoError(t, err)
 	// page 자체는 정상 반환 — 호출의 결과는 변경되지 않음
 	assert.Equal(t, "정치", page.Title)
+	// async demote goroutine 완료 대기 (gemini PR #479 피드백으로 비동기 처리)
+	p.WaitAutoDemote()
 
 	require.Len(t, bl.inserts, 1, "expected exactly 1 Insert call")
 	rec := bl.inserts[0]
@@ -104,7 +107,8 @@ func TestParser_ParsePage_AutoDemote_TriggersInsert(t *testing.T) {
 // PublishedAt set) 에서 Insert 가 호출되지 않는지 검증합니다.
 func TestParser_ParsePage_AutoDemote_NotTriggeredOnArticle(t *testing.T) {
 	repo := &fakeRepo{rules: []*model.ParserRuleRecord{pageRule()}}
-	res, _ := rule.NewResolver(repo)
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
 	bl := &fakeAutoDemoteRepo{}
 	log := logger.New(logger.DefaultConfig())
 
@@ -114,6 +118,7 @@ func TestParser_ParsePage_AutoDemote_NotTriggeredOnArticle(t *testing.T) {
 	_, err = p.ParsePage(context.Background(),
 		makeRaw("https://news.example.com/article/1", articleHTML))
 	require.NoError(t, err)
+	p.WaitAutoDemote() // 비동기 demote 가 spawn 되지 않았어야 함을 확정 — wait 자체 즉시 반환
 
 	assert.Empty(t, bl.inserts, "정상 article 에서 Insert 호출되면 안 됨")
 }
@@ -122,7 +127,8 @@ func TestParser_ParsePage_AutoDemote_NotTriggeredOnArticle(t *testing.T) {
 // 호출되지 않는지 (기존 동작 유지) 검증합니다.
 func TestParser_ParsePage_AutoDemote_DisabledByDefault(t *testing.T) {
 	repo := &fakeRepo{rules: []*model.ParserRuleRecord{indexOnlyPageRule()}}
-	res, _ := rule.NewResolver(repo)
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
 	bl := &fakeAutoDemoteRepo{}
 
 	p, err := rule.NewParser(res) // 옵션 미주입
@@ -139,7 +145,8 @@ func TestParser_ParsePage_AutoDemote_DisabledByDefault(t *testing.T) {
 // 반환 시 ParsePage 가 정상 동작 + 호출자 모르게 흡수되는지 검증합니다.
 func TestParser_ParsePage_AutoDemote_DuplicateGracefullyAbsorbed(t *testing.T) {
 	repo := &fakeRepo{rules: []*model.ParserRuleRecord{indexOnlyPageRule()}}
-	res, _ := rule.NewResolver(repo)
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
 	bl := &fakeAutoDemoteRepo{insertErr: storage.ErrDuplicate}
 	log := logger.New(logger.DefaultConfig())
 
@@ -150,13 +157,15 @@ func TestParser_ParsePage_AutoDemote_DuplicateGracefullyAbsorbed(t *testing.T) {
 		makeRaw("https://news.example.com/breakingnews/politics", indexOnlyHTML))
 	require.NoError(t, err, "Insert ErrDuplicate 는 ParsePage 에러로 전파되면 안 됨")
 	assert.Equal(t, "정치", page.Title)
+	p.WaitAutoDemote() // goroutine leak 방지
 }
 
 // TestParser_ParsePage_AutoDemote_InsertFailureNonFatal 는 Insert 가 일반 에러 반환 시
 // ParsePage 가 page 결과를 정상 반환 (강등은 실패하지만 본 요청은 영향 X) 하는지 검증합니다.
 func TestParser_ParsePage_AutoDemote_InsertFailureNonFatal(t *testing.T) {
 	repo := &fakeRepo{rules: []*model.ParserRuleRecord{indexOnlyPageRule()}}
-	res, _ := rule.NewResolver(repo)
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
 	bl := &fakeAutoDemoteRepo{insertErr: errors.New("db connection lost")}
 	log := logger.New(logger.DefaultConfig())
 
@@ -167,13 +176,15 @@ func TestParser_ParsePage_AutoDemote_InsertFailureNonFatal(t *testing.T) {
 		makeRaw("https://news.example.com/breakingnews/politics", indexOnlyHTML))
 	require.NoError(t, err, "Insert 일반 에러도 ParsePage 결과에 영향 없어야 함 (non-fatal)")
 	assert.Equal(t, "정치", page.Title)
+	p.WaitAutoDemote() // goroutine leak 방지
 }
 
 // TestParser_ParsePage_AutoDemote_NilLoggerOption 은 logger 가 nil 이면 옵션 자체가 noop
 // 인지 검증합니다 (방어 — main wiring 사고 회피).
 func TestParser_ParsePage_AutoDemote_NilLoggerOption(t *testing.T) {
 	repo := &fakeRepo{rules: []*model.ParserRuleRecord{indexOnlyPageRule()}}
-	res, _ := rule.NewResolver(repo)
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
 	bl := &fakeAutoDemoteRepo{}
 
 	p, err := rule.NewParser(res, rule.WithBlacklistAutoDemote(bl, nil, nil))
@@ -190,7 +201,8 @@ func TestParser_ParsePage_AutoDemote_NilLoggerOption(t *testing.T) {
 // 인지 검증합니다.
 func TestParser_ParsePage_AutoDemote_NilRepoOption(t *testing.T) {
 	repo := &fakeRepo{rules: []*model.ParserRuleRecord{indexOnlyPageRule()}}
-	res, _ := rule.NewResolver(repo)
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
 	log := logger.New(logger.DefaultConfig())
 
 	p, err := rule.NewParser(res, rule.WithBlacklistAutoDemote(nil, nil, log))
@@ -199,4 +211,50 @@ func TestParser_ParsePage_AutoDemote_NilRepoOption(t *testing.T) {
 	_, err = p.ParsePage(context.Background(),
 		makeRaw("https://news.example.com/breakingnews/politics", indexOnlyHTML))
 	require.NoError(t, err, "repo nil → 옵션 noop → ParsePage 정상 동작")
+}
+
+// TestNewParser_NilOptionGuarded 는 ParserOption 슬라이스에 nil 이 섞여도 panic 없이
+// skip 되는지 검증합니다 (coderabbit PR #479 피드백 — 호출자 wiring 사고 방어).
+func TestNewParser_NilOptionGuarded(t *testing.T) {
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{pageRule()}}
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
+
+	// nil 옵션이 섞인 슬라이스 — 호출자가 조건부로 옵션을 append 할 때 잘못된 nil entry 가 들어갈 수 있음
+	p, err := rule.NewParser(res, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	// 정상 동작 확인 — nil 만 있는 옵션이라 autoDemoter 도 미설정
+	_, err = p.ParsePage(context.Background(),
+		makeRaw("https://news.example.com/article/1", articleHTML))
+	require.NoError(t, err)
+}
+
+// TestParser_ParsePage_AutoDemote_LowercasesHost 는 대문자 host URL 의 path pattern
+// 등록 시 host_pattern 이 lower-case 로 정규화되는지 검증합니다 (coderabbit PR #479 피드백).
+//
+// rule 의 HostPattern 은 lowercase 로 저장되어 있고 (DB 컨벤션 + repo 자체가 ToLower),
+// 운영 환경에서는 fetcher 가 URL host 도 normalize 후 라우팅하지만, 본 helper 가 직접
+// URL.Host 를 사용하므로 helper 단에서 lowercase 보장이 필요. 본 테스트는 helper 의
+// pathPatternFromURL 가 host 를 lowercase 처리하는지를 화이트박스 검증.
+func TestParser_ParsePage_AutoDemote_LowercasesHost(t *testing.T) {
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{indexOnlyPageRule()}}
+	res, errRes := rule.NewResolver(repo)
+	require.NoError(t, errRes)
+	bl := &fakeAutoDemoteRepo{}
+	log := logger.New(logger.DefaultConfig())
+
+	p, err := rule.NewParser(res, rule.WithBlacklistAutoDemote(bl, nil, log))
+	require.NoError(t, err)
+
+	// URL host 에 대문자 — resolver 는 lowercase 라우팅, helper 는 URL.Host (대문자 그대로) 를
+	// 받아서 BlacklistRecord 등록 → pathPatternFromURL 의 ToLower 가 동작해야 lower-case 로 저장.
+	_, err = p.ParsePage(context.Background(),
+		makeRaw("https://News.Example.COM/breakingnews/politics", indexOnlyHTML))
+	require.NoError(t, err)
+	p.WaitAutoDemote()
+
+	require.Len(t, bl.inserts, 1)
+	assert.Equal(t, "news.example.com", bl.inserts[0].HostPattern, "host 는 lower-case 로 정규화돼야 함")
 }
