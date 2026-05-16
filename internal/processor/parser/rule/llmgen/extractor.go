@@ -32,6 +32,12 @@ type BlacklistDecision struct {
 	// Reason 은 운영자가 사후 분류 / 검증할 수 있도록 한국어로 작성된 사유.
 	// parser_blacklist.reason 컬럼에 그대로 저장.
 	Reason string
+
+	// Mode 는 parser_blacklist 등록 시 적용할 차단 정책입니다 (이슈 #480).
+	//   - "drop"               : URL 자체 drop — 광고 / interstitial / empty / captcha 등 본문/링크 모두 무가치한 케이스
+	//   - "extract_links_only" : list 모드로 강등 — 카테고리 / 섹션 인덱스 등 본문은 없지만 article-like link 가 있는 케이스
+	// 빈 문자열이면 호출자 (service.HandleLLMDecision) 가 default "drop" 으로 보정 — backward compat.
+	Mode model.BlacklistMode
 }
 
 // ExtractResult 는 EnrichedExtractor 의 다단계 추출 결과입니다.

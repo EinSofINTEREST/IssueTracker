@@ -25,14 +25,15 @@ import (
 
 // BlacklistService 는 parser_blacklist 도메인의 비즈니스 boundary 입니다.
 type BlacklistService interface {
-	// HandleLLMDecision 은 LLM blacklist 판정 결과를 parser_blacklist 에 자동 등록합니다 (이슈 #326).
+	// HandleLLMDecision 은 LLM blacklist 판정 결과를 parser_blacklist 에 자동 등록합니다 (이슈 #326, #480).
 	//
 	//   - sample URL 의 path 를 escape + ^/$ anchor 한 정확 일치 regex 로 path_pattern 생성
 	//   - URL parse 실패 → insert skip (host-wide catch-all over-reach 회피)
+	//   - mode 인자가 빈 문자열이면 default "drop" — backward compat (이슈 #480)
 	//   - INSERT 성공 → (true, nil)
 	//   - ErrDuplicate (이미 등록) → (false, nil) — 정상 (graceful 흡수)
 	//   - 그 외 INSERT 에러 → (false, err) — 호출자 정책 (현재 모두 warn 로그 후 흐름 계속)
-	HandleLLMDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, reason string) (inserted bool, err error)
+	HandleLLMDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, reason string, mode model.BlacklistMode) (inserted bool, err error)
 
 	// Insert 는 row 를 직접 INSERT (운영자 manual 또는 다른 source 경로용).
 	Insert(ctx context.Context, rec *model.BlacklistRecord) error
@@ -91,12 +92,31 @@ func NewBlacklistService(repo repository.BlacklistRepository, log *logger.Logger
 }
 
 // HandleLLMDecision 흡수 — 기존 llmgen.Generator.handleBlacklistDecision 의 로직.
-func (s *blacklistService) HandleLLMDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, reason string) (bool, error) {
+//
+// mode 가 빈 문자열이거나 인식되지 않는 값이면 default "drop" 으로 보정 — backward compat
+// + 안전 (이슈 #480). 운영 가시성을 위해 fallback 시 WARN 로그 출력.
+func (s *blacklistService) HandleLLMDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, reason string, mode model.BlacklistMode) (bool, error) {
+	switch mode {
+	case model.BlacklistModeDrop, model.BlacklistModeExtractLinksOnly:
+		// 인식된 값 — 그대로 사용.
+	default:
+		// 빈 문자열 또는 unknown — drop 으로 보정.
+		if mode != "" {
+			s.log.WithFields(map[string]interface{}{
+				"host":           host,
+				"sample_url":     sampleURL,
+				"requested_mode": string(mode),
+			}).Warn("blacklist HandleLLMDecision: unknown mode, falling back to drop")
+		}
+		mode = model.BlacklistModeDrop
+	}
+
 	logFields := map[string]interface{}{
 		"host":             host,
 		"sample_url":       sampleURL,
 		"target_type":      string(targetType),
 		"blacklist_reason": reason,
+		"blacklist_mode":   string(mode),
 	}
 
 	pathPattern := pathPatternFromURL(sampleURL)
@@ -110,7 +130,7 @@ func (s *blacklistService) HandleLLMDecision(ctx context.Context, host, sampleUR
 		PathPattern: pathPattern,
 		Reason:      reason,
 		Source:      model.BlacklistSourceAuto,
-		Mode:        model.BlacklistModeDrop,
+		Mode:        mode,
 		Enabled:     true,
 	}
 	if err := s.repo.Insert(ctx, rec); err != nil {

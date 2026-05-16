@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
+	"issuetracker/internal/storage/model"
 )
 
 // TestExtractResult_BlacklistDecision_JSONShape 은 BlacklistDecision 이 운영자 manual review
@@ -29,11 +30,36 @@ func TestExtractResult_BlacklistDecision_JSONShape(t *testing.T) {
 	var unmarshalled struct {
 		Blacklist *struct {
 			Reason string `json:"Reason"`
+			Mode   string `json:"Mode"`
 		} `json:"Blacklist"`
 	}
 	require.NoError(t, json.Unmarshal(data, &unmarshalled))
 	require.NotNil(t, unmarshalled.Blacklist)
 	assert.Equal(t, "광고 페이지", unmarshalled.Blacklist.Reason)
+	assert.Equal(t, "", unmarshalled.Blacklist.Mode, "Mode 미설정 시 빈 문자열 직렬화 — service 가 default drop 으로 fallback")
+}
+
+// TestExtractResult_BlacklistDecision_ModeField 는 Mode 필드가 두 mode 값에 대해 round-trip
+// 직렬화/역직렬화 되는지 검증합니다 (이슈 #480).
+func TestExtractResult_BlacklistDecision_ModeField(t *testing.T) {
+	cases := []model.BlacklistMode{model.BlacklistModeDrop, model.BlacklistModeExtractLinksOnly}
+	for _, want := range cases {
+		t.Run(string(want), func(t *testing.T) {
+			res := llmgen.ExtractResult{
+				Blacklist: &llmgen.BlacklistDecision{
+					Reason: "카테고리 인덱스",
+					Mode:   want,
+				},
+			}
+			data, err := json.Marshal(res)
+			require.NoError(t, err)
+
+			var roundtrip llmgen.ExtractResult
+			require.NoError(t, json.Unmarshal(data, &roundtrip))
+			require.NotNil(t, roundtrip.Blacklist)
+			assert.Equal(t, want, roundtrip.Blacklist.Mode)
+		})
+	}
 }
 
 // TestPageType_Constants 는 claudegen prompt 와 storage layer 사이의 분류 string 계약이

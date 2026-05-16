@@ -458,6 +458,7 @@ func (w *Worker) ExtractEnriched(ctx context.Context, host string, targetType mo
 type enrichedOutput struct {
 	Validity           string            `json:"validity"`
 	BlacklistReason    string            `json:"blacklist_reason"`
+	BlacklistMode      string            `json:"blacklist_mode"` // 이슈 #480 — "drop" | "extract_links_only" (legacy: 빈 문자열 → drop fallback)
 	PageType           string            `json:"page_type"`
 	PageTypeConfidence float64           `json:"page_type_confidence"`
 	Article            bool              `json:"article"`
@@ -490,8 +491,11 @@ func parseEnrichedOutput(output string) (*llmgen.ExtractResult, error) {
 		if reason == "" {
 			reason = "(no reason provided)"
 		}
+		// 이슈 #480 — mode 가 명시된 경우 ExtractLinksOnly / Drop 분기. 빈 값 또는 unknown 은
+		// 서비스 단에서 default drop 으로 보정되므로 본 단계는 단순 통과.
+		mode := model.BlacklistMode(strings.TrimSpace(eo.BlacklistMode))
 		return &llmgen.ExtractResult{
-			Blacklist: &llmgen.BlacklistDecision{Reason: reason},
+			Blacklist: &llmgen.BlacklistDecision{Reason: reason, Mode: mode},
 		}, nil
 	case "ok":
 		return &llmgen.ExtractResult{
