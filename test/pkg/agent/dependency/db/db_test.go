@@ -1,4 +1,4 @@
-package agentdb_test
+package db_test
 
 import (
 	"encoding/json"
@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"issuetracker/pkg/agentdb"
+	agentdb "issuetracker/pkg/agent/dependency/db"
 )
 
 func TestDSN_PostgresURI_RoundTrip(t *testing.T) {

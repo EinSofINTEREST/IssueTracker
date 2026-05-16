@@ -42,7 +42,7 @@ import (
 	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/internal/storage/service"
 	"issuetracker/pkg/agent/claude"
-	"issuetracker/pkg/agentdb"
+	agentdb "issuetracker/pkg/agent/dependency/db"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/llm/prompt"
 	llmwiring "issuetracker/pkg/llm/wiring"

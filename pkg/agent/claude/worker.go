@@ -37,7 +37,7 @@ import (
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage/model"
-	"issuetracker/pkg/agentdb"
+	agentdb "issuetracker/pkg/agent/dependency/db"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )

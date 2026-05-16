@@ -1,5 +1,8 @@
-// Package agentdb 는 LLM agent (claude / codex 등) 가 read-only DB 에 직접 접근하기 위한
+// Package db 는 LLM agent (claude / codex 등) 가 read-only DB 에 직접 접근하기 위한
 // 공통 추상을 제공합니다 (이슈 #472).
+//
+// 위치: pkg/agent/dependency/db — agent 가 사용하는 외부 dependency 모음의 첫 항목.
+// 향후 다른 agent dependency (filesystem MCP 등) 도 pkg/agent/dependency/<name> 아래에 추가.
 //
 // 디자인 목표:
 //   - DB credential 캡슐화 — agent backend (claude / codex) 가 변경되어도 동일 DSN 객체 재사용
@@ -8,7 +11,7 @@
 //
 // 본 패키지는 transport 무관한 데이터 모델 (DSN / MCPConfig) 만 정의. 실제 세션에 mount 하는
 // 책임은 agent backend (예: pkg/agent/claude/enrich.go) 에 위임.
-package agentdb
+package db
 
 import (
 	"encoding/json"
@@ -48,20 +51,20 @@ var allowedSSLModes = map[string]struct{}{
 // Validate 는 필수 필드 누락을 확인합니다. config 로딩 직후 1회 호출 권장.
 func (d DSN) Validate() error {
 	if d.Host == "" {
-		return errors.New("agentdb: dsn host empty")
+		return errors.New("agent/db: dsn host empty")
 	}
 	if d.Port <= 0 || d.Port > 65535 {
-		return fmt.Errorf("agentdb: dsn port out of range: %d", d.Port)
+		return fmt.Errorf("agent/db: dsn port out of range: %d", d.Port)
 	}
 	if d.Database == "" {
-		return errors.New("agentdb: dsn database empty")
+		return errors.New("agent/db: dsn database empty")
 	}
 	if d.User == "" {
-		return errors.New("agentdb: dsn user empty")
+		return errors.New("agent/db: dsn user empty")
 	}
 	if d.SSLMode != "" {
 		if _, ok := allowedSSLModes[d.SSLMode]; !ok {
-			return fmt.Errorf("agentdb: invalid sslmode %q (allowed: disable / allow / prefer / require / verify-ca / verify-full)", d.SSLMode)
+			return fmt.Errorf("agent/db: invalid sslmode %q (allowed: disable / allow / prefer / require / verify-ca / verify-full)", d.SSLMode)
 		}
 	}
 	// Password 는 dev 환경에서 비어있을 수 있으므로 강제하지 않음 (Postgres trust auth).
@@ -122,7 +125,7 @@ func DSNFromEnv(prefix string) (DSN, bool, error) {
 		return DSN{}, false, nil
 	}
 	if user == "" || db == "" {
-		return DSN{}, false, fmt.Errorf("agentdb: %sUSER and %sDATABASE must both be set", prefix, prefix)
+		return DSN{}, false, fmt.Errorf("agent/db: %sUSER and %sDATABASE must both be set", prefix, prefix)
 	}
 
 	host := os.Getenv(prefix + "HOST")
@@ -133,7 +136,7 @@ func DSNFromEnv(prefix string) (DSN, bool, error) {
 	if raw := os.Getenv(prefix + "PORT"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil {
-			return DSN{}, false, fmt.Errorf("agentdb: parse %sPORT %q: %w", prefix, raw, err)
+			return DSN{}, false, fmt.Errorf("agent/db: parse %sPORT %q: %w", prefix, raw, err)
 		}
 		port = n
 	}
@@ -189,7 +192,7 @@ type MCPConfig struct {
 // 이 보안 layer 임에 주의.
 func PostgresMCPConfig(serverName string, dsn DSN) (MCPConfig, error) {
 	if strings.TrimSpace(serverName) == "" {
-		return MCPConfig{}, errors.New("agentdb: serverName empty")
+		return MCPConfig{}, errors.New("agent/db: serverName empty")
 	}
 	if err := dsn.Validate(); err != nil {
 		return MCPConfig{}, err
@@ -214,7 +217,7 @@ func PostgresMCPConfig(serverName string, dsn DSN) (MCPConfig, error) {
 func (c MCPConfig) Marshal() ([]byte, error) {
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("agentdb: marshal mcp config: %w", err)
+		return nil, fmt.Errorf("agent/db: marshal mcp config: %w", err)
 	}
 	return b, nil
 }
