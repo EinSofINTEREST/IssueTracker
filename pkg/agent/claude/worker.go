@@ -16,7 +16,7 @@
 //
 // 환경변수:
 //   - CLAUDE_CODE_AUTH_DIR             : 호스트의 Claude 인증 디렉토리 (기본: $HOME/.claude)
-//   - CLAUDE_CODE_CONTAINER_AUTH_PATH  : 컨테이너 내 디렉토리 마운트 경로 (기본: /root/.claude)
+//   - CLAUDE_CODE_CONTAINER_AUTH_PATH  : 컨테이너 내 디렉토리 마운트 경로 (기본: /home/node/.claude)
 //   - CLAUDE_CODE_MODEL                : 모델 ID (기본: claude-sonnet-4-6)
 //   - CLAUDE_CODE_IMAGE                : Docker 이미지 (기본: issuetracker-claudegen:local — `make claudegen-build` 필요)
 //   - CLAUDE_CODE_TIMEOUT              : 세션 단위 타임아웃 (기본: 120s, Go duration 형식)
@@ -48,7 +48,7 @@ const (
 	defaultImage             = "issuetracker-claudegen:local"
 	defaultModel             = "claude-sonnet-4-6"
 	defaultSessionTimeout    = 120 * time.Second
-	defaultContainerAuthPath = "/root/.claude" // 컨테이너 내 인증 마운트 경로
+	defaultContainerAuthPath = "/home/node/.claude" // 컨테이너 내 인증 마운트 경로 (이슈 #474 — node user HOME)
 
 	truncateStderrLen = 512 // exec 실패 시 stderr 미리보기 최대 길이
 	truncateStdoutLen = 256 // 파싱 실패 시 stdout 미리보기 최대 길이
