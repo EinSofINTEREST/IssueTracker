@@ -260,6 +260,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create workspace dir: %w", err)
 	}
+	// 이슈 #474 — 컨테이너 user 가 non-root (node, uid 1000) 이므로 호스트 프로세스가
+	// root 인 경우 MkdirTemp 의 기본 권한 0700 으로 컨테이너에서 traverse 불가.
+	// 0755 로 완화하여 컨테이너 node user 가 mount 후 read + traverse 가능하도록 함.
+	if err := os.Chmod(workDir, 0o755); err != nil {
+		os.RemoveAll(workDir)
+		return fmt.Errorf("chmod workspace dir: %w", err)
+	}
 
 	containerID, err := w.runner.StartContainer(ctx, w.image, workDir, w.authDir, w.containerAuthPath)
 	if err != nil {
