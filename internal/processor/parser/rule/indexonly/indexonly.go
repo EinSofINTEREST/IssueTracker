@@ -18,6 +18,7 @@ package indexonly
 import (
 	"net/url"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/PuerkitoBio/goquery"
@@ -120,6 +121,8 @@ func analyzeAnchors(rawHTML, pageURL string) (linkRatio float64, articleLinks in
 	// LinkRatio / ArticleLinks 모두 same-host anchor 만 카운트 — 본 휴리스틱의 의도가
 	// "사이트 내부 hub 페이지" 탐지이므로 외부 도메인 anchor 는 양 신호 모두에서 제외.
 	// 외부 광고 / "관련 사이트" 영역이 ratio 를 부풀리는 false-positive 차단.
+	// href trim / prefix 검사 / url.Parse 는 각 anchor 당 한 번만 수행하고 결과 *url.URL 을
+	// 두 helper 에 전달 — 중복 파싱 회피 (gemini PR #478 피드백).
 	pageHost := hostOf(pageURL)
 	var linkTextLen int
 	seen := make(map[string]struct{})
@@ -128,11 +131,19 @@ func analyzeAnchors(rawHTML, pageURL string) (linkRatio float64, articleLinks in
 		if !ok {
 			return
 		}
-		if !isSameHostOrRelative(href, pageHost) {
+		href = strings.TrimSpace(href)
+		if href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "mailto:") {
+			return
+		}
+		u, err := url.Parse(href)
+		if err != nil {
+			return
+		}
+		if !isSameHostOrRelative(u, pageHost) {
 			return
 		}
 		linkTextLen += utf8.RuneCountInString(collapseWhitespace(a.Text()))
-		if !isArticleLike(href, pageHost) {
+		if !isArticleLike(u, pageHost) {
 			return
 		}
 		// 중복 href 는 한 번만 카운트 — 카테고리 페이지의 "더보기" 등 반복 anchor 보정.
@@ -150,53 +161,30 @@ func analyzeAnchors(rawHTML, pageURL string) (linkRatio float64, articleLinks in
 	return linkRatio, articleLinks
 }
 
-// isSameHostOrRelative 는 href 가 same-host (절대 URL) 이거나 상대 URL 인지 판정합니다.
+// isSameHostOrRelative 는 *url.URL 이 same-host (절대 URL) 이거나 상대 URL 인지 판정합니다.
 // 외부 도메인 anchor 를 LinkRatio 계산에서 제외하기 위한 사전 필터.
-func isSameHostOrRelative(href, pageHost string) bool {
-	href = strings.TrimSpace(href)
-	if href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "mailto:") {
-		return false
-	}
-	u, err := url.Parse(href)
-	if err != nil {
-		return false
-	}
+func isSameHostOrRelative(u *url.URL, pageHost string) bool {
 	if u.Host == "" {
 		return true // 상대 URL — same-host 로 간주
 	}
 	return pageHost != "" && strings.EqualFold(u.Host, pageHost)
 }
 
-// isArticleLike 는 href 가 article 후보로 보이는지 판정합니다.
+// isArticleLike 는 *url.URL 이 article 후보로 보이는지 판정합니다.
 //
 // 기준:
 //   - 절대 URL 이면 host 가 pageHost 와 동일해야 함 (외부 도메인 제외)
 //   - 상대 URL 도 허용 (대다수 카테고리 페이지 내부 link)
-//   - path 가 "/" 만 있거나 fragment / anchor 만이면 제외
-//   - path 가 적어도 1 개의 segment 를 가지며 단순 "/" 가 아님
-func isArticleLike(href, pageHost string) bool {
-	href = strings.TrimSpace(href)
-	if href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "mailto:") {
-		return false
-	}
-	u, err := url.Parse(href)
-	if err != nil {
-		return false
-	}
+//   - path 가 "/" 만 있거나 비어있으면 제외
+//   - path 가 최소 1 개의 non-empty segment 를 가져야 함
+//
+// u.Path 는 url.Parse 가 query 를 RawQuery 로 분리한 뒤의 결과 — query 영향 자동 제거.
+func isArticleLike(u *url.URL, pageHost string) bool {
 	if u.Host != "" && pageHost != "" && !strings.EqualFold(u.Host, pageHost) {
 		return false
 	}
-	p := strings.TrimSpace(u.Path)
-	if p == "" || p == "/" {
-		return false
-	}
-	// path 가 최소 1 개의 non-empty segment 를 가져야 함.
-	for _, seg := range strings.Split(p, "/") {
-		if seg != "" {
-			return true
-		}
-	}
-	return false
+	// strings.Trim 은 앞뒤 "/" 를 모두 제거 — 한 개라도 non-empty segment 가 있으면 결과 non-empty.
+	return strings.Trim(strings.TrimSpace(u.Path), "/") != ""
 }
 
 // hostOf 는 URL 의 host 만 추출합니다 (parse 실패 시 빈 문자열).
@@ -210,12 +198,15 @@ func hostOf(rawURL string) string {
 
 // collapseWhitespace 는 연속된 공백 문자열을 단일 공백으로 변환합니다.
 // goquery.Text() 가 들여쓰기/줄바꿈 포함 텍스트를 반환하므로 텍스트 길이 측정의 노이즈를 제거.
+//
+// unicode.IsSpace 사용 — non-breaking space (U+00A0), ideographic space (U+3000) 등 다양한
+// 유니코드 공백을 정확히 흡수 (i18n 컨텐츠 길이 측정 정확도).
 func collapseWhitespace(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	prevSpace := true // leading whitespace 무시
 	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+		if unicode.IsSpace(r) {
 			if !prevSpace {
 				b.WriteByte(' ')
 				prevSpace = true
