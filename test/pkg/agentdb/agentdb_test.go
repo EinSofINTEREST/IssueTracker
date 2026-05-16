@@ -75,11 +75,12 @@ func TestPostgresMCPConfig_StructureAndMarshal(t *testing.T) {
 
 	server := cfg.MCPServers["issuetracker_ro"]
 	assert.Equal(t, "npx", server.Command)
-	assert.Equal(t, []string{
-		"-y",
-		"@modelcontextprotocol/server-postgres",
-		d.PostgresURI(),
-	}, server.Args)
+	require.Len(t, server.Args, 3)
+	assert.Equal(t, "-y", server.Args[0])
+	// 패키지 spec 은 Dockerfile MCP_POSTGRES_VERSION 과 동일 버전 고정 — 변경 시 둘 다 업데이트.
+	assert.True(t, strings.HasPrefix(server.Args[1], "@modelcontextprotocol/server-postgres@"),
+		"package spec must be version-pinned (got %q)", server.Args[1])
+	assert.Equal(t, d.PostgresURI(), server.Args[2])
 
 	// .mcp.json 직렬화 — claude code 가 읽는 형태.
 	b, err := cfg.Marshal()

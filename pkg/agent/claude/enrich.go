@@ -87,7 +87,9 @@ func (w *Worker) RunSession(
 			return "", fmt.Errorf("write mcp config: %w", err)
 		}
 		// 컨테이너 내부 경로 — workDir 이 /workspace 로 마운트되므로 sessionID 만 join.
-		mcpConfigContainerPath = filepath.Join("/workspace", sessionID, ".mcp.json")
+		// 컨테이너는 Linux 라 항상 '/' separator 사용 — filepath.Join 은 호스트 separator
+		// (Windows 의 '\') 를 쓸 수 있어 부적합 (gemini-review PR #473).
+		mcpConfigContainerPath = "/workspace/" + sessionID + "/.mcp.json"
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, w.sessionTimeout)

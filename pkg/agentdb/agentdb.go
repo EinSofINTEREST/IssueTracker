@@ -140,6 +140,13 @@ func DSNFromEnv(prefix string) (DSN, bool, error) {
 	return d, true, nil
 }
 
+// postgresMCPPackage 는 PostgresMCPConfig 가 npx 에 넘기는 패키지 spec — 버전 고정.
+//
+// 본 상수는 deployments/docker/claudegen/Dockerfile 의 MCP_POSTGRES_VERSION ARG 와 항상
+// 같은 버전을 가리켜야 합니다 (이슈 #472 PR #473 coderabbit 지적). Dockerfile 이 사전 설치한
+// 캐시를 npx 가 그대로 사용하도록 버전을 일치시켜 재현성 확보.
+const postgresMCPPackage = "@modelcontextprotocol/server-postgres@0.6.2"
+
 // MCPServerConfig 는 Model Context Protocol 의 server 항목 1개 구성입니다.
 //
 // claude code 의 `.mcp.json` schema 와 1:1 — claude 외 다른 MCP-호환 agent 도 동일 schema 를
@@ -177,7 +184,7 @@ func PostgresMCPConfig(serverName string, dsn DSN) (MCPConfig, error) {
 				Command: "npx",
 				Args: []string{
 					"-y",
-					"@modelcontextprotocol/server-postgres",
+					postgresMCPPackage,
 					dsn.PostgresURI(),
 				},
 			},

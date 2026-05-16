@@ -13,13 +13,16 @@
 --   - idle_in_transaction_session_timeout 10s — 누수된 트랜잭션 차단
 --
 -- 운영:
---   - dev/CI 환경은 본 migration 의 기본 password 로 즉시 사용 가능
---   - 운영 환경은 배포 후 ALTER ROLE enricher_ro WITH PASSWORD '...' 로 별도 회전 필수
+--   - 본 migration 은 NOLOGIN 으로만 생성 — 자격증명을 git 에 commit 하지 않기 위함 (PR #473
+--     coderabbit major 지적). 모든 환경 (dev / staging / prod) 에서 배포 직후 별도 secret
+--     관리 단계로 LOGIN + PASSWORD 활성화 필요:
+--       psql -c "ALTER ROLE enricher_ro WITH LOGIN PASSWORD '<runtime-secret>';"
+--   - dev/CI 편의를 위해 scripts/dev/enable-enricher-ro.sh 가 .env 값으로 1회 실행 가능.
 
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'enricher_ro') THEN
-    CREATE ROLE enricher_ro WITH LOGIN PASSWORD 'enricher_ro_dev_pw';
+    CREATE ROLE enricher_ro NOLOGIN;
   END IF;
 END$$;
 
