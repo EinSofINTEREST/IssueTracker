@@ -44,3 +44,4 @@ debug_*.log
 
 # Claude scheduler lock (session-local)
 .claude/scheduled_tasks.lock
+.claude/settings.local.json
