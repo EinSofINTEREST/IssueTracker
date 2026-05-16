@@ -43,9 +43,11 @@ ADMIN_PW="${POSTGRES_PASSWORD:-postgres}"
 # Password 가 SQL injection 친화적이지 않도록 작은 따옴표 escape.
 ESCAPED="${PASSWORD//\'/\'\'}"
 
-PGPASSWORD="$ADMIN_PW" psql -h "$HOST" -p "$PORT" -U "$ADMIN_USER" -d "$DB" \
-  -v ON_ERROR_STOP=1 \
-  -c "ALTER ROLE enricher_ro WITH LOGIN PASSWORD '${ESCAPED}';" \
-  >/dev/null
+# stdin 으로 SQL 을 전달 — `-c` 플래그를 쓰면 password 가 process listing (ps) 에 노출
+# 되므로 회피 (PR #473 coderabbit minor 지적).
+printf "ALTER ROLE enricher_ro WITH LOGIN PASSWORD '%s';" "$ESCAPED" | \
+  PGPASSWORD="$ADMIN_PW" psql -h "$HOST" -p "$PORT" -U "$ADMIN_USER" -d "$DB" \
+    -v ON_ERROR_STOP=1 \
+    >/dev/null
 
 echo "enricher_ro: LOGIN enabled (host=$HOST db=$DB)"

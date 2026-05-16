@@ -46,11 +46,13 @@ func TestDSN_Validate(t *testing.T) {
 		want bool
 	}{
 		{"happy", agentdb.DSN{Host: "h", Port: 5432, Database: "d", User: "u"}, true},
+		{"happy with sslmode", agentdb.DSN{Host: "h", Port: 5432, Database: "d", User: "u", SSLMode: "verify-full"}, true},
 		{"missing host", agentdb.DSN{Port: 5432, Database: "d", User: "u"}, false},
 		{"port zero", agentdb.DSN{Host: "h", Port: 0, Database: "d", User: "u"}, false},
 		{"port too large", agentdb.DSN{Host: "h", Port: 70000, Database: "d", User: "u"}, false},
 		{"missing db", agentdb.DSN{Host: "h", Port: 5432, User: "u"}, false},
 		{"missing user", agentdb.DSN{Host: "h", Port: 5432, Database: "d"}, false},
+		{"invalid sslmode", agentdb.DSN{Host: "h", Port: 5432, Database: "d", User: "u", SSLMode: "requre"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

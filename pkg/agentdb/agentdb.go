@@ -34,6 +34,17 @@ type DSN struct {
 	SSLMode  string // "disable" / "require" / "verify-full" 등 (libpq 표기)
 }
 
+// allowedSSLModes 는 libpq 가 인식하는 sslmode 값 — Validate 가 오타 (예: "requre") 를
+// 조기 거부하도록 사용 (PR #473 coderabbit minor 지적).
+var allowedSSLModes = map[string]struct{}{
+	"disable":     {},
+	"allow":       {},
+	"prefer":      {},
+	"require":     {},
+	"verify-ca":   {},
+	"verify-full": {},
+}
+
 // Validate 는 필수 필드 누락을 확인합니다. config 로딩 직후 1회 호출 권장.
 func (d DSN) Validate() error {
 	if d.Host == "" {
@@ -47,6 +58,11 @@ func (d DSN) Validate() error {
 	}
 	if d.User == "" {
 		return errors.New("agentdb: dsn user empty")
+	}
+	if d.SSLMode != "" {
+		if _, ok := allowedSSLModes[d.SSLMode]; !ok {
+			return fmt.Errorf("agentdb: invalid sslmode %q (allowed: disable / allow / prefer / require / verify-ca / verify-full)", d.SSLMode)
+		}
 	}
 	// Password 는 dev 환경에서 비어있을 수 있으므로 강제하지 않음 (Postgres trust auth).
 	return nil
