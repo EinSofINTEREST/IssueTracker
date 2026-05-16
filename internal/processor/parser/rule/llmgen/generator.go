@@ -187,8 +187,10 @@ func (g *Generator) SetExtractor(e SelectorExtractor) {
 //
 // storage/service.BlacklistService 가 본 인터페이스를 만족 — Generator 는 service 패키지를
 // 직접 import 하지 않고 인터페이스만 의존 (의존성 역전).
+//
+// 이슈 #480 — mode 인자 추가. 빈 문자열이면 service 가 default "drop" 으로 보정.
 type BlacklistAutoRegister interface {
-	HandleLLMDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, reason string) (inserted bool, err error)
+	HandleLLMDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType, reason string, mode model.BlacklistMode) (inserted bool, err error)
 }
 
 // SetBlacklistService 는 EnrichedExtractor 가 페이지를 blacklist 로 판정했을 때 등록할
@@ -783,7 +785,8 @@ func (g *Generator) handleBlacklistDecision(ctx context.Context, host, sampleURL
 		return
 	}
 	// service 가 INSERT / ErrDuplicate / 로그 모두 처리 — Generator 는 결과 무시 (모든 실패 non-fatal).
-	_, _ = g.blacklistSvc.HandleLLMDecision(ctx, host, sampleURL, targetType, decision.Reason)
+	// decision.Mode 가 빈 문자열이면 service 가 default "drop" 으로 보정 (이슈 #480).
+	_, _ = g.blacklistSvc.HandleLLMDecision(ctx, host, sampleURL, targetType, decision.Reason, decision.Mode)
 }
 
 // pathPatternFromURL 은 service/blacklist.go 로 이전 (이슈 #431).

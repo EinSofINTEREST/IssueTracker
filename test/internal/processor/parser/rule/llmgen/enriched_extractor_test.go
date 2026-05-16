@@ -64,7 +64,7 @@ type recordingBlacklistRepo struct {
 // HandleLLMDecision 은 BlacklistAutoRegister 인터페이스를 만족합니다 (llmgen.Generator 가 의존).
 // 본 stub 은 실제 service 와 같은 path_pattern 변환 로직을 직접 수행 — 기존 테스트의 검증 부분
 // (rec.PathPattern Contains "/promo/123") 이 그대로 통과되도록.
-func (r *recordingBlacklistRepo) HandleLLMDecision(_ context.Context, host, sampleURL string, _ model.TargetType, reason string) (bool, error) {
+func (r *recordingBlacklistRepo) HandleLLMDecision(_ context.Context, host, sampleURL string, _ model.TargetType, reason string, mode model.BlacklistMode) (bool, error) {
 	u, err := url.Parse(sampleURL)
 	if err != nil {
 		return false, nil
@@ -73,12 +73,16 @@ func (r *recordingBlacklistRepo) HandleLLMDecision(_ context.Context, host, samp
 	if path == "" {
 		path = "/"
 	}
+	// 이슈 #480 — mode 인자 보정 (빈 문자열은 drop 으로 fallback, 실제 service 와 동일 정책).
+	if mode != model.BlacklistModeDrop && mode != model.BlacklistModeExtractLinksOnly {
+		mode = model.BlacklistModeDrop
+	}
 	rec := &model.BlacklistRecord{
 		HostPattern: host,
 		PathPattern: "^" + regexp.QuoteMeta(path) + "$",
 		Reason:      reason,
 		Source:      model.BlacklistSourceAuto,
-		Mode:        model.BlacklistModeDrop,
+		Mode:        mode,
 		Enabled:     true,
 	}
 	r.mu.Lock()

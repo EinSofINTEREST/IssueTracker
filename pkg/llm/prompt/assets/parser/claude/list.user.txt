@@ -9,6 +9,7 @@ Output schema:
 {
   "validity": "ok" or "blacklist",
   "blacklist_reason": "<korean reason if validity=blacklist, else null>",
+  "blacklist_mode": "drop" or "extract_links_only" (required if validity=blacklist, else null),
   "page_type": "news" | "community" | "info" | "commercial" | "paper" | "other",
   "page_type_confidence": <float 0.0 to 1.0>,
   "selectors": {
@@ -33,6 +34,11 @@ Validity decision rules:
   * Page with no parseable list of articles (just a single large component, embed widget, etc.)
 - "ok" otherwise. If "ok", you MUST fill `selectors` and `self_check` based on the actual HTML.
 - If "blacklist", `selectors` and `self_check` may be empty objects (`{}`), and `blacklist_reason` MUST be a short Korean explanation (e.g., "광고 페이지", "리스트 없음").
+
+Blacklist mode rules (required when validity="blacklist"):
+- "drop" — page is ads / paywall / empty / captcha / redirect landing and has no useful internal links to harvest. List target sees these as terminal — block the URL entirely.
+- "extract_links_only" — rare on a list target (list rule already extracts links); use only when the page is a non-standard hub layout that wraps article links but does not match the configured item_container selector well. The downstream router will retry as list.
+- When unsure, prefer "drop" — list-target pages that already lack a usable item_container are typically dead ends.
 
 Page type classification:
 - "news"       — news aggregator / category page with editorial article links

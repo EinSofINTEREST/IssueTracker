@@ -9,6 +9,7 @@ Output schema:
 {
   "validity": "ok" or "blacklist",
   "blacklist_reason": "<korean reason if validity=blacklist, else null>",
+  "blacklist_mode": "drop" or "extract_links_only" (required if validity=blacklist, else null),
   "page_type": "news" | "community" | "info" | "commercial" | "paper" | "other",
   "page_type_confidence": <float 0.0 to 1.0>,
   "article": <boolean>,
@@ -37,8 +38,14 @@ Validity decision rules:
   * Pure navigation page with no article-like content
   * Captcha / bot-detection page
   * URL shortener / redirect landing
+  * Category / section index page (e.g., "/news/society", "/tech") that has no single article body but contains many article-like links
 - "ok" otherwise. If "ok", you MUST fill `selectors` and `self_check` based on the actual HTML.
-- If "blacklist", `selectors` and `self_check` may be empty objects (`{}`), and `blacklist_reason` MUST be a short Korean explanation (e.g., "광고 페이지", "로그인 요구", "빈 페이지").
+- If "blacklist", `selectors` and `self_check` may be empty objects (`{}`), and `blacklist_reason` MUST be a short Korean explanation (e.g., "광고 페이지", "로그인 요구", "빈 페이지", "카테고리 인덱스").
+
+Blacklist mode rules (required when validity="blacklist"):
+- "extract_links_only" — page has no single article body BUT contains many same-site article-like links (e.g., category / section landing / news index / hub). Downstream will refetch this URL as a list page to discover articles.
+- "drop" — page has neither body nor useful links (ads, paywalls, captcha, empty / 404 / login walls, URL shorteners, etc.). Fetch / parse / link extraction all blocked for this URL.
+- When unsure, prefer "drop" (conservative — no false-positive link harvesting from ad-laden pages).
 
 Page type classification:
 - "news"       — journalistic article (newspaper, broadcaster, news aggregator with editorial content)
