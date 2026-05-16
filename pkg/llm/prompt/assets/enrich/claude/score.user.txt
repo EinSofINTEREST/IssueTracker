@@ -42,4 +42,15 @@ Output rules:
 - factors fields MUST also be in [0.0, 1.0] — they are diagnostic only, do not have to combine linearly to trust_score.
 - rationale is required and must be non-empty. No invented citations.
 
-Return ONLY the JSON object.
+Example output (illustrative — your values will differ):
+{
+  "trust_score": 0.72,
+  "rationale": "5 of 7 claims supported by independent reputable sources (Reuters, Bloomberg, SEC). One claim contradicted by SEC filing pulls the score down. Context has rich background on Acme Corp and Jane Doe with citations to Wikipedia and the official site. Source diversity moderate — 4 distinct domains across verifications and context.",
+  "factors": {
+    "claim_support_ratio":  0.71,
+    "source_diversity":     0.6,
+    "context_completeness": 0.8
+  }
+}
+
+Return ONLY the JSON object — no preamble, no markdown fences, no trailing prose.

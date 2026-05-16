@@ -382,8 +382,11 @@ func (w *Worker) ExtractEnriched(ctx context.Context, host string, targetType mo
 	args := []string{
 		"claude",
 		"--model", w.model,
-		// --dangerously-skip-permissions 는 root user 환경에서 동작하지 않고, OAuth 인증 + -p 모드는
-		// 본 플래그 없이 정상 동작 — 라이브 검증 시 발견.
+		// 이슈 #470 — 컨테이너 내 도구 권한 자동 허가. ExtractEnriched 자체는 selector 추출
+		// 단계라 외부 도구 호출이 적지만, 동일 컨테이너 / 동일 CLI 호출 패턴을 enrich 경로
+		// (RunSession) 와 일관되게 유지하기 위해 본 단계도 동일 플래그 적용. 격리된 docker
+		// 컨테이너 환경이므로 권한 prompt 가 prompt 만큼 자율 동작을 막는 비용이 더 크다.
+		"--dangerously-skip-permissions",
 		"-p", promptText,
 	}
 

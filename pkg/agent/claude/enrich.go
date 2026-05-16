@@ -79,6 +79,10 @@ func (w *Worker) RunSession(
 	args := []string{
 		"claude",
 		"--model", w.model,
+		// 이슈 #470 — 컨테이너 내 도구 권한 자동 허가. enrich worker 는 WebFetch / WebSearch 가
+		// 핵심 동작 의존성 (cross-verify / context 단계). 라이브 (2026-05-16) 에서 권한 부재로
+		// 14건 모두 검증 실패 확인 → 본 플래그로 일괄 허가.
+		"--dangerously-skip-permissions",
 		"-p", promptText,
 	}
 

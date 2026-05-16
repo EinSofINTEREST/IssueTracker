@@ -40,4 +40,28 @@ Source rules:
 
 Be honest about uncertainty — when in doubt, prefer "unverified" with a short note explaining what you searched and why it was inconclusive.
 
-Return ONLY the JSON object.
+Example output (illustrative — your values will differ):
+{
+  "verifications": [
+    {
+      "claim_idx": 0,
+      "verdict": "supported",
+      "sources": ["https://www.reuters.com/business/acme-bankruptcy-filing-2026-05-15", "https://www.bloomberg.com/news/articles/2026-05-15/acme-chapter-11"],
+      "note": "Both Reuters and Bloomberg confirm the May 15 Chapter 11 filing."
+    },
+    {
+      "claim_idx": 1,
+      "verdict": "contradicted",
+      "sources": ["https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=acme"],
+      "note": "SEC filing shows CEO transition announced May 12, not the bankruptcy date."
+    },
+    {
+      "claim_idx": 2,
+      "verdict": "unverified",
+      "sources": [],
+      "note": "Searched Reuters, AP, and local press; no independent coverage of the 1200 employee figure."
+    }
+  ]
+}
+
+Return ONLY the JSON object — no preamble, no markdown fences, no trailing prose.
