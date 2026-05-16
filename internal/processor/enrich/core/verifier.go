@@ -1,8 +1,10 @@
 // 본 파일은 enrich 단계의 교차 검증기 (Verifier) 인터페이스 + 구현체를 정의합니다 (이슈 #448).
 //
-// Verifier 는 추출된 claims 와 후보 reference URL 들을 받아 claim 별 verdict 를 산출합니다.
-// Claude WebFetch 도구를 적극 활용하도록 prompt 가 유도 — 후보 URL 외에도 추가 신규 페치
-// 가능. Extractor 와 마찬가지로 실패 시 빈 verifications 로 fallback 하고 pipeline 진행.
+// Verifier 는 추출된 claims 를 받아 claim 별 verdict 를 산출합니다. LLM 이 직접 MCP postgres
+// 도구로 DB 후보를 조회하고 (이슈 #472) WebFetch 로 외부 소스를 보강 — 후보 prefetch /
+// in-Go ranking 은 본 PR 부터 제거 (이슈 #469 의 한글 토큰화 깨짐 해소).
+//
+// 실패 시 빈 verifications 로 fallback 하고 pipeline 진행 (forward-first).
 
 package core
 
@@ -15,20 +17,14 @@ import (
 	"issuetracker/pkg/llm/prompt"
 )
 
-// CandidateRef 는 DB 에서 추출한 동일 국가·시간 윈도우 후보 article 의 lightweight ref 입니다.
-type CandidateRef struct {
-	URL   string
-	Title string
-	Host  string
-}
-
-// VerifyInput 은 Verifier.Verify 의 입력 — source URL + 검증 대상 claims + DB 후보.
+// VerifyInput 은 Verifier.Verify 의 입력 — source URL + 검증 대상 claims.
+//
+// 이슈 #472 이후 DB 후보 prefetch 가 제거 — LLM 이 MCP postgres 로 직접 조회.
 type VerifyInput struct {
-	URL        string
-	Host       string
-	Title      string
-	Claims     []Claim
-	Candidates []CandidateRef
+	URL    string
+	Host   string
+	Title  string
+	Claims []Claim
 }
 
 // Verifier 는 claims 의 외부 소스 대조 결과 (Verification 리스트) 를 산출합니다.
@@ -89,17 +85,12 @@ func (v *ClaudegenVerifier) Verify(ctx context.Context, in VerifyInput) ([]Verif
 	if err != nil {
 		return nil, fmt.Errorf("marshal claims: %w", err)
 	}
-	candidatesJSON, err := marshalSliceForPrompt(in.Candidates)
-	if err != nil {
-		return nil, fmt.Errorf("marshal candidates: %w", err)
-	}
 
 	promptText := prompt.Render(tpl,
 		"{{URL}}", in.URL,
 		"{{HOST}}", in.Host,
 		"{{TITLE}}", in.Title,
 		"{{CLAIMS_JSON}}", claimsJSON,
-		"{{CANDIDATES_JSON}}", candidatesJSON,
 	)
 
 	stdout, err := v.runner.RunSession(ctx, "enrich-verify", nil, promptText)

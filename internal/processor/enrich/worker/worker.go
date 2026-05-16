@@ -13,8 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"sort"
-	"strings"
 	"time"
 
 	"issuetracker/internal/bus"
@@ -293,29 +291,15 @@ func (w *Worker) runExtraction(ctx context.Context, pm *core.ProcessingMessage, 
 	return content, facts
 }
 
-// 검증 단계 상수 (이슈 #448).
-const (
-	// verificationWindow: 후보 article 시간 윈도우 — 발행 시각 ±N. ±24h 가 일반적인 뉴스 사이클.
-	verificationWindow = 24 * time.Hour
-	// verificationCandidateFetchLimit: DB 후보 조회 fetch limit — 너무 많으면 ranking 비용 증가.
-	verificationCandidateFetchLimit = 50
-	// verificationTopK: 최종 verifier 에 넘기는 후보 수 — prompt context 비용 보호.
-	verificationTopK = 5
-)
-
 // runVerification 은 추출된 claims 에 대해 cross-verification 을 수행하고 facts.Verifications
 // 에 결과를 첨부합니다.
 //
 // 모든 실패 경로는 verifications 미첨부로 fallback — pipeline 진행 보장 (forward-first).
 // claims 가 없으면 skip — verifier 호출 불필요.
 //
-// 후보 선정:
-//  1. ContentService.ListByCountry 로 동일 country + 시간 윈도우 (±24h) 내 최근 발행 article fetch (limit 50)
-//  2. 본인 article (URL 또는 ID 동일) 제외
-//  3. title token overlap 으로 ranking → top 5
-//
-// 그 5개를 CandidateRef 로 verifier 에 전달. verifier (prompt) 가 WebFetch 로 추가 신규
-// 페치 + 검증을 수행.
+// 이슈 #472 부터 DB 후보 prefetch / in-Go ranking 은 제거됨 — LLM 이 MCP postgres 도구로
+// contents 테이블을 직접 조회 + WebFetch 로 외부 보강. 한글 title 의 ASCII-only tokenize
+// 깨짐 (이슈 #469) 도 본 변경으로 자동 해소.
 func (w *Worker) runVerification(
 	ctx context.Context,
 	pm *core.ProcessingMessage,
@@ -332,24 +316,19 @@ func (w *Worker) runVerification(
 		return
 	}
 
-	candidates := w.findCandidates(ctx, content)
-	host := hostOf(ref.URL)
-
 	in := enrichcore.VerifyInput{
-		URL:        ref.URL,
-		Host:       host,
-		Title:      content.Title,
-		Claims:     facts.Claims,
-		Candidates: candidates,
+		URL:    ref.URL,
+		Host:   hostOf(ref.URL),
+		Title:  content.Title,
+		Claims: facts.Claims,
 	}
 
 	verifications, err := w.verifier.Verify(ctx, in)
 	if err != nil {
 		log.WithFields(map[string]interface{}{
-			"job_id":          pm.ID,
-			"ref_id":          ref.ID,
-			"claim_count":     len(facts.Claims),
-			"candidate_count": len(candidates),
+			"job_id":      pm.ID,
+			"ref_id":      ref.ID,
+			"claim_count": len(facts.Claims),
 		}).WithError(err).Warn("enrichment verification failed, forwarding without verifications")
 		return
 	}
@@ -358,7 +337,6 @@ func (w *Worker) runVerification(
 		"job_id":             pm.ID,
 		"ref_id":             ref.ID,
 		"claim_count":        len(facts.Claims),
-		"candidate_count":    len(candidates),
 		"verification_count": len(verifications),
 	}).Debug("enrichment verification completed")
 }
@@ -560,69 +538,6 @@ func (w *Worker) persistEnriched(
 	}).Debug("enriched_contents upsert completed")
 }
 
-// findCandidates 는 본 content 와 같은 country + 시간 윈도우의 후보 article 들을 조회하고
-// title token overlap 으로 ranking 한 top-K 를 반환합니다. 본인 article 은 제외.
-//
-// 본 메소드는 DB error 시 빈 slice 반환 — verifier 는 DB 후보 없이도 WebFetch 만으로 진행 가능.
-func (w *Worker) findCandidates(ctx context.Context, src *core.Content) []enrichcore.CandidateRef {
-	log := logger.FromContext(ctx)
-
-	// PublishedAt zero-value 면 시간 윈도우 적용 불가 — 빈 후보로 진행.
-	if src.PublishedAt.IsZero() {
-		return nil
-	}
-
-	after := src.PublishedAt.Add(-verificationWindow)
-	before := src.PublishedAt.Add(verificationWindow)
-	filter := model.ContentFilter{
-		PublishedAfter:  &after,
-		PublishedBefore: &before,
-		Pagination:      model.Pagination{Limit: verificationCandidateFetchLimit},
-	}
-	rows, err := w.contentSvc.ListByCountry(ctx, src.Country, filter)
-	if err != nil {
-		log.WithError(err).Debug("candidate fetch failed, proceeding with empty candidates")
-		return nil
-	}
-
-	srcTokens := tokenize(src.Title)
-	type scored struct {
-		c     *core.Content
-		score int
-	}
-	ranked := make([]scored, 0, len(rows))
-	for _, r := range rows {
-		if r == nil {
-			continue
-		}
-		// 본인 제외 (ID 또는 URL 일치)
-		if r.ID == src.ID || (r.URL != "" && r.URL == src.URL) {
-			continue
-		}
-		s := tokenOverlap(srcTokens, tokenize(r.Title))
-		if s == 0 {
-			continue
-		}
-		ranked = append(ranked, scored{c: r, score: s})
-	}
-	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
-
-	limit := verificationTopK
-	if len(ranked) < limit {
-		limit = len(ranked)
-	}
-	out := make([]enrichcore.CandidateRef, 0, limit)
-	for i := 0; i < limit; i++ {
-		c := ranked[i].c
-		out = append(out, enrichcore.CandidateRef{
-			URL:   c.URL,
-			Title: c.Title,
-			Host:  hostOf(c.URL),
-		})
-	}
-	return out
-}
-
 // hostOf 는 URL 의 host 부분만 추출합니다. parse 실패 시 빈 문자열 반환.
 func hostOf(u string) string {
 	parsed, err := url.Parse(u)
@@ -630,41 +545,6 @@ func hostOf(u string) string {
 		return ""
 	}
 	return parsed.Host
-}
-
-// tokenize 는 title 을 소문자 단어 토큰 set 으로 분해합니다. 길이 2 이하 토큰은 stopword 제외.
-func tokenize(s string) map[string]struct{} {
-	out := map[string]struct{}{}
-	cur := make([]rune, 0, 32)
-	flush := func() {
-		if len(cur) > 2 {
-			out[strings.ToLower(string(cur))] = struct{}{}
-		}
-		cur = cur[:0]
-	}
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			cur = append(cur, r)
-		} else {
-			flush()
-		}
-	}
-	flush()
-	return out
-}
-
-// tokenOverlap 은 두 토큰 set 의 교집합 크기를 반환합니다.
-func tokenOverlap(a, b map[string]struct{}) int {
-	if len(a) > len(b) {
-		a, b = b, a
-	}
-	n := 0
-	for t := range a {
-		if _, ok := b[t]; ok {
-			n++
-		}
-	}
-	return n
 }
 
 // attachFacts 는 추출된 facts 를 ProcessingMessage.Metadata 에 JSON 으로 저장합니다.

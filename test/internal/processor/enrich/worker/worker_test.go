@@ -461,6 +461,9 @@ func (s *listingStubContentService) ListByCountry(_ context.Context, _ string, _
 
 // TestEnrichWorker_Verification_AttachesVerificationsToFacts — claims 가 있으면 verifier
 // 가 호출되고 결과가 facts.Verifications 에 첨부.
+//
+// 이슈 #472 이후 DB 후보 prefetch 가 제거되어 worker 는 candidate ranking 을 수행하지 않음.
+// verifier 입력은 claims + source 메타데이터만 — 후보 조회는 LLM 의 MCP postgres 책임.
 func TestEnrichWorker_Verification_AttachesVerificationsToFacts(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
@@ -474,12 +477,7 @@ func TestEnrichWorker_Verification_AttachesVerificationsToFacts(t *testing.T) {
 		Country:     "US",
 		PublishedAt: publishedAt,
 	}
-	related := []*core.Content{
-		{ID: "c-rel1", Title: "City election turnout sets new record", URL: "https://other.com/a", PublishedAt: publishedAt},
-		{ID: "c-rel2", Title: "Local sports match results", URL: "https://other.com/b", PublishedAt: publishedAt},
-		{ID: "c-primary", Title: "self should be skipped", URL: "https://example.com/p", PublishedAt: publishedAt},
-	}
-	contentSvc := &listingStubContentService{primary: primary, listed: related}
+	contentSvc := &listingStubContentService{primary: primary}
 
 	extractedFacts := &enrichcore.EnrichedFacts{
 		Claims: []enrichcore.Claim{{Text: "Turnout reached 60% in city"}},
@@ -516,19 +514,10 @@ func TestEnrichWorker_Verification_AttachesVerificationsToFacts(t *testing.T) {
 
 	runWorker(t, consumer, w, msg)
 
-	// verifier 호출 검증 — candidate ranking: rel1 (overlap: city,election,turnout,record) 가 rel2 보다 우선
 	if assert.Len(t, fakeVer.callsLog, 1, "verifier should be called once") {
 		in := fakeVer.callsLog[0]
 		assert.Equal(t, "https://example.com/p", in.URL)
 		assert.Len(t, in.Claims, 1)
-		// 본인 (c-primary URL) 은 candidate 에서 제외, rel1 이 rel2 보다 token overlap 높음
-		assert.NotEmpty(t, in.Candidates)
-		topCandidate := in.Candidates[0]
-		assert.Equal(t, "https://other.com/a", topCandidate.URL)
-		// 본인 URL 이 candidate 에 없음
-		for _, c := range in.Candidates {
-			assert.NotEqual(t, "https://example.com/p", c.URL, "source URL must be excluded")
-		}
 	}
 
 	// metadata.enriched_facts.verifications 첨부 검증

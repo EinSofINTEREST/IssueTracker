@@ -8,12 +8,18 @@ Source article:
 Claims to verify (each has an idx):
 {{CLAIMS_JSON}}
 
-DB candidate articles (same country / time window, may cover the same topic):
-{{CANDIDATES_JSON}}
+You have two evidence-gathering tools available — use both:
+
+1. **MCP postgres tool** (`mcp__issuetracker_ro__query` or equivalent) — gives read-only access to the IssueTracker database. Useful tables:
+   - `contents (id, source_id, source_type, country, language, title, author, published_at, updated_at, category, tags, url, canonical_url, content_hash, reliability, created_at)` — every article the system has ingested. Filter by `country`, `published_at` window, or keyword match on `title` / `tags` / `category` to find articles likely to cover the same event. Note: `body` column is NOT exposed — use `url` + WebFetch when you need full text.
+   - `enriched_contents (content_id, trust_score, facts, verifications, context, rationale, factors, enriched_at)` — previously scored articles. `trust_score` (0.0-1.0) and `factors` JSONB are useful priors when picking which DB candidates to trust.
+   - **Query etiquette**: always LIMIT (e.g., 20). Use `ILIKE` for case-insensitive title matching. For non-ASCII titles (Korean, etc.), DO NOT rely on English-only tokenization — query by `tags`, `category`, entity names, or substring `ILIKE '%<keyword>%'`. statement_timeout is 5 seconds.
+
+2. **WebFetch / WebSearch** — search the open web for additional independent sources, especially reputable / official ones. Use this when DB candidates are scarce or when you need authoritative confirmation (government sources, primary documents).
 
 Your task:
-1. For each candidate URL, **use the WebFetch tool** to retrieve and read the article. Compare against the claims.
-2. **Use the WebFetch tool to search the open web** for additional independent sources covering the same claims. Prefer reputable / official sources.
+1. Decide what evidence each claim needs, then query the DB to find candidate articles in the same country / time window / topic area.
+2. Use WebFetch to read each candidate URL (DB-sourced or web-sourced) and compare against the claims.
 3. For each claim, decide a verdict based on the evidence you find.
 
 Output a single JSON object — no explanation, no markdown, no code blocks:
