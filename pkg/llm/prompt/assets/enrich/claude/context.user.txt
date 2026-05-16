@@ -52,4 +52,31 @@ Output rules:
 - Source article's host is acceptable in `sources` only when it is the canonical source (e.g., official corporate site). Prefer external authoritative sources where possible.
 - All summaries / events / implications must be factually grounded in cited sources. When in doubt, omit.
 
-Return ONLY the JSON object.
+Example output (illustrative — your values will differ. Note: starts immediately with `{`, no preamble like "Based on..." or "Here is...":
+{
+  "background": [
+    {
+      "subject": "Acme Corp",
+      "category": "organization",
+      "summary": "Acme Corp is a publicly traded US logistics firm founded in 1987, headquartered in Ohio. It operated regional warehousing across the Midwest until rising debt prompted restructuring efforts in 2024.",
+      "sources": ["https://en.wikipedia.org/wiki/Acme_Corp"]
+    },
+    {
+      "subject": "Jane Doe",
+      "category": "person",
+      "summary": "Jane Doe served as Acme Corp's CEO since 2019 after a career at FedEx. She previously oversaw the 2022 Midwest expansion that is now cited as a major driver of the company's debt load.",
+      "sources": ["https://www.acmecorp.com/leadership/jane-doe"]
+    }
+  ],
+  "timeline": [
+    {"date": "2024-11", "event": "Acme Corp issued profit warning citing rising fuel costs.", "source": "https://www.reuters.com/business/acme-warning-2024-11"},
+    {"date": "2026-05-15", "event": "Acme Corp filed for Chapter 11 bankruptcy protection.", "source": "https://www.reuters.com/business/acme-bankruptcy-filing-2026-05-15"}
+  ],
+  "implications": {
+    "political": "",
+    "social": "1200 affected employees concentrated in three Midwest counties may strain local unemployment services.",
+    "technical": ""
+  }
+}
+
+Return ONLY the JSON object — no preamble, no markdown fences, no trailing prose. Begin your response with `{` and end with `}`.

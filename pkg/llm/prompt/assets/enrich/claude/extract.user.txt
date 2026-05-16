@@ -29,4 +29,22 @@ Extraction rules:
 
 Empty arrays are acceptable when the page lacks signal. Do not invent.
 
-Return ONLY the JSON object.
+Example output (illustrative — your values will differ):
+{
+  "entities": [
+    {"type": "person", "name": "Jane Doe", "mentions": 4},
+    {"type": "org", "name": "Acme Corp", "mentions": 2}
+  ],
+  "claims": [
+    {"text": "Acme Corp filed for bankruptcy on May 15.", "subject": "Acme Corp", "predicate": "filed for", "object": "bankruptcy"},
+    {"text": "The CEO Jane Doe stepped down the same day.", "subject": "Jane Doe", "predicate": "stepped down", "object": "CEO role"}
+  ],
+  "facts": [
+    {"key": "filing_date", "value": "2026-05-15"},
+    {"key": "employees_affected", "value": "1200", "unit": "people"}
+  ],
+  "topics": ["business", "economy"],
+  "sentiment": "negative"
+}
+
+Return ONLY the JSON object — no preamble, no markdown fences, no trailing prose.
