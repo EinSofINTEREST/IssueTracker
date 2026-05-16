@@ -37,6 +37,7 @@ import (
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage/model"
+	"issuetracker/pkg/agentdb"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
 )
@@ -91,6 +92,20 @@ type Worker struct {
 	containerID string
 	workDir     string
 	wg          sync.WaitGroup // 진행 중인 Extract 호출 추적
+
+	// mcpConfig 가 non-nil 이면 RunSession 이 세션 디렉토리에 .mcp.json 을 작성하고
+	// claude code 를 --mcp-config 플래그와 함께 호출합니다 (이슈 #472). nil 이면 비활성.
+	// ExtractEnriched (parser selector 추출) 에는 영향 없음 — enrich 경로 전용.
+	mcpConfig *agentdb.MCPConfig
+}
+
+// WithMCPConfig 는 RunSession 호출 시 mount 할 MCP 설정을 등록합니다 (이슈 #472).
+//
+// 본 메소드는 fluent 패턴 — 생성자 N개 + WithMCPConfig 으로 옵션성 보장.
+// nil 전달 시 비활성 (기존 nil 상태와 동일). 본 함수는 thread-unsafe — Start() 전에 1회만 호출.
+func (w *Worker) WithMCPConfig(c *agentdb.MCPConfig) *Worker {
+	w.mcpConfig = c
+	return w
 }
 
 // ModelName 은 이 Worker 가 사용하는 모델 ID 를 반환합니다.
