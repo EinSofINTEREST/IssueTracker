@@ -10,8 +10,10 @@ import (
 	"github.com/PuerkitoBio/goquery"
 
 	"issuetracker/internal/processor/fetcher/core"
+	"issuetracker/internal/processor/parser/rule/indexonly"
 	"issuetracker/internal/processor/parser/types"
 	"issuetracker/internal/storage/model"
+	"issuetracker/pkg/logger"
 )
 
 // resolveTimeout 은 호출자 ctx 가 deadline 없을 때 추가 안전망입니다.
@@ -34,6 +36,31 @@ type Parser struct {
 	resolver    RuleLookup
 	discovery   *PageLinkDiscovery // full-page link discovery
 	dateLayouts []string           // PublishedAt try-list (앞쪽 우선)
+
+	// 이슈 #477 — ParsePage 결과가 index-only 페이지로 판정되면 parser_blacklist 에
+	// extract_links_only mode 로 자동 등록. nil 이면 기능 비활성 (기존 동작 100% 유지).
+	autoDemoter *autoDemoter
+}
+
+// ParserOption 은 NewParser 의 functional option 입니다.
+type ParserOption func(*Parser)
+
+// WithBlacklistAutoDemote 는 ParsePage 가 index-only 페이지로 판정한 URL 을
+// parser_blacklist 에 자동 등록하는 기능을 활성화합니다 (이슈 #477).
+//
+//   - repo    : Insert 만 사용. service.BlacklistService / repository.BlacklistRepository
+//     모두 AutoDemoteRegisterer 를 만족.
+//   - metrics : nil 허용. nil 이면 Record* 가 noop — 기능은 동작하지만 metric 노출 안 됨.
+//   - log     : non-nil 필수. WARN 로그 (auto-demote 발생 / Insert 실패) 출력.
+//
+// 인자 중 repo 또는 log 가 nil 이면 옵션 자체가 noop — 기존 ParsePage 흐름 유지.
+func WithBlacklistAutoDemote(repo AutoDemoteRegisterer, metrics *AutoDemoteMetrics, log *logger.Logger) ParserOption {
+	return func(p *Parser) {
+		if repo == nil || log == nil {
+			return
+		}
+		p.autoDemoter = &autoDemoter{repo: repo, metrics: metrics, log: log}
+	}
 }
 
 // RuleLookup 은 URL + target_type 으로 활성 ParserRule 을 조회하는 추상 (이슈 #463).
@@ -49,15 +76,38 @@ var _ RuleLookup = (*Resolver)(nil)
 
 // NewParser 는 RuleLookup 을 사용하는 Parser 를 생성합니다.
 // resolver 가 nil 이면 error — 호출자 (cmd/main) 가 boot fatal 처리.
-func NewParser(resolver RuleLookup) (*Parser, error) {
+//
+// opts 는 functional option (예: WithBlacklistAutoDemote). 호출자가 미지정하면 기존 동작 유지.
+func NewParser(resolver RuleLookup, opts ...ParserOption) (*Parser, error) {
 	if resolver == nil {
 		return nil, errors.New("rule: NewParser requires non-nil resolver")
 	}
-	return &Parser{
+	p := &Parser{
 		resolver:    resolver,
 		discovery:   NewPageLinkDiscovery(),
 		dateLayouts: defaultDateLayouts(),
-	}, nil
+	}
+	for _, opt := range opts {
+		if opt == nil {
+			continue // nil 옵션은 skip — 호출자 wiring 사고 방어 (coderabbit PR #479 피드백)
+		}
+		opt(p)
+	}
+	return p, nil
+}
+
+// WaitAutoDemote 는 in-flight auto-demote goroutine 들의 완료를 대기합니다.
+//
+// graceful shutdown 또는 테스트에서 race condition 회피용. autoDemoter 가 nil 이면
+// 즉시 반환 (기능 비활성 상태).
+//
+// ParsePage 가 spawn 한 비동기 demote goroutine 들은 본 메소드가 반환할 때까지 in-flight.
+// 호출 시점 이후 시작되는 새 goroutine 은 wait 대상 X — 명시적 barrier 시멘틱.
+func (p *Parser) WaitAutoDemote() {
+	if p.autoDemoter == nil {
+		return
+	}
+	p.autoDemoter.wg.Wait()
 }
 
 // ParsePage 는 RawContent 를 DB rule 기반으로 Page 로 파싱합니다 (types.ContentParser 구현).
@@ -126,6 +176,18 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 			Message:    "Title or MainContent selector matched 0 elements (rule may be stale)",
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypePage),
+		}
+	}
+
+	// 이슈 #477 — index-only 페이지 자동 강등. autoDemoter 가 nil 이면 분기 자체 skip
+	// (기능 비활성 시 기존 동작 100% 유지). 본 호출의 page 자체는 정상 반환 — 다음 호출부터
+	// matcher 가 본 URL 을 extract_links_only 로 라우팅 (publisher 직전).
+	//
+	// demoteAsync 는 별도 goroutine — DB Insert 지연이 ParsePage 호출 워커 throughput 에
+	// 영향 X (gemini PR #479 피드백). 테스트는 Parser.WaitAutoDemote 로 in-flight 완료 대기.
+	if p.autoDemoter != nil {
+		if ok, score := indexonly.IsIndexOnly(page, raw.HTML, indexonly.Config{}); ok {
+			p.autoDemoter.demoteAsync(ctx, raw.URL, score)
 		}
 	}
 	return page, nil
