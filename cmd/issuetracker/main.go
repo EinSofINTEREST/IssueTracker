@@ -180,16 +180,14 @@ func main() {
 		service.WithParserRuleQueryTimeout(dbCfg.QueryTimeout),
 		service.WithParserRuleInvalidator(ruleResolver),
 	)
-	ruleParser, err := rule.NewParser(ruleResolver)
-	if err != nil {
-		log.WithError(err).Fatal("failed to construct rule parser")
-	}
-
 	// page-parse 블랙리스트 — 카테고리 → article job 발행 단계에서 매칭 URL 차단.
 	// Enabled=false 시 Matcher 미주입 → parser_worker 가 모든 링크 그대로 발행 (기능 OFF).
 	//
 	// BlacklistService (이슈 #431) 가 decorator chain (timeout + invalidating cache) 을 내부 합성 +
 	// HandleLLMDecision 비즈니스 로직 캡슐화. Matcher 는 별도 구성 — read-only cache + match.
+	//
+	// 이슈 #477 — ruleParser 의 index-only 자동 강등 옵션에 blacklistSvc 를 주입하기 위해
+	// blacklist 구성 후 ruleParser 를 생성하도록 순서 정렬.
 	blacklistCfg, err := processorcfg.LoadBlacklist()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load blacklist config")
@@ -215,6 +213,18 @@ func main() {
 		log.Info("page-parse blacklist enabled (parser_blacklist DB-backed)")
 	} else {
 		log.Info("page-parse blacklist disabled (BLACKLIST_ENABLED=false)")
+	}
+
+	// ruleParser 생성 — blacklistSvc 가 있으면 index-only 자동 강등 옵션 활성 (이슈 #477).
+	// blacklistCfg.Enabled=false 환경에서는 blacklistSvc 가 nil → 옵션이 noop → 기존 동작 유지.
+	autoDemoteMetrics := rule.NewAutoDemoteMetrics(metricsRegistry)
+	parserOpts := []rule.ParserOption{}
+	if blacklistSvc != nil {
+		parserOpts = append(parserOpts, rule.WithBlacklistAutoDemote(blacklistSvc, autoDemoteMetrics, log))
+	}
+	ruleParser, err := rule.NewParser(ruleResolver, parserOpts...)
+	if err != nil {
+		log.WithError(err).Fatal("failed to construct rule parser")
 	}
 
 	// Readiness check: 사이트 등록 전 parser_rules 가 seed 됐는지 검증.
