@@ -493,7 +493,9 @@ func parseEnrichedOutput(output string) (*llmgen.ExtractResult, error) {
 		}
 		// 이슈 #480 — mode 가 명시된 경우 ExtractLinksOnly / Drop 분기. 빈 값 또는 unknown 은
 		// 서비스 단에서 default drop 으로 보정되므로 본 단계는 단순 통과.
-		mode := model.BlacklistMode(strings.TrimSpace(eo.BlacklistMode))
+		// ToLower 정규화 — LLM 응답 case 변종 (DROP / Drop) 이 unknown 으로 downgrade 되어
+		// link harvest fallback 이 의도치 않게 막히는 케이스 회피 (coderabbit PR #481 피드백).
+		mode := model.BlacklistMode(strings.ToLower(strings.TrimSpace(eo.BlacklistMode)))
 		return &llmgen.ExtractResult{
 			Blacklist: &llmgen.BlacklistDecision{Reason: reason, Mode: mode},
 		}, nil
