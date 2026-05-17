@@ -100,9 +100,8 @@ def split_prefix(title: str) -> tuple[str | None, int | None, str]:
 
 def pr_to_props(pr: dict) -> dict:
     category, issue_num, body = split_prefix(pr["title"])
-    state = pr.get("state", "OPEN").upper()
     merged = bool(pr.get("mergedAt"))
-    notion_state = "Merged" if merged else ("Open" if state == "OPEN" else "Open")
+    notion_state = "Merged" if merged else "Open"
     props: dict = {
         "제목":   {"title": [rt(body or pr["title"])]},
         "번호":   {"number": pr["number"]},
@@ -149,14 +148,17 @@ def iter_all_rows(ds_id: str):
 
 
 def archive_page(page_id: str) -> None:
-    notion_request(f"/pages/{page_id}", "PATCH", {"archived": True})
+    # Notion API 2026-03-11 변경: `archived` 속성이 `in_trash` 로 대체됨
+    notion_request(f"/pages/{page_id}", "PATCH", {"in_trash": True})
 
 
 def upsert_pr(ds_id: str, pr: dict) -> str:
     props = pr_to_props(pr)
     existing = find_row_by_pr_number(ds_id, pr["number"])
     if existing:
-        notion_request(f"/pages/{existing}", "PATCH", {"properties": props})
+        # 재오픈된 PR 이 archive 되어 있을 수 있으므로 in_trash=False 로 복구
+        notion_request(f"/pages/{existing}", "PATCH",
+                       {"properties": props, "in_trash": False})
         return f"updated row {existing} (#{pr['number']})"
     res = notion_request("/pages", "POST", {
         "parent": {"data_source_id": ds_id},
@@ -207,6 +209,18 @@ def mode_event(ds_id: str, repo: str) -> int:
 
 
 def mode_backfill(ds_id: str, repo: str) -> int:
+    # GitHub fetch 를 destructive archive 보다 먼저 — fetch 실패 시 DB 비우지 않도록
+    log("== fetching open + merged PRs from GitHub ==")
+    prs: dict[int, dict] = {}
+    for state in ("open", "merged"):
+        for pr in gh_list_prs(repo, state):
+            prs[pr["number"]] = pr
+    if not prs:
+        log("error: GitHub returned 0 PRs; aborting before any destructive operation")
+        return 2
+    ordered = sorted(prs.values(), key=lambda p: p["number"])
+    log(f"fetched {len(ordered)} PRs from GitHub")
+
     log("== archiving all existing rows ==")
     n_archived = 0
     for row_id in iter_all_rows(ds_id):
@@ -215,14 +229,7 @@ def mode_backfill(ds_id: str, repo: str) -> int:
         time.sleep(0.2)
     log(f"archived {n_archived} rows")
 
-    log("== fetching open + merged PRs from GitHub ==")
-    prs: dict[int, dict] = {}
-    for state in ("open", "merged"):
-        for pr in gh_list_prs(repo, state):
-            prs[pr["number"]] = pr
-    ordered = sorted(prs.values(), key=lambda p: p["number"])
     log(f"creating {len(ordered)} rows")
-
     for i, pr in enumerate(ordered, 1):
         notion_request("/pages", "POST", {
             "parent": {"data_source_id": ds_id},
