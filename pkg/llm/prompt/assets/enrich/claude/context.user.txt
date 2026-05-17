@@ -8,7 +8,7 @@ CRITICAL OUTPUT CONTRACT — read first, applies to your ENTIRE response:
 - DO NOT start with: "I", "The", "Title", "Based on", "Sure", "Okay", "Here", "Let me", or any natural-language sentence.
 - DO NOT wrap in markdown fences (no ```json blocks, no ``` of any kind).
 - DO NOT append trailing prose after the closing brace.
-- If you cannot fulfill the task (no external sources, tools unavailable, entities ungrounded), STILL emit a valid JSON object with empty-field defaults per the schema (background=[], timeline=[], implications with all-empty strings). DO NOT apologize or explain in prose.
+- If you cannot fulfill the task (no external sources, tools unavailable, entities ungrounded), STILL emit a valid JSON object with empty-field defaults per the schema (background=[], timeline=[], implications object with each of `political`/`social`/`technical` set to ""). DO NOT apologize or explain in prose. The `implications` field MUST remain an object — do NOT replace it with a string.
 - Violating responses are DISCARDED upstream — the article is logged as failed and re-attempted, wasting LLM quota and operational signal.
 ═══════════════════════════════════════════════════════════════
 
