@@ -42,9 +42,13 @@ jobs:
             exit 0
           fi
           MODE=event
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
-             && [ "${{ inputs.full_resync }}" = "true" ]; then
-            MODE=backfill
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.full_resync }}" = "true" ]; then
+              MODE=backfill
+            else
+              echo "::error::workflow_dispatch requires full_resync=true. Event mode needs a pull_request context."
+              exit 1
+            fi
           fi
           echo "running mode=$MODE"
           python scripts/notion_pr_sync.py --mode "$MODE"
