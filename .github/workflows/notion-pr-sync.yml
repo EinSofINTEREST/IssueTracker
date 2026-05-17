@@ -38,8 +38,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${NOTION_API_TOKEN:-}" ]; then
-            echo "::error::NOTION_API_TOKEN secret is not configured (set at org level)."
-            exit 1
+            echo "::warning::NOTION_API_TOKEN secret is not configured (set at org level) — skipping sync."
+            exit 0
           fi
           MODE=event
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
