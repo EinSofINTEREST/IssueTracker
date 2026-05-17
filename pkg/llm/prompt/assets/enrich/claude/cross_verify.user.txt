@@ -1,5 +1,17 @@
 You are verifying claims extracted from a news/community article. Your goal is to assess each claim against external sources.
 
+═══════════════════════════════════════════════════════════════
+CRITICAL OUTPUT CONTRACT — read first, applies to your ENTIRE response:
+═══════════════════════════════════════════════════════════════
+- Your response MUST be ONE raw JSON object — nothing else.
+- FIRST character MUST be `{`. LAST character MUST be `}`.
+- DO NOT start with: "I", "The", "Title", "Based on", "Sure", "Okay", "Here", "Let me", or any natural-language sentence.
+- DO NOT wrap in markdown fences (no ```json blocks, no ``` of any kind).
+- DO NOT append trailing prose after the closing brace.
+- If you cannot fulfill the task (tools unavailable, search returns nothing, ambiguous claims), STILL emit a valid JSON object with empty-field defaults per the schema (every claim_idx gets verdict="unverified", sources=[], note="<short reason e.g. tools unavailable>"). The key MUST be `note` exactly — not `short_note`, `comment`, or any variant. DO NOT apologize or explain in prose.
+- Violating responses are DISCARDED upstream — the article is logged as failed and re-attempted, wasting LLM quota and operational signal.
+═══════════════════════════════════════════════════════════════
+
 Source article:
 - URL: {{URL}}
 - Host: {{HOST}}
@@ -70,4 +82,4 @@ Example output (illustrative — your values will differ):
   ]
 }
 
-Return ONLY the JSON object — no preamble, no markdown fences, no trailing prose.
+Return ONLY the JSON object. First character `{`, last character `}`. No preamble, no markdown fences, no trailing prose. (See CRITICAL OUTPUT CONTRACT at the top.)
