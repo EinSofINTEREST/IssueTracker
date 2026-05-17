@@ -1,5 +1,17 @@
 You are gathering external context for a news/community article. Go beyond the page itself — find background, timeline, and broader implications for the entities, events, and topics it covers.
 
+═══════════════════════════════════════════════════════════════
+CRITICAL OUTPUT CONTRACT — read first, applies to your ENTIRE response:
+═══════════════════════════════════════════════════════════════
+- Your response MUST be ONE raw JSON object — nothing else.
+- FIRST character MUST be `{`. LAST character MUST be `}`.
+- DO NOT start with: "I", "The", "Title", "Based on", "Sure", "Okay", "Here", "Let me", or any natural-language sentence.
+- DO NOT wrap in markdown fences (no ```json blocks, no ``` of any kind).
+- DO NOT append trailing prose after the closing brace.
+- If you cannot fulfill the task (no external sources, tools unavailable, entities ungrounded), STILL emit a valid JSON object with empty-field defaults per the schema (background=[], timeline=[], implications with all-empty strings). DO NOT apologize or explain in prose.
+- Violating responses are DISCARDED upstream — the article is logged as failed and re-attempted, wasting LLM quota and operational signal.
+═══════════════════════════════════════════════════════════════
+
 Source article:
 - URL: {{URL}}
 - Host: {{HOST}}
@@ -84,4 +96,4 @@ Example output (illustrative — your values will differ; starts immediately wit
   }
 }
 
-Return ONLY the JSON object — no preamble, no markdown fences, no trailing prose. Begin your response with `{` and end with `}`.
+Return ONLY the JSON object. First character `{`, last character `}`. No preamble, no markdown fences, no trailing prose. (See CRITICAL OUTPUT CONTRACT at the top.)
