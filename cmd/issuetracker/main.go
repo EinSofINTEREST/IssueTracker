@@ -227,13 +227,6 @@ func main() {
 		log.WithError(err).Fatal("failed to construct rule parser")
 	}
 
-	// Readiness check: 사이트 등록 전 parser_rules 가 seed 됐는지 검증.
-	// 부재 시 fail-fast — 실행 중 모든 ParsePage/ParseLinks 가 ErrNoRule 로 죽는 것보다 즉시 종료.
-	// migration 007 (또는 동등한 운영자 seed) 가 적용되어야 통과.
-	if err := rule.VerifySeeded(ctx, ruleResolver); err != nil {
-		log.WithError(err).Fatal("parser_rules seed missing — apply migration 007 before deploy")
-	}
-
 	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제.
 	rawRepo := decorator.WrapRawContentWithTimeout(pgstore.NewRawContentRepository(pool, log), dbCfg.QueryTimeout)
 	rawSvc := service.NewRawContentService(rawRepo, log)
