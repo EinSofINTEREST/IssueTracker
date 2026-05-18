@@ -241,13 +241,17 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		if w.cfg.ReparseEnabled && IsReparseEligible(err) {
 			reparseCount := readReparseCount(msg)
 			if reparseCount < core.MaxValidateReparseCount {
+				// 이슈 #502: validation 실패는 콘텐츠 필터 결과 (시스템 에러 아님) — .WithError 제거,
+				// reject_reason 구조화 필드로 평탄화 + url 필드 추가 (사후 추적 가능하도록).
 				log.WithFields(map[string]interface{}{
 					"job_id":        pm.ID,
 					"ref_id":        ref.ID,
 					"source":        content.SourceID,
+					"url":           content.URL,
 					"reparse_count": reparseCount,
 					"max":           core.MaxValidateReparseCount,
-				}).WithError(err).Info("content validation failed, triggering parser reparse (LLM rule relearn)")
+					"reject_reason": err.Error(),
+				}).Info("content validation failed, triggering parser reparse (LLM rule relearn)")
 
 				// reparse cycle 시작 — 발행 성공 후 contents row 정리 (순서 중요, gemini 반영).
 				// Delete 가 republish 보다 먼저면 Delete 성공 + republish 실패 시 Kafka 재처리에서
@@ -277,12 +281,15 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 
 		// 검증 실패: contents에서 삭제 후 DLQ 또는 재큐잉
 		if pm.RetryCount >= maxRetries(msg) {
+			// 이슈 #502: .WithError 제거 + reject_reason 평탄화 + url 추가.
 			log.WithFields(map[string]interface{}{
-				"job_id":  pm.ID,
-				"ref_id":  ref.ID,
-				"source":  content.SourceID,
-				"country": content.Country,
-			}).WithError(err).Info("content validation failed, deleting content and sending to dlq")
+				"job_id":        pm.ID,
+				"ref_id":        ref.ID,
+				"source":        content.SourceID,
+				"country":       content.Country,
+				"url":           content.URL,
+				"reject_reason": err.Error(),
+			}).Info("content validation failed, deleting content and sending to dlq")
 
 			// contents.Delete 직전에 reject 사유를 contents 컬럼에 기록.
 			// 순서가 중요: Delete 후엔 사후 추적 단일 source 가 깨진다.
@@ -299,10 +306,14 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 				return fmt.Errorf("send to dlq (max retries): %w", dlqErr)
 			}
 		} else {
+			// 이슈 #502: .WithError 제거 + reject_reason 평탄화 + url 추가.
 			log.WithFields(map[string]interface{}{
-				"job_id":      pm.ID,
-				"retry_count": pm.RetryCount,
-			}).WithError(err).Info("content validation failed, requeueing")
+				"job_id":        pm.ID,
+				"ref_id":        ref.ID,
+				"retry_count":   pm.RetryCount,
+				"url":           content.URL,
+				"reject_reason": err.Error(),
+			}).Info("content validation failed, requeueing")
 			if rqErr := w.requeue(ctx, msg, &pm); rqErr != nil {
 				// requeue 실패 시 commit 하면 재시도 기회 상실 → 에러 반환하여 재소비 보장
 				return fmt.Errorf("requeue: %w", rqErr)
