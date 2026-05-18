@@ -35,12 +35,18 @@ func Build(provider llm.Provider, repo repository.ParserRuleRepository, resolver
 		return nil, fmt.Errorf("construct llmgen generator: %w", err)
 	}
 	if redisClient != nil {
-		locker, lockerErr := redisstore.NewInflightLocker(redisClient.Raw(), inflightLockTTL)
+		// inflightLockTTL ≤ 0 은 NewInflightLocker 내부에서 DefaultInflightLockTTL 로 보정 —
+		// 로그에 실제 적용된 값이 찍히도록 호출 전에 동일 fallback 을 미리 적용.
+		appliedTTL := inflightLockTTL
+		if appliedTTL <= 0 {
+			appliedTTL = redisstore.DefaultInflightLockTTL
+		}
+		locker, lockerErr := redisstore.NewInflightLocker(redisClient.Raw(), appliedTTL)
 		if lockerErr != nil {
 			return nil, fmt.Errorf("construct redis inflight locker: %w", lockerErr)
 		}
 		gen.SetLocker(locker)
-		log.WithField("ttl", inflightLockTTL.String()).Info("llmgen: Redis 분산 inflight lock 활성화")
+		log.WithField("ttl", appliedTTL.String()).Info("llmgen: Redis 분산 inflight lock 활성화")
 	}
 
 	// Host breaker (#215) — 동일 host 의 LLM 호출이 N회 연속 rate_limit hit 시 cooldown.
