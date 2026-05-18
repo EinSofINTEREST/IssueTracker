@@ -7,6 +7,7 @@ package wiring
 
 import (
 	"fmt"
+	"time"
 
 	"issuetracker/internal/processor/parser/rule"
 	"issuetracker/internal/processor/parser/rule/llmgen"
@@ -24,7 +25,8 @@ import (
 // provider 가 nil (LLM 비활성) 이면 (nil, nil) 반환 — parser worker 는 ErrNoRule 시 raw 만 잔존.
 // llmgen.New 자체 실패는 wiring 버그 — 호출자 (main) 에서 Fatal 결정.
 // redisClient 가 nil 이면 in-process memInflightLocker 로 graceful degrade.
-func Build(provider llm.Provider, repo repository.ParserRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, redisClient *redis.Client, log *logger.Logger) (*llmgen.Generator, error) {
+// inflightLockTTL ≤ 0 이면 NewInflightLocker 내부에서 DefaultInflightLockTTL (5m) 로 보정 (이슈 #495).
+func Build(provider llm.Provider, repo repository.ParserRuleRepository, resolver *rule.Resolver, promptLoader prompt.Loader, redisClient *redis.Client, inflightLockTTL time.Duration, log *logger.Logger) (*llmgen.Generator, error) {
 	if provider == nil {
 		return nil, nil
 	}
@@ -33,12 +35,12 @@ func Build(provider llm.Provider, repo repository.ParserRuleRepository, resolver
 		return nil, fmt.Errorf("construct llmgen generator: %w", err)
 	}
 	if redisClient != nil {
-		locker, lockerErr := redisstore.NewInflightLocker(redisClient.Raw(), redisstore.DefaultInflightLockTTL)
+		locker, lockerErr := redisstore.NewInflightLocker(redisClient.Raw(), inflightLockTTL)
 		if lockerErr != nil {
 			return nil, fmt.Errorf("construct redis inflight locker: %w", lockerErr)
 		}
 		gen.SetLocker(locker)
-		log.Info("llmgen: Redis 분산 inflight lock 활성화")
+		log.WithField("ttl", inflightLockTTL.String()).Info("llmgen: Redis 분산 inflight lock 활성화")
 	}
 
 	// Host breaker (#215) — 동일 host 의 LLM 호출이 N회 연속 rate_limit hit 시 cooldown.

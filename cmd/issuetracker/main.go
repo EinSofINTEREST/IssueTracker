@@ -502,7 +502,7 @@ func main() {
 		}).Info("LLM prompt loader enabled (file → embed chain)")
 	}
 
-	llmGen, err := llmgenwiring.Build(llmProvider, parserRuleSvc, ruleResolver, promptLoader, redisClientShared, log)
+	llmGen, err := llmgenwiring.Build(llmProvider, parserRuleSvc, ruleResolver, promptLoader, redisClientShared, redisCfg.InflightLockTTL, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build llmgen generator")
 	}
