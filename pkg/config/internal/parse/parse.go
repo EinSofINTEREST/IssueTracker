@@ -148,6 +148,23 @@ func NonNegativeInt32(key string, dest *int32) error {
 	return nil
 }
 
+// PositiveInt64 는 PositiveInt 의 int64 변형 (> 0).
+func PositiveInt64(key string, dest *int64) error {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return fmt.Errorf("parse %s %q: %w", key, v, err)
+	}
+	if n <= 0 {
+		return fmt.Errorf("%s %d must be positive", key, n)
+	}
+	*dest = n
+	return nil
+}
+
 // NonNegativeInt64 는 NonNegativeInt 의 int64 변형.
 func NonNegativeInt64(key string, dest *int64) error {
 	v := os.Getenv(key)
