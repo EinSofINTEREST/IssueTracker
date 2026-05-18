@@ -85,17 +85,18 @@ validate/worker.go → types  (RunValidation 이 types.Validator 인자)
 
 ## 서브패키지
 
-| 디렉토리                                                                       | 문서                                |
-|-------------------------------------------------------------------------------|-------------------------------------|
-| [`internal/processor/fetcher/`](../../../../internal/processor/fetcher/)       | [fetcher/README.md](fetcher/README.md) |
-| [`internal/processor/parser/`](../../../../internal/processor/parser/)         | [parser/README.md](parser/README.md)   |
-| [`internal/processor/validate/`](../../../../internal/processor/validate/)     | [validate.md](validate.md)             |
+| 디렉토리 | 문서 |
+|---|---|
+| [`internal/processor/fetcher/`](../../../../internal/processor/fetcher/) | [fetcher/README.md](fetcher/README.md) |
+| [`internal/processor/parser/`](../../../../internal/processor/parser/) | [parser/README.md](parser/README.md) |
+| [`internal/processor/validate/`](../../../../internal/processor/validate/) | [validate.md](validate.md) |
+| [`internal/processor/enrich/`](../../../../internal/processor/enrich/) | [enrich/README.md](enrich/README.md) — 4-stage enrichment pipeline (이슈 #445 ~ #450, #457) |
+| [`internal/processor/precheck/`](../../../../internal/processor/precheck/) | [precheck.md](precheck.md) — 진입점 URL 처리 가부 게이트 (이슈 #425) |
 
 <br>
 
 ## 향후 확장
 
-- `internal/processor/enrich/` — entity / sentiment / topic
 - `internal/processor/embed/` — vector embedding
 - `internal/processor/classify/` — [internal/classifier](../classifier/README.md) 호출 stage
 
