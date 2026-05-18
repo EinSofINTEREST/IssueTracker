@@ -13,14 +13,14 @@
 ```go
 type ContentService interface {
     // ContentHash 동일 시 기존 ID 반환 (저장 X)
-    Store(ctx, *core.Content) (id string, isDuplicate bool, err error)
+    Store(ctx context.Context, c *core.Content) (id string, isDuplicate bool, err error)
 
-    StoreBatch(ctx, []*core.Content) ([]StoreResult, error)
-    GetByID(ctx, id string) (*core.Content, error)
-    Delete(ctx, id string) error
+    StoreBatch(ctx context.Context, contents []*core.Content) ([]StoreResult, error)
+    GetByID(ctx context.Context, id string) (*core.Content, error)
+    Delete(ctx context.Context, id string) error
 
     // validation_status 업데이트 (이슈 #135 / #161)
-    // status: "passed" / "rejected" 등 ValidationStatus 의 string 표현
+    // status: `model.ValidationStatus*` 상수의 string 값 — 허용값 "pending" / "passed" / "rejected"
     // code:   분류 코드 (예: "VAL_001"); 빈 문자열 허용
     // detail: 자유 형식 사유; 빈 문자열 허용
     UpdateValidationStatus(ctx context.Context, id, status, code, detail string) error
@@ -38,15 +38,15 @@ type ContentService interface {
 ```go
 type RawContentService interface {
     // 동일 URL 시 기존 ID 반환
-    Store(ctx, *core.RawContent) (id string, isDuplicate bool, err error)
+    Store(ctx context.Context, r *core.RawContent) (id string, isDuplicate bool, err error)
 
-    GetByID(ctx, id string) (*core.RawContent, error)
+    GetByID(ctx context.Context, id string) (*core.RawContent, error)
 
     // idempotent (없어도 nil) — Claim Check 정리 (이슈 #134)
-    Delete(ctx, id string) error
+    Delete(ctx context.Context, id string) error
 
-    List(ctx, filter model.RawContentFilter) ([]*core.RawContent, error)
-    PurgeOlderThan(ctx, t time.Time) (int64, error)  // cleanup cron 용
+    List(ctx context.Context, filter model.RawContentFilter) ([]*core.RawContent, error)
+    PurgeOlderThan(ctx context.Context, t time.Time) (int64, error)  // cleanup cron 용
 }
 ```
 
@@ -65,16 +65,16 @@ type BlacklistService interface {
     //   - sample URL → ^/$ anchor regex 변환 (host-wide catch-all over-reach 회피)
     //   - mode 인자가 빈 문자열이면 default "drop" — backward compat (이슈 #480)
     //   - ErrDuplicate → (false, nil) graceful 흡수
-    HandleLLMDecision(ctx, host, sampleURL string, targetType model.TargetType,
+    HandleLLMDecision(ctx context.Context, host, sampleURL string, targetType model.TargetType,
                        reason string, mode model.BlacklistMode) (inserted bool, err error)
 
     // CRUD 위임
-    Insert(ctx, *model.BlacklistRecord) error
-    Update(ctx, *model.BlacklistRecord) error
-    Delete(ctx, id int64) error
-    GetByID(ctx, id int64) (*model.BlacklistRecord, error)
-    FindEnabledByHost(ctx, host string) ([]*model.BlacklistRecord, error)
-    List(ctx, filter model.BlacklistFilter) ([]*model.BlacklistRecord, error)
+    Insert(ctx context.Context, rec *model.BlacklistRecord) error
+    Update(ctx context.Context, rec *model.BlacklistRecord) error
+    Delete(ctx context.Context, id int64) error
+    GetByID(ctx context.Context, id int64) (*model.BlacklistRecord, error)
+    FindEnabledByHost(ctx context.Context, host string) ([]*model.BlacklistRecord, error)
+    List(ctx context.Context, filter model.BlacklistFilter) ([]*model.BlacklistRecord, error)
 }
 ```
 
@@ -108,18 +108,18 @@ blacklistSvc := service.NewBlacklistService(
 
 ```go
 type ParserRuleService interface {
-    Insert(ctx, *model.ParserRuleRecord) error
-    Update(ctx, *model.ParserRuleRecord) error
-    UpdatePathPattern(ctx, id int64, pattern, description string) error
-    GetByID(ctx, id int64) (*model.ParserRuleRecord, error)
-    FindActive(ctx, host string, targetType model.TargetType) (*model.ParserRuleRecord, error)
-    InsertNextVersion(ctx, *model.ParserRuleRecord) error
-    HasAnyRule(ctx, hostPattern string, targetType model.TargetType) (exists, hasEnabled bool, err error)
-    FindByNaturalKey(ctx, sourceName, hostPattern, pathPattern string,
+    Insert(ctx context.Context, r *model.ParserRuleRecord) error
+    Update(ctx context.Context, r *model.ParserRuleRecord) error
+    UpdatePathPattern(ctx context.Context, id int64, pattern, description string) error
+    GetByID(ctx context.Context, id int64) (*model.ParserRuleRecord, error)
+    FindActive(ctx context.Context, host string, targetType model.TargetType) (*model.ParserRuleRecord, error)
+    InsertNextVersion(ctx context.Context, r *model.ParserRuleRecord) error
+    HasAnyRule(ctx context.Context, hostPattern string, targetType model.TargetType) (exists, hasEnabled bool, err error)
+    FindByNaturalKey(ctx context.Context, sourceName, hostPattern, pathPattern string,
                      targetType model.TargetType, version int) (*model.ParserRuleRecord, error)
-    FindActiveCandidates(ctx, host string, targetType model.TargetType) ([]*model.ParserRuleRecord, error)
-    List(ctx, filter model.ParserRuleFilter) ([]*model.ParserRuleRecord, error)
-    Delete(ctx, id int64) error
+    FindActiveCandidates(ctx context.Context, host string, targetType model.TargetType) ([]*model.ParserRuleRecord, error)
+    List(ctx context.Context, filter model.ParserRuleFilter) ([]*model.ParserRuleRecord, error)
+    Delete(ctx context.Context, id int64) error
 }
 ```
 
