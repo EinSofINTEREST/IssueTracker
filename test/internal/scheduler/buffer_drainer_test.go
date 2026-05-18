@@ -277,6 +277,39 @@ func TestBufferDrainer_IdleWhenBufferEmpty(t *testing.T) {
 	assert.Equal(t, 0, prod.count())
 }
 
+// TestBufferDrainer_DrainsLowPriority 는 low label 도 정상 drain 되는지 검증 (Copilot PR #511 피드백).
+// normal 만 검증하면 drainTargets 의 low 매핑 누락/오류가 회귀로 잡히지 않음.
+func TestBufferDrainer_DrainsLowPriority(t *testing.T) {
+	buf := newMockJobBuffer()
+	for i := 0; i < 3; i++ {
+		payload := encodeMsg(t, queue.Message{Topic: queue.TopicCrawlLow, Value: []byte("v")})
+		buf.seed("low", payload)
+	}
+
+	prod := &mockDrainerProducer{}
+	check := &fixedBacklogChecker{}
+	check.lag.Store(50)
+
+	d, err := scheduler.NewBufferDrainer(buf, prod, check, scheduler.BufferDrainerConfig{
+		Interval:      time.Hour,
+		TargetBacklog: 1000,
+		DrainBatch:    100,
+		GroupID:       queue.GroupCrawlerWorkers,
+	}, newDrainerTestLog())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	d.Start(ctx)
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	d.Stop()
+
+	assert.Equal(t, 3, prod.count(), "low priority buffer 3건 모두 drain")
+	for _, m := range prod.published {
+		assert.Equal(t, queue.TopicCrawlLow, m.Topic, "low buffer payload 는 low topic 으로 publish")
+	}
+}
+
 // TestBufferDrainer_NilDepsReturnError 는 필수 의존성 nil 시 생성자가 error 반환을 검증.
 func TestBufferDrainer_NilDepsReturnError(t *testing.T) {
 	buf := newMockJobBuffer()

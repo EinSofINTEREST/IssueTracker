@@ -237,12 +237,18 @@ func (d *BufferDrainer) drainOnce(ctx context.Context, label, topic string) erro
 	if pubErr := d.producer.PublishBatch(ctx, msgs); pubErr != nil {
 		// publish 실패 → 재적재 (순서 보존 X). EnqueueBatch 로 1 RTT — N개 EnqueueJob 회피
 		// (gemini PR #511 피드백).
+		//
+		// shutdown 중 ctx 가 cancel 됐어도 재적재는 반드시 시도해야 데이터 손실 회피 —
+		// context.WithoutCancel 로 logger / trace metadata 는 보존하되 cancel 신호 분리 (coderabbit
+		// PR #511 피드백). 5s timeout 으로 bound — Redis stall 시 goroutine leak 회피.
 		d.log.WithFields(map[string]interface{}{
 			"label": label,
 			"topic": topic,
 			"count": len(msgs),
 		}).WithError(pubErr).Warn("buffer drain publish failed, re-enqueueing payloads")
-		if reErr := d.buffer.EnqueueBatch(ctx, label, payloads, d.maxLen); reErr != nil {
+		reCtx, reCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer reCancel()
+		if reErr := d.buffer.EnqueueBatch(reCtx, label, payloads, d.maxLen); reErr != nil {
 			d.log.WithFields(map[string]interface{}{
 				"label": label,
 				"count": len(payloads),

@@ -862,7 +862,17 @@ func main() {
 
 	// Backlog throttle: SCHEDULER_MAX_BACKLOG > 0 일 때만 활성.
 	// crawl 토픽의 consumer-group lag 가 임계값 초과 시 publish 차단.
-	if schedulerCfg.MaxBacklog > 0 {
+	//
+	// 이슈 #510 — Redis 버퍼 활성 시 throttle wire skip:
+	//   - BacklogThrottler 는 scheduler.runEntry 에서 publish 직전 normal/low job 을 silent drop
+	//   - 본 PR 의 BufferingProducer 는 publish 단계에서 normal/low 를 Redis 로 routing
+	//   - 둘 다 활성화하면 throttle drop 이 BufferingProducer 진입 전 발생 → buffer 가 손실 경로 우회 못함 (Copilot PR #511 피드백)
+	// 따라서 buffer 활성 시 throttler 자체를 wiring 하지 않음 — buffer 가 elastic queueing 책임 인수.
+	switch {
+	case bufferDrainer != nil:
+		log.WithField("max_backlog_ignored", schedulerCfg.MaxBacklog).
+			Info("scheduler backlog throttle skipped — publisher redis buffer manages elastic queueing")
+	case schedulerCfg.MaxBacklog > 0:
 		backlogChecker := queue.NewBacklogChecker(crawlerKafkaCfg.Brokers, schedulerCfg.BacklogCheckTimeout)
 		throttler := scheduler.NewBacklogThrottler(
 			backlogChecker,

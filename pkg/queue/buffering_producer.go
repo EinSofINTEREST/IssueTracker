@@ -23,8 +23,14 @@ type JobBuffer interface {
 	JobBufferLen(ctx context.Context, label string) (int64, error)
 }
 
-// NoopJobBuffer 는 모든 호출이 zero-value 를 반환하는 fail-safe 구현체입니다.
-// Redis 비활성 / buffer 기능 opt-out 시 wiring 에서 사용.
+// NoopJobBuffer 는 fail-safe 구현체입니다 — Redis 비활성 / buffer 기능 opt-out 시 wiring 사용.
+//
+// 동작:
+//   - EnqueueJob / EnqueueBatch : 항상 error 반환 → BufferingProducer 가 underlying 직접 publish fallback
+//   - DrainJobs / JobBufferLen   : 빈 슬라이스 / 0 반환 (idle)
+//
+// enqueue 가 error 를 반환하는 이유: BufferingProducer 의 fallback 경로 진입 신호 —
+// silent succeed 시 payload 가 사라진 채로 publish 손실 발생. 명시적 error 만이 fallback 트리거.
 type NoopJobBuffer struct{}
 
 // EnqueueJob 항상 error 반환 — BufferingProducer 가 fallback 경로를 타도록 신호.
@@ -71,14 +77,18 @@ type BufferingProducer struct {
 // NewBufferingProducer 는 underlying Producer 를 buffer 데코레이터로 감쌉니다.
 //
 // 인자:
-//   - underlying : 실제 Kafka publish 책임 (보통 *KafkaProducer)
-//   - buffer     : Redis 또는 Noop. nil 이면 NoopJobBuffer 로 자동 대체 — 기능 비활성
-//   - maxLen     : EnqueueJob 의 LIST 최대 길이 (>0 이면 LTRIM 적용)
-//   - log        : enqueue 실패 / fallback 등 WARN 로그
-//
-// underlying / log 는 필수 (nil 이면 NewBufferingProducer 자체가 fallback 으로 underlying 만 반환할 수
-// 있으나, 그러면 데코 의미 없음 → 명시적 error 또는 호출자가 wiring 책임).
+//   - underlying : 실제 Kafka publish 책임 (보통 *KafkaProducer). nil 이면 panic — exported
+//     constructor 이므로 wiring 오류는 silent crash 대신 즉시 명시 (coderabbit PR #511 피드백).
+//   - buffer     : Redis 또는 Noop. nil 이면 NoopJobBuffer 로 자동 대체 — 기능 비활성 의미.
+//   - maxLen     : EnqueueJob/Batch 의 LIST 최대 길이 (>0 이면 LTRIM 적용)
+//   - log        : enqueue 실패 / fallback 등 WARN 로그. nil 이면 panic (필수).
 func NewBufferingProducer(underlying Producer, buffer JobBuffer, maxLen int64, log *logger.Logger) *BufferingProducer {
+	if underlying == nil {
+		panic("queue: NewBufferingProducer requires non-nil underlying Producer")
+	}
+	if log == nil {
+		panic("queue: NewBufferingProducer requires non-nil logger")
+	}
 	if buffer == nil {
 		buffer = NoopJobBuffer{}
 	}

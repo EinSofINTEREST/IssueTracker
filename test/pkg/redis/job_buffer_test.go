@@ -172,6 +172,9 @@ func TestJobBufferLen(t *testing.T) {
 	label := "test-len"
 	jobBufferCleanup(t, client, label)
 	ctx := context.Background()
+	// 잔존 buffer 가 후속 테스트 실행 / 디버깅에 영향을 주지 않도록 종료 시 정리 보장
+	// (Copilot PR #511 피드백).
+	t.Cleanup(func() { jobBufferCleanup(t, client, label) })
 
 	n, err := client.JobBufferLen(ctx, label)
 	require.NoError(t, err)
