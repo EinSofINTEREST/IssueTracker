@@ -352,10 +352,12 @@ func TestParser_ParsePage_ErrorHost_LowercasesHost(t *testing.T) {
 	res, _ := rule.NewResolver(repo)
 	p, _ := rule.NewParser(res)
 
-	// 대문자 host — errorHost 가 lowercase 로 정규화해야 staleCounter 키가 resolver 와 일치.
+	// 대문자 host — NormalizeHost 가 lowercase 로 정규화해야 staleCounter 키가 resolver 와 일치.
 	_, err := p.ParsePage(context.Background(), makeRaw("https://NEWS.EXAMPLE.COM/x", articleHTML))
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
+	// rerr.Code 도 pin — 다른 에러 경로 (예: ErrNoRule) 로 통과해도 Host 단정만으로 PASS 회피 (coderabbit PR #509).
+	assert.Equal(t, rule.ErrEmptySelector, rerr.Code)
 	assert.Equal(t, "news.example.com", rerr.Host, "Host 는 소문자로 정규화되어야 함")
 }
 
@@ -370,6 +372,8 @@ func TestParser_ParsePage_ErrorHost_StripsPort(t *testing.T) {
 	_, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com:8080/x", articleHTML))
 	var rerr *rule.Error
 	require.ErrorAs(t, err, &rerr)
+	// rerr.Code 도 pin — 시나리오 잠금 (coderabbit PR #509).
+	assert.Equal(t, rule.ErrEmptySelector, rerr.Code)
 	assert.Equal(t, "news.example.com", rerr.Host, "Host 는 port 제거된 hostname")
 }
 
