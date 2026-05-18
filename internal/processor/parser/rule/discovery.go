@@ -3,7 +3,6 @@ package rule
 import (
 	"fmt"
 	"math/rand/v2"
-	"net/url"
 	"regexp"
 
 	"issuetracker/internal/processor/fetcher/core"
@@ -55,6 +54,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 		return nil, &Error{
 			Code:       ErrEmptySelector,
 			Message:    "link discovery requires non-nil LinkDiscoveryConfig",
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 		}
@@ -68,6 +68,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 			return nil, &Error{
 				Code:       ErrEmptySelector,
 				Message:    fmt.Sprintf("invalid ArticleURLPattern regex: %q", cfg.ArticleURLPattern),
+				Host:       NormalizeHost(raw.URL),
 				URL:        raw.URL,
 				TargetType: string(model.TargetTypeList),
 				Err:        err,
@@ -96,6 +97,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 		return nil, &Error{
 			Code:       ErrParseFailure,
 			Message:    "link extractor failed",
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 			Err:        err,
@@ -111,7 +113,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 	// 외부 링크 (cross-origin) 는 광고/제휴 노이즈 비율 높으므로 cap 으로 통제하되,
 	// 무작위 sample 로 특정 영역 (예: 페이지 상단의 광고 슬롯) 에 편향되지 않도록.
 	maxOut := cfg.MaxLinksPerPage
-	pageHost := hostOf(raw.URL)
+	pageHost := NormalizeHost(raw.URL)
 
 	sameOrigin := make([]types.LinkItem, 0, len(candidates))
 	crossOrigin := make([]types.LinkItem, 0)
@@ -120,7 +122,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 			continue
 		}
 		item := types.LinkItem{URL: l.URL, Title: l.Text}
-		if pageHost != "" && hostOf(l.URL) == pageHost {
+		if pageHost != "" && NormalizeHost(l.URL) == pageHost {
 			sameOrigin = append(sameOrigin, item)
 		} else {
 			crossOrigin = append(crossOrigin, item)
@@ -161,19 +163,10 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 		return nil, &Error{
 			Code:       ErrParseFailure,
 			Message:    msg,
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 		}
 	}
 	return out, nil
-}
-
-// hostOf 는 URL 문자열에서 host 를 추출합니다 (parse 실패 시 빈 문자열).
-// 본 함수는 same-origin 분류 비교용 — 빈 문자열 비교는 항상 cross-origin 으로 취급되도록.
-func hostOf(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u == nil {
-		return ""
-	}
-	return u.Host
 }

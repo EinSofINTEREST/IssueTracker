@@ -34,7 +34,7 @@ func validateRaw(raw *core.RawContent) error {
 	if raw != nil {
 		u = raw.URL
 	}
-	return &Error{Code: ErrParseFailure, Message: "raw content empty", URL: u}
+	return &Error{Code: ErrParseFailure, Message: "raw content empty", Host: NormalizeHost(u), URL: u}
 }
 
 // extractField 는 단일 필드를 추출합니다 (selector 가 nil 이면 빈 문자열).

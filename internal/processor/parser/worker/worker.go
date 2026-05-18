@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -598,6 +597,13 @@ func (w *Worker) processArticlePage(ctx context.Context, raw *core.RawContent, r
 func (w *Worker) handleRuleError(ctx context.Context, raw *core.RawContent, rawID, stage string, targetType model.TargetType, err error, llmRetryCount int, crawlerName string, jobTimeout time.Duration, mlog *logger.Logger) error {
 	var rerr *rule.Error
 	if errors.As(err, &rerr) {
+		// 방어책 (이슈 #508): rule.Error 생성 측에서 Host 누락 시 raw.URL 에서 derive.
+		// parser.go 의 14개 Error 발산이 모두 errorHost 로 Host 를 채우지만, 향후 신규 발산
+		// 지점에서 누락하더라도 staleCounter / failureCounter 가 무력화되지 않도록 fail-safe.
+		if rerr.Host == "" && raw != nil {
+			rerr.Host = hostOf(raw.URL)
+		}
+
 		mlog.WithFields(map[string]interface{}{
 			"stage":       stage,
 			"error_code":  string(rerr.Code),
@@ -775,14 +781,13 @@ func (w *Worker) recordStaleAndMaybeRelearn(ctx context.Context, host string, ta
 	w.llmGen.EnqueueStale(ctx, host, targetType, raw, llmRetryCount, crawlerName, jobTimeout)
 }
 
-// hostOf 는 raw.URL 에서 host 만 추출합니다 (port 제거).
-// 파싱 실패 시 빈 문자열 — 호출자가 빈 host 를 noop 으로 흡수.
+// hostOf 는 rule.NormalizeHost 의 thin wrapper 로 worker 패키지의 in-file 호출처 가독성 보조.
+//
+// 정규화 로직 (u.Hostname() + lowercase, port 제거) 의 single source of truth 는 rule.NormalizeHost
+// (gemini PR #509 피드백, 이슈 #508). resolver / parser.go / discovery.go / extract.go / worker
+// 모두 동일 canonical form 사용 — staleCounter / failureCounter 키 일관성 보장.
 func hostOf(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	return u.Hostname()
+	return rule.NormalizeHost(rawURL)
 }
 
 // recordEmptyBodyIfApplicable 는 page 의 Title / MainContent 길이가 임계값 미달이면
