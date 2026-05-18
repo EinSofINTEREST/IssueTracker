@@ -40,13 +40,15 @@ type Decision struct {
 
 // 단일 정책 plug-in interface
 type Source interface {
-    CheckURL(ctx context.Context, rawURL string) Decision
+    Name() string  // 식별자 (예: "blacklist") — Decision.Source 로 들어감
+    Check(ctx context.Context, rawURL string) Decision
 }
 
-// 다중 Source 를 합성한 게이트
-type Decider struct { ... }
-func New(sources ...Source) *Decider
-func (d *Decider) CheckURL(ctx context.Context, rawURL string) Decision
+// 다중 Source 를 합성한 게이트 — interface (struct 아님)
+type Decider interface {
+    CheckURL(ctx context.Context, rawURL string) Decision
+}
+func New(sources ...Source) Decider
 ```
 
 `Decider.CheckURL` 은 등록된 Source 들을 순차 호출 — 첫 non-Allow Verdict 가 나오면 즉시 반환. 모두 Allow 면 `VerdictAllow`.
@@ -98,8 +100,8 @@ case precheck.VerdictExtractLinksOnly:
 
 ## 의존
 
-- [`internal/processor/parser/rule`](../parser/rule.md) — `BlacklistMatcher` (BlacklistSource 의 백엔드)
-- [`internal/storage/model`](../../storage/README.md) — `BlacklistMode` 상수
+- [`internal/processor/parser/rule`](parser/rule.md) — `BlacklistMatcher` (BlacklistSource 의 백엔드)
+- [`internal/storage/model`](../storage/README.md) — `BlacklistMode` 상수
 
 <br>
 
@@ -108,8 +110,8 @@ case precheck.VerdictExtractLinksOnly:
 | 호출자 | 사용 메소드 | 비고 |
 |---|---|---|
 | [`internal/publisher`](../publisher.md) | `Decider.CheckURL` | publish 직전 마지막 게이트 |
-| [`internal/processor/parser/worker`](parser/README.md) | `Decider.CheckURL` (계획) | parser 진입점 — list / page 라우팅 결정에 활용 |
-| [`internal/processor/fetcher/handler`](fetcher/handler.md) (계획) | `Decider.CheckURL` | fetch 시작 전 (대량 사이트 throttle 등 향후) |
+| [`internal/processor/parser/worker`](parser/README.md) | `Decider.CheckURL` | parser 진입점 — list / page 라우팅 결정 (이미 wiring 완료, main.go) |
+| [`internal/processor/fetcher/handler`](fetcher/handler.md) | `Decider.CheckURL` | fetch 시작 전 게이트 (이미 wiring 완료, main.go) |
 
 <br>
 

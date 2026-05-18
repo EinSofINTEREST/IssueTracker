@@ -25,7 +25,7 @@
 ```
 Kafka(issuetracker.validated)
   ↓ Worker.processMessage (claim check 로드)
-  ↓ ProcessingLock.Acquire("enrich", url)
+  ↓ ProcessingLock.Acquire("enricher", url)
   ↓
   ├─ Stage 1: Extractor.Extract(content, html)       — 이슈 #447
   │     → EnrichedFacts (entities[], claims[], facts[], topics[], sentiment)
@@ -36,7 +36,7 @@ Kafka(issuetracker.validated)
   │     → MCP postgres + WebFetch 로 claim 별 cross-verify
   │     → 실패 시 forwarding without verifications
   │
-  ├─ Stage 3: Contextualizer.Contextualize(...)      — 이슈 #449
+  ├─ Stage 3: Contextualizer.Provide(...)            — 이슈 #449
   │     → PageContext (background[], timeline[], implications)
   │     → MCP postgres + WebFetch 로 entity 별 external background 수집
   │     → 실패 시 forwarding without context
@@ -68,7 +68,7 @@ type Verifier interface {
     Verify(ctx, in VerifyInput) ([]Verification, error)
 }
 type Contextualizer interface {
-    Contextualize(ctx, in ContextInput) (*PageContext, error)
+    Provide(ctx context.Context, in ContextInput) (*PageContext, error)
 }
 type Scorer interface {
     Score(ctx, in ScoreInput) (*TrustScoreResult, error)
@@ -158,7 +158,7 @@ type Worker struct {
     rawSvc    service.RawContentService
     contSvc   service.ContentService
     enrichSvc EnrichedContentService
-    lock      *locks.ProcessingLock  // "enrich" stage
+    lock      *locks.ProcessingLock  // "enricher" stage
     log       *logger.Logger
 }
 ```
@@ -182,10 +182,10 @@ type Worker struct {
 ## 의존
 
 - [`pkg/agent/claude`](../../../pkg/agent/claude.md) — claudegen container pool + SessionRunner
-- [`pkg/llm/prompt`](../../../pkg/llm/prompt/) — file → embed prompt loader
+- [`pkg/llm/prompt`](../../../../../pkg/llm/prompt/) — file → embed prompt loader ([`pkg/llm.md`](../../../pkg/llm.md) 안에 포함)
 - [`internal/storage/service`](../../storage/service.md) — RawContentService, ContentService, EnrichedContentService
 - [`internal/storage/repository`](../../storage/README.md) — EnrichedContentRepository (이슈 #450)
-- [`internal/locks`](../../locks/README.md) — ProcessingLock (단계 "enrich")
+- [`internal/locks`](../../locks/README.md) — ProcessingLock (단계 "enricher")
 - [`pkg/queue`](../../../pkg/queue.md), [`pkg/logger`](../../../pkg/logger.md)
 
 <br>

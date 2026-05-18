@@ -101,7 +101,7 @@ CMD ["tail", "-f", "/dev/null"]
 
 ### 1. parser llmgen (셀렉터 자동 생성)
 
-[`rule/llmgen.Generator`](../internal/processor/parser/rule.md#4-llm-selector-generator) 가 `ParsePage` 실패 시 host 별로 본 Pool 의 `Worker.ExtractEnriched(host, targetType, html)` 호출. 결과 `ExtractResult` 의 `Selectors` 가 `parser_rules` 에 `enabled=false` 로 INSERT.
+[`rule/llmgen.Generator`](../../internal/processor/parser/rule.md#4-llm-selector-generator) 가 `ParsePage` 실패 시 host 별로 본 Pool 의 `Worker.ExtractEnriched(host, targetType, html)` 호출. 결과 `ExtractResult` 의 `Selectors` 가 `parser_rules` 에 `enabled=false` 로 INSERT.
 
 응답 JSON schema (`worker.go:enrichedOutput`):
 ```json
@@ -118,11 +118,11 @@ CMD ["tail", "-f", "/dev/null"]
 }
 ```
 
-`blacklist_mode` 가 `extract_links_only` 면 [`service.BlacklistService.HandleLLMDecision`](../internal/storage/service.md) 가 `parser_blacklist` 에 mode 그대로 등록 (이슈 #480).
+`blacklist_mode` 가 `extract_links_only` 면 [`service.BlacklistService.HandleLLMDecision`](../../internal/storage/service.md) 가 `parser_blacklist` 에 mode 그대로 등록 (이슈 #480).
 
 ### 2. enrich 4-stage (entity/claim/verify/context/score)
 
-[`enrich/core`](../internal/processor/enrich/README.md) 의 4 단계 각각 `RunSession(ctx, label, files, promptText)` 호출:
+[`enrich/core`](../../internal/processor/enrich/README.md) 의 4 단계 각각 `RunSession(ctx, label, files, promptText)` 호출:
 - label: `enrich-extract` / `enrich-verify` / `enrich-context` / `enrich-score`
 - files: stage 별 page HTML / 직전 단계 결과 JSON
 - 응답: 각 단계 schema 의 JSON
@@ -144,8 +144,8 @@ CMD ["tail", "-f", "/dev/null"]
 
 | 호출자 | 사용 메소드 | 비고 |
 |---|---|---|
-| [`internal/processor/parser/rule/llmgen.Generator`](../internal/processor/parser/rule.md#4-llm-selector-generator) | `Worker.ExtractEnriched(host, targetType, html)` | selector 자동 생성 |
-| [`internal/processor/enrich/core.Claudegen*`](../internal/processor/enrich/README.md) | `agent.Agent.RunSession(label, files, prompt)` (SessionRunner 추상) | 4-stage enrich |
+| [`internal/processor/parser/rule/llmgen.Generator`](../../internal/processor/parser/rule.md#4-llm-selector-generator) | `Worker.ExtractEnriched(host, targetType, html)` | selector 자동 생성 |
+| [`internal/processor/enrich/core.Claudegen*`](../../internal/processor/enrich/README.md) | `agent.Agent.RunSession(label, files, prompt)` (SessionRunner 추상) | 4-stage enrich |
 | [`cmd/issuetracker`](../../cmd/issuetracker.md) | `NewPoolFromEnv` | wiring |
 
 <br>
