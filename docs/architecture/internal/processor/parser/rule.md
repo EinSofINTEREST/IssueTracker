@@ -112,7 +112,7 @@ ParsePage(ctx, raw)
 
 ## 4. LLM Selector Generator ([rule/llmgen/](../../../../../internal/processor/parser/rule/llmgen/))
 
-이슈 #149. `ErrNoRule` / `ErrParseFailure` 등 발생 시 **비동기**로 LLM 에게 selector 를 생성시키고 `enabled=false` 로 DB 에 INSERT (운영자 검토 후 활성). 또한 LLM 이 페이지를 "파싱 부적합" 으로 판정하면 `parser_blacklist` 에 `source='auto'` 로 자동 등록 (이슈 #326, #480).
+이슈 #149. `ErrNoRule` / `ErrParseFailure` 등 발생 시 **비동기**로 LLM 에게 selector 를 생성시키고 `enabled=true` 로 DB 에 INSERT (CSS 검증을 품질 게이트로 사용해 통과 시 즉시 활성 — pending 큐의 URL 재처리가 유효하도록). 또한 LLM 이 페이지를 "파싱 부적합" 으로 판정하면 `parser_blacklist` 에 `source='auto'` 로 자동 등록 (이슈 #326, #480).
 
 | 파일 | 역할 |
 |------|------|
@@ -135,7 +135,7 @@ LLM 프롬프트 ([`pkg/llm/prompt/assets/parser/claude/{page,list}.user.txt`](.
 
 **article 플래그** (이슈 #421/#423): `ExtractResult.Article` + `ArticleConfidence` 가 LLM 자체 분류. parser_rules.article 컬럼에 영속화 → 다운스트림 validator 가 `Article=true` 에만 PublishedAt 필수 강제.
 
-**동작**: ParserWorker 가 `ErrNoRule` / `ErrParseFailure` 받으면 `llmGen.Enqueue(ctx, host, targetType, raw)` 호출 — `targetType` (`page`/`list`) 별로 별도 in-flight set 으로 dedup. Generator 는 별도 goroutine 에서 EnrichedExtractor (claudegen) 호출 → 결과 검증 → INSERT (enabled=false) → [`Resolver.Invalidate(host, targetType)`](../../../../../internal/processor/parser/rule/resolver.go).
+**동작**: ParserWorker 가 `ErrNoRule` / `ErrParseFailure` 받으면 `llmGen.Enqueue(ctx, host, targetType, raw)` 호출 — `targetType` (`page`/`list`) 별로 별도 in-flight set 으로 dedup. Generator 는 별도 goroutine 에서 EnrichedExtractor (claudegen) 호출 → 결과 검증 (CSS selector 가 실제 매칭되는지 확인) → INSERT (`enabled=true`, CSS 검증 통과 시) → [`Resolver.Invalidate(host, targetType)`](../../../../../internal/processor/parser/rule/resolver.go).
 
 <br>
 
@@ -164,7 +164,7 @@ LLM 프롬프트 ([`pkg/llm/prompt/assets/parser/claude/{page,list}.user.txt`](.
 ```
 1. polling goroutine 가 interval 마다 RunOnce 호출
 2. parser_rules 에서 source_name='llm-auto' AND path_pattern='' (catch-all) 조회
-3. 각 rule 에 대해 sample_urls 에서 누적 URL 로드 (MinSamples 미만이면 skip)
+3. 각 rule 에 대해 parser_rule_sample_urls 에서 누적 URL 로드 (MinSamples 미만이면 skip)
 4. pathinfer.InferHeuristic → 실패 + LLM 있으면 InferLLM
 5. 결과 path_pattern 으로 parser_rules.UpdatePathPattern (optimistic guard)
 6. Resolver.Invalidate(host) + SampleURLRepository.Purge(rule_id)
@@ -190,7 +190,7 @@ rule/parser.go ──→ rule/resolver.go (RuleLookup) ──→ internal/storag
 rule/llmgen/ ──→ pkg/agent/claude (EnrichedExtractor) + storage (parser_rules INSERT)
                   │
                   └──→ service.BlacklistService.HandleLLMDecision (mode 인자, #480)
-rule/refiner/ ──→ pathinfer + pkg/llm + storage (parser_rules UPDATE / sample_urls)
+rule/refiner/ ──→ pathinfer + pkg/llm + storage (parser_rules UPDATE / parser_rule_sample_urls)
 rule/discovery/ ──→ pkg/links (link extract)
 rule/blacklist_matcher.go ──→ storage.BlacklistRepository (host 단위 lookup)
 ```

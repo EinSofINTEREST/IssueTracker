@@ -99,7 +99,7 @@ Worker 가 이상 종료 / rule.Error 잔존 / LLM 재처리 윈도우 만료된
   - `raw_contents` (load+delete)
   - `contents` (store)
   - `parser_rule_sample_urls` (insert)
-  - `parser_blacklist` (auto_demote INSERT — async, mode='extract_links_only')
+  - `parser_blacklist` (auto_demote / llmgen INSERT — async, mode='extract_links_only' | 'drop')
 - Redis: ProcessingLock (단계="parser")
 
 <br>
