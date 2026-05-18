@@ -81,9 +81,15 @@ func findLogEntry(t *testing.T, buf *bytes.Buffer, message string) map[string]in
 
 // newWorkerWithLogger 는 newWorker 와 동일 fixture 이지만 publisher 가 본 테스트의 logger 를 공유하도록
 // 구성합니다 (publisher 도 로그를 찍기에 본 logger 로 통일하면 검증 노이즈가 줄어듦).
+//
+// ReparseEnabled=false 명시 — VAL_003 (Title/Body min_length) 는 IsReparseEligible 이라
+// default 가 향후 true 로 변경되면 본 테스트의 의도된 DLQ/requeue 분기 대신 reparse 분기가 발화 (gemini PR #513 피드백).
+// 본 테스트는 reparse 분기 외의 두 분기 (DLQ / requeue) 의 로그 출력 검증이 목적이므로 명시 잠금.
 func newWorkerWithLogger(consumer queue.Consumer, producer queue.Producer, contentSvc service.ContentService, log *logger.Logger) *worker.Worker {
 	pub := bus.New(producer, nil, log)
-	return worker.NewWorker(consumer, pub, contentSvc, locks.NewNoopStageGate(), 1, processorcfg.DefaultValidateConfig())
+	cfg := processorcfg.DefaultValidateConfig()
+	cfg.ReparseEnabled = false
+	return worker.NewWorker(consumer, pub, contentSvc, locks.NewNoopStageGate(), 1, cfg)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
