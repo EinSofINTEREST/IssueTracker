@@ -4,7 +4,7 @@
 
 > 글로벌 이슈 수집 및 분석 시스템
 
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## 개요
@@ -76,7 +76,7 @@ IssueTracker 는 전 세계의 뉴스 / 커뮤니티 / 소셜 소스를 크롤�
 
 ### 요구사항
 
-- Go 1.22+
+- Go 1.24+
 - PostgreSQL 15+
 - Apache Kafka 4.x (KRaft 모드, Zookeeper 불필요)
 - Redis 7+
@@ -142,14 +142,19 @@ issuetracker/
 ├── cmd/                            # 애플리케이션 entry → bin/
 │   ├── issuetracker/               # 통합 파이프라인 (메인 entry)
 │   ├── processor/                  # validate 전용
-│   ├── migrate/  ├── migrate-down/ # DB 스키마 마이그레이션
+│   ├── migrate/                    # DB 스키마 마이그레이션 (up)
+│   ├── migrate-down/               # DB 스키마 마이그레이션 (down)
 │   └── rule-validator/             # parser rule dry-run 도구
 │
 ├── internal/
 │   ├── processor/
 │   │   ├── processor.go            # Stage lifecycle interface
 │   │   ├── fetcher/                # crawler pool + handler chain (goquery / chromedp / browser / RSS)
-│   │   │   ├── core/   handler/   worker/   domain/   implementation/
+│   │   │   ├── core/
+│   │   │   ├── handler/
+│   │   │   ├── worker/
+│   │   │   ├── domain/
+│   │   │   ├── implementation/
 │   │   │   └── rate_limiter/
 │   │   ├── parser/
 │   │   │   ├── types/              # Page / LinkItem / ContentParser interface
@@ -174,7 +179,6 @@ issuetracker/
 │   │   └── redis/                  # Redis 구현 (lock, sliding window)
 │   ├── locks/                      # ProcessingLock / IngestionLock (Redis)
 │   ├── bus/                        # Kafka producer/consumer + retry scheduler
-│   ├── publisher/                  # Crawl job publisher (precheck 게이트 consumer)
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives
 │   └── classifier/                 # external classifier gRPC/HTTP client

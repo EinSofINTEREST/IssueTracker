@@ -4,7 +4,7 @@
 
 > Global Issue Collection and Analysis System
 
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Overview
@@ -76,7 +76,7 @@ Detailed component docs live under [`docs/architecture/`](docs/architecture/). S
 
 ### Prerequisites
 
-- Go 1.22+
+- Go 1.24+
 - PostgreSQL 15+
 - Apache Kafka 4.x (KRaft mode, no Zookeeper)
 - Redis 7+
@@ -96,7 +96,7 @@ make claudegen-build  # builds the claudegen container image (issuetracker-claud
 
 | Binary | Entry Point | Description |
 |---|---|---|
-| `bin/issuetracker` | `cmd/issuetracker/` | **Integrated pipeline** — fetcher + parser + validate + enrich + scheduler (운영 entry) |
+| `bin/issuetracker` | `cmd/issuetracker/` | **Integrated pipeline** — fetcher + parser + validate + enrich + scheduler (production entry) |
 | `bin/processor` | `cmd/processor/` | Validate processor standalone |
 | `bin/migrate` | `cmd/migrate/` | Run DB migrations (up) |
 | `bin/migrate-down` | `cmd/migrate-down/` | Rollback DB migrations |
@@ -142,14 +142,19 @@ issuetracker/
 ├── cmd/                            # Application entry points → bin/
 │   ├── issuetracker/               # integrated pipeline (main entry)
 │   ├── processor/                  # validate-only
-│   ├── migrate/  ├── migrate-down/ # DB schema migrations
+│   ├── migrate/                    # DB schema migrations (up)
+│   ├── migrate-down/               # DB schema migrations (down)
 │   └── rule-validator/             # parser rule dry-run tool
 │
 ├── internal/
 │   ├── processor/
 │   │   ├── processor.go            # Stage lifecycle interface
 │   │   ├── fetcher/                # crawler pool + handler chain (goquery / chromedp / browser / RSS)
-│   │   │   ├── core/   handler/   worker/   domain/   implementation/
+│   │   │   ├── core/
+│   │   │   ├── handler/
+│   │   │   ├── worker/
+│   │   │   ├── domain/
+│   │   │   ├── implementation/
 │   │   │   └── rate_limiter/
 │   │   ├── parser/
 │   │   │   ├── types/              # Page / LinkItem / ContentParser interfaces
@@ -174,7 +179,6 @@ issuetracker/
 │   │   └── redis/                  # Redis implementations (locks, sliding window)
 │   ├── locks/                      # ProcessingLock / IngestionLock (Redis)
 │   ├── bus/                        # Kafka producer/consumer with retry scheduler
-│   ├── publisher/                  # Crawl job publisher (precheck gate consumer)
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives
 │   └── classifier/                 # external classifier gRPC/HTTP client
@@ -205,9 +209,9 @@ issuetracker/
 
 ### Key Design Choices
 
-- **DB-driven rules** — Parser selectors / blacklist / scheduler entries all live in PostgreSQL (`parser_rules`, `parser_blacklist`, `scheduler_entries`). Site additions are SQL changes, not code (이슈 #100, #482).
-- **Claim Check pattern** — Raw HTML is stored in `raw_contents` and **only the row ID** travels through Kafka. Parser worker loads it once, deletes after success (이슈 #134).
-- **Storage layering (Phase 1/2)** — `model/` (types) → `repository/` (CRUD interfaces) → `decorator/` (timeout / cache invalidator) → `service/` (business logic). Decorator chain is auto-composed by `service.New*` (이슈 #430, #431).
+- **DB-driven rules** — Parser selectors / blacklist / scheduler entries all live in PostgreSQL (`parser_rules`, `parser_blacklist`, `scheduler_entries`). Site additions are SQL changes, not code (Issue #100, #482).
+- **Claim Check pattern** — Raw HTML is stored in `raw_contents` and **only the row ID** travels through Kafka. Parser worker loads it once, deletes after success (Issue #134).
+- **Storage layering (Phase 1/2)** — `model/` (types) → `repository/` (CRUD interfaces) → `decorator/` (timeout / cache invalidator) → `service/` (business logic). Decorator chain is auto-composed by `service.New*` (Issue #430, #431).
 - **Stage Gate Semaphore** — Per-stage `ProcessingLock` + `Semaphore` capacity prevents same-URL concurrent work and bounds concurrency below worker count.
 - **Auto-blacklist** — Two paths register to `parser_blacklist`:
   - **Heuristic auto-demote** ([`rule/indexonly/`](internal/processor/parser/rule/indexonly/)) — when ParsePage succeeds but content is index-only → `mode='extract_links_only'`
@@ -251,7 +255,7 @@ make chrome-remote-urls  # discover dynamic ws:// URLs
 ### Running
 
 ```bash
-make start               # integrated pipeline (운영 entry — preferred)
+make start               # integrated pipeline (production entry — preferred)
 make run-issuetracker    # same, no chrome/kafka pre-check
 make run-processor       # validate worker only
 
@@ -272,7 +276,7 @@ All env vars live in `.env` (single source). Loaded via [`pkg/config`](docs/arch
 | `CLAUDE_CODE_*` | `pkg/agent/claude` |
 | `FETCHER_*`, `STAGES_*_ENABLED`, `STAGES_*_WORKER_COUNT` | `fetcher` / `runtime` |
 | `BLACKLIST_*`, `VALIDATE_*`, `SCHEDULER_*` | `processor` |
-| `ENRICHER_DB_RO_*` | enrich MCP postgres (이슈 #472) |
+| `ENRICHER_DB_RO_*` | enrich MCP postgres (Issue #472) |
 | `METRICS_ADDR`, `LOG_*`, `SHUTDOWN_TIMEOUT` | `app` |
 
 See [`.env.example`](.env.example) for the canonical list.
