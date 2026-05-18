@@ -22,14 +22,20 @@ import (
 // ctx 에 이미 더 짧은 deadline 이 있으면 그것이 우선 (context.WithTimeout 이 합성).
 const resolveTimeout = 5 * time.Second
 
-// errorHost 는 rule.Error 의 Host 필드용 canonical host 를 추출합니다 (이슈 #508).
+// NormalizeHost 는 rawURL 에서 canonical host 를 추출합니다 (이슈 #508).
 //
 // resolver 의 extractHostPath 와 동일 정규화 (u.Hostname() + lowercase) — port 제거 + 대소문자 일관.
-// 이 정규화로 worker 의 staleCounter / failureCounter 가 같은 host 를 같은 키로 누적.
-// parse 실패 / 빈 host → 빈 문자열 (호출 측은 빈 host 를 noop 으로 흡수, host="" 가드 유지).
-func errorHost(rawURL string) string {
+// 이 정규화로 staleCounter / failureCounter 가 같은 host 를 같은 키로 누적.
+//
+// 본 패키지 전체 single source of truth:
+//   - rule.Error 의 Host 필드 (parser.go / discovery.go / extract.go 발산)
+//   - PageLinkDiscovery 의 same-origin 비교 (discovery.go)
+//   - worker 패키지의 handleRuleError fallback (rule.NormalizeHost 호출)
+//
+// parse 실패 / 빈 host → 빈 문자열 — 호출 측은 빈 host 를 noop 으로 흡수.
+func NormalizeHost(rawURL string) string {
 	u, err := url.Parse(rawURL)
-	if err != nil || u == nil {
+	if err != nil {
 		return ""
 	}
 	return strings.ToLower(u.Hostname())
@@ -148,7 +154,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 		return nil, &Error{
 			Code:       ErrNoRule,
 			Message:    "rule lookup returned nil rule",
-			Host:       errorHost(raw.URL),
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypePage),
 		}
@@ -160,7 +166,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 		return nil, &Error{
 			Code:       ErrEmptySelector,
 			Message:    "page rule missing required Title or MainContent selector",
-			Host:       errorHost(raw.URL),
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypePage),
 		}
@@ -168,7 +174,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(raw.HTML))
 	if err != nil {
-		return nil, &Error{Code: ErrParseFailure, Message: "goquery parse failed", Host: errorHost(raw.URL), URL: raw.URL, Err: err}
+		return nil, &Error{Code: ErrParseFailure, Message: "goquery parse failed", Host: NormalizeHost(raw.URL), URL: raw.URL, Err: err}
 	}
 
 	page := &types.Page{
@@ -189,7 +195,7 @@ func (p *Parser) ParsePage(ctx context.Context, raw *core.RawContent) (*types.Pa
 		return nil, &Error{
 			Code:       ErrParseFailure,
 			Message:    "Title or MainContent selector matched 0 elements (rule may be stale)",
-			Host:       errorHost(raw.URL),
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypePage),
 		}
@@ -241,7 +247,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 		return nil, &Error{
 			Code:       ErrNoRule,
 			Message:    "rule lookup returned nil rule",
-			Host:       errorHost(raw.URL),
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 		}
@@ -259,7 +265,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 		return nil, &Error{
 			Code:       ErrEmptySelector,
 			Message:    "list rule missing required ItemContainer or ItemLink selector (or set LinkDiscovery.ArticleURLPattern)",
-			Host:       errorHost(raw.URL),
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 		}
@@ -267,7 +273,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(raw.HTML))
 	if err != nil {
-		return nil, &Error{Code: ErrParseFailure, Message: "goquery parse failed", Host: errorHost(raw.URL), URL: raw.URL, Err: err}
+		return nil, &Error{Code: ErrParseFailure, Message: "goquery parse failed", Host: NormalizeHost(raw.URL), URL: raw.URL, Err: err}
 	}
 
 	base, baseErr := url.Parse(raw.URL)
@@ -283,7 +289,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 		return nil, &Error{
 			Code:       ErrParseFailure,
 			Message:    "ItemContainer selector matched 0 elements (rule may be stale)",
-			Host:       errorHost(raw.URL),
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 		}
@@ -313,7 +319,7 @@ func (p *Parser) ParseLinks(ctx context.Context, raw *core.RawContent) ([]types.
 		return nil, &Error{
 			Code:       ErrParseFailure,
 			Message:    "ItemContainer matched but no valid ItemLink found (ItemLink selector may be stale)",
-			Host:       errorHost(raw.URL),
+			Host:       NormalizeHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 		}
