@@ -239,6 +239,8 @@ func unsetRedisEnvVars(t *testing.T) {
 		"REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD",
 		"REDIS_DB", "REDIS_DIAL_TIMEOUT", "REDIS_READ_TIMEOUT",
 		"REDIS_WRITE_TIMEOUT", "REDIS_POOL_SIZE",
+		"REDIS_INGESTION_LOCK_TTL", "PIPELINE_GUARD_CATEGORY_TTL",
+		"REDIS_INFLIGHT_LOCK_TTL",
 	}
 	for _, v := range vars {
 		t.Setenv(v, "")
@@ -268,6 +270,47 @@ func TestLoadRedis_DefaultValues(t *testing.T) {
 	}
 	if cfg.DialTimeout != def.DialTimeout {
 		t.Errorf("DialTimeout: got %v, want %v", cfg.DialTimeout, def.DialTimeout)
+	}
+	if cfg.InflightLockTTL != def.InflightLockTTL {
+		t.Errorf("InflightLockTTL: got %v, want %v", cfg.InflightLockTTL, def.InflightLockTTL)
+	}
+	if cfg.InflightLockTTL != 5*time.Minute {
+		t.Errorf("InflightLockTTL default: got %v, want 5m", cfg.InflightLockTTL)
+	}
+}
+
+func TestLoadRedis_InflightLockTTLOverride(t *testing.T) {
+	unsetRedisEnvVars(t)
+	t.Setenv("REDIS_INFLIGHT_LOCK_TTL", "10m")
+
+	cfg, err := storagecfg.LoadRedis("/tmp/nonexistent-env-file.env")
+	if err != nil {
+		t.Fatalf("REDIS_INFLIGHT_LOCK_TTL 로드 실패: %v", err)
+	}
+	if cfg.InflightLockTTL != 10*time.Minute {
+		t.Errorf("InflightLockTTL: got %v, want 10m", cfg.InflightLockTTL)
+	}
+}
+
+func TestLoadRedis_InvalidInflightLockTTL(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"not a duration", "not-a-duration"},
+		{"zero", "0s"},
+		{"negative", "-1m"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetRedisEnvVars(t)
+			t.Setenv("REDIS_INFLIGHT_LOCK_TTL", tt.value)
+
+			_, err := storagecfg.LoadRedis("/tmp/nonexistent-env-file.env")
+			if err == nil {
+				t.Fatalf("REDIS_INFLIGHT_LOCK_TTL=%q: 에러가 반환되어야 합니다", tt.value)
+			}
+		})
 	}
 }
 

@@ -16,6 +16,10 @@ import (
 
 // DefaultInflightLockTTL 은 Redis 분산 Lock 의 기본 TTL 입니다.
 // CLAUDE_CODE_TIMEOUT 기본값(120s) 의 2.5배 — 프로세스 크래시 후 stuck 슬롯 자동 해제 보장.
+//
+// 런타임 환경에서는 REDIS_INFLIGHT_LOCK_TTL 환경변수로 덮어쓸 수 있습니다 (이슈 #495).
+// CLAUDE_CODE_TIMEOUT 을 늘렸을 때 본 TTL 도 함께 늘려야 (CLAUDE_CODE_TIMEOUT × 2.5 권장)
+// 정상 LLM 호출이 lock TTL 초과로 stuck 표시되는 false positive 를 회피.
 const DefaultInflightLockTTL = 5 * time.Minute
 
 const inflightKeyPrefix = "llmgen:inflight:"
