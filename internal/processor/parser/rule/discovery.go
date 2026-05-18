@@ -55,6 +55,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 		return nil, &Error{
 			Code:       ErrEmptySelector,
 			Message:    "link discovery requires non-nil LinkDiscoveryConfig",
+			Host:       errorHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 		}
@@ -68,6 +69,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 			return nil, &Error{
 				Code:       ErrEmptySelector,
 				Message:    fmt.Sprintf("invalid ArticleURLPattern regex: %q", cfg.ArticleURLPattern),
+				Host:       errorHost(raw.URL),
 				URL:        raw.URL,
 				TargetType: string(model.TargetTypeList),
 				Err:        err,
@@ -96,6 +98,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 		return nil, &Error{
 			Code:       ErrParseFailure,
 			Message:    "link extractor failed",
+			Host:       errorHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 			Err:        err,
@@ -161,6 +164,7 @@ func (d *PageLinkDiscovery) Discover(raw *core.RawContent, cfg *model.LinkDiscov
 		return nil, &Error{
 			Code:       ErrParseFailure,
 			Message:    msg,
+			Host:       errorHost(raw.URL),
 			URL:        raw.URL,
 			TargetType: string(model.TargetTypeList),
 		}
