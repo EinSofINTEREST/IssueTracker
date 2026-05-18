@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -507,6 +508,92 @@ func TestLoadScheduler_InvalidBacklogCheckTimeout(t *testing.T) {
 	_, err := processorcfg.LoadScheduler("/tmp/nonexistent-env-file.env")
 	if err == nil {
 		t.Fatal("SCHEDULER_BACKLOG_CHECK_TIMEOUT 가 duration 형식이 아니면 에러가 반환되어야 합니다")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadJobBuffer (이슈 #510 / PR #511 Copilot 피드백)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func unsetJobBufferEnvVars(t *testing.T) {
+	t.Helper()
+	vars := []string{
+		"PUBLISHER_REDIS_BUFFER_ENABLED",
+		"PUBLISHER_REDIS_BUFFER_DRAIN_INTERVAL",
+		"PUBLISHER_REDIS_BUFFER_TARGET_BACKLOG",
+		"PUBLISHER_REDIS_BUFFER_DRAIN_BATCH",
+		"PUBLISHER_REDIS_BUFFER_MAX_LEN",
+		"PUBLISHER_REDIS_BUFFER_CHECK_TIMEOUT",
+	}
+	for _, v := range vars {
+		t.Setenv(v, "")
+	}
+}
+
+func TestLoadJobBuffer_DefaultValues(t *testing.T) {
+	unsetJobBufferEnvVars(t)
+
+	cfg, err := processorcfg.LoadJobBuffer("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+
+	def := processorcfg.DefaultJobBufferConfig()
+	if cfg.Enabled != def.Enabled {
+		t.Errorf("Enabled: got %v, want %v (default disabled)", cfg.Enabled, def.Enabled)
+	}
+	if cfg.DrainInterval != def.DrainInterval {
+		t.Errorf("DrainInterval: got %v, want %v", cfg.DrainInterval, def.DrainInterval)
+	}
+	if cfg.TargetBacklog != def.TargetBacklog {
+		t.Errorf("TargetBacklog: got %d, want %d", cfg.TargetBacklog, def.TargetBacklog)
+	}
+	if cfg.DrainBatch != def.DrainBatch {
+		t.Errorf("DrainBatch: got %d, want %d", cfg.DrainBatch, def.DrainBatch)
+	}
+	if cfg.MaxLen != def.MaxLen {
+		t.Errorf("MaxLen: got %d, want %d", cfg.MaxLen, def.MaxLen)
+	}
+}
+
+func TestLoadJobBuffer_EnvOverride(t *testing.T) {
+	unsetJobBufferEnvVars(t)
+	t.Setenv("PUBLISHER_REDIS_BUFFER_ENABLED", "true")
+	t.Setenv("PUBLISHER_REDIS_BUFFER_DRAIN_INTERVAL", "10s")
+	t.Setenv("PUBLISHER_REDIS_BUFFER_TARGET_BACKLOG", "1500")
+	t.Setenv("PUBLISHER_REDIS_BUFFER_DRAIN_BATCH", "50")
+	t.Setenv("PUBLISHER_REDIS_BUFFER_MAX_LEN", "0") // 0 = unlimited (NonNegativeInt64)
+
+	cfg, err := processorcfg.LoadJobBuffer("/tmp/nonexistent-env-file.env")
+	require.NoError(t, err)
+
+	assert.True(t, cfg.Enabled)
+	assert.Equal(t, 10*time.Second, cfg.DrainInterval)
+	assert.Equal(t, int64(1500), cfg.TargetBacklog)
+	assert.Equal(t, 50, cfg.DrainBatch)
+	assert.Equal(t, int64(0), cfg.MaxLen)
+}
+
+func TestLoadJobBuffer_InvalidInputs(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"invalid duration", "PUBLISHER_REDIS_BUFFER_DRAIN_INTERVAL", "not-a-duration"},
+		{"non-positive duration", "PUBLISHER_REDIS_BUFFER_DRAIN_INTERVAL", "0s"},
+		{"invalid int (target)", "PUBLISHER_REDIS_BUFFER_TARGET_BACKLOG", "not-a-number"},
+		{"non-positive target", "PUBLISHER_REDIS_BUFFER_TARGET_BACKLOG", "0"},
+		{"invalid int (batch)", "PUBLISHER_REDIS_BUFFER_DRAIN_BATCH", "abc"},
+		{"non-positive batch", "PUBLISHER_REDIS_BUFFER_DRAIN_BATCH", "-5"},
+		{"negative maxlen", "PUBLISHER_REDIS_BUFFER_MAX_LEN", "-1"},
+		{"invalid check timeout", "PUBLISHER_REDIS_BUFFER_CHECK_TIMEOUT", "xyz"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unsetJobBufferEnvVars(t)
+			t.Setenv(tt.key, tt.value)
+			_, err := processorcfg.LoadJobBuffer("/tmp/nonexistent-env-file.env")
+			assert.Error(t, err, "%s=%q 는 에러를 반환해야 함", tt.key, tt.value)
+		})
 	}
 }
 

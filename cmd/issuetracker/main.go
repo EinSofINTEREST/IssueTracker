@@ -130,8 +130,71 @@ func main() {
 	crawlerKafkaCfg := queue.DefaultConfig()
 	crawlerKafkaCfg.GroupID = queue.GroupCrawlerWorkers
 
-	crawlerProducer := queue.NewProducer(crawlerKafkaCfg)
-	defer crawlerProducer.Close()
+	// Redis client 조기 초기화 — JobBuffer / ProcessingLock / IngestionLock / RetryScheduler 가
+	// 모두 공유 (이슈 #510). 실패 시 graceful degrade — 모든 Redis 기반 기능은 noop fallback.
+	var redisClientShared *redis.Client
+	redisCfg, err := storagecfg.LoadRedis()
+	if err != nil {
+		log.WithError(err).Warn("failed to load redis config, falling back to noop processing/ingestion lock and disabled job buffer")
+	} else {
+		redisClient, redisErr := redis.New(ctx, redisCfg)
+		if redisErr != nil {
+			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop processing/ingestion lock and disabled job buffer")
+		} else {
+			defer redisClient.Close()
+			redisClientShared = redisClient
+			log.WithFields(map[string]interface{}{
+				"host": redisCfg.Host,
+				"port": redisCfg.Port,
+			}).Info("redis connected (shared by lock / ingestion lock / job buffer / retry scheduler)")
+		}
+	}
+
+	// 이슈 #510 — normal/low priority crawl 토픽 Redis 버퍼링 (opt-in).
+	// Enabled + Redis 연결 시 BufferingProducer 데코레이터 + BufferDrainer goroutine 활성화.
+	// 비활성 시 raw KafkaProducer 사용 (기존 동작 보존).
+	jobBufferCfg, err := processorcfg.LoadJobBuffer()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load job buffer config")
+	}
+
+	rawCrawlerProducer := queue.NewProducer(crawlerKafkaCfg)
+	defer rawCrawlerProducer.Close()
+
+	var crawlerProducer queue.Producer = rawCrawlerProducer
+	var bufferDrainer *scheduler.BufferDrainer // nil 이면 기능 비활성 — Stop() skip
+
+	if jobBufferCfg.Enabled && redisClientShared != nil {
+		bufferingProducer := queue.NewBufferingProducer(rawCrawlerProducer, redisClientShared, jobBufferCfg.MaxLen, log)
+		crawlerProducer = bufferingProducer
+
+		drainer, derr := scheduler.NewBufferDrainer(
+			redisClientShared,
+			rawCrawlerProducer, // drainer 는 underlying 으로 직접 publish — 무한 루프 회피
+			queue.NewBacklogChecker(crawlerKafkaCfg.Brokers, jobBufferCfg.CheckTimeout),
+			scheduler.BufferDrainerConfig{
+				Interval:      jobBufferCfg.DrainInterval,
+				TargetBacklog: jobBufferCfg.TargetBacklog,
+				DrainBatch:    jobBufferCfg.DrainBatch,
+				MaxLen:        jobBufferCfg.MaxLen,
+				CheckTimeout:  jobBufferCfg.CheckTimeout,
+				GroupID:       queue.GroupCrawlerWorkers,
+			},
+			log,
+		)
+		if derr != nil {
+			log.WithError(derr).Fatal("failed to construct buffer drainer")
+		}
+		bufferDrainer = drainer
+		log.WithFields(map[string]interface{}{
+			"drain_interval": jobBufferCfg.DrainInterval.String(),
+			"target_backlog": jobBufferCfg.TargetBacklog,
+			"drain_batch":    jobBufferCfg.DrainBatch,
+			"max_len":        jobBufferCfg.MaxLen,
+		}).Info("publisher redis buffer enabled (normal/low priority)")
+	} else if jobBufferCfg.Enabled && redisClientShared == nil {
+		log.Warn("publisher redis buffer requested but redis unavailable — falling back to direct kafka publish")
+	}
 
 	// 이슈 #391 — PriorityResolver chain 이 publisher 측으로 이동 + 모든 PublishX 가
 	// resolver 통과 (메타 #385 Sub 6). ExplicitPriorityResolver 를 chain 1순위 로 등록 —
@@ -319,57 +382,41 @@ func main() {
 		}
 	}
 
-	// Redis 기반 ProcessingLock: 동일 URL 이 여러 worker/인스턴스에서 단계별 (fetcher/parser/validator)
-	// 중복 처리되는 것을 방지합니다. 단일 인스턴스를 fetcher / parser / validator 가 공유 —
-	// 단계 구분은 ProcessingKey(stage, url) 의 stage prefix 로 처리.
-	// worker/manager 가 nil 을 NoopProcessingLock 로 fallback 처리하는 설계와 일관되게,
-	// Redis 초기화 실패 시에도 크롤링이 중단되지 않도록 graceful degrade 합니다.
+	// Redis 기반 ProcessingLock / IngestionLock / DelayedRetryScheduler — redisClientShared 가
+	// 위쪽에서 이미 초기화됨 (이슈 #510 — JobBuffer 와 client 공유). 본 블록은 lock/retry 만 wire.
+	// 단일 인스턴스를 fetcher / parser / validator 가 공유 — 단계 구분은 ProcessingKey(stage, url)
+	// 의 stage prefix 로 처리. worker/manager 가 nil 을 NoopProcessingLock 로 fallback 처리.
 	var procLock locks.ProcessingLock
 	var ingestionLock locks.IngestionLock
 	var retryScheduler bus.RetryScheduler
 	var retrySchedulerStop func()
-	var redisClientShared *redis.Client // failure counter wiring 에서 재사용
-	redisCfg, err := storagecfg.LoadRedis()
-	if err != nil {
-		log.WithError(err).Warn("failed to load redis config, falling back to noop processing lock and ingestion lock")
-	} else {
-		redisClient, redisErr := redis.New(ctx, redisCfg)
-		if redisErr != nil {
-			log.WithError(redisErr).Warn("failed to connect to redis, falling back to noop processing lock and ingestion lock")
-		} else {
-			defer redisClient.Close()
-			redisClientShared = redisClient
-			log.WithFields(map[string]interface{}{
-				"host": redisCfg.Host,
-				"port": redisCfg.Port,
-			}).Info("redis connected for processing lock and ingestion lock")
-			procLock = locks.NewRedisProcessingLock(redisClient, locks.DefaultProcessingLockTTL)
-			ingestionLock = locks.NewRedisIngestionLock(redisClient, redisCfg.IngestionLockTTL)
+	if redisClientShared != nil {
+		procLock = locks.NewRedisProcessingLock(redisClientShared, locks.DefaultProcessingLockTTL)
+		ingestionLock = locks.NewRedisIngestionLock(redisClientShared, redisCfg.IngestionLockTTL)
 
-			// Delayed retry queue: retry 를 Redis ZSET 에 보관하고 별도
-			// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
-			// Redis 부재 시 worker 가 lazy 로 KafkaImmediateRetryScheduler 를 사용 (기존 동작).
-			retryCfg := bus.DefaultRedisRetrySchedulerConfig()
-			// idle heartbeat 압축 (이슈 #370) — pkg/config 로 env 로드 일관성 유지.
-			retrySchedCfg, retrySchedErr := runtimecfg.LoadRetryScheduler()
-			if retrySchedErr != nil {
-				log.WithError(retrySchedErr).Fatal("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS 로드 실패")
-			}
-			retryCfg.HeartbeatEveryNIdleTicks = retrySchedCfg.HeartbeatEveryNIdleTicks
-			redisRetry := bus.NewRedisDelayedRetryScheduler(
-				redisClient, jobPublisher,
-				retryCfg,
-				log,
-			)
-			runCtx, cancelRun := context.WithCancel(ctx)
-			redisRetry.Start(runCtx) // 내부에서 wg.Add 후 go Run — 패닉 안전
-			retryScheduler = redisRetry
-			retrySchedulerStop = func() {
-				cancelRun()
-				redisRetry.Stop()
-			}
-			log.Info("redis delayed retry queue enabled (worker slot occupancy on retry resolved)")
+		// Delayed retry queue: retry 를 Redis ZSET 에 보관하고 별도
+		// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
+		// Redis 부재 시 worker 가 lazy 로 KafkaImmediateRetryScheduler 를 사용 (기존 동작).
+		retryCfg := bus.DefaultRedisRetrySchedulerConfig()
+		// idle heartbeat 압축 (이슈 #370) — pkg/config 로 env 로드 일관성 유지.
+		retrySchedCfg, retrySchedErr := runtimecfg.LoadRetryScheduler()
+		if retrySchedErr != nil {
+			log.WithError(retrySchedErr).Fatal("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS 로드 실패")
 		}
+		retryCfg.HeartbeatEveryNIdleTicks = retrySchedCfg.HeartbeatEveryNIdleTicks
+		redisRetry := bus.NewRedisDelayedRetryScheduler(
+			redisClientShared, jobPublisher,
+			retryCfg,
+			log,
+		)
+		runCtx, cancelRun := context.WithCancel(ctx)
+		redisRetry.Start(runCtx) // 내부에서 wg.Add 후 go Run — 패닉 안전
+		retryScheduler = redisRetry
+		retrySchedulerStop = func() {
+			cancelRun()
+			redisRetry.Stop()
+		}
+		log.Info("redis delayed retry queue enabled (worker slot occupancy on retry resolved)")
 	}
 	if retrySchedulerStop != nil {
 		defer retrySchedulerStop()
@@ -815,7 +862,17 @@ func main() {
 
 	// Backlog throttle: SCHEDULER_MAX_BACKLOG > 0 일 때만 활성.
 	// crawl 토픽의 consumer-group lag 가 임계값 초과 시 publish 차단.
-	if schedulerCfg.MaxBacklog > 0 {
+	//
+	// 이슈 #510 — Redis 버퍼 활성 시 throttle wire skip:
+	//   - BacklogThrottler 는 scheduler.runEntry 에서 publish 직전 normal/low job 을 silent drop
+	//   - 본 PR 의 BufferingProducer 는 publish 단계에서 normal/low 를 Redis 로 routing
+	//   - 둘 다 활성화하면 throttle drop 이 BufferingProducer 진입 전 발생 → buffer 가 손실 경로 우회 못함 (Copilot PR #511 피드백)
+	// 따라서 buffer 활성 시 throttler 자체를 wiring 하지 않음 — buffer 가 elastic queueing 책임 인수.
+	switch {
+	case bufferDrainer != nil:
+		log.WithField("max_backlog_ignored", schedulerCfg.MaxBacklog).
+			Info("scheduler backlog throttle skipped — publisher redis buffer manages elastic queueing")
+	case schedulerCfg.MaxBacklog > 0:
 		backlogChecker := queue.NewBacklogChecker(crawlerKafkaCfg.Brokers, schedulerCfg.BacklogCheckTimeout)
 		throttler := scheduler.NewBacklogThrottler(
 			backlogChecker,
@@ -843,6 +900,12 @@ func main() {
 		log.WithField("entry_count", len(entries)).Info("scheduler started")
 	} else {
 		log.Info("scheduler disabled by STAGES_SCHEDULER_ENABLED=false")
+	}
+
+	// 이슈 #510 — BufferDrainer 시작 (config Enabled + Redis 연결 시에만 wiring 됨).
+	// drainer 가 scheduler stage 와 독립 — fetcher 단계가 활성화된 어떤 인스턴스에서도 drain 가능.
+	if bufferDrainer != nil {
+		bufferDrainer.Start(ctx)
 	}
 
 	// ══════════════════════════════════════════════════════════════════════════
@@ -1090,6 +1153,14 @@ func main() {
 	shutdownCtx = log.ToContext(shutdownCtx)
 
 	sched.Stop()
+
+	// 이슈 #510 — BufferDrainer 정지. scheduler.Stop 이후 호출 — scheduler 가 BufferingProducer 로
+	// 보내는 publish 가 끝난 뒤 drainer 가 잔존 buffer 를 마지막으로 비울 수 있도록.
+	// 단, drainer 는 자기 tick 주기로 동작 — Stop 은 다음 tick 직전에 cancel + 진행 중 cycle 완료 대기.
+	// 잔존 buffer 는 Redis 에 보존되어 다음 부팅 시 자동 회복 (옵션 A — 본 이슈 본문 참조).
+	if bufferDrainer != nil {
+		bufferDrainer.Stop()
+	}
 
 	// Stage 들을 정의 순서대로 stop — fetcher → parser → validate 순서로 정리.
 	// 데이터 파이프라인 source-first 원칙: fetcher 가 먼저 Kafka 발행을 멈추면 downstream
