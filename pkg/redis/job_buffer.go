@@ -32,30 +32,52 @@ func JobBufferKey(label string) string {
 // 항목이 소실되지만, 정책상 신규 publish 우선. 호출자는 enqueue 직전 IngestionLock 로 dedup 책임.
 //
 // label / payload 빈 값은 명시적 error — silent corruption 회피.
+//
+// 단일 payload 의 thin wrapper — 내부에서 EnqueueBatch 로 위임 (single source of truth).
 func (c *Client) EnqueueJob(ctx context.Context, label string, payload []byte, maxLen int64) error {
-	if label == "" {
-		return errors.New("enqueue job: empty label")
-	}
 	if len(payload) == 0 {
 		return fmt.Errorf("enqueue job %s: empty payload", label)
 	}
+	return c.EnqueueBatch(ctx, label, [][]byte{payload}, maxLen)
+}
 
-	key := JobBufferKey(label)
-
-	if maxLen > 0 {
-		// LPUSH + LTRIM 을 pipeline 으로 1 RTT — 두 명령 사이 race 가 있어도 다음 LTRIM 에서 보정.
-		pipe := c.rdb.Pipeline()
-		pipe.LPush(ctx, key, payload)
-		// LTRIM start stop 은 inclusive — [0, maxLen-1] 보존 (head 최신 N개).
-		pipe.LTrim(ctx, key, 0, maxLen-1)
-		if _, err := pipe.Exec(ctx); err != nil {
-			return fmt.Errorf("enqueue job %s: %w", label, err)
-		}
+// EnqueueBatch 는 payloads 슬라이스 전체를 단일 Redis pipeline 으로 LPUSH 합니다 (gemini PR #511 피드백).
+//
+// 동작:
+//  1. 빈 payloads → 즉시 (nil, nil) 반환 (no-op, idempotent)
+//  2. 모든 payloads 를 LPUSH 의 variadic args 로 1 RTT 전송
+//  3. MaxLen > 0 이면 동일 pipeline 에 LTRIM 추가 — 2 명령 1 RTT
+//
+// LPUSH 의 multi-arg 의미: LPUSH key v1 v2 v3 → list head 가 [v3, v2, v1, ...prev] 순서.
+// 즉 같은 호출 안의 마지막 인자가 head 최우선. 본 함수는 입력 순서 보존을 목표로 하지 않음 —
+// drainer 가 batch 단위로 처리하면 충분.
+//
+// label 빈 값 / 개별 payload 빈 값 → 명시적 error (silent corruption 회피).
+// payloads 길이 0 은 정상 (no-op).
+func (c *Client) EnqueueBatch(ctx context.Context, label string, payloads [][]byte, maxLen int64) error {
+	if label == "" {
+		return errors.New("enqueue batch: empty label")
+	}
+	if len(payloads) == 0 {
 		return nil
 	}
 
-	if err := c.rdb.LPush(ctx, key, payload).Err(); err != nil {
-		return fmt.Errorf("enqueue job %s: %w", label, err)
+	key := JobBufferKey(label)
+	args := make([]interface{}, len(payloads))
+	for i, p := range payloads {
+		if len(p) == 0 {
+			return fmt.Errorf("enqueue batch %s: empty payload at index %d", label, i)
+		}
+		args[i] = p
+	}
+
+	pipe := c.rdb.Pipeline()
+	pipe.LPush(ctx, key, args...)
+	if maxLen > 0 {
+		pipe.LTrim(ctx, key, 0, maxLen-1)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("enqueue batch %s: %w", label, err)
 	}
 	return nil
 }

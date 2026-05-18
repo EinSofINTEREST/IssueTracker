@@ -69,6 +69,16 @@ func (b *fakeBuffer) EnqueueJob(_ context.Context, label string, payload []byte,
 	return nil
 }
 
+func (b *fakeBuffer) EnqueueBatch(_ context.Context, label string, payloads [][]byte, _ int64) error {
+	if b.enqueueErr != nil {
+		return b.enqueueErr
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.enqueued[label] = append(b.enqueued[label], payloads...)
+	return nil
+}
+
 func (b *fakeBuffer) DrainJobs(_ context.Context, label string, n int) ([][]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -175,6 +185,49 @@ func TestBufferingProducer_Publish_BufferFailFallback(t *testing.T) {
 	})
 	require.NoError(t, err, "fallback 으로 underlying.Publish 가 성공하면 본 호출도 성공")
 	assert.Equal(t, 1, under.count(), "buffer 실패 시 underlying 으로 fallback")
+}
+
+// countingFakeBuffer 는 EnqueueBatch 호출 횟수를 추적해 단일 batch 호출 검증용.
+type countingFakeBuffer struct {
+	*fakeBuffer
+	batchCallsPerLabel map[string]int
+}
+
+func newCountingFakeBuffer() *countingFakeBuffer {
+	return &countingFakeBuffer{
+		fakeBuffer:         newFakeBuffer(),
+		batchCallsPerLabel: make(map[string]int),
+	}
+}
+
+func (b *countingFakeBuffer) EnqueueBatch(ctx context.Context, label string, payloads [][]byte, maxLen int64) error {
+	b.mu.Lock()
+	b.batchCallsPerLabel[label]++
+	b.mu.Unlock()
+	return b.fakeBuffer.EnqueueBatch(ctx, label, payloads, maxLen)
+}
+
+// TestBufferingProducer_PublishBatch_UsesSingleEnqueueBatchPerLabel 는 같은 label 의 N개 메시지가
+// 단일 EnqueueBatch 호출로 처리되는지 검증 (gemini PR #511 피드백).
+func TestBufferingProducer_PublishBatch_UsesSingleEnqueueBatchPerLabel(t *testing.T) {
+	under := &fakeProducer{}
+	buf := newCountingFakeBuffer()
+	p := queue.NewBufferingProducer(under, buf, 1000, newTestLog())
+
+	msgs := []queue.Message{
+		{Topic: queue.TopicCrawlNormal, Value: []byte("n1")},
+		{Topic: queue.TopicCrawlNormal, Value: []byte("n2")},
+		{Topic: queue.TopicCrawlNormal, Value: []byte("n3")},
+		{Topic: queue.TopicCrawlLow, Value: []byte("l1")},
+		{Topic: queue.TopicCrawlLow, Value: []byte("l2")},
+	}
+	require.NoError(t, p.PublishBatch(context.Background(), msgs))
+
+	// 같은 label 의 3개 normal 메시지 → 1회 EnqueueBatch, 2개 low → 1회 EnqueueBatch.
+	assert.Equal(t, 1, buf.batchCallsPerLabel["normal"], "label 'normal' 1회 batch 호출")
+	assert.Equal(t, 1, buf.batchCallsPerLabel["low"], "label 'low' 1회 batch 호출")
+	assert.Equal(t, 3, buf.lenFor("normal"))
+	assert.Equal(t, 2, buf.lenFor("low"))
 }
 
 // TestBufferingProducer_PublishBatch_MixedPriorities 는 batch 안 high/normal/low 혼합 라우팅 검증.

@@ -235,16 +235,18 @@ func (d *BufferDrainer) drainOnce(ctx context.Context, label, topic string) erro
 	}
 
 	if pubErr := d.producer.PublishBatch(ctx, msgs); pubErr != nil {
-		// publish 실패 → 재적재 (순서 보존 X). MaxLen 으로 LTRIM 회피 위해 maxLen 그대로 전달.
+		// publish 실패 → 재적재 (순서 보존 X). EnqueueBatch 로 1 RTT — N개 EnqueueJob 회피
+		// (gemini PR #511 피드백).
 		d.log.WithFields(map[string]interface{}{
 			"label": label,
 			"topic": topic,
 			"count": len(msgs),
 		}).WithError(pubErr).Warn("buffer drain publish failed, re-enqueueing payloads")
-		for _, p := range payloads {
-			if reErr := d.buffer.EnqueueJob(ctx, label, p, d.maxLen); reErr != nil {
-				d.log.WithError(reErr).Warn("re-enqueue after publish failure failed (data loss possible)")
-			}
+		if reErr := d.buffer.EnqueueBatch(ctx, label, payloads, d.maxLen); reErr != nil {
+			d.log.WithFields(map[string]interface{}{
+				"label": label,
+				"count": len(payloads),
+			}).WithError(reErr).Warn("re-enqueue after publish failure failed (data loss possible)")
 		}
 		return fmt.Errorf("publish batch %s: %w", topic, pubErr)
 	}

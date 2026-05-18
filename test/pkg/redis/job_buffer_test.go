@@ -99,6 +99,73 @@ func TestEnqueueJob_EmptyValidation(t *testing.T) {
 	assert.Error(t, client.EnqueueJob(ctx, "ok", []byte{}, 0))
 }
 
+// TestEnqueueBatch_AddsAllPayloadsInOneCall 는 EnqueueBatch 가 multi-arg LPUSH 로 N개를 한 번에 적재 검증.
+func TestEnqueueBatch_AddsAllPayloadsInOneCall(t *testing.T) {
+	client := newTestClient(t)
+	label := "test-batch"
+	jobBufferCleanup(t, client, label)
+	ctx := context.Background()
+
+	payloads := [][]byte{
+		[]byte("batch-1"),
+		[]byte("batch-2"),
+		[]byte("batch-3"),
+	}
+	require.NoError(t, client.EnqueueBatch(ctx, label, payloads, 0))
+
+	n, err := client.JobBufferLen(ctx, label)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n)
+
+	drained, err := client.DrainJobs(ctx, label, 10)
+	require.NoError(t, err)
+	require.Len(t, drained, 3)
+}
+
+// TestEnqueueBatch_EmptyPayloadsNoop 는 빈 슬라이스가 정상 처리됨을 검증.
+func TestEnqueueBatch_EmptyPayloadsNoop(t *testing.T) {
+	client := newTestClient(t)
+	label := "test-batch-empty"
+	jobBufferCleanup(t, client, label)
+	ctx := context.Background()
+
+	require.NoError(t, client.EnqueueBatch(ctx, label, nil, 0))
+	require.NoError(t, client.EnqueueBatch(ctx, label, [][]byte{}, 0))
+
+	n, err := client.JobBufferLen(ctx, label)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+}
+
+// TestEnqueueBatch_RespectsLTRIM 는 MaxLen 이 batch 결과에도 적용됨을 검증.
+func TestEnqueueBatch_RespectsLTRIM(t *testing.T) {
+	client := newTestClient(t)
+	label := "test-batch-trim"
+	jobBufferCleanup(t, client, label)
+	ctx := context.Background()
+
+	payloads := make([][]byte, 5)
+	for i := range payloads {
+		payloads[i] = []byte("p-" + string(rune('a'+i)))
+	}
+	require.NoError(t, client.EnqueueBatch(ctx, label, payloads, 3))
+
+	n, err := client.JobBufferLen(ctx, label)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n, "MaxLen=3 로 LTRIM 적용됨")
+}
+
+// TestEnqueueBatch_EmptyPayloadInSliceFails 는 batch 중 빈 payload 가 있으면 error 검증.
+func TestEnqueueBatch_EmptyPayloadInSliceFails(t *testing.T) {
+	client := newTestClient(t)
+	label := "test-batch-invalid"
+	jobBufferCleanup(t, client, label)
+	ctx := context.Background()
+
+	err := client.EnqueueBatch(ctx, label, [][]byte{[]byte("ok"), nil, []byte("ok2")}, 0)
+	assert.Error(t, err)
+}
+
 // TestJobBufferLen 은 enqueue 후 len 이 정확한지 검증합니다.
 func TestJobBufferLen(t *testing.T) {
 	client := newTestClient(t)

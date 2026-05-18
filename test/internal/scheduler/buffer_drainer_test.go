@@ -42,6 +42,16 @@ func (b *mockJobBuffer) EnqueueJob(_ context.Context, label string, payload []by
 	return nil
 }
 
+func (b *mockJobBuffer) EnqueueBatch(_ context.Context, label string, payloads [][]byte, _ int64) error {
+	if b.enqErr != nil {
+		return b.enqErr
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.store[label] = append(b.store[label], payloads...)
+	return nil
+}
+
 func (b *mockJobBuffer) DrainJobs(_ context.Context, label string, n int) ([][]byte, error) {
 	if b.drainErr != nil {
 		return nil, b.drainErr
