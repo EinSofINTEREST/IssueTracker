@@ -297,3 +297,122 @@ func TestParser_RuleLookupMock_NilRuleSuccess_NoPanic(t *testing.T) {
 	require.ErrorAs(t, err, &rerr)
 	assert.Equal(t, rule.ErrNoRule, rerr.Code)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// rule.Error 의 Host 필드 — 이슈 #508
+//
+// parser.go 의 모든 Error 발산이 raw.URL 에서 canonical host (lowercase hostname, port 제거) 를
+// 채워야 worker 의 staleCounter / failureCounter 가 올바른 host 키로 누적됨.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestParser_ParsePage_ErrorHost_EmptySelector(t *testing.T) {
+	r := pageRule()
+	r.Selectors.Title = nil
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
+
+	_, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com/x", articleHTML))
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrEmptySelector, rerr.Code)
+	assert.Equal(t, "news.example.com", rerr.Host, "Host 필드는 raw.URL 의 canonical host 와 일치해야 함")
+}
+
+func TestParser_ParsePage_ErrorHost_ParseFailure(t *testing.T) {
+	r := pageRule()
+	r.Selectors.MainContent = &model.FieldSelector{CSS: "div.no-such-class", Multi: true}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
+
+	_, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com/x", articleHTML))
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrParseFailure, rerr.Code)
+	assert.Equal(t, "news.example.com", rerr.Host)
+}
+
+func TestParser_ParsePage_ErrorHost_EmptyRaw_ParseFailure(t *testing.T) {
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{pageRule()}}
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
+
+	_, err := p.ParsePage(context.Background(), &core.RawContent{URL: "https://news.example.com/x", HTML: ""})
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrParseFailure, rerr.Code)
+	assert.Equal(t, "news.example.com", rerr.Host, "validateRaw 가 발산한 Error 도 Host 필드를 채워야 함")
+}
+
+func TestParser_ParsePage_ErrorHost_LowercasesHost(t *testing.T) {
+	r := pageRule()
+	r.Selectors.Title = nil
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
+
+	// 대문자 host — errorHost 가 lowercase 로 정규화해야 staleCounter 키가 resolver 와 일치.
+	_, err := p.ParsePage(context.Background(), makeRaw("https://NEWS.EXAMPLE.COM/x", articleHTML))
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, "news.example.com", rerr.Host, "Host 는 소문자로 정규화되어야 함")
+}
+
+func TestParser_ParsePage_ErrorHost_StripsPort(t *testing.T) {
+	r := pageRule()
+	r.Selectors.Title = nil
+	r.HostPattern = "news.example.com"
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
+
+	_, err := p.ParsePage(context.Background(), makeRaw("https://news.example.com:8080/x", articleHTML))
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, "news.example.com", rerr.Host, "Host 는 port 제거된 hostname")
+}
+
+func TestParser_ParseLinks_ErrorHost_EmptySelector(t *testing.T) {
+	r := listRule()
+	r.Selectors.ItemContainer = nil
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
+
+	_, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category/politics", listHTML))
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrEmptySelector, rerr.Code)
+	assert.Equal(t, "news.example.com", rerr.Host)
+}
+
+func TestParser_ParseLinks_ErrorHost_ParseFailure(t *testing.T) {
+	r := listRule()
+	r.Selectors.ItemContainer = &model.FieldSelector{CSS: "ul.no-such-class li"}
+	repo := &fakeRepo{rules: []*model.ParserRuleRecord{r}}
+	res, _ := rule.NewResolver(repo)
+	p, _ := rule.NewParser(res)
+
+	_, err := p.ParseLinks(context.Background(), makeRaw("https://news.example.com/category/politics", listHTML))
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, rule.ErrParseFailure, rerr.Code)
+	assert.Equal(t, "news.example.com", rerr.Host)
+}
+
+func TestParser_NilRuleSuccess_ErrorHost(t *testing.T) {
+	mockLookup := &stubRuleLookup{rule: nil, err: nil}
+	p, _ := rule.NewParser(mockLookup)
+
+	// ParsePage nil-rule
+	_, err := p.ParsePage(context.Background(), makeRaw("https://example.com/a", articleHTML))
+	var rerr *rule.Error
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, "example.com", rerr.Host, "nil-rule ErrNoRule 도 Host 채워야 함")
+
+	// ParseLinks nil-rule
+	_, err = p.ParseLinks(context.Background(), makeRaw("https://example.com/list", listHTML))
+	require.ErrorAs(t, err, &rerr)
+	assert.Equal(t, "example.com", rerr.Host)
+}
