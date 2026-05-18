@@ -235,19 +235,34 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 
 	_, err = RunValidation(ctx, v, content)
 	if err != nil {
+		// 본 함수의 모든 validation-fail emit 사이트가 공유하는 공통 필드 빌더.
+		// CanonicalURL 이 URL 과 다를 때만 canonical_url 필드 추가 — redirect / canonical 차이 추적
+		// 가능 (Copilot PR #513 피드백). URL 자체는 contents.url NOT NULL 이라 항상 채워짐.
+		mkFields := func(base map[string]interface{}) map[string]interface{} {
+			base["url"] = content.URL
+			if content.CanonicalURL != "" && content.CanonicalURL != content.URL {
+				base["canonical_url"] = content.CanonicalURL
+			}
+			return base
+		}
 		// validator → parser 재학습 트리거 분기 (이슈 #363/#364) — selector 보강으로 해결
 		// 가능한 에러 (PublishedAt required / Title-Body min_length) 가 trigger 대상.
 		// 본 분기는 cfg.ReparseEnabled + 횟수 < max 일 때만 동작 — 그 외에는 기존 DLQ/requeue 흐름.
 		if w.cfg.ReparseEnabled && IsReparseEligible(err) {
 			reparseCount := readReparseCount(msg)
 			if reparseCount < core.MaxValidateReparseCount {
-				log.WithFields(map[string]interface{}{
+				// validation 실패는 콘텐츠 필터 결과 (시스템 에러 아님) — .WithError 부착 시
+				// 다운스트림 대시보드/알림이 시스템 에러로 오인. 대신 reject_reason 구조화 필드로
+				// 평탄화하고 url / source / country 를 일관 포함하여 사후 추적·분석 가능하도록.
+				log.WithFields(mkFields(map[string]interface{}{
 					"job_id":        pm.ID,
 					"ref_id":        ref.ID,
 					"source":        content.SourceID,
+					"country":       content.Country,
 					"reparse_count": reparseCount,
 					"max":           core.MaxValidateReparseCount,
-				}).WithError(err).Info("content validation failed, triggering parser reparse (LLM rule relearn)")
+					"reject_reason": err.Error(),
+				})).Info("content validation failed, triggering parser reparse (LLM rule relearn)")
 
 				// reparse cycle 시작 — 발행 성공 후 contents row 정리 (순서 중요, gemini 반영).
 				// Delete 가 republish 보다 먼저면 Delete 성공 + republish 실패 시 Kafka 재처리에서
@@ -275,14 +290,18 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 			}).Info("reparse count reached max, falling through to existing DLQ/requeue flow")
 		}
 
-		// 검증 실패: contents에서 삭제 후 DLQ 또는 재큐잉
+		// 검증 실패: contents에서 삭제 후 DLQ 또는 재큐잉.
+		// 본 emit 들은 validation 필터 결과 (콘텐츠 거부) — 시스템 에러 아니므로 .WithError 미부착.
+		// 모든 사이트에서 동일한 공통 필드 셋 (source / country / url / ref_id / reject_reason +
+		// CanonicalURL 이 url 과 다를 때 canonical_url 추가) 을 유지 (Copilot PR #513 피드백).
 		if pm.RetryCount >= maxRetries(msg) {
-			log.WithFields(map[string]interface{}{
-				"job_id":  pm.ID,
-				"ref_id":  ref.ID,
-				"source":  content.SourceID,
-				"country": content.Country,
-			}).WithError(err).Info("content validation failed, deleting content and sending to dlq")
+			log.WithFields(mkFields(map[string]interface{}{
+				"job_id":        pm.ID,
+				"ref_id":        ref.ID,
+				"source":        content.SourceID,
+				"country":       content.Country,
+				"reject_reason": err.Error(),
+			})).Info("content validation failed, deleting content and sending to dlq")
 
 			// contents.Delete 직전에 reject 사유를 contents 컬럼에 기록.
 			// 순서가 중요: Delete 후엔 사후 추적 단일 source 가 깨진다.
@@ -299,10 +318,14 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 				return fmt.Errorf("send to dlq (max retries): %w", dlqErr)
 			}
 		} else {
-			log.WithFields(map[string]interface{}{
-				"job_id":      pm.ID,
-				"retry_count": pm.RetryCount,
-			}).WithError(err).Info("content validation failed, requeueing")
+			log.WithFields(mkFields(map[string]interface{}{
+				"job_id":        pm.ID,
+				"ref_id":        ref.ID,
+				"source":        content.SourceID,
+				"country":       content.Country,
+				"retry_count":   pm.RetryCount,
+				"reject_reason": err.Error(),
+			})).Info("content validation failed, requeueing")
 			if rqErr := w.requeue(ctx, msg, &pm); rqErr != nil {
 				// requeue 실패 시 commit 하면 재시도 기회 상실 → 에러 반환하여 재소비 보장
 				return fmt.Errorf("requeue: %w", rqErr)
