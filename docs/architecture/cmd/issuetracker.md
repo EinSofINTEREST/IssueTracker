@@ -33,11 +33,11 @@
 11. PoolManager (3-tier crawler workers)
 12. LLM provider (chain policy, 이슈 #149)
 13. ParserWorker (consumer group: parsers)
-14. EnrichWorker (consumer group: enrichers, 이슈 #446 ~ #450)
-15. ValidateWorker (consumer group: validators)
-16. Refiner (path_pattern 정밀화, 이슈 #173 단계 4-2)
-17. RawContentCleaner cron                 (Claim Check 잔존물 정리)
-18. Scheduler + BacklogThrottler           (이슈 #124)
+14. Refiner (path_pattern 정밀화, 이슈 #173 단계 4-2)
+15. RawContentCleaner cron                 (Claim Check 잔존물 정리)
+16. Scheduler + BacklogThrottler           (이슈 #124)
+17. ValidateWorker (consumer group: validators)
+18. EnrichWorker (consumer group: enrichers, 이슈 #446 ~ #450)
 19. SIGTERM 대기 → 역순 graceful shutdown
 ```
 
@@ -139,7 +139,7 @@ SIGINT/SIGTERM 수신 시:
 
 1. logger 에 `shutting_down=true` 부착 (이슈 #72)
 2. root `cancel()` — 모든 goroutine 의 ctx 무효화
-3. shutdownCtx (`SHUTDOWN_TIMEOUT`, default 30s 또는 2m) 로 역순 Stop:
+3. shutdownCtx (`SHUTDOWN_TIMEOUT`, default 30s) 로 stages 역순 Stop:
    - `sched.Stop()`
    - `manager.Stop(shutdownCtx)` — drain crawler workers
    - `parserWorker.Stop(shutdownCtx)` — Parser.WaitAutoDemote 도 함께 호출 (이슈 #477)
@@ -148,8 +148,9 @@ SIGINT/SIGTERM 수신 시:
    - `llmGen.Stop(shutdownCtx)` — in-flight LLM call drain (이슈 #149)
    - `pathRefiner.Stop(shutdownCtx)` — refiner cycle drain (PR #191)
    - `cleaner.Stop()` — cleanup cron
-   - `claudegenPool.Stop(shutdownCtx)` — claudegen 컨테이너 정리 (이슈 #458, CLAUDE_CODE_SHUTDOWN_TIMEOUT)
-4. `defer` 체인이 Kafka producer/consumer, redis, pgpool 닫음
+4. cleanupCtx (`CLAUDE_CODE_SHUTDOWN_TIMEOUT`, default 10s) 로 claudegen 정리 — shutdownCtx 와 분리하여 stages.Stop 이 timeout 으로 cancel 되더라도 `docker rm -f` 가 반드시 시도되도록 보장:
+   - `claudegenPool.Stop(cleanupCtx)` — claudegen 컨테이너 정리 (이슈 #458)
+5. `defer` 체인이 Kafka producer/consumer, redis, pgpool 닫음
 
 <br>
 
