@@ -2,11 +2,15 @@ package worker_test
 
 // 이슈 #502 — validation-fail 로그 필드 검증.
 //
-// 3개 emit 지점 (deleting-to-dlq / requeueing / triggering parser reparse) 의 로그 출력에서:
+// 검증 대상 emit 2개 — DLQ 분기 (retry >= max) / requeueing 분기 (retry < max):
 //   - `error` 필드가 부착되지 않음 (.WithError 제거)
 //   - `url` 필드 존재 (사후 추적 가능)
 //   - `reject_reason` 필드 존재 (rejected 원인 평탄화)
-// 를 검증합니다.
+//   - CanonicalURL 이 URL 과 다를 때 canonical_url 필드 추가 (Copilot PR #513 피드백)
+//
+// reparse 분기 (triggering parser reparse) 는 ReparseEnabled + IsReparseEligible 양조건 필요 —
+// 동일 mkFields 헬퍼를 공유하므로 본 검증 결과가 그대로 적용됨. 별도 분기 활성 시나리오 테스트는
+// reparse_test.go 가 분기 자체를 커버.
 
 import (
 	"bytes"
@@ -177,4 +181,68 @@ func TestValidateWorker_RequeueLog_NoErrorField_HasURLAndRejectReason(t *testing
 	assert.Contains(t, reason, "VAL_")
 
 	assert.Equal(t, "info", entry["level"])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3) canonical_url 필드 (Copilot PR #513 피드백)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestValidateWorker_RequeueLog_CanonicalURLDiffers_HasCanonicalField 는
+// content.CanonicalURL 이 URL 과 다를 때 canonical_url 필드가 추가됨을 검증.
+func TestValidateWorker_RequeueLog_CanonicalURLDiffers_HasCanonicalField(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := newMockContentService()
+	log, buf := captureLog()
+	w := newWorkerWithLogger(consumer, producer, contentSvc, log)
+
+	content := newNewsContent()
+	content.Title = "x"
+	content.Body = "short body"
+	content.PublishedAt = time.Time{}
+	content.URL = "https://example.com/article?utm_source=foo"
+	content.CanonicalURL = "https://example.com/article" // URL 과 다름
+	msg := makeProcessingMessage(content, 0)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicNormalized
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorkerWithLogger(t, consumer, w, msg, log)
+
+	entry := findLogEntry(t, buf, "content validation failed, requeueing")
+	assert.Equal(t, content.URL, entry["url"])
+	canonical, _ := entry["canonical_url"].(string)
+	assert.Equal(t, content.CanonicalURL, canonical, "CanonicalURL != URL 시 canonical_url 필드 추가")
+}
+
+// TestValidateWorker_RequeueLog_CanonicalURLEmpty_NoCanonicalField 는
+// content.CanonicalURL 이 빈 문자열 (default) 일 때 canonical_url 필드가 부재함을 검증.
+func TestValidateWorker_RequeueLog_CanonicalURLEmpty_NoCanonicalField(t *testing.T) {
+	consumer := new(mockConsumer)
+	producer := new(mockProducer)
+	contentSvc := newMockContentService()
+	log, buf := captureLog()
+	w := newWorkerWithLogger(consumer, producer, contentSvc, log)
+
+	content := newNewsContent()
+	content.Title = "x"
+	content.Body = "short body"
+	content.PublishedAt = time.Time{}
+	content.CanonicalURL = "" // default
+	msg := makeProcessingMessage(content, 0)
+
+	contentSvc.On("GetByID", mock.Anything, content.ID).Return(content, nil)
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		return m.Topic == queue.TopicNormalized
+	})).Return(nil)
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil)
+
+	runWorkerWithLogger(t, consumer, w, msg, log)
+
+	entry := findLogEntry(t, buf, "content validation failed, requeueing")
+	_, hasCanonical := entry["canonical_url"]
+	assert.False(t, hasCanonical, "CanonicalURL 빈 문자열 시 canonical_url 필드 미부착 (노이즈 제거)")
 }
