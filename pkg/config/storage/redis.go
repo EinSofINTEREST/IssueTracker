@@ -31,6 +31,12 @@ type RedisConfig struct {
 	// 본 TTL 은 fallback (worker 가 release 호출 못 하고 죽은 경우 자동 회수).
 	// 환경변수: PIPELINE_GUARD_CATEGORY_TTL (default 60s).
 	PipelineGuardCategoryTTL time.Duration
+
+	// InflightLockTTL: llmgen 의 (host, targetType) 단위 분산 InflightLocker TTL (이슈 #495).
+	// CLAUDE_CODE_TIMEOUT 변경 시 동기화 가능하도록 환경변수로 노출.
+	// 기본 5m 은 CLAUDE_CODE_TIMEOUT 기본값 (120s) 의 2.5배 — 프로세스 크래시 후 stuck 슬롯 자동 해제.
+	// 환경변수: REDIS_INFLIGHT_LOCK_TTL (default 5m).
+	InflightLockTTL time.Duration
 }
 
 // DefaultRedisConfig는 로컬 개발 환경용 기본 RedisConfig를 반환합니다.
@@ -46,6 +52,7 @@ func DefaultRedisConfig() RedisConfig {
 		PoolSize:                 10,
 		IngestionLockTTL:         24 * time.Hour,
 		PipelineGuardCategoryTTL: 60 * time.Second,
+		InflightLockTTL:          5 * time.Minute,
 	}
 }
 
@@ -146,6 +153,16 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 			return RedisConfig{}, fmt.Errorf("invalid PIPELINE_GUARD_CATEGORY_TTL %q: must be positive", v)
 		}
 		cfg.PipelineGuardCategoryTTL = d
+	}
+	if v := os.Getenv("REDIS_INFLIGHT_LOCK_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parse REDIS_INFLIGHT_LOCK_TTL %q: %w", v, err)
+		}
+		if d <= 0 {
+			return RedisConfig{}, fmt.Errorf("invalid REDIS_INFLIGHT_LOCK_TTL %q: must be positive", v)
+		}
+		cfg.InflightLockTTL = d
 	}
 
 	return cfg, nil
