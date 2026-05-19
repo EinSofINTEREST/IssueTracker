@@ -136,10 +136,19 @@ func (c *ChromedpCrawler) Fetch(ctx context.Context, target core.Target) (*core.
 		// (statusCode == 0 이면서 capturedHTML 도 빈 상태) 만 진짜 실패로 분류한다.
 		partialHTML, captureErr := captureOuterHTML(browserCtx, c.opts.GracefulCaptureTimeout)
 		if captureErr != nil {
-			log.WithFields(map[string]interface{}{
+			// 이슈 #517 — capture 실패 시 cancel 출처 진단을 위해 ctx 상태 emit.
+			// "context canceled" 가 browserCtx / allocCtx 어디에서 왔는지 명확화.
+			fields := map[string]interface{}{
 				"url":        target.URL,
 				"timeout_ms": c.config.Timeout.Milliseconds(),
-			}).WithError(captureErr).Warn("graceful capture failed, proceeding with empty partial body")
+			}
+			if browserErr := browserCtx.Err(); browserErr != nil {
+				fields["browser_ctx_err"] = browserErr.Error()
+			}
+			if allocErr := c.allocCtx.Err(); allocErr != nil {
+				fields["alloc_ctx_err"] = allocErr.Error()
+			}
+			log.WithFields(fields).WithError(captureErr).Warn("graceful capture failed, proceeding with empty partial body")
 			partialHTML = ""
 		} else if !IsValidPartialDOM(partialHTML) {
 			log.WithFields(map[string]interface{}{
