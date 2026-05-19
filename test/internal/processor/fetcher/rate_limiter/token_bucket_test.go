@@ -47,12 +47,12 @@ func findLog(buf *bytes.Buffer, message string) map[string]interface{} {
 }
 
 func TestNewRateLimiter(t *testing.T) {
-	limiter := ratelimiter.NewRateLimiter(3600, 10)
+	limiter := ratelimiter.NewRateLimiter(3600, 10, "test")
 	assert.NotNil(t, limiter)
 }
 
 func TestRateLimiter_Allow_InitialBurst(t *testing.T) {
-	limiter := ratelimiter.NewRateLimiter(3600, 5)
+	limiter := ratelimiter.NewRateLimiter(3600, 5, "test")
 
 	// 초기 burst만큼 허용되어야 함
 	for i := 0; i < 5; i++ {
@@ -65,7 +65,7 @@ func TestRateLimiter_Allow_InitialBurst(t *testing.T) {
 
 func TestRateLimiter_Allow_Refill(t *testing.T) {
 	// 시간당 3600 요청 = 초당 1 요청
-	limiter := ratelimiter.NewRateLimiter(3600, 1)
+	limiter := ratelimiter.NewRateLimiter(3600, 1, "test")
 
 	assert.True(t, limiter.Allow())
 
@@ -79,7 +79,7 @@ func TestRateLimiter_Allow_Refill(t *testing.T) {
 }
 
 func TestRateLimiter_Wait_Success(t *testing.T) {
-	limiter := ratelimiter.NewRateLimiter(3600, 2)
+	limiter := ratelimiter.NewRateLimiter(3600, 2, "test")
 	ctx := context.Background()
 
 	// 처음 2개는 즉시 허용
@@ -96,8 +96,8 @@ func TestRateLimiter_Wait_Success(t *testing.T) {
 }
 
 func TestRateLimiter_Wait_ContextCanceled(t *testing.T) {
-	limiter := ratelimiter.NewRateLimiter(10, 1) // 낮은 rate로 설정
-	limiter.Allow()                              // 토큰 소진
+	limiter := ratelimiter.NewRateLimiter(10, 1, "test") // 낮은 rate로 설정
+	limiter.Allow()                                      // 토큰 소진
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -107,8 +107,8 @@ func TestRateLimiter_Wait_ContextCanceled(t *testing.T) {
 }
 
 func TestRateLimiter_Wait_ContextTimeout(t *testing.T) {
-	limiter := ratelimiter.NewRateLimiter(10, 1) // 낮은 rate로 설정
-	limiter.Allow()                              // 토큰 소진
+	limiter := ratelimiter.NewRateLimiter(10, 1, "test") // 낮은 rate로 설정
+	limiter.Allow()                                      // 토큰 소진
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -118,7 +118,7 @@ func TestRateLimiter_Wait_ContextTimeout(t *testing.T) {
 }
 
 func TestRateLimiter_ConcurrentRequests(t *testing.T) {
-	limiter := ratelimiter.NewRateLimiter(100, 10)
+	limiter := ratelimiter.NewRateLimiter(100, 10, "test")
 
 	// 동시에 20개 요청
 	var allowed atomic.Int32
@@ -146,7 +146,7 @@ func TestRateLimiter_ConcurrentRequests(t *testing.T) {
 }
 
 func TestTokenBucketRateLimiter_String(t *testing.T) {
-	limiter := ratelimiter.NewRateLimiter(3600, 10)
+	limiter := ratelimiter.NewRateLimiter(3600, 10, "test")
 	str := limiter.(*ratelimiter.TokenBucketRateLimiter).String()
 
 	assert.Contains(t, str, "RateLimiter")
@@ -158,7 +158,7 @@ func TestRateLimiter_Wait_LogsWaitStart(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := debugContext(&buf)
 
-	limiter := ratelimiter.NewRateLimiter(3600, 1)
+	limiter := ratelimiter.NewRateLimiter(3600, 1, "test")
 	require.NoError(t, limiter.Wait(ctx)) // 첫 번째 — 즉시 통과
 	buf.Reset()
 
@@ -175,7 +175,7 @@ func TestRateLimiter_Wait_LogsWaitCompleted(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := debugContext(&buf)
 
-	limiter := ratelimiter.NewRateLimiter(3600, 1)
+	limiter := ratelimiter.NewRateLimiter(3600, 1, "test")
 	require.NoError(t, limiter.Wait(ctx)) // 첫 번째 — 즉시 통과
 	buf.Reset()
 
@@ -189,7 +189,7 @@ func TestRateLimiter_Wait_LogsWaitCompleted(t *testing.T) {
 func TestRateLimiter_Wait_LogsContextCancelled(t *testing.T) {
 	var buf bytes.Buffer
 
-	limiter := ratelimiter.NewRateLimiter(10, 1)
+	limiter := ratelimiter.NewRateLimiter(10, 1, "test")
 	limiter.Allow() // 토큰 소진
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -208,4 +208,79 @@ func TestRateLimiter_Wait_LogsContextCancelled(t *testing.T) {
 	assert.Contains(t, entry, "wait_count")
 	assert.Contains(t, entry, "rate")
 	assert.Contains(t, entry, "burst")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// label 필드 (이슈 #503)
+//
+// 모든 throttle 로그 (rate limit reached / wait completed / wait context done) 가 생성자에
+// 주입된 label 을 그대로 emit 하는지 검증. 운영자가 어떤 호스트/IP 가 throttled 인지 사후 추적
+// 가능하도록.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestRateLimiter_Wait_LogsLabelOnReached(t *testing.T) {
+	var buf bytes.Buffer
+	ctx := debugContext(&buf)
+
+	limiter := ratelimiter.NewRateLimiter(3600, 1, "192.0.2.10")
+	require.NoError(t, limiter.Wait(ctx)) // 첫 번째 — 즉시 통과
+	buf.Reset()
+
+	require.NoError(t, limiter.Wait(ctx)) // 두 번째 — 대기 발생
+
+	entry := findLog(&buf, "rate limit reached, waiting for token")
+	require.NotNil(t, entry)
+	assert.Equal(t, "192.0.2.10", entry["label"], "label 필드가 생성자 인자 그대로 emit")
+}
+
+func TestRateLimiter_Wait_LogsLabelOnCompleted(t *testing.T) {
+	var buf bytes.Buffer
+	ctx := debugContext(&buf)
+
+	limiter := ratelimiter.NewRateLimiter(3600, 1, "example.com")
+	require.NoError(t, limiter.Wait(ctx)) // 첫 번째 — 즉시 통과
+	buf.Reset()
+
+	require.NoError(t, limiter.Wait(ctx)) // 두 번째 — 대기 후 완료
+
+	entry := findLog(&buf, "rate limit wait completed")
+	require.NotNil(t, entry)
+	assert.Equal(t, "example.com", entry["label"])
+}
+
+func TestRateLimiter_Wait_LogsLabelOnContextCancelled(t *testing.T) {
+	var buf bytes.Buffer
+
+	limiter := ratelimiter.NewRateLimiter(10, 1, "slow.example.com")
+	limiter.Allow() // 토큰 소진
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	logCfg := logger.DefaultConfig()
+	logCfg.Level = logger.LevelDebug
+	logCfg.Output = &buf
+	ctx = logger.New(logCfg).ToContext(ctx)
+
+	err := limiter.Wait(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+
+	entry := lastLog(t, &buf)
+	assert.Equal(t, "slow.example.com", entry["label"])
+}
+
+func TestRateLimiter_EmptyLabel_StillEmits(t *testing.T) {
+	var buf bytes.Buffer
+	ctx := debugContext(&buf)
+
+	limiter := ratelimiter.NewRateLimiter(3600, 1, "") // 빈 label 도 허용
+	require.NoError(t, limiter.Wait(ctx))
+	buf.Reset()
+	require.NoError(t, limiter.Wait(ctx))
+
+	entry := findLog(&buf, "rate limit reached, waiting for token")
+	require.NotNil(t, entry)
+	// 빈 문자열이라도 필드는 존재 — JSON 에 "label":"" 로 emit
+	label, ok := entry["label"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "", label)
 }

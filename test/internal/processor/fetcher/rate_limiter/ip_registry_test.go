@@ -135,7 +135,7 @@ func TestIPRateLimiterRegistry_Wait_DNSFailure_ContextCanceled_ReturnsCtxErr(t *
 }
 
 func TestNewRateLimiter_ZeroRequestsPerHour_ReturnsNoopLimiter(t *testing.T) {
-	limiter := ratelimiter.NewRateLimiter(0, 10)
+	limiter := ratelimiter.NewRateLimiter(0, 10, "test")
 
 	// 0 이하 RequestsPerHour는 noop limiter를 반환 (모든 요청 허용)
 	for i := 0; i < 100; i++ {

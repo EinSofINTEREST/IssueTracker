@@ -127,7 +127,9 @@ func (r *IPRateLimiterRegistry) getOrCreate(ip string, rph int) core.RateLimiter
 		return entry.limiter
 	}
 
-	limiter := NewRateLimiter(rph, r.burst)
+	// label 은 throttle 로그 추적 식별자 — IP registry 는 IP 그대로 전달 (이슈 #503).
+	// 같은 IP 의 모든 host 가 limiter 를 공유하므로 host 보다 IP 가 정확한 식별자.
+	limiter := NewRateLimiter(rph, r.burst, ip)
 	r.limiters[ip] = limiterEntry{limiter: limiter, lastUsed: now}
 
 	// 주기적 eviction: 새 limiter 생성 시점에 만료 항목 정리
