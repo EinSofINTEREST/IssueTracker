@@ -79,6 +79,11 @@ func captureOuterHTML(browserCtx context.Context, captureTimeout time.Duration) 
 		if derr != nil {
 			return derr
 		}
+		// nil node 방어 (gemini PR #518 피드백) — cdproto 가 success 반환해도 node nil 가능성 대비.
+		// nil 시 NodeID 접근 panic 회피 + 명시적 error.
+		if node == nil {
+			return errors.New("dom.GetDocument returned nil node")
+		}
 		result, herr := dom.GetOuterHTML().WithNodeID(node.NodeID).Do(ctx)
 		if herr != nil {
 			return herr
