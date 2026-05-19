@@ -151,6 +151,63 @@ def _truncate(s: str, n: int = 1900) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+# ---------- link URL normalization (이슈 #519) ----------
+#
+# PR body 안의 markdown link `[text](url)` 에서 url 이 absolute URL 이면 Notion API 가 그대로
+# 받아들이나, **relative path** (예: `internal/foo.go`) 는 "Invalid URL for link" 로 400 reject.
+# 운영자가 PR body 에 relative path link 를 자연스럽게 적는 것을 막지 않도록, sync 측에서
+# GitHub blob URL 로 자동 변환.
+#
+# Context 전파: md_inline 은 호출 체인 깊은 곳이라 매번 인자 전달은 cascading 부담. PR 처리는
+# single-process 단발 호출이므로 module-level dict 사용 + 진입 시 set / 종료 시 clear.
+_link_context: dict[str, str] = {"repo_url": "", "ref": ""}
+
+
+def _set_link_context(repo_url: str, ref: str) -> None:
+    _link_context["repo_url"] = repo_url or ""
+    _link_context["ref"] = ref or ""
+
+
+def _clear_link_context() -> None:
+    _link_context["repo_url"] = ""
+    _link_context["ref"] = ""
+
+
+def _normalize_link_url(url: str) -> str | None:
+    """Convert relative path to GitHub blob URL.
+
+    - absolute URL (http/https/ftp/mailto/tel/...) → return as-is
+    - fragment-only (#section)                     → return as-is (Notion accepts)
+    - empty                                        → return None (caller drops link)
+    - relative path WITH repo context              → return GitHub blob URL
+    - relative path WITHOUT repo context           → return None (caller drops link,
+                                                     keeps text without link)
+    """
+    if not url:
+        return None
+    # absolute scheme detection — "scheme:" 형태 (http: https: mailto: tel: ftp: ...)
+    if "://" in url or url.startswith(("mailto:", "tel:", "data:")):
+        return url
+    # fragment-only — Notion 의 page 내부 anchor 로 처리 가능
+    if url.startswith("#"):
+        return url
+    # relative path — repo context 있을 때만 GitHub blob URL 로 변환
+    repo_url = _link_context.get("repo_url")
+    ref = _link_context.get("ref")
+    if not repo_url or not ref:
+        return None  # caller 가 plain text fallback
+    # `./` prefix 만 명시적으로 1회 제거, 그 후 단일 `/` 만 제거.
+    # `lstrip("./")` 는 character set 으로 동작해 `.github/`, `.gitignore` 같은 dotfile prefix 가
+    # 깨지므로 사용 불가 (gemini PR #520 피드백).
+    cleaned = url
+    if cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    cleaned = cleaned.lstrip("/")
+    if not cleaned:
+        return None
+    return f"{repo_url}/blob/{ref}/{cleaned}"
+
+
 def md_inline(text: str) -> list[dict]:
     """Parse inline markdown into a list of rich_text spans."""
     spans: list[dict] = []
@@ -163,7 +220,12 @@ def md_inline(text: str) -> list[dict]:
         elif m.group(2) is not None:
             spans.append(rt(_truncate(m.group(2)), code=True))
         elif m.group(3) is not None and m.group(4) is not None:
-            spans.append(rt(_truncate(m.group(3)), link=m.group(4)))
+            # 이슈 #519 — relative path 는 GitHub blob URL 로 변환, 변환 불가 시 plain text fallback.
+            normalized = _normalize_link_url(m.group(4))
+            if normalized:
+                spans.append(rt(_truncate(m.group(3)), link=normalized))
+            else:
+                spans.append(rt(_truncate(m.group(3))))
         elif m.group(5) is not None:
             spans.append(rt(_truncate(m.group(5)), italic=True))
         elif m.group(6) is not None:
@@ -302,48 +364,63 @@ def files_to_blocks(files: list[dict], max_files: int = 100) -> list[dict]:
 
 
 def pr_to_body_blocks(pr: dict) -> list[dict]:
-    """Compose the full child-block list rendered into a PR row page."""
-    blocks: list[dict] = []
-    # Header / URL
-    blocks.append(_block(
-        "callout",
-        rich_text=[
-            rt(f"#{pr['number']} ", code=True),
-            rt(pr.get("title", ""), bold=True),
-        ],
-        icon={"type": "emoji", "emoji": "🔗"},
-        color="gray_background",
-    ))
-    blocks.append(_block(
-        "paragraph",
-        rich_text=[rt("GitHub: "), rt(pr["url"], link=pr["url"])],
-    ))
+    """Compose the full child-block list rendered into a PR row page.
 
-    # Body
-    body = (pr.get("body") or "").strip()
-    blocks.append(_block("divider"))
-    blocks.append(_block("heading_2", rich_text=[rt("📝 본문")]))
-    if body:
-        blocks.extend(md_to_blocks(body))
-    else:
+    PR body 안의 relative path markdown link 를 GitHub blob URL 로 자동 변환하기 위해
+    link context (repo_url + ref) 를 set/clear (이슈 #519). 함수 진입/종료 시 모두 처리하여
+    재진입 / 예외 발생에도 잔존 state 없음.
+
+    ref 우선순위: headRefOid (commit SHA, 가장 stable) → headRefName (branch) → "main" (fallback).
+    """
+    # link context 설정 — PR URL 에서 repo URL 추출 ("https://github.com/o/r/pull/123" → "https://github.com/o/r").
+    pr_url = pr.get("url") or ""
+    repo_url = pr_url.rsplit("/pull/", 1)[0] if "/pull/" in pr_url else ""
+    ref = pr.get("headRefOid") or pr.get("headRefName") or "main"
+    _set_link_context(repo_url, ref)
+    try:
+        blocks: list[dict] = []
+        # Header / URL
+        blocks.append(_block(
+            "callout",
+            rich_text=[
+                rt(f"#{pr['number']} ", code=True),
+                rt(pr.get("title", ""), bold=True),
+            ],
+            icon={"type": "emoji", "emoji": "🔗"},
+            color="gray_background",
+        ))
         blocks.append(_block(
             "paragraph",
-            rich_text=[rt("(본문 없음)", italic=True)],
+            rich_text=[rt("GitHub: "), rt(pr["url"], link=pr["url"])],
         ))
 
-    # Files
-    files = pr.get("files") or []
-    blocks.append(_block("divider"))
-    blocks.append(_block("heading_2", rich_text=[rt(f"📁 변경 파일 ({len(files)})")]))
-    if files:
-        blocks.extend(files_to_blocks(files))
-    else:
-        blocks.append(_block(
-            "paragraph",
-            rich_text=[rt("(변경 파일 정보 없음)", italic=True)],
-        ))
+        # Body
+        body = (pr.get("body") or "").strip()
+        blocks.append(_block("divider"))
+        blocks.append(_block("heading_2", rich_text=[rt("📝 본문")]))
+        if body:
+            blocks.extend(md_to_blocks(body))
+        else:
+            blocks.append(_block(
+                "paragraph",
+                rich_text=[rt("(본문 없음)", italic=True)],
+            ))
 
-    return blocks
+        # Files
+        files = pr.get("files") or []
+        blocks.append(_block("divider"))
+        blocks.append(_block("heading_2", rich_text=[rt(f"📁 변경 파일 ({len(files)})")]))
+        if files:
+            blocks.extend(files_to_blocks(files))
+        else:
+            blocks.append(_block(
+                "paragraph",
+                rich_text=[rt("(변경 파일 정보 없음)", italic=True)],
+            ))
+
+        return blocks
+    finally:
+        _clear_link_context()
 
 
 def split_prefix(title: str) -> tuple[str | None, int | None, str]:
@@ -464,7 +541,7 @@ def upsert_pr(ds_id: str, pr: dict, body_sync: bool = True) -> str:
 
 # ---------- GitHub fetching ----------
 
-PR_FIELDS = "number,title,state,url,author,createdAt,mergedAt,closedAt,updatedAt,body,files"
+PR_FIELDS = "number,title,state,url,author,createdAt,mergedAt,closedAt,updatedAt,body,files,headRefOid,headRefName"
 PR_FIELDS_LIST = "number,title,state,url,author,createdAt,mergedAt,closedAt,updatedAt"
 
 
