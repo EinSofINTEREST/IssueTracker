@@ -196,7 +196,13 @@ def _normalize_link_url(url: str) -> str | None:
     ref = _link_context.get("ref")
     if not repo_url or not ref:
         return None  # caller 가 plain text fallback
-    cleaned = url.lstrip("./").lstrip("/")
+    # `./` prefix 만 명시적으로 1회 제거, 그 후 단일 `/` 만 제거.
+    # `lstrip("./")` 는 character set 으로 동작해 `.github/`, `.gitignore` 같은 dotfile prefix 가
+    # 깨지므로 사용 불가 (gemini PR #520 피드백).
+    cleaned = url
+    if cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    cleaned = cleaned.lstrip("/")
     if not cleaned:
         return None
     return f"{repo_url}/blob/{ref}/{cleaned}"

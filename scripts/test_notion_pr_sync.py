@@ -79,10 +79,31 @@ def test_normalize_relative_absolute_slash_stripped():
 
 
 def test_normalize_relative_only_slashes_returns_none():
-    # ".//" 같은 의미 없는 path → 모두 strip 후 빈 문자열 → None (link 제거)
+    # "./" 또는 "/" 단독은 정리 후 빈 문자열 → None (link 제거)
     nps._set_link_context("https://github.com/owner/repo", "main")
     assert nps._normalize_link_url("./") is None
     assert nps._normalize_link_url("/") is None
+
+
+def test_normalize_relative_dotfile_prefix_preserved():
+    # `.github/`, `.gitignore` 같은 dotfile prefix 가 깨지면 안 됨 (gemini PR #520).
+    # lstrip("./") 가 character set 으로 동작했던 버그 검증.
+    nps._set_link_context("https://github.com/owner/repo", "main")
+    assert nps._normalize_link_url(".github/workflows/ci.yml") == (
+        "https://github.com/owner/repo/blob/main/.github/workflows/ci.yml"
+    )
+    assert nps._normalize_link_url(".gitignore") == (
+        "https://github.com/owner/repo/blob/main/.gitignore"
+    )
+
+
+def test_normalize_relative_parent_path_preserved():
+    # `../../foo` 같은 상위 경로도 의도치 않게 축소되지 않아야 함.
+    # GitHub blob URL 에 그대로 들어가도 OK — 깨진 link 가 되더라도 PR body 원본 의도 보존.
+    nps._set_link_context("https://github.com/owner/repo", "main")
+    assert nps._normalize_link_url("../sibling/file") == (
+        "https://github.com/owner/repo/blob/main/../sibling/file"
+    )
 
 
 def test_normalize_data_url_passthrough():
