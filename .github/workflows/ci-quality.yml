@@ -119,3 +119,27 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.64.8
+
+  python-test:
+    # scripts/ 하위 Python 유틸 (notion_pr_sync.py 등) 회귀 방지용 pytest 실행.
+    # Notion sync 같이 외부 호출이 잦지 않은 스크립트라도 link 정규화 / 본문 변환 로직은
+    # 망가지면 PR 자동화가 조용히 깨지므로 CI 에서 매 PR 검증한다 (이슈 #519 / PR #520).
+    name: Python Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Run pytest
+        working-directory: scripts
+        run: python -m pytest -v
