@@ -168,6 +168,14 @@ func main() {
 		bufferingProducer := queue.NewBufferingProducer(rawCrawlerProducer, redisClientShared, jobBufferCfg.MaxLen, log)
 		crawlerProducer = bufferingProducer
 
+		// 이슈 #512 — leader locker: 다중 인스턴스 환경에서 한 인스턴스만 drain.
+		// TTL 은 drain interval × 1.1 — 한 cycle 안전 커버 + leader crash 후 빠른 회수.
+		leaderTTL := jobBufferCfg.DrainInterval + jobBufferCfg.DrainInterval/10
+		leaderLocker, llErr := redis.NewLeaderLocker(redisClientShared.Raw(), "buffer_drainer", leaderTTL)
+		if llErr != nil {
+			log.WithError(llErr).Fatal("failed to construct buffer drainer leader locker")
+		}
+
 		drainer, derr := scheduler.NewBufferDrainer(
 			redisClientShared,
 			rawCrawlerProducer, // drainer 는 underlying 으로 직접 publish — 무한 루프 회피
@@ -179,6 +187,8 @@ func main() {
 				MaxLen:        jobBufferCfg.MaxLen,
 				CheckTimeout:  jobBufferCfg.CheckTimeout,
 				GroupID:       queue.GroupCrawlerWorkers,
+				Leader:        leaderLocker, // 이슈 #512 — election
+				// RetryScheduler 는 jobPublisher 생성 후 SetRetryScheduler 로 late binding
 			},
 			log,
 		)
@@ -191,7 +201,8 @@ func main() {
 			"target_backlog": jobBufferCfg.TargetBacklog,
 			"drain_batch":    jobBufferCfg.DrainBatch,
 			"max_len":        jobBufferCfg.MaxLen,
-		}).Info("publisher redis buffer enabled (normal/low priority)")
+			"leader_ttl":     leaderTTL.String(),
+		}).Info("publisher redis buffer enabled (normal/low priority, multi-instance leader election)")
 	} else if jobBufferCfg.Enabled && redisClientShared == nil {
 		log.Warn("publisher redis buffer requested but redis unavailable — falling back to direct kafka publish")
 	}
@@ -415,6 +426,13 @@ func main() {
 		retrySchedulerStop = func() {
 			cancelRun()
 			redisRetry.Stop()
+		}
+
+		// 이슈 #512 — BufferDrainer 가 publish 실패 시 Kafka 재시도 경로 사용. late binding —
+		// drainer 가 redis client 의존으로 위쪽에서 먼저 생성됐기에 본 시점에 setter 로 주입.
+		if bufferDrainer != nil {
+			bufferDrainer.SetRetryScheduler(retryScheduler)
+			log.Info("buffer drainer retry scheduler wired (publish-fail → kafka retry path)")
 		}
 		log.Info("redis delayed retry queue enabled (worker slot occupancy on retry resolved)")
 	}
