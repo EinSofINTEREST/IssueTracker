@@ -16,7 +16,11 @@ import (
 
 // TokenBucketRateLimiter는 token bucket 알고리즘을 사용한 rate limiter입니다.
 // 시간당 요청 수를 제한하며, burst를 허용합니다.
+//
+// label 은 throttle 로그의 추적 식별자 — IP 단위 registry 에서는 IP 문자열, 그 외 호출자가
+// 의미 있는 식별자를 자유롭게 전달 (이슈 #503). 빈 문자열도 허용 — 로그에 label="" 만 찍힘.
 type TokenBucketRateLimiter struct {
+	label      string
 	rate       float64 // tokens per second
 	burst      int     // maximum tokens
 	tokens     float64 // current tokens
@@ -27,7 +31,11 @@ type TokenBucketRateLimiter struct {
 // NewRateLimiter는 새로운 rate limiter를 생성합니다.
 // requestsPerHour: 시간당 허용 요청 수 (0 이하면 제한 없음)
 // burst: 한번에 허용되는 최대 요청 수 (최소 1)
-func NewRateLimiter(requestsPerHour, burst int) core.RateLimiter {
+// label: 본 limiter 의 추적 식별자 (이슈 #503) — Wait 로그의 `label` 필드에 emit.
+//
+//	IP registry 호출 시 IP, 그 외 호출자가 host 또는 의미 있는 식별자를 전달.
+//	0 이하 RPH 시 noopRateLimiter 가 반환되므로 label 은 무시되지만, signature 일관성을 위해 유지.
+func NewRateLimiter(requestsPerHour, burst int, label string) core.RateLimiter {
 	// 0 이하 값 방어: divide by zero 및 무한 대기 방지
 	if requestsPerHour <= 0 {
 		return &noopRateLimiter{}
@@ -39,6 +47,7 @@ func NewRateLimiter(requestsPerHour, burst int) core.RateLimiter {
 	rate := float64(requestsPerHour) / 3600.0 // convert to per second
 
 	return &TokenBucketRateLimiter{
+		label:      label,
 		rate:       rate,
 		burst:      burst,
 		tokens:     float64(burst),
@@ -62,7 +71,10 @@ func (r *TokenBucketRateLimiter) Wait(ctx context.Context) error {
 	for {
 		if r.Allow() {
 			if waitCount > 0 {
-				log.WithField("wait_count", waitCount).Debug("rate limit wait completed")
+				log.WithFields(map[string]interface{}{
+					"label":      r.label,
+					"wait_count": waitCount,
+				}).Debug("rate limit wait completed")
 			}
 			return nil
 		}
@@ -72,6 +84,7 @@ func (r *TokenBucketRateLimiter) Wait(ctx context.Context) error {
 
 		if waitCount == 1 {
 			log.WithFields(map[string]interface{}{
+				"label":   r.label,
 				"wait_ms": sleepDuration.Milliseconds(),
 				"rate":    r.rate,
 				"burst":   r.burst,
@@ -82,6 +95,7 @@ func (r *TokenBucketRateLimiter) Wait(ctx context.Context) error {
 		case <-ctx.Done():
 			ctxErr := ctx.Err()
 			log.WithFields(map[string]interface{}{
+				"label":      r.label,
 				"wait_count": waitCount,
 				"rate":       r.rate,
 				"burst":      r.burst,
