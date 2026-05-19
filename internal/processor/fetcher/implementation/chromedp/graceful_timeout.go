@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -50,10 +51,16 @@ func IsValidPartialDOM(html string) bool {
 // browserCtx는 timeout으로 cancel되지 않은 tab context여야 하며,
 // chromedp가 동일 탭에 새 명령을 발행할 수 있어야 한다.
 //
-// page.StopLoading() 을 OuterHTML 직전에 발행하여 navigation polling 을 즉시 중단,
-// CDP 가 응답할 여유를 확보. analytics / SSE / long-poll 페이지처럼 navigation 이
-// 끝나지 않는 케이스에서 OuterHTML 만 호출하면 응답이 안 와서 context canceled 로
-// 끝나는 현상을 회피한다.
+// 이슈 #517: 기존 구현은 `chromedp.Run` 을 두 번 호출하는 패턴 (StopLoading 따로 + OuterHTML 따로)
+// 이었으나, 외부 chromedp.Run timeout 이후 chromedp 내부 task system 이 cancel 전파되어 후속 Run
+// 이 `context canceled` 로 실패 (라이브 8/8 케이스). 단일 `chromedp.Run` 안에서 cdproto 액션
+// (page.StopLoading / dom.GetDocument / dom.GetOuterHTML) 을 ActionFunc 로 묶어 실행 — chromedp
+// task lifecycle 영향 격리.
+//
+// 동작:
+//  1. page.StopLoading — navigation polling 즉시 중단. 실패해도 무시 (이미 stopped 일 수 있음).
+//  2. dom.GetDocument — 루트 노드 ID 획득.
+//  3. dom.GetOuterHTML(NodeID) — 현재 DOM 의 outer HTML 반환.
 //
 // captureTimeout 가 0 이하이면 DefaultGracefulCaptureTimeout 을 사용한다.
 func captureOuterHTML(browserCtx context.Context, captureTimeout time.Duration) (string, error) {
@@ -64,10 +71,27 @@ func captureOuterHTML(browserCtx context.Context, captureTimeout time.Duration) 
 	defer cancel()
 
 	var html string
-	if err := chromedp.Run(rescueCtx,
-		page.StopLoading(),
-		chromedp.OuterHTML("html", &html),
-	); err != nil {
+	err := chromedp.Run(rescueCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		// StopLoading 실패는 무시 — 이미 멈춘 상태일 수 있고, 본 함수의 목적은 HTML 캡처.
+		_ = page.StopLoading().Do(ctx)
+
+		node, derr := dom.GetDocument().Do(ctx)
+		if derr != nil {
+			return derr
+		}
+		// nil node 방어 (gemini PR #518 피드백) — cdproto 가 success 반환해도 node nil 가능성 대비.
+		// nil 시 NodeID 접근 panic 회피 + 명시적 error.
+		if node == nil {
+			return errors.New("dom.GetDocument returned nil node")
+		}
+		result, herr := dom.GetOuterHTML().WithNodeID(node.NodeID).Do(ctx)
+		if herr != nil {
+			return herr
+		}
+		html = result
+		return nil
+	}))
+	if err != nil {
 		return "", err
 	}
 	return html, nil
