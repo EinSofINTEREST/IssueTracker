@@ -310,17 +310,23 @@ func (d *BufferDrainer) drainOnce(ctx context.Context, label, topic string) erro
 		//   - retryScheduler 가 wiring 됐으면 → Kafka 재시도 경로 (즉시/지연 publish) 사용
 		//     → fetcher worker 가 빠르게 pickup, 다음 drain tick (30s) 대기 회피
 		//   - retryScheduler 가 nil 이면 → Redis 재적재 fallback (기존 동작)
+		// 로그 메시지는 두 경로 의도를 명확 분기 (Copilot PR #516 피드백).
 		// shutdown 중 ctx cancel 시에도 복구 시도 — WithoutCancel + 5s timeout.
+		fallbackMsg := "buffer drain publish failed, falling back to redis re-enqueue"
+		if d.retryScheduler != nil {
+			fallbackMsg = "buffer drain publish failed, dispatching to kafka retry path"
+		}
 		d.log.WithFields(map[string]interface{}{
 			"label": label,
 			"topic": topic,
 			"count": len(msgs),
-		}).WithError(pubErr).Warn("buffer drain publish failed, dispatching to retry path")
+		}).WithError(pubErr).Warn(fallbackMsg)
+
 		reCtx, reCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer reCancel()
 
 		if d.retryScheduler != nil {
-			d.dispatchToRetry(reCtx, msgs, label, topic, pubErr)
+			d.dispatchToRetry(reCtx, msgs, payloads, label, topic, pubErr)
 		} else {
 			// fallback: Redis 재적재 (기존 PR #511 동작 보존)
 			if reErr := d.buffer.EnqueueBatch(reCtx, label, payloads, d.maxLen); reErr != nil {
@@ -348,21 +354,28 @@ func (d *BufferDrainer) drainOnce(ctx context.Context, label, topic string) erro
 // 진입시킵니다 (이슈 #512). msg.Value 는 CrawlJob 의 JSON Marshal — Unmarshal 후 RetryScheduler.
 // Enqueue 호출. RetryScheduler 가 즉시/지연 publish + retry-count 헤더 관리.
 //
-// 개별 메시지 처리 실패는 다른 메시지에 영향 X — 모두 시도 + 최종 warn 카운트 로깅.
-// 본 dispatch 자체도 실패하는 케이스 (예: Kafka 전체 장애) 에서는 RetryScheduler 가 이미
-// Kafka.WriteMessages 를 시도하므로 직전 PublishBatch 실패와 동일 사유 — 추가 fallback 없음
-// (Redis 재적재로 가도 다음 tick 에 동일 Kafka 시도 반복). 운영자는 warn 누적으로 감지.
-func (d *BufferDrainer) dispatchToRetry(ctx context.Context, msgs []queue.Message, label, topic string, pubErr error) {
+// 데이터 손실 방어 (Copilot PR #516 피드백):
+//   - decode 실패 / RetryScheduler.Enqueue 실패한 메시지는 이미 DrainJobs 로 Redis 에서 제거된
+//     상태 → 그대로 drop 하면 실제 데이터 손실
+//   - 해당 케이스의 원본 payload 들을 Redis buffer 에 EnqueueBatch 로 재적재 — 다음 drain tick 에서
+//     재시도. msgs[i] 와 payloads[i] 는 동일 인덱스로 1:1 대응 (호출자가 보장).
+//   - 마지막 EnqueueBatch 마저 실패하면 진짜 손실 — 운영자 감지용 Warn 로깅
+func (d *BufferDrainer) dispatchToRetry(ctx context.Context, msgs []queue.Message, payloads [][]byte, label, topic string, pubErr error) {
 	successCount := 0
 	failCount := 0
-	for _, msg := range msgs {
+	failedPayloads := make([][]byte, 0)
+
+	for i, msg := range msgs {
 		job, err := core.UnmarshalCrawlJob(msg.Value)
 		if err != nil {
 			d.log.WithFields(map[string]interface{}{
 				"label": label,
 				"topic": topic,
-			}).WithError(err).Warn("retry dispatch decode failed, dropping message")
+			}).WithError(err).Warn("retry dispatch decode failed, re-enqueueing to buffer")
 			failCount++
+			if i < len(payloads) {
+				failedPayloads = append(failedPayloads, payloads[i])
+			}
 			continue
 		}
 		if err := d.retryScheduler.Enqueue(ctx, job, pubErr); err != nil {
@@ -370,16 +383,32 @@ func (d *BufferDrainer) dispatchToRetry(ctx context.Context, msgs []queue.Messag
 				"label":  label,
 				"topic":  topic,
 				"job_id": job.ID,
-			}).WithError(err).Warn("retry dispatch enqueue failed")
+			}).WithError(err).Warn("retry dispatch enqueue failed, re-enqueueing to buffer")
 			failCount++
+			if i < len(payloads) {
+				failedPayloads = append(failedPayloads, payloads[i])
+			}
 			continue
 		}
 		successCount++
 	}
+
+	// 실패한 항목들을 Redis buffer 로 재적재 — 다음 drain tick 에서 재시도 가능.
+	// 본 EnqueueBatch 도 실패하면 진짜 손실. 운영자가 warn 카운트로 감지.
+	if len(failedPayloads) > 0 {
+		if reErr := d.buffer.EnqueueBatch(ctx, label, failedPayloads, d.maxLen); reErr != nil {
+			d.log.WithFields(map[string]interface{}{
+				"label": label,
+				"count": len(failedPayloads),
+			}).WithError(reErr).Warn("re-enqueue of retry dispatch failures failed (data loss)")
+		}
+	}
+
 	d.log.WithFields(map[string]interface{}{
-		"label":     label,
-		"topic":     topic,
-		"succeeded": successCount,
-		"failed":    failCount,
+		"label":      label,
+		"topic":      topic,
+		"succeeded":  successCount,
+		"failed":     failCount,
+		"reenqueued": len(failedPayloads),
 	}).Info("buffer drain publish failures dispatched to retry scheduler")
 }

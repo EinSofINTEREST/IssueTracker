@@ -141,6 +141,9 @@ func TestLeaderLocker_TryAcquire_DoubleByOwner_ReturnsFalse(t *testing.T) {
 }
 
 // TestLeaderLocker_TTLExpiry_OtherInstanceCanAcquire 는 TTL 만료 후 다른 인스턴스가 leader 승격 검증.
+//
+// assert.Eventually 사용 — 고정 sleep 은 CI 부하 시 flaky (Copilot PR #516 피드백).
+// 폴링 간격 50ms / 최대 3초 대기로 안정성 향상.
 func TestLeaderLocker_TTLExpiry_OtherInstanceCanAcquire(t *testing.T) {
 	client := newTestClient(t)
 	role := "test-leader-ttl-" + time.Now().Format("150405.000000")
@@ -160,11 +163,10 @@ func TestLeaderLocker_TTLExpiry_OtherInstanceCanAcquire(t *testing.T) {
 	acquired1, _ := leader1.TryAcquire(ctx)
 	require.True(t, acquired1)
 
-	// TTL 만료 대기 (~600ms).
-	time.Sleep(700 * time.Millisecond)
-
-	// 만료된 lock 자리에 instance2 가 leader 승격.
-	acquired2, err := leader2.TryAcquire(ctx)
-	require.NoError(t, err)
-	assert.True(t, acquired2, "TTL 만료 후 다른 instance 가 leader 승격 가능")
+	// TTL 만료 후 instance2 의 leader 승격을 폴링으로 검증.
+	// 최대 3s 대기 (TTL 500ms 의 6배 — CI 부하 시에도 충분).
+	assert.Eventually(t, func() bool {
+		acquired, err := leader2.TryAcquire(ctx)
+		return err == nil && acquired
+	}, 3*time.Second, 50*time.Millisecond, "TTL 만료 후 다른 instance 가 leader 승격 가능해야 함")
 }

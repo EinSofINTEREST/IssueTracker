@@ -504,6 +504,38 @@ func TestBufferDrainer_PublishFailDispatchesToRetryScheduler(t *testing.T) {
 	assert.Equal(t, int64(0), n, "RetryScheduler 사용 시 Redis 재적재 X")
 }
 
+// TestBufferDrainer_RetryDispatchFailure_ReenqueueToBuffer 는 RetryScheduler.Enqueue 실패 시
+// 실패한 항목이 Redis buffer 로 재적재되는지 검증 (Copilot PR #516 피드백 — 데이터 손실 방어).
+func TestBufferDrainer_RetryDispatchFailure_ReenqueueToBuffer(t *testing.T) {
+	buf := newMockJobBuffer()
+	job := &core.CrawlJob{ID: "j1", CrawlerName: "test", Target: core.Target{URL: "https://example.com/a"}, Priority: core.PriorityNormal}
+	buf.seed("normal", encodeJobMsg(t, queue.TopicCrawlNormal, job))
+
+	prod := &mockDrainerProducer{failErr: errors.New("kafka down")}
+	check := &fixedBacklogChecker{}
+	rs := &mockRetryScheduler{enqueueErr: errors.New("retry scheduler also down")}
+
+	d, err := scheduler.NewBufferDrainer(buf, prod, check, scheduler.BufferDrainerConfig{
+		Interval:       time.Hour,
+		TargetBacklog:  1000,
+		DrainBatch:     100,
+		GroupID:        queue.GroupCrawlerWorkers,
+		RetryScheduler: rs,
+	}, newDrainerTestLog())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	d.Start(ctx)
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	d.Stop()
+
+	assert.Equal(t, 0, prod.count())
+	assert.Equal(t, 0, rs.count(), "Enqueue 도 실패 → success 0")
+	n, _ := buf.JobBufferLen(context.Background(), "normal")
+	assert.Equal(t, int64(1), n, "RetryScheduler.Enqueue 실패한 항목 → buffer 재적재 (데이터 손실 방어)")
+}
+
 // TestBufferDrainer_PublishFailNoRetryScheduler_FallsBackToRedis 는 RetryScheduler nil 시 기존 Redis 재적재 fallback 검증.
 func TestBufferDrainer_PublishFailNoRetryScheduler_FallsBackToRedis(t *testing.T) {
 	buf := newMockJobBuffer()

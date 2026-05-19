@@ -39,10 +39,9 @@ func LeaderLockKey(role string) string {
 // 사용 흐름 (single role, multi-instance):
 //
 //	locker, _ := redis.NewLeaderLocker(client, "buffer_drainer", 31*time.Second)
-//	defer locker.Stop() // graceful shutdown 시 보유 lock 자동 release
 //
 //	if acquired, _ := locker.TryAcquire(ctx); acquired {
-//	    defer locker.Release(ctx)
+//	    defer locker.Release(ctx) // ownership 확인 후 안전한 lock 해제
 //	    // leader-only work
 //	}
 //
@@ -88,7 +87,7 @@ func NewLeaderLocker(client *goredis.Client, role string, ttl time.Duration) (*L
 // 반환:
 //   - (true, nil)  — 신규 leader 획득 성공. 호출자는 leader-only 작업 후 Release 호출 의무.
 //   - (false, nil) — 다른 인스턴스가 이미 leader. 호출자는 작업 skip.
-//   - (false, err) — Redis 인프라 에러. 호출자는 fail-closed 권장 (drain skip).
+//   - (false, err) — Redis 인프라 에러 또는 crypto/rand 실패. 호출자는 fail-closed 권장.
 //
 // 동일 LeaderLocker 인스턴스가 이미 lock 보유 중이면 (false, nil) — 이중 획득 방지.
 // Release 호출 없이 lock 보유 중인 상태에서 TryAcquire 를 호출하는 것은 사용 오류.
@@ -100,10 +99,13 @@ func (l *LeaderLocker) TryAcquire(ctx context.Context) (bool, error) {
 	}
 	l.mu.Unlock()
 
-	token := newLeaderToken()
+	token, err := newLeaderToken()
+	if err != nil {
+		return false, fmt.Errorf("generate leader token: %w", err)
+	}
 	key := LeaderLockKey(l.role)
 
-	err := l.rdb.SetArgs(ctx, key, token, goredis.SetArgs{
+	err = l.rdb.SetArgs(ctx, key, token, goredis.SetArgs{
 		Mode: "NX",
 		TTL:  l.ttl,
 	}).Err()
@@ -154,12 +156,13 @@ func (l *LeaderLocker) HasLock() bool {
 
 // newLeaderToken 는 crypto/rand 기반의 고유 token (32자 hex) 을 생성합니다.
 //
-// 실패는 매우 드물지만 발생 시 빈 문자열 반환 — TryAcquire 가 빈 token 으로 SET NX → 다른
-// 인스턴스의 빈 token lock 과 충돌 가능. 따라서 호출자는 빈 token 을 무시하지 않도록 명시적 panic.
-func newLeaderToken() string {
+// 실패는 매우 드물지만 발생 시 error 반환 — runtime Redis 유틸이라 panic 보다 호출자가
+// graceful 하게 처리 가능 (Copilot PR #516 피드백). TryAcquire 가 본 error 를 (false, err) 로
+// 전파 — 호출자는 fail-closed 동작.
+func newLeaderToken() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Errorf("redis: crypto/rand failure generating leader token: %w", err))
+		return "", fmt.Errorf("redis: crypto/rand failure generating leader token: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
