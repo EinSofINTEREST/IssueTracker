@@ -119,6 +119,13 @@ type Worker struct {
 	// pool 은 workerpool harness — Start 에서 lazy 생성. lifecycle (poll / dispatch / shutdown /
 	// commit-with-drain) 을 위임 (이슈 #406 — 메타 #403 Sub 3).
 	pool *workerpool.ConsumerPool
+
+	// retryScheduler 는 ProcessMessage 실패 시 재시도 발행 경로 (이슈 #522 / 메타 #515 Phase 2).
+	// nil 허용 — nil 이면 기존 동작 (commit skip → Kafka redeliver).
+	//
+	// ZSET 인입 모드에서는 pop 이 곧 ack 이라 commit skip 으로 redeliver 불가 — RetryScheduler
+	// 주입 필수. 주입 시 Handle 이 ProcessMessage 실패에 대해 Enqueue 후 commit (메시지 손실 방지).
+	retryScheduler bus.RetryScheduler
 }
 
 // PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 최소 인터페이스입니다.
@@ -226,6 +233,16 @@ func (w *Worker) SetPrecheck(d precheck.Decider) {
 	w.precheck = d
 }
 
+// SetRetryScheduler 는 ProcessMessage 실패 시 재시도 발행 경로를 주입합니다 (이슈 #522 / 메타 #515 Phase 2).
+//
+// nil 주입 시 기존 동작 (commit skip → Kafka redeliver) 유지. ZSET 인입 모드에서는 pop 이
+// 곧 ack 이라 commit skip 으로는 redeliver 불가 — 본 setter 로 RetryScheduler 를 반드시 주입.
+//
+// Start 호출 전 wiring 단계에서 1회 설정.
+func (w *Worker) SetRetryScheduler(rs bus.RetryScheduler) {
+	w.retryScheduler = rs
+}
+
 // SetStaleCounter 는 stale rule 재학습 트리거 카운터 + 임계값을 주입합니다.
 //
 // nil counter 주입 시 stale 재학습 비활성 (기존 chromedp 자동 전환만 동작).
@@ -293,7 +310,9 @@ func (w *Worker) Stop(ctx context.Context) error {
 // 흐름:
 //   - ProcessMessage 성공 → commit
 //   - ErrStageGateNotAcquired → commit skip (Debug — 다른 worker 가 처리 중인 정상 dedup)
-//   - 기타 transient 에러 → commit skip (Warn — Kafka 가 redeliver)
+//   - 기타 transient 에러:
+//     - retryScheduler 주입 시 (이슈 #522): RetryScheduler.Enqueue → commit (메시지 손실 방지)
+//     - retryScheduler 미주입 시: commit skip (Warn — Kafka 가 redeliver, 기존 동작)
 //
 // commit 실패는 ctx cancel 인 경우 강등하지 않으면 셧다운 시점에 noise. Warn 으로 가시성 유지.
 func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
@@ -306,7 +325,23 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 			log.WithField("offset", msg.Offset).Debug("stage gate not acquired by this worker, uncommitted")
 			return
 		}
-		// ProcessMessage 가 commit 하지 않은 경우 — 재시도 위해 commit skip (Kafka 가 redeliver).
+		// retryScheduler 주입 시 — Enqueue 후 commit. ZSET 인입 모드 (pop=ack) 에서는 commit skip
+		// 으로 redeliver 가 불가능하므로 RetryScheduler 경유 (Kafka 재발행) 만이 메시지 손실 방지책.
+		if w.retryScheduler != nil {
+			if enqueueErr := w.enqueueRetry(ctx, msg, err); enqueueErr != nil {
+				log.WithError(enqueueErr).WithField("offset", msg.Offset).Warn("retry enqueue failed, message will be lost in zset mode")
+				return
+			}
+			// Enqueue 성공 — commit (메시지 손실 방지). ZSETConsumer 의 Commit 은 no-op.
+			if commitErr := w.pool.Commit(ctx, msg); commitErr != nil {
+				if ctx.Err() == nil {
+					log.WithError(commitErr).Warn("commit after retry enqueue failed")
+				}
+			}
+			log.WithError(err).WithField("offset", msg.Offset).Info("process message failed, enqueued for retry")
+			return
+		}
+		// retryScheduler 미주입 — commit skip (Kafka 가 redeliver, 기존 동작).
 		log.WithError(err).WithField("offset", msg.Offset).Warn("process message failed, will be redelivered")
 		return
 	}
@@ -316,6 +351,54 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 			log.WithError(commitErr).Warn("commit failed after success")
 		}
 	}
+}
+
+// enqueueRetry 는 ProcessMessage 실패한 메시지를 RetryScheduler 경유로 재시도 큐에 등록합니다 (이슈 #522).
+//
+// RawContentRef → CrawlJob 변환 — URL + CrawlerName 보존. priority 는 메시지 header 에서 추출
+// (1=high / 2=normal / 3=low, 잘못된 값은 normal). Target.Type=Article (parse 단계 메시지는
+// raw 1건의 article 처리 의미). retry_reason / original_raw_id 헤더로 추적 가시성 제공.
+func (w *Worker) enqueueRetry(ctx context.Context, msg *queue.Message, lastErr error) error {
+	var ref core.RawContentRef
+	if uerr := json.Unmarshal(msg.Value, &ref); uerr != nil {
+		return fmt.Errorf("retry unmarshal: %w", uerr)
+	}
+	if ref.URL == "" {
+		return fmt.Errorf("retry unmarshal: empty URL in RawContentRef %s", ref.ID)
+	}
+
+	priority := core.PriorityNormal
+	if p, ok := msg.Headers["priority"]; ok {
+		if v, err := strconv.Atoi(p); err == nil {
+			switch core.Priority(v) {
+			case core.PriorityHigh, core.PriorityNormal, core.PriorityLow:
+				priority = core.Priority(v)
+			}
+		}
+	}
+
+	crawlerName := ref.SourceInfo.Name
+	if crawlerName == "" {
+		crawlerName = "parser-retry"
+	}
+
+	job := &core.CrawlJob{
+		ID:          ref.ID,
+		CrawlerName: crawlerName,
+		Target: core.Target{
+			URL:  ref.URL,
+			Type: core.TargetTypeArticle,
+			Metadata: map[string]interface{}{
+				"retry_reason":    "parser_process_failed",
+				"original_raw_id": ref.ID,
+			},
+		},
+		Priority:    priority,
+		ScheduledAt: time.Now(),
+		Timeout:     defaultJobTimeout,
+		MaxRetries:  3,
+	}
+	return w.retryScheduler.Enqueue(ctx, job, lastErr)
 }
 
 // ErrStageGateNotAcquired 는 parser stage 의 ProcessingLock 이 다른 worker 에 점유 중이라
