@@ -38,11 +38,14 @@ const stageName = "parser"
 //  3. llmgen.Generator (선택) — ErrNoRule async LLM 호출. Worker 가 유일 Enqueue source 이므로
 //     Worker.Stop 후에 Stop 해야 in-flight LLM 호출 완료 보장.
 //  4. refiner.Refiner (선택) — interval polling. ctx cancel 시 cycle 즉시 종료.
+//  5. ZSetIntake (선택, 이슈 #522) — Kafka → Redis ZSET 인입. Worker 가 ZSET consumer 모드로
+//     동작하는 환경에서만 활성. ctx cancel 시 종료.
 type Stage struct {
 	worker  *worker.Worker
 	cleaner *worker.RawContentCleaner
-	llmGen  *llmgen.Generator // nil 허용
-	refiner *refiner.Refiner  // nil 허용
+	llmGen  *llmgen.Generator  // nil 허용
+	refiner *refiner.Refiner   // nil 허용
+	intake  *worker.ZSetIntake // nil 허용 — ZSET 인입 모드일 때만 (이슈 #522)
 	log     *logger.Logger
 }
 
@@ -73,6 +76,14 @@ func NewStage(
 	}, nil
 }
 
+// SetZSetIntake 는 Kafka → ZSET 인입 단계 컴포넌트를 주입합니다 (이슈 #522 / 메타 #515 Phase 2).
+//
+// nil 주입 시 ZSET 모드 비활성 — Worker 가 일반 Kafka consumer 로 동작하는 경로.
+// Start 호출 전 wiring 단계에서 1회 설정.
+func (s *Stage) SetZSetIntake(intake *worker.ZSetIntake) {
+	s.intake = intake
+}
+
 // Name 은 stage 식별자 ("parser") 를 반환합니다.
 func (s *Stage) Name() string { return stageName }
 
@@ -88,6 +99,11 @@ func (s *Stage) Start(ctx context.Context) {
 	s.cleaner.Start(ctx)
 	if s.refiner != nil {
 		s.refiner.Start(ctx)
+	}
+	// 이슈 #522 — ZSET 인입 모드. Worker 가 ZSET consumer 로 동작하므로 별도 goroutine 에서
+	// Kafka → ZSET intake 를 동시 운용. ctx cancel 시 자연 종료 (별도 Stop 메소드 불필요).
+	if s.intake != nil {
+		go s.intake.Run(ctx)
 	}
 }
 

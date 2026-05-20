@@ -709,9 +709,43 @@ func main() {
 	// fetcher 와 분리된 별도 consumer group (issuetracker-parsers) 으로 동작 — 인스턴스 수 독립 스케일.
 	// TopicFetched 의 RawContentRef 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제.
 	// 파싱 실패 (rule.Error) 시 raw 잔존 → LLM 재처리 윈도우.
+	//
+	// 이슈 #522 — ZSET 인입 모드 (PARSER_PRIORITY_QUEUE_ENABLED=true + redisClientShared) :
+	//   - Kafka consumer → ZSET intake goroutine (별도) 가 ZSET 으로 적재
+	//   - Worker 는 ZSET consumer 로 BZPOPMIN → priority sub-ordering 보장
+	//   - 처리 실패 시 RetryScheduler 경유로 Kafka 재발행 (Redis 잔존 X)
 	parserKafkaCfg := queue.DefaultConfig()
 	parserKafkaCfg.GroupID = queue.GroupParsers
-	parserConsumer := queue.NewConsumer(parserKafkaCfg, queue.TopicFetched)
+	parserKafkaConsumer := queue.NewConsumer(parserKafkaCfg, queue.TopicFetched)
+
+	// priorityQueueEnabled 가 true 면 Worker 는 ZSET consumer 를, intake 가 kafka consumer 를 사용.
+	// false 면 Worker 가 kafka consumer 를 직접 사용 (기존 동작).
+	parserPriorityQueueEnabled := envBoolOrDefault("PARSER_PRIORITY_QUEUE_ENABLED", false) && redisClientShared != nil
+	var parserConsumer bus.Consumer = parserKafkaConsumer
+	var parserZSetIntake *parserWorker.ZSetIntake
+	var parserZSetQueue *queue.PriorityZSetQueue
+	if parserPriorityQueueEnabled {
+		zsetCfg := queue.PriorityZSetConfig{
+			ZSetKey:        envOrDefault("PARSER_ZSET_QUEUE_KEY", "parser:zset:queue"),
+			EntryKeyPrefix: envOrDefault("PARSER_ZSET_ENTRY_PREFIX", "parser:zset:entry:"),
+			MaxSize:        int64(envIntOrDefault("PARSER_ZSET_MAX_SIZE", int(queue.PriorityZSetMaxSize))),
+			EntryTTL:       envDurationOrDefault("PARSER_ZSET_ENTRY_TTL", queue.PriorityZSetEntryTTL),
+		}
+		var qerr error
+		parserZSetQueue, qerr = queue.NewPriorityZSetQueue(redisClientShared.Raw(), zsetCfg)
+		if qerr != nil {
+			log.WithError(qerr).Fatal("failed to construct parser priority zset queue")
+		}
+		zsetConsumer := queue.NewPriorityZSetConsumer(parserZSetQueue, "parser:zset", envDurationOrDefault("PARSER_ZSET_POP_TIMEOUT", time.Second))
+		parserConsumer = zsetConsumer
+		parserZSetIntake = parserWorker.NewZSetIntake(parserKafkaConsumer, parserZSetQueue, log)
+		log.WithFields(map[string]interface{}{
+			"zset_key":     zsetCfg.ZSetKey,
+			"entry_prefix": zsetCfg.EntryKeyPrefix,
+			"max_size":     zsetCfg.MaxSize,
+			"entry_ttl_ms": zsetCfg.EntryTTL.Milliseconds(),
+		}).Info("parser priority zset queue enabled")
+	}
 	// sample URL 누적 — parser_worker 가 정상 파싱 후 누적, 단계 4-2 의 정밀화 트리거 입력.
 	sampleRepo := decorator.WrapSampleURLWithTimeout(pgstore.NewSampleURLRepository(pool, log), dbCfg.QueryTimeout)
 
@@ -731,8 +765,8 @@ func main() {
 	}
 
 	w := parserWorker.NewWorker(
-		parserConsumer,
-		jobPublisher, // 이슈 #392 — 구 producer + JobPublisher 두 인자 통합 (bus.Publisher 가 Forward + PublishChained 모두 제공)
+		parserConsumer, // ZSET 모드면 zsetConsumer, 아니면 kafka consumer (이슈 #522)
+		jobPublisher,   // 이슈 #392 — 구 producer + JobPublisher 두 인자 통합 (bus.Publisher 가 Forward + PublishChained 모두 제공)
 		rawSvc,
 		contentSvc,
 		ruleParser,
@@ -753,6 +787,19 @@ func main() {
 	// Category cycle 종료 시 marker release — scheduler 다음 주기에 즉시 진입 가능.
 	if pipelineGuard != nil {
 		w.SetPipelineGuard(pipelineGuard)
+	}
+
+	// ── RetryScheduler 주입 (이슈 #522) ────────────────────────────
+	// ZSET 인입 모드에서는 BZPOPMIN 이 곧 ack 라 commit skip 으로 redeliver 가 불가.
+	// RetryScheduler 가 주입되어야 ProcessMessage 실패 시 Kafka 재발행 → 다음 intake → ZSET 재진입
+	// 패턴으로 메시지 손실 방지. retryScheduler 가 nil 인 환경에서 ZSET 모드 활성화하면 처리 실패가
+	// 메시지 손실로 이어지므로 fatal.
+	if parserPriorityQueueEnabled {
+		if retryScheduler == nil {
+			log.Fatal("parser priority zset queue enabled but retry scheduler not configured — set REDIS_HOST or disable PARSER_PRIORITY_QUEUE_ENABLED")
+		}
+		w.SetRetryScheduler(retryScheduler)
+		log.Info("parser worker: retry scheduler injected (zset mode message loss guard)")
 	}
 
 	// ── Precheck 게이트 (이슈 #425) ───────────────────────────────────
@@ -1132,6 +1179,11 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct parser stage")
 	}
+	// 이슈 #522 — ZSET 인입 모드일 때 intake goroutine 을 parser Stage 의 lifecycle 에 묶음.
+	// Stage.Start 가 go intake.Run(ctx), ctx cancel 시 자연 종료.
+	if parserZSetIntake != nil {
+		parserStg.SetZSetIntake(parserZSetIntake)
+	}
 	validateStage, err := validate.NewStage(validateWorker)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct validate stage")
@@ -1274,6 +1326,29 @@ func envDurationOrDefault(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// envBoolOrDefault 는 환경변수에서 bool 을 파싱하여 반환합니다 (이슈 #522).
+// 미설정 시 def. "true"/"1" → true / "false"/"0" → false. 기타는 def.
+func envBoolOrDefault(key string, def bool) bool {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+// envOrDefault 는 환경변수에서 string 을 파싱하여 반환합니다 (이슈 #522).
+// 미설정 / 빈 값 시 def.
+func envOrDefault(key, def string) string {
+	if raw := os.Getenv(key); raw != "" {
+		return raw
+	}
+	return def
 }
 
 // envIntOrDefault 는 환경변수에서 양의 int 를 파싱하여 반환합니다 (이슈 #521).
