@@ -232,6 +232,15 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 		}
 	}
 
+	// timeout — 원본 timeout_ms 헤더 계승, 부재 시 기본 (gemini #3275211693).
+	// republishForReparse 의 동일 패턴 — scheduler 가 entry 별 부여한 timeout 보존.
+	jobTimeout := buildRetryDefaultTimeout
+	if raw := msg.Headers[core.HeaderTimeoutMs]; raw != "" {
+		if ms, perr := strconv.Atoi(raw); perr == nil && ms > 0 {
+			jobTimeout = time.Duration(ms) * time.Millisecond
+		}
+	}
+
 	return &core.CrawlJob{
 		ID:          ref.ID,
 		CrawlerName: crawlerName,
@@ -245,10 +254,13 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 		},
 		Priority:    priority,
 		ScheduledAt: time.Now(),
-		Timeout:     30 * time.Second,
+		Timeout:     jobTimeout,
 		MaxRetries:  bus.DefaultMaxRetries,
 	}, nil
 }
+
+// buildRetryDefaultTimeout 은 BuildRetryJob 의 timeout_ms 헤더가 부재할 때 사용하는 기본값입니다.
+const buildRetryDefaultTimeout = 30 * time.Second
 
 // PriorityFromHeader 는 Kafka 메시지 헤더의 "priority" 값을 int 로 파싱합니다 (이슈 #523).
 // 미설정 / 파싱 실패 / 범위 밖 (1~3 외) 은 PriorityNormal (2) 로 보정.

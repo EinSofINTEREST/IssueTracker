@@ -4,6 +4,7 @@ package worker_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,6 +109,37 @@ func TestBuildRetryJob_EmptyURL_ReturnsError(t *testing.T) {
 	msg := makeRetryMsg(t, "ref-4", "", "src", nil)
 	_, err := worker.BuildRetryJob(msg)
 	assert.Error(t, err)
+}
+
+func TestBuildRetryJob_TimeoutHeaderHonored(t *testing.T) {
+	// gemini #3275211693 — timeout_ms 헤더가 있으면 그 값 사용 (republishForReparse 와 동일 정책).
+	msg := makeRetryMsg(t, "ref-to-1", "https://example.com/", "src", map[string]string{
+		"timeout_ms": "60000", // 60s
+	})
+	job, err := worker.BuildRetryJob(msg)
+	require.NoError(t, err)
+	assert.Equal(t, 60*time.Second, job.Timeout)
+}
+
+func TestBuildRetryJob_NoTimeoutHeader_UsesDefault(t *testing.T) {
+	msg := makeRetryMsg(t, "ref-to-2", "https://example.com/", "src", nil)
+	job, err := worker.BuildRetryJob(msg)
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Second, job.Timeout, "헤더 부재 시 default 30s")
+}
+
+func TestBuildRetryJob_InvalidTimeoutHeader_UsesDefault(t *testing.T) {
+	cases := []string{"0", "-1", "not-a-number", ""}
+	for _, v := range cases {
+		t.Run("timeout_ms="+v, func(t *testing.T) {
+			msg := makeRetryMsg(t, "ref-to-x", "https://example.com/", "src", map[string]string{
+				"timeout_ms": v,
+			})
+			job, err := worker.BuildRetryJob(msg)
+			require.NoError(t, err)
+			assert.Equal(t, 30*time.Second, job.Timeout, "잘못된 timeout_ms %q → default", v)
+		})
+	}
 }
 
 func TestBuildRetryJob_MalformedProcessingMessage_ReturnsError(t *testing.T) {
