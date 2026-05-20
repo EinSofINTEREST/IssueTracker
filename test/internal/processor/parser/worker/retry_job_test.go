@@ -75,6 +75,73 @@ func TestBuildRetryJob_InvalidPriorityHeader_DefaultsToNormal(t *testing.T) {
 	}
 }
 
+func TestBuildRetryJob_HeaderCrawlerPreferredOverSourceInfo(t *testing.T) {
+	// crawler 헤더가 있으면 SourceInfo.Name 보다 우선 (gemini #3274689308).
+	msg := &queue.Message{
+		Value: makeRawRef(t, "raw-h1", "https://example.com/", "source-info-name"),
+		Headers: map[string]string{
+			"crawler": "header-crawler",
+		},
+	}
+	job, err := worker.BuildRetryJob(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "header-crawler", job.CrawlerName)
+}
+
+func TestBuildRetryJob_NoHeaderCrawler_UsesSourceInfo(t *testing.T) {
+	// crawler 헤더가 없으면 RawContentRef.SourceInfo.Name fallback.
+	msg := &queue.Message{
+		Value:   makeRawRef(t, "raw-h2", "https://example.com/", "fallback-source"),
+		Headers: map[string]string{},
+	}
+	job, err := worker.BuildRetryJob(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "fallback-source", job.CrawlerName)
+}
+
+func TestBuildRetryJob_TargetTypeHeader_Category(t *testing.T) {
+	// target_type 헤더가 유효 (category) 면 사용 (gemini #3274689285 — Article 오인 차단).
+	msg := &queue.Message{
+		Value: makeRawRef(t, "raw-tt-1", "https://example.com/", "src"),
+		Headers: map[string]string{
+			"target_type": "category",
+		},
+	}
+	job, err := worker.BuildRetryJob(msg)
+	require.NoError(t, err)
+	assert.Equal(t, core.TargetTypeCategory, job.Target.Type)
+}
+
+func TestBuildRetryJob_TargetTypeHeader_Article(t *testing.T) {
+	msg := &queue.Message{
+		Value: makeRawRef(t, "raw-tt-2", "https://example.com/", "src"),
+		Headers: map[string]string{
+			"target_type": "article",
+		},
+	}
+	job, err := worker.BuildRetryJob(msg)
+	require.NoError(t, err)
+	assert.Equal(t, core.TargetTypeArticle, job.Target.Type)
+}
+
+func TestBuildRetryJob_TargetTypeHeader_InvalidFallsBackToArticle(t *testing.T) {
+	cases := []string{"unknown", "", "page", "list"}
+	for _, tt := range cases {
+		t.Run("type="+tt, func(t *testing.T) {
+			msg := &queue.Message{
+				Value: makeRawRef(t, "raw-tt-x", "https://example.com/", "src"),
+				Headers: map[string]string{
+					"target_type": tt,
+				},
+			}
+			job, err := worker.BuildRetryJob(msg)
+			require.NoError(t, err)
+			assert.Equal(t, core.TargetTypeArticle, job.Target.Type,
+				"unknown target_type %q should fall back to Article", tt)
+		})
+	}
+}
+
 func TestBuildRetryJob_EmptySourceName_UsesFallback(t *testing.T) {
 	msg := &queue.Message{
 		Value: makeRawRef(t, "raw-3", "https://example.com/", ""),

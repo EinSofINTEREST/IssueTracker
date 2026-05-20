@@ -35,9 +35,16 @@ const PriorityZSetEntryTTL = 24 * time.Hour
 const PriorityZSetMaxSize = 100000
 
 // priorityFactor 는 priority 와 timestamp 사이의 score 간격 계수입니다.
-// arrival_ts (UnixMilli, ~1.7e12) 가 priorityFactor (=1e10) 보다 작아야 priority 가
-// 정렬에서 dominant — 1e10 으로 두면 ms 단위 timestamp 가 priority 안에서 sub-ordering.
-const priorityFactor = 1e10
+//
+// 정렬 정책: priority 가 dominant, timestamp 가 같은 priority 내 sub-ordering.
+//
+// 값 결정 (gemini PR #526 high-priority 피드백):
+//   - arrival_ts = UnixMilli (~1.7e12 in 2026, 100년 후도 ~5e12 미만)
+//   - priorityFactor 가 arrival_ts 보다 충분히 커야 priority 가 dominant
+//   - 1e10 (이전 값) 은 ~10초 이상 시간 차이만 나도 priority 영향이 ts 차이에 묻힘
+//   - 1e13 으로 두면 priority 간 차이 (1e13) 가 ts 변동 (~1e12) 보다 ~10x 큼
+//   - float64 mantissa 한계 9e15 — priority=3 * 1e13 + ts ≈ 3.018e13, 정밀도 안전
+const priorityFactor = 1e13
 
 // PriorityZSetConfig 는 PriorityZSetQueue 의 동작을 제어하는 설정입니다.
 type PriorityZSetConfig struct {

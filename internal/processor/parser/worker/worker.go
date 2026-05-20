@@ -366,9 +366,15 @@ func (w *Worker) enqueueRetry(ctx context.Context, msg *queue.Message, lastErr e
 
 // BuildRetryJob 은 parse 실패한 Kafka 메시지를 retry 용 CrawlJob 으로 변환합니다 (이슈 #522).
 //
-// RawContentRef.URL + CrawlerName 보존 + priority header 추출 (1=high / 2=normal / 3=low,
-// 잘못된 값은 normal). Target.Type=Article (parse 단계 메시지는 raw 1건의 article 처리 의미).
-// retry_reason / original_raw_id 헤더로 추적 가시성 제공.
+// RawContentRef.URL + CrawlerName + priority + target_type 을 보존하며, 일부 필드는 msg.Headers
+// 가 우선:
+//   - crawler 헤더 우선, 없으면 RawContentRef.SourceInfo.Name, 둘 다 빈 값이면 "parser-retry"
+//     (gemini #3274689308 — ProcessMessage 의 헤더 우선 정책과 일관)
+//   - priority 헤더는 PriorityFromHeader 헬퍼로 통일 (gemini #3274689296)
+//   - target_type 헤더가 유효 (article/category) 이면 사용, 없거나 잘못되면 Article default
+//     (gemini #3274689285 — Category 페이지 retry 시 Article 로 오인 차단)
+//
+// retry_reason / original_raw_id 메타로 추적 가시성 제공.
 //
 // 빈 URL 또는 unmarshal 실패 시 error — 호출자가 retry 불가로 분기.
 func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
@@ -380,19 +386,21 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 		return nil, fmt.Errorf("retry unmarshal: empty URL in RawContentRef %s", ref.ID)
 	}
 
-	priority := core.PriorityNormal
-	if p, ok := msg.Headers["priority"]; ok {
-		if v, err := strconv.Atoi(p); err == nil {
-			switch core.Priority(v) {
-			case core.PriorityHigh, core.PriorityNormal, core.PriorityLow:
-				priority = core.Priority(v)
-			}
-		}
-	}
+	priority := core.Priority(PriorityFromHeader(msg.Headers))
 
-	crawlerName := ref.SourceInfo.Name
+	crawlerName := msg.Headers["crawler"]
+	if crawlerName == "" {
+		crawlerName = ref.SourceInfo.Name
+	}
 	if crawlerName == "" {
 		crawlerName = "parser-retry"
+	}
+
+	targetType := core.TargetTypeArticle
+	if t, ok := msg.Headers["target_type"]; ok {
+		if tt := core.TargetType(t); isValidTargetType(tt) {
+			targetType = tt
+		}
 	}
 
 	return &core.CrawlJob{
@@ -400,7 +408,7 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 		CrawlerName: crawlerName,
 		Target: core.Target{
 			URL:  ref.URL,
-			Type: core.TargetTypeArticle,
+			Type: targetType,
 			Metadata: map[string]interface{}{
 				"retry_reason":    "parser_process_failed",
 				"original_raw_id": ref.ID,
@@ -411,6 +419,17 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 		Timeout:     defaultJobTimeout,
 		MaxRetries:  3,
 	}, nil
+}
+
+// isValidTargetType 은 retry job 에 적용 가능한 TargetType 인지 검증합니다.
+// article / category 만 허용 — 알 수 없는 값은 caller 가 Article default 로 보정.
+func isValidTargetType(t core.TargetType) bool {
+	switch t {
+	case core.TargetTypeArticle, core.TargetTypeCategory:
+		return true
+	default:
+		return false
+	}
 }
 
 // ErrStageGateNotAcquired 는 parser stage 의 ProcessingLock 이 다른 worker 에 점유 중이라
