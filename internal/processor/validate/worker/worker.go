@@ -167,7 +167,17 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 	}
 	if w.retryScheduler != nil {
 		if enqueueErr := w.enqueueRetry(ctx, msg, err); enqueueErr != nil {
-			log.WithError(enqueueErr).Warn("retry enqueue failed, message will be lost in zset mode")
+			// ZSET 모드에서 메시지는 이미 pop 됐으므로 enqueue 실패 시 영구 손실 — fallback 으로
+			// DLQ 발행하여 운영 가시성 + 수동 복구 가능 (coderabbit #3275227536).
+			log.WithError(enqueueErr).Warn("retry enqueue failed, sending to dlq as fallback")
+			if dlqErr := w.sendToDLQ(ctx, msg, fmt.Errorf("retry enqueue failed: %w (original: %v)", enqueueErr, err)); dlqErr != nil {
+				log.WithError(dlqErr).Error("dlq fallback failed, message will be lost in zset mode")
+				return
+			}
+			// DLQ 발행 성공 — commit (ZSETConsumer 의 Commit 은 no-op).
+			if commitErr := w.commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+				log.WithError(commitErr).Warn("commit after dlq fallback failed")
+			}
 			return
 		}
 		// Enqueue 성공 — commit (메시지 손실 방지). ZSETConsumer 의 Commit 은 no-op.

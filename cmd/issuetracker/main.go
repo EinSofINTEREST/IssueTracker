@@ -1049,7 +1049,12 @@ func main() {
 	//   - Kafka consumer → ZSET intake goroutine 이 ZSET 으로 적재
 	//   - Worker 는 ZSET consumer 로 BZPOPMIN → priority sub-ordering 보장
 	//   - 처리 실패 시 RetryScheduler 경유로 Kafka 재발행 (Redis 잔존 X)
-	validatePriorityQueueEnabled := envBoolOrDefault("VALIDATE_PRIORITY_QUEUE_ENABLED", false) && redisClientShared != nil
+	//
+	// Validate stage 가 disabled (STAGES_VALIDATE_ENABLED=false) 인 환경에서는 본 분기 자체를
+	// 비활성화 — 미사용 stage 에 fatal 가드를 트리거하지 않도록 (coderabbit #3275227525).
+	validatePriorityQueueEnabled := stagesCfg.ValidateEnabled &&
+		envBoolOrDefault("VALIDATE_PRIORITY_QUEUE_ENABLED", false) &&
+		redisClientShared != nil
 	var validateConsumer bus.Consumer = validateKafkaConsumer
 	var validateZSetIntake *validateWorkerPkg.ZSetIntake
 	if validatePriorityQueueEnabled {
