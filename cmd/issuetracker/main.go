@@ -10,6 +10,7 @@ import (
 	storagecfg "issuetracker/pkg/config/storage"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	validateWorkerPkg "issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/scheduler"
 	"issuetracker/internal/storage/decorator"
+	"issuetracker/internal/storage/model"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
@@ -210,10 +212,15 @@ func main() {
 	// 이슈 #391 — PriorityResolver chain 이 publisher 측으로 이동 + 모든 PublishX 가
 	// resolver 통과 (메타 #385 Sub 6). ExplicitPriorityResolver 를 chain 1순위 로 등록 —
 	// 발행자가 job.Priority 를 사전 명시한 경우 (seed entry / retry / upgrade) 그 값이 보존됨.
+	//
+	// 이슈 #521 — RuleBasedPriorityResolver 가 parser_rules.crawl_priority 컬럼을 hydrate
+	// 하여 host/path 기반 priority 분기. ruleBased 인스턴스를 변수로 보유해 후속 단계에서
+	// PriorityRulesRefresher 가 hydrate 가능 (pool 생성 이후).
 	resolver := bus.NewCompositeResolver(core.PriorityNormal)
 	resolver.Add(&bus.ExplicitPriorityResolver{})
 	resolver.Add(bus.NewSourcePriorityResolver(core.PriorityNormal))
-	resolver.Add(bus.NewRuleBasedPriorityResolver(core.PriorityNormal))
+	ruleBasedResolver := bus.NewRuleBasedPriorityResolver(core.PriorityNormal)
+	resolver.Add(ruleBasedResolver)
 
 	highConsumer := queue.NewConsumer(crawlerKafkaCfg, queue.TopicCrawlHigh)
 	defer highConsumer.Close()
@@ -254,6 +261,48 @@ func main() {
 		service.WithParserRuleQueryTimeout(dbCfg.QueryTimeout),
 		service.WithParserRuleInvalidator(ruleResolver),
 	)
+
+	// 이슈 #521 — RuleBasedPriorityResolver hydrate. parser_rules 의 enabled 룰 (target_type=page)
+	// 에서 (host_pattern, path_pattern, crawl_priority) 추출 후 atomic 으로 resolver 에 주입.
+	//
+	// target_type=page 만 로드 — Copilot #3274137388 피드백: 같은 host 의 page/list 룰이 priority
+	// 가 다를 경우 모호. URL crawl priority 분기는 page (article body) 단위가 자연스러우므로
+	// 본 단계에서는 page 만 hydrate.
+	//
+	// Limit (default 10000, env PRIORITY_RULES_LOAD_LIMIT) 도달 시 WARN — silent truncation 회피
+	// (gemini #3274133287 / Copilot #3274137421 피드백).
+	//
+	// 부팅 직후 1회 + 주기 refresh (default 5분, env PRIORITY_RULES_REFRESH_INTERVAL).
+	priorityRefreshInterval := envDurationOrDefault("PRIORITY_RULES_REFRESH_INTERVAL", 5*time.Minute)
+	priorityLoadLimit := envIntOrDefault("PRIORITY_RULES_LOAD_LIMIT", 10000)
+	priorityLoader := func(loadCtx context.Context) ([]bus.HostPathPriorityRule, error) {
+		records, err := parserRuleRepoRaw.List(loadCtx, model.ParserRuleFilter{
+			OnlyEnabled: true,
+			TargetType:  model.TargetTypePage,
+			Limit:       priorityLoadLimit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(records) == priorityLoadLimit {
+			log.WithField("limit", priorityLoadLimit).Warn("priority rules load reached limit, possible truncation — raise PRIORITY_RULES_LOAD_LIMIT")
+		}
+		rules := make([]bus.HostPathPriorityRule, 0, len(records))
+		for _, rec := range records {
+			rules = append(rules, bus.HostPathPriorityRule{
+				HostPattern: rec.HostPattern,
+				PathPattern: rec.PathPattern,
+				Priority:    priorityFromInt16(rec.CrawlPriority),
+			})
+		}
+		return rules, nil
+	}
+	priorityRefresher := bus.NewPriorityRulesRefresher(ruleBasedResolver, priorityLoader, priorityRefreshInterval, log)
+	priorityRefresher.Start(ctx)
+	log.WithFields(map[string]interface{}{
+		"interval_ms": priorityRefreshInterval.Milliseconds(),
+		"load_limit":  priorityLoadLimit,
+	}).Info("priority rules refresher started")
 	// page-parse 블랙리스트 — 카테고리 → article job 발행 단계에서 매칭 URL 차단.
 	// Enabled=false 시 Matcher 미주입 → parser_worker 가 모든 링크 그대로 발행 (기능 OFF).
 	//
@@ -644,6 +693,7 @@ func main() {
 			rawIDTracker,
 			rawSvc,
 			jobPublisher, // 이슈 #388 — bus.UpgradePublisher (단일 facade)
+			resolver,     // 이슈 #521 — host/path 기반 priority 결정
 			redisRaw,     // nil 허용 — in-flight lock 비활성 (단일 인스턴스)
 			log,
 		)
@@ -1210,6 +1260,47 @@ func main() {
 	}
 
 	log.Info("shutdown completed")
+}
+
+// envDurationOrDefault 는 환경변수에서 time.Duration 을 파싱하여 반환합니다 (이슈 #521).
+// 미설정 / 파싱 실패 시 def 반환. 운영자가 PRIORITY_RULES_REFRESH_INTERVAL 같은 변수 조정 시 사용.
+func envDurationOrDefault(key string, def time.Duration) time.Duration {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return def
+	}
+	return d
+}
+
+// envIntOrDefault 는 환경변수에서 양의 int 를 파싱하여 반환합니다 (이슈 #521).
+// 미설정 / 파싱 실패 / 0 이하 값은 def 반환.
+func envIntOrDefault(key string, def int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return def
+	}
+	return v
+}
+
+// priorityFromInt16 은 DB 의 crawl_priority (SMALLINT, 1~3) 를 core.Priority 로 변환합니다 (이슈 #521).
+// 매핑: 1=high / 2=normal / 3=low. 잘못된 값은 normal 로 보정 — DB CHECK 제약으로 정상은 미도달.
+func priorityFromInt16(v int16) core.Priority {
+	switch v {
+	case 1:
+		return core.PriorityHigh
+	case 3:
+		return core.PriorityLow
+	default:
+		return core.PriorityNormal
+	}
 }
 
 // buildEnricherROMCPConfig 는 ENRICHER_DB_RO_* 환경변수에서 read-only DSN 을 구성하고

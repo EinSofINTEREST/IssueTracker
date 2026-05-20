@@ -36,9 +36,9 @@ func NewParserRuleRepository(pool *pgxpool.Pool, log *logger.Logger) repository.
 
 const sqlInsertParserRule = `
 INSERT INTO parser_rules (
-  source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article
+  source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, crawl_priority
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 )
 RETURNING id, created_at, updated_at
 `
@@ -68,9 +68,17 @@ func (r *pgParserRuleRepository) Insert(ctx context.Context, rec *model.ParserRu
 	if rec.Version == 0 {
 		rec.Version = 1
 	}
+	// crawl_priority 미설정 (0) 은 normal (2) 로 보정 — DB DEFAULT 와 일치 (이슈 #521).
+	// 보정된 값을 rec.CrawlPriority 에 다시 반영해 in-memory 와 DB row 의 값을 일치시킴
+	// (coderabbit 피드백 #3274112959 — caller 가 Insert 후 rec 의 priority 를 참조해도 정합).
+	priority := rec.CrawlPriority
+	if priority < 1 || priority > 3 {
+		priority = 2
+	}
+	rec.CrawlPriority = priority
 	row := r.pool.QueryRow(ctx, sqlInsertParserRule,
 		rec.SourceName, rec.HostPattern, rec.PathPattern, string(rec.TargetType), rec.Version,
-		rec.Enabled, selectors, confidence, rec.Description, rec.PageType, rec.Article,
+		rec.Enabled, selectors, confidence, rec.Description, rec.PageType, rec.Article, priority,
 	)
 	if err := row.Scan(&rec.ID, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
 		var pgErr *pgconn.PgError
@@ -155,7 +163,7 @@ func (r *pgParserRuleRepository) UpdatePathPattern(ctx context.Context, id int64
 }
 
 const sqlGetParserRuleByID = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, crawl_priority, created_at, updated_at
 FROM parser_rules
 WHERE id = $1
 `
@@ -174,7 +182,7 @@ func (r *pgParserRuleRepository) GetByID(ctx context.Context, id int64) (*model.
 }
 
 const sqlFindParserRuleByNaturalKey = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, crawl_priority, created_at, updated_at
 FROM parser_rules
 WHERE source_name  = $1
   AND host_pattern = $2
@@ -265,7 +273,7 @@ func (r *pgParserRuleRepository) HasAnyRule(ctx context.Context, hostPattern str
 //   - LENGTH(path_pattern) DESC : 더 구체적인 (긴) regex 패턴 우선 (path_pattern=” 은 길이 0 으로 마지막)
 //   - version DESC             : 같은 패턴 안에서 최신 버전 우선
 const sqlFindActiveCandidates = `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, crawl_priority, created_at, updated_at
 FROM parser_rules
 WHERE host_pattern = $1
   AND target_type  = $2
@@ -322,7 +330,7 @@ func (r *pgParserRuleRepository) List(ctx context.Context, f model.ParserRuleFil
 	}
 
 	query := `
-SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, created_at, updated_at
+SELECT id, source_name, host_pattern, path_pattern, target_type, version, enabled, selectors, confidence, description, page_type, article, crawl_priority, created_at, updated_at
 FROM parser_rules
 WHERE 1=1`
 	args := make([]any, 0, 4)
@@ -394,7 +402,7 @@ func scanParserRule(s scanner) (*model.ParserRuleRecord, error) {
 	if err := s.Scan(
 		&rec.ID, &rec.SourceName, &rec.HostPattern, &rec.PathPattern, &targetType, &rec.Version,
 		&rec.Enabled, &selectorsRaw, &confidenceRaw, &rec.Description, &rec.PageType, &rec.Article,
-		&rec.CreatedAt, &rec.UpdatedAt,
+		&rec.CrawlPriority, &rec.CreatedAt, &rec.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}

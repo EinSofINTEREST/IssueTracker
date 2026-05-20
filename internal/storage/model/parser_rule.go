@@ -85,6 +85,9 @@ type ParserRuleRecord struct {
 	PageType    string
 	// Article 은 룰이 적용되는 페이지가 뉴스 기사 본문인지 표시합니다 (이슈 #421).
 	Article bool
+	// CrawlPriority 는 host/path 매칭된 URL 의 crawl 우선순위입니다 (이슈 #521).
+	// 1=high / 2=normal / 3=low — core.Priority 매핑 동일. DEFAULT 2.
+	CrawlPriority int16
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

@@ -61,26 +61,28 @@ const (
 //   - max 20 cap: 단일 사이클 republish 폭주 회피
 //   - 모든 단계 실패는 non-fatal — best-effort. 다음 카운팅 사이클이 자연스러운 retry.
 type Upgrader struct {
-	repo       repository.FetcherRuleRepository
-	resolver   Resolver
-	tracker    primitive.RawIDTracker
-	rawSvc     service.RawContentService
-	upgradePub bus.UpgradePublisher // gemini PR #398 — `publisher` package import 와 shadow 회피.
-	redis      *goredis.Client      // SETNX in-flight lock 용. nil 이면 lock 비활성 (단일 인스턴스 환경).
-	log        *logger.Logger
+	repo             repository.FetcherRuleRepository
+	resolver         Resolver
+	tracker          primitive.RawIDTracker
+	rawSvc           service.RawContentService
+	upgradePub       bus.UpgradePublisher // gemini PR #398 — `publisher` package import 와 shadow 회피.
+	priorityResolver bus.PriorityResolver // 이슈 #521 — host/path 기반 priority 결정. nil 이면 PriorityNormal fallback.
+	redis            *goredis.Client      // SETNX in-flight lock 용. nil 이면 lock 비활성 (단일 인스턴스 환경).
+	log              *logger.Logger
 }
 
 // NewUpgrader 는 Upgrader 를 생성합니다 (이슈 #388 — producer queue.Producer →
 // bus.UpgradePublisher 의존 교체).
 //
-// 모든 인자는 nil 허용 안 함 (redis 만 nil 허용 — 단일 인스턴스 환경에서 lock 비활성).
-// nil 인자 발견 시 error.
+// 모든 인자는 nil 허용 안 함 (redis / priorityResolver 만 nil 허용).
+// priorityResolver 가 nil 이면 republish job 의 priority 가 항상 PriorityNormal (기존 동작 호환).
 func NewUpgrader(
 	repo repository.FetcherRuleRepository,
 	resolver Resolver,
 	tracker primitive.RawIDTracker,
 	rawSvc service.RawContentService,
 	pub bus.UpgradePublisher,
+	priorityResolver bus.PriorityResolver,
 	redisClient *goredis.Client,
 	log *logger.Logger,
 ) (*Upgrader, error) {
@@ -103,13 +105,14 @@ func NewUpgrader(
 		return nil, errors.New("rule: NewUpgrader requires non-nil Logger")
 	}
 	return &Upgrader{
-		repo:       repo,
-		resolver:   resolver,
-		tracker:    tracker,
-		rawSvc:     rawSvc,
-		upgradePub: pub,
-		redis:      redisClient,
-		log:        log,
+		repo:             repo,
+		resolver:         resolver,
+		tracker:          tracker,
+		rawSvc:           rawSvc,
+		upgradePub:       pub,
+		priorityResolver: priorityResolver,
+		redis:            redisClient,
+		log:              log,
 	}, nil
 }
 
@@ -220,10 +223,16 @@ func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []stri
 					"original_raw_id":            rawID,
 				},
 			},
-			Priority:    core.PriorityNormal,
 			ScheduledAt: time.Now(),
 			Timeout:     republishedJobTimeout,
 			MaxRetries:  3,
+		}
+		// 이슈 #521 — priorityResolver 가 host/path 기반 priority 결정.
+		// nil 이면 PriorityNormal fallback (기존 동작 호환).
+		if u.priorityResolver != nil {
+			job.Priority = u.priorityResolver.Resolve(job)
+		} else {
+			job.Priority = core.PriorityNormal
 		}
 		data, err := job.Marshal()
 		if err != nil {
@@ -232,7 +241,7 @@ func (u *Upgrader) republishRaws(ctx context.Context, host string, rawIDs []stri
 			continue
 		}
 		msgs = append(msgs, queue.Message{
-			Topic: queue.TopicCrawlNormal,
+			Topic: bus.CrawlTopic(job.Priority),
 			Key:   []byte(job.ID),
 			Value: data,
 			Headers: map[string]string{

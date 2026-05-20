@@ -7,6 +7,12 @@
 package bus
 
 import (
+	"net/url"
+	"regexp"
+	"sort"
+	"strings"
+	"sync/atomic"
+
 	"issuetracker/internal/processor/fetcher/core"
 )
 
@@ -115,10 +121,42 @@ type PriorityRule struct {
 	Priority core.Priority
 }
 
+// HostPathPriorityRule 은 host_pattern + path_pattern + priority 로 구성된 라우팅 규칙입니다.
+// parser_rules.crawl_priority 컬럼에서 hydrate 되어 RuleBasedPriorityResolver 에 주입됩니다 (이슈 #521).
+type HostPathPriorityRule struct {
+	// HostPattern 은 정확 host 매칭 (예: "n.news.naver.com").
+	// parser_rules.host_pattern 그대로 — RE2 패턴이 아닌 정확 문자열 매칭.
+	HostPattern string
+	// PathPattern 은 RE2 정규식. 빈 문자열이면 모든 path 매칭.
+	PathPattern string
+	// Priority 는 매칭 시 적용할 우선순위 (1=high / 2=normal / 3=low).
+	Priority core.Priority
+}
+
+// compiledHostPathRule 은 hydrate 시점에 path regex 가 컴파일된 내부 표현입니다.
+//
+// pathLen 은 정렬용 — len(rule.PathPattern). 빈 path (catch-all) 은 길이 0 으로 host 안에서
+// 가장 마지막 평가. coderabbit 피드백 #3274112935 — 같은 host 에서 catch-all 이 specific
+// path 룰을 shadow 하지 않도록 사전 정렬에 사용.
+type compiledHostPathRule struct {
+	host     string
+	path     *regexp.Regexp // nil 이면 모든 path 매칭
+	pathLen  int            // 원본 PathPattern 길이 — 정렬 키
+	priority core.Priority
+}
+
 // RuleBasedPriorityResolver 는 등록된 규칙을 순서대로 평가하여 첫 번째 매치의 우선순위를 반환합니다.
+//
+// 두 종류의 룰을 지원합니다:
+//  1. 함수형 PriorityRule (AddRule) — 임의 조건 매칭
+//  2. host/path 룰 (SetHostPathRules) — DB hydrate 대상, atomic.Pointer 로 lock-free 교체
+//
+// SetHostPathRules 는 atomic 교체로 동시 Resolve 호출과 race-safe — periodic refresher
+// goroutine 이 안전하게 새 룰 슬라이스로 교체 가능 (이슈 #521).
 type RuleBasedPriorityResolver struct {
-	rules    []PriorityRule
-	fallback core.Priority
+	rules       []PriorityRule
+	hostPathPtr atomic.Pointer[[]compiledHostPathRule]
+	fallback    core.Priority
 }
 
 // NewRuleBasedPriorityResolver 는 기본 우선순위를 지정하여 빈 resolver 를 생성합니다.
@@ -137,13 +175,98 @@ func (r *RuleBasedPriorityResolver) AddRule(
 	r.rules = append(r.rules, PriorityRule{Match: match, Priority: priority})
 }
 
+// SetHostPathRules 는 host/path 룰 슬라이스를 atomic 으로 교체합니다 (이슈 #521).
+//
+// hydrate / refresh 시점에 호출됩니다. path_pattern 의 RE2 컴파일 실패한 항목은 silently
+// skip + 결과 슬라이스에 미포함. (이는 INSERT 단계에서 사전 검증되므로 정상 흐름에서는
+// 컴파일 실패가 없어야 합니다 — postgres.Insert 가 RE2 검증).
+//
+// 정렬: 같은 host 내 더 구체적인 (긴) path regex 가 먼저 평가되도록 LENGTH(path) DESC.
+// 빈 path_pattern 은 host catch-all 로 마지막 평가.
+//
+// 매칭 정책 — Resolve 시:
+//  1. job.Target.URL 에서 host + path 추출
+//  2. host 정확 매칭 + path regex 매칭 첫 룰의 priority 반환
+//
+// nil 또는 빈 슬라이스 전달 시 host/path 룰이 비활성화되어 fallback 동작 (CanResolve 가 false).
+//
+// 정렬 (coderabbit 피드백 #3274112935):
+//   - 1순위 host ASC (그룹화 — host 평가는 정확 매칭이므로 그룹화만으로 충분)
+//   - 2순위 pathLen DESC (긴 path regex 우선 → 같은 host 에서 catch-all 이 specific 을 shadow 회피)
+//
+// 동일 host + 동일 pathLen 의 경우 입력 순서 보존 (sort.SliceStable).
+func (r *RuleBasedPriorityResolver) SetHostPathRules(rules []HostPathPriorityRule) {
+	compiled := make([]compiledHostPathRule, 0, len(rules))
+	for _, rule := range rules {
+		// host 정규화 — matchHostPath 의 u.Hostname() lowercase 매칭과 일관 (gemini #3274133274 / Copilot #3274137309).
+		entry := compiledHostPathRule{
+			host:     strings.ToLower(rule.HostPattern),
+			pathLen:  len(rule.PathPattern),
+			priority: rule.Priority,
+		}
+		if rule.PathPattern != "" {
+			re, err := regexp.Compile(rule.PathPattern)
+			if err != nil {
+				// INSERT 시점에 검증되므로 정상 흐름은 도달 불가 — 도달 시 해당 룰만 skip.
+				continue
+			}
+			entry.path = re
+		}
+		compiled = append(compiled, entry)
+	}
+	sort.SliceStable(compiled, func(i, j int) bool {
+		if compiled[i].host != compiled[j].host {
+			return compiled[i].host < compiled[j].host
+		}
+		return compiled[i].pathLen > compiled[j].pathLen
+	})
+	r.hostPathPtr.Store(&compiled)
+}
+
+// matchHostPath 는 job 의 URL 에서 host/path 룰 매칭을 시도하여 priority + 매칭 여부를 반환합니다.
+//
+// URL parse 실패 시 (false, _) — 호출자가 fallback 처리.
+//
+// 호스트 정규화 (gemini #3274133274 / Copilot #3274137309):
+//   - u.Hostname() 로 port 제외 (parser_rules.host_pattern 은 보통 port 없는 도메인)
+//   - strings.ToLower 로 대소문자 통일 (parser_rule resolver 와 일관)
+func (r *RuleBasedPriorityResolver) matchHostPath(job *core.CrawlJob) (core.Priority, bool) {
+	rulesPtr := r.hostPathPtr.Load()
+	if rulesPtr == nil || len(*rulesPtr) == 0 {
+		return 0, false
+	}
+	u, err := url.Parse(job.Target.URL)
+	if err != nil || u.Host == "" {
+		return 0, false
+	}
+	host := strings.ToLower(u.Hostname())
+	path := u.Path
+	if path == "" {
+		path = "/"
+	}
+	for _, rule := range *rulesPtr {
+		if rule.host != host {
+			continue
+		}
+		if rule.path == nil || rule.path.MatchString(path) {
+			return rule.priority, true
+		}
+	}
+	return 0, false
+}
+
 // Resolve 는 등록된 규칙을 순서대로 평가합니다.
+// 1순위: 함수형 PriorityRule (AddRule 으로 등록).
+// 2순위: host/path 룰 (SetHostPathRules 으로 등록).
 // 매치되는 규칙이 없으면 fallback 우선순위를 반환합니다.
 func (r *RuleBasedPriorityResolver) Resolve(job *core.CrawlJob) core.Priority {
 	for _, rule := range r.rules {
 		if rule.Match(job) {
 			return rule.Priority
 		}
+	}
+	if p, ok := r.matchHostPath(job); ok {
+		return p
 	}
 	return r.fallback
 }
@@ -155,6 +278,9 @@ func (r *RuleBasedPriorityResolver) CanResolve(job *core.CrawlJob) bool {
 		if rule.Match(job) {
 			return true
 		}
+	}
+	if _, ok := r.matchHostPath(job); ok {
+		return true
 	}
 	return false
 }
