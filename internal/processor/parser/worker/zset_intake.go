@@ -33,16 +33,19 @@ import (
 )
 
 // ZSetIntake 는 Kafka → ZSET 인입 단계의 컴포넌트입니다.
+//
+// zsetQueue 가 queue.PriorityPusher 인터페이스 (Push only) — *queue.PriorityZSetQueue 가
+// 자동 만족하며, 단위 테스트에서는 in-memory stub 으로 교체 가능 (Copilot #3274731563).
 type ZSetIntake struct {
 	consumer  bus.Consumer
-	zsetQueue *queue.PriorityZSetQueue
+	zsetQueue queue.PriorityPusher
 	log       *logger.Logger
 }
 
 // NewZSetIntake 는 ZSetIntake 인스턴스를 생성합니다.
 //
 // 모든 인자 nil 불허 — wiring 단계에서 사전 검증. nil 시 nil 반환.
-func NewZSetIntake(consumer bus.Consumer, zsetQueue *queue.PriorityZSetQueue, log *logger.Logger) *ZSetIntake {
+func NewZSetIntake(consumer bus.Consumer, zsetQueue queue.PriorityPusher, log *logger.Logger) *ZSetIntake {
 	if consumer == nil || zsetQueue == nil || log == nil {
 		return nil
 	}
@@ -55,10 +58,17 @@ func NewZSetIntake(consumer bus.Consumer, zsetQueue *queue.PriorityZSetQueue, lo
 
 // Run 은 ctx 가 cancel 될 때까지 Kafka FetchMessage → ZSET push → Kafka commit 루프를 실행합니다.
 //
-// goroutine 으로 시작 권장 — 본 함수는 blocking. 종료 시 consumer.Close 는 호출자 책임.
+// goroutine 으로 시작 권장 — 본 함수는 blocking. 종료 시 consumer.Close 를 defer 로 호출하여
+// Kafka reader 자원 누수 방지 (Copilot #3274731405). ZSET 모드에서는 parserKafkaConsumer 가
+// intake 전용으로만 사용되므로 본 함수 종료 시점이 closing 의 자연스러운 위치.
 func (i *ZSetIntake) Run(ctx context.Context) {
 	i.log.Info("parser zset intake started")
-	defer i.log.Info("parser zset intake stopped")
+	defer func() {
+		if err := i.consumer.Close(); err != nil {
+			i.log.WithError(err).Warn("intake consumer close failed")
+		}
+		i.log.Info("parser zset intake stopped")
+	}()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -80,6 +90,12 @@ func (i *ZSetIntake) Run(ctx context.Context) {
 		}
 		i.handleOne(ctx, msg)
 	}
+}
+
+// HandleOneForTest 는 handleOne 의 테스트 전용 export 입니다 — unit test 분기 검증 용.
+// 외부 호출자는 본 메소드 대신 Run 을 사용해야 합니다.
+func (i *ZSetIntake) HandleOneForTest(ctx context.Context, msg *queue.Message) {
+	i.handleOne(ctx, msg)
 }
 
 // handleOne 은 단일 메시지를 ZSET 에 적재 + Kafka commit 합니다.

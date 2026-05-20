@@ -49,9 +49,13 @@ func newPriorityZSetTestQueue(t *testing.T, suffix string) (*queue.PriorityZSetQ
 		defer cancel()
 		client.Raw().Del(ctx, prefix+"queue")
 		// entries 는 wildcard SCAN + DEL — 운영에선 권장 안 되지만 테스트 cleanup 한정.
+		// iter.Err() 검증 (Copilot #3274731503) — cleanup 실패가 silent 하지 않도록.
 		iter := client.Raw().Scan(ctx, 0, prefix+"entry:*", 0).Iterator()
 		for iter.Next(ctx) {
 			client.Raw().Del(ctx, iter.Val())
+		}
+		if err := iter.Err(); err != nil {
+			t.Logf("cleanup SCAN iterator error (ignored): %v", err)
 		}
 	})
 	return q, client
@@ -270,6 +274,32 @@ func TestPriorityZSetConsumer_Close_NoOp(t *testing.T) {
 	q, _ := newPriorityZSetTestQueue(t, "consumer-close")
 	c := queue.NewPriorityZSetConsumer(q, "parser:zset", 500*time.Millisecond)
 	assert.NoError(t, c.Close())
+}
+
+func TestPriorityZSetQueue_Pop_EntryExpiredBeforeGet_ReturnsNilPayload(t *testing.T) {
+	// entry STRING 이 TTL 만료된 상태 — Pop 은 (id, score, nil payload) 반환.
+	// 직접 ZADD 만 하고 SET 은 생략하여 시뮬레이션.
+	q, client := newPriorityZSetTestQueue(t, "entry-expired")
+	ctx := context.Background()
+
+	prefix := "test:priority-zset:entry-expired:"
+	// queue key 정확히 알 수 없으니 직접 push 후 SCAN
+	require.NoError(t, q.Push(ctx, 2, "id-1", []byte("payload")))
+
+	// entry STRING 직접 삭제 — TTL 만료 시뮬레이션.
+	iter := client.Raw().Scan(ctx, 0, prefix+"*:entry:*", 0).Iterator()
+	for iter.Next(ctx) {
+		client.Raw().Del(ctx, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		t.Logf("scan err (ignored): %v", err)
+	}
+
+	res, err := q.Pop(ctx, 1*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, "id-1", res.ID)
+	assert.Nil(t, res.Payload, "entry 만료 시 Payload=nil")
 }
 
 func TestPriorityZSetConsumer_FetchMessage_CtxCancel(t *testing.T) {

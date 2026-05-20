@@ -56,12 +56,23 @@ type PriorityZSetConfig struct {
 	// 실제 키: <EntryKeyPrefix><id>. 예: "parser:zset:entry:".
 	EntryKeyPrefix string
 
-	// MaxSize 는 ZSET 의 최대 크기입니다. 0 또는 음수면 unlimited.
-	// 초과 시 score 가 가장 큰 (low priority + 오래된) 항목 drop.
+	// MaxSize 는 ZSET 의 최대 크기입니다 — 운영 안전망 (Redis 메모리 보호).
+	// 0 또는 음수면 PriorityZSetMaxSize default (100000) — unlimited 옵션은 의도적으로 미지원.
+	// 초과 시 score 가 가장 큰 (low priority + 오래된) 항목 drop (Copilot #3274731323 정합).
 	MaxSize int64
 
 	// EntryTTL 은 entry STRING 의 TTL 입니다. 0 또는 음수면 PriorityZSetEntryTTL.
 	EntryTTL time.Duration
+}
+
+// PriorityPusher 는 PriorityZSetQueue 의 Push 책임만 추상화한 인터페이스입니다 (이슈 #522).
+//
+// ZSetIntake 등 push-only 호출자가 *PriorityZSetQueue 대신 본 인터페이스에 의존하면 단위 테스트
+// 에서 in-memory mock 으로 손쉽게 교체 가능 — Copilot #3274731563 피드백.
+//
+// Validate/Enrich 의 인입 단계도 동일 인터페이스를 재사용 예정 (메타 #515 Phase 2).
+type PriorityPusher interface {
+	Push(ctx context.Context, priority int, id string, payload []byte) error
 }
 
 // PriorityZSetQueue 는 Redis ZSET 기반 priority queue 입니다.
@@ -154,6 +165,11 @@ type PopResult struct {
 // 빈 큐에서 timeout 만료 시 (nil, nil) — 호출자가 polling loop 에서 재시도.
 //
 // entry STRING 이 만료된 경우 (TTL 초과) Payload=nil 로 반환. 호출자가 로그 + skip.
+//
+// 메시지 손실 방지 (Copilot #3274731302):
+// BZPOPMIN 으로 ZSET 에서 먼저 제거된 후 entry GET 이 Redis 오류 (timeout 등) 로 실패하면
+// 메시지가 영구 손실됨. 이를 피하기 위해 GET 실패 시 동일 score 로 ZADD 복구를 시도하고,
+// 복구도 실패하면 진짜 손실로 분류하여 error 반환. 호출자가 RetryScheduler 등으로 후속 처리 가능.
 func (q *PriorityZSetQueue) Pop(ctx context.Context, timeout time.Duration) (*PopResult, error) {
 	res, err := q.rdb.BZPopMin(ctx, timeout, q.zsetKey).Result()
 	if err != nil {
@@ -173,7 +189,12 @@ func (q *PriorityZSetQueue) Pop(ctx context.Context, timeout time.Duration) (*Po
 	priority := priorityFromScore(res.Score)
 	payload, err := q.rdb.Get(ctx, q.entryKey+id).Bytes()
 	if err != nil && !errors.Is(err, goredis.Nil) {
-		return nil, fmt.Errorf("priority zset entry get (id=%s): %w", id, err)
+		// entry GET 이 Redis 오류로 실패 — 이미 ZSET 에서 pop 된 ID 가 손실되는 것을 막기 위해
+		// 동일 score 로 ZADD 복구 시도. 복구 성공 시 caller 가 재시도 가능.
+		if zaddErr := q.rdb.ZAdd(ctx, q.zsetKey, goredis.Z{Score: res.Score, Member: id}).Err(); zaddErr != nil {
+			return nil, fmt.Errorf("priority zset entry get failed and zset restore failed (id=%s): get=%w; zadd=%v", id, err, zaddErr)
+		}
+		return nil, fmt.Errorf("priority zset entry get (id=%s, restored to zset): %w", id, err)
 	}
 	// pop 된 후 entry 도 cleanup — TTL 로도 자연 만료되지만 명시적 삭제로 메모리 즉시 회수.
 	q.rdb.Del(ctx, q.entryKey+id)

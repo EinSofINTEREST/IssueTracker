@@ -417,7 +417,9 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 		Priority:    priority,
 		ScheduledAt: time.Now(),
 		Timeout:     defaultJobTimeout,
-		MaxRetries:  3,
+		// MaxRetries 는 bus.DefaultMaxRetries 단일 출처 — chain.go buildJobMessages 와 일관
+		// (Copilot #3274731364 — 매직 넘버 제거).
+		MaxRetries: bus.DefaultMaxRetries,
 	}, nil
 }
 
