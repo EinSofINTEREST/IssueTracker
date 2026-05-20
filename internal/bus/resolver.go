@@ -9,6 +9,7 @@ package bus
 import (
 	"net/url"
 	"regexp"
+	"sort"
 	"sync/atomic"
 
 	"issuetracker/internal/processor/fetcher/core"
@@ -132,9 +133,14 @@ type HostPathPriorityRule struct {
 }
 
 // compiledHostPathRule 은 hydrate 시점에 path regex 가 컴파일된 내부 표현입니다.
+//
+// pathLen 은 정렬용 — len(rule.PathPattern). 빈 path (catch-all) 은 길이 0 으로 host 안에서
+// 가장 마지막 평가. coderabbit 피드백 #3274112935 — 같은 host 에서 catch-all 이 specific
+// path 룰을 shadow 하지 않도록 사전 정렬에 사용.
 type compiledHostPathRule struct {
 	host     string
 	path     *regexp.Regexp // nil 이면 모든 path 매칭
+	pathLen  int            // 원본 PathPattern 길이 — 정렬 키
 	priority core.Priority
 }
 
@@ -182,11 +188,18 @@ func (r *RuleBasedPriorityResolver) AddRule(
 //  2. host 정확 매칭 + path regex 매칭 첫 룰의 priority 반환
 //
 // nil 또는 빈 슬라이스 전달 시 host/path 룰이 비활성화되어 fallback 동작 (CanResolve 가 false).
+//
+// 정렬 (coderabbit 피드백 #3274112935):
+//   - 1순위 host ASC (그룹화 — host 평가는 정확 매칭이므로 그룹화만으로 충분)
+//   - 2순위 pathLen DESC (긴 path regex 우선 → 같은 host 에서 catch-all 이 specific 을 shadow 회피)
+//
+// 동일 host + 동일 pathLen 의 경우 입력 순서 보존 (sort.SliceStable).
 func (r *RuleBasedPriorityResolver) SetHostPathRules(rules []HostPathPriorityRule) {
 	compiled := make([]compiledHostPathRule, 0, len(rules))
 	for _, rule := range rules {
 		entry := compiledHostPathRule{
 			host:     rule.HostPattern,
+			pathLen:  len(rule.PathPattern),
 			priority: rule.Priority,
 		}
 		if rule.PathPattern != "" {
@@ -199,6 +212,12 @@ func (r *RuleBasedPriorityResolver) SetHostPathRules(rules []HostPathPriorityRul
 		}
 		compiled = append(compiled, entry)
 	}
+	sort.SliceStable(compiled, func(i, j int) bool {
+		if compiled[i].host != compiled[j].host {
+			return compiled[i].host < compiled[j].host
+		}
+		return compiled[i].pathLen > compiled[j].pathLen
+	})
 	r.hostPathPtr.Store(&compiled)
 }
 

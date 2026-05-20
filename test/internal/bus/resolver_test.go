@@ -147,6 +147,24 @@ func TestRuleBasedPriorityResolver_HostPathRule_NilOrEmpty_NoOp(t *testing.T) {
 	assert.False(t, r.CanResolve(job))
 }
 
+func TestRuleBasedPriorityResolver_HostPathRule_SpecificPathBeatsCatchAll(t *testing.T) {
+	// 같은 host 안에서 catch-all (path="") 룰이 specific path 룰을 shadow 하면 안 됨
+	// (coderabbit 피드백 #3274112935). SetHostPathRules 가 LENGTH(path) DESC 정렬 수행.
+	r := bus.NewRuleBasedPriorityResolver(core.PriorityNormal)
+	r.SetHostPathRules([]bus.HostPathPriorityRule{
+		// catch-all 을 specific 앞에 명시적으로 배치 — 정렬이 동작해야 specific 가 먼저 평가됨.
+		{HostPattern: "mixed.example.com", PathPattern: "", Priority: core.PriorityLow},
+		{HostPattern: "mixed.example.com", PathPattern: "^/breaking/", Priority: core.PriorityHigh},
+	})
+
+	breakingJob := makeJobWithURL("https://mixed.example.com/breaking/headline")
+	assert.Equal(t, core.PriorityHigh, r.Resolve(breakingJob), "specific path 가 catch-all 보다 우선")
+
+	// catch-all 은 specific 미매칭 시 정상 fallback.
+	otherJob := makeJobWithURL("https://mixed.example.com/other/path")
+	assert.Equal(t, core.PriorityLow, r.Resolve(otherJob), "specific 미매칭 시 catch-all 적용")
+}
+
 func TestRuleBasedPriorityResolver_FunctionalRulesEvaluatedBeforeHostPath(t *testing.T) {
 	// AddRule (함수형) 이 SetHostPathRules (host/path) 보다 먼저 평가됨 — 정합 일관.
 	r := bus.NewRuleBasedPriorityResolver(core.PriorityNormal)

@@ -69,10 +69,13 @@ func (r *pgParserRuleRepository) Insert(ctx context.Context, rec *model.ParserRu
 		rec.Version = 1
 	}
 	// crawl_priority 미설정 (0) 은 normal (2) 로 보정 — DB DEFAULT 와 일치 (이슈 #521).
+	// 보정된 값을 rec.CrawlPriority 에 다시 반영해 in-memory 와 DB row 의 값을 일치시킴
+	// (coderabbit 피드백 #3274112959 — caller 가 Insert 후 rec 의 priority 를 참조해도 정합).
 	priority := rec.CrawlPriority
 	if priority < 1 || priority > 3 {
 		priority = 2
 	}
+	rec.CrawlPriority = priority
 	row := r.pool.QueryRow(ctx, sqlInsertParserRule,
 		rec.SourceName, rec.HostPattern, rec.PathPattern, string(rec.TargetType), rec.Version,
 		rec.Enabled, selectors, confidence, rec.Description, rec.PageType, rec.Article, priority,
