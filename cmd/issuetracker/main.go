@@ -1035,8 +1035,8 @@ func main() {
 	validateKafkaCfg := queue.DefaultConfig()
 	validateKafkaCfg.GroupID = queue.GroupValidators
 
-	validateConsumer := queue.NewConsumer(validateKafkaCfg, queue.TopicNormalized)
-	defer validateConsumer.Close()
+	validateKafkaConsumer := queue.NewConsumer(validateKafkaCfg, queue.TopicNormalized)
+	defer validateKafkaConsumer.Close()
 
 	validateProducer := queue.NewProducer(validateKafkaCfg)
 	defer validateProducer.Close()
@@ -1044,6 +1044,40 @@ func main() {
 	// 이슈 #393 — validate worker 가 publisher facade 의존. validate 전용 producer 를
 	// thin publisher 로 wrap (resolver/guard 불필요 — validate 는 Forward 만 사용).
 	validatePublisher := bus.New(validateProducer, nil, log)
+
+	// 이슈 #523 — ZSET 인입 모드 (VALIDATE_PRIORITY_QUEUE_ENABLED + redisClientShared) :
+	//   - Kafka consumer → ZSET intake goroutine 이 ZSET 으로 적재
+	//   - Worker 는 ZSET consumer 로 BZPOPMIN → priority sub-ordering 보장
+	//   - 처리 실패 시 RetryScheduler 경유로 Kafka 재발행 (Redis 잔존 X)
+	//
+	// Validate stage 가 disabled (STAGES_VALIDATE_ENABLED=false) 인 환경에서는 본 분기 자체를
+	// 비활성화 — 미사용 stage 에 fatal 가드를 트리거하지 않도록 (coderabbit #3275227525).
+	validatePriorityQueueEnabled := stagesCfg.ValidateEnabled &&
+		envBoolOrDefault("VALIDATE_PRIORITY_QUEUE_ENABLED", false) &&
+		redisClientShared != nil
+	var validateConsumer bus.Consumer = validateKafkaConsumer
+	var validateZSetIntake *validateWorkerPkg.ZSetIntake
+	if validatePriorityQueueEnabled {
+		zsetCfg := queue.PriorityZSetConfig{
+			ZSetKey:        envOrDefault("VALIDATE_ZSET_QUEUE_KEY", "validate:zset:queue"),
+			EntryKeyPrefix: envOrDefault("VALIDATE_ZSET_ENTRY_PREFIX", "validate:zset:entry:"),
+			MaxSize:        int64(envIntOrDefault("VALIDATE_ZSET_MAX_SIZE", int(queue.PriorityZSetMaxSize))),
+			EntryTTL:       envDurationOrDefault("VALIDATE_ZSET_ENTRY_TTL", queue.PriorityZSetEntryTTL),
+		}
+		validateZSetQueue, qerr := queue.NewPriorityZSetQueue(redisClientShared.Raw(), zsetCfg)
+		if qerr != nil {
+			log.WithError(qerr).Fatal("failed to construct validate priority zset queue")
+		}
+		zsetConsumer := queue.NewPriorityZSetConsumer(validateZSetQueue, "validate:zset", envDurationOrDefault("VALIDATE_ZSET_POP_TIMEOUT", time.Second))
+		validateConsumer = zsetConsumer
+		validateZSetIntake = validateWorkerPkg.NewZSetIntake(validateKafkaConsumer, validateZSetQueue, log)
+		log.WithFields(map[string]interface{}{
+			"zset_key":     zsetCfg.ZSetKey,
+			"entry_prefix": zsetCfg.EntryKeyPrefix,
+			"max_size":     zsetCfg.MaxSize,
+			"entry_ttl_ms": zsetCfg.EntryTTL.Milliseconds(),
+		}).Info("validate priority zset queue enabled")
+	}
 
 	// Validate StageGate (이슈 #356) — ProcessingLock + per-stage Semaphore 합성.
 	validateCap := runtimecfg.CapPerStage(workerCountsCfg.Validate, stageGateCfg.ValidateMaxConcurrentPerStage)
@@ -1059,6 +1093,16 @@ func main() {
 	}
 
 	validateWorker := validateWorkerPkg.NewWorker(validateConsumer, validatePublisher, contentSvc, validateGate, workerCountsCfg.Validate, validateCfg)
+
+	// 이슈 #523 — ZSET 인입 모드에서는 BZPOPMIN 이 곧 ack 이므로 RetryScheduler 가 필수.
+	// nil 이면 fatal (메시지 손실 방지 가드).
+	if validatePriorityQueueEnabled {
+		if retryScheduler == nil {
+			log.Fatal("validate priority zset queue enabled but retry scheduler not configured — set REDIS_HOST or disable VALIDATE_PRIORITY_QUEUE_ENABLED")
+		}
+		validateWorker.SetRetryScheduler(retryScheduler)
+		log.Info("validate worker: retry scheduler injected (zset mode message loss guard)")
+	}
 
 	log.WithFields(map[string]interface{}{
 		"worker_count": workerCountsCfg.Validate,
@@ -1187,6 +1231,10 @@ func main() {
 	validateStage, err := validate.NewStage(validateWorker)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct validate stage")
+	}
+	// 이슈 #523 — ZSET 인입 모드일 때 intake goroutine 을 validate Stage lifecycle 에 묶음.
+	if validateZSetIntake != nil {
+		validateStage.SetZSetIntake(validateZSetIntake)
 	}
 	enrichStage, err := enrich.NewStage(enrichW)
 	if err != nil {
