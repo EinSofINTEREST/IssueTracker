@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/bus"
 	"issuetracker/internal/processor/fetcher/core"
@@ -91,7 +92,10 @@ func TestPriorityRulesRefresher_PeriodicRefresh_PicksUpChanges(t *testing.T) {
 	assert.Equal(t, core.PriorityLow, resolver.Resolve(secondJob))
 }
 
-func TestPriorityRulesRefresher_CtxCancel_StopsTicker(t *testing.T) {
+func TestPriorityRulesRefresher_CtxCancel_EventuallyStopsTicker(t *testing.T) {
+	// select 가 ctx.Done() 과 ticker.C 동시 ready 시 ticker 분기를 우연히 선택할 수 있어
+	// "cancel 직후 카운트 동결" 검증은 flaky (Copilot 피드백 #3274137500).
+	// 대신 "어느 시점부터는 카운트가 더 이상 증가하지 않음" 을 require.Eventually 로 검증.
 	resolver := bus.NewRuleBasedPriorityResolver(core.PriorityNormal)
 
 	var callCount int32
@@ -104,15 +108,15 @@ func TestPriorityRulesRefresher_CtxCancel_StopsTicker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	refresher.Start(ctx)
 
-	// 부팅 호출 1번 발생 후 즉시 cancel.
 	cancel()
 
-	// cancel 후 ticker 가 종료되어 추가 호출 없음 — 짧은 sleep 후 카운트 안정.
-	time.Sleep(100 * time.Millisecond)
-	stableCount := atomic.LoadInt32(&callCount)
-	time.Sleep(100 * time.Millisecond)
-	finalCount := atomic.LoadInt32(&callCount)
-	assert.Equal(t, stableCount, finalCount, "ticker should not fire after ctx cancel")
+	// 500ms 안에 카운트가 정지해야 함 — 50ms 마다 200ms 윈도우에서 동일 카운트면 정지로 판정.
+	require.Eventually(t, func() bool {
+		c1 := atomic.LoadInt32(&callCount)
+		time.Sleep(200 * time.Millisecond)
+		c2 := atomic.LoadInt32(&callCount)
+		return c1 == c2
+	}, 1500*time.Millisecond, 50*time.Millisecond, "ticker should eventually stop firing after ctx cancel")
 }
 
 func TestNewPriorityRulesRefresher_ZeroInterval_UsesDefault(t *testing.T) {

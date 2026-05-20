@@ -147,6 +147,40 @@ func TestRuleBasedPriorityResolver_HostPathRule_NilOrEmpty_NoOp(t *testing.T) {
 	assert.False(t, r.CanResolve(job))
 }
 
+func TestRuleBasedPriorityResolver_HostPathRule_PortInURL_MatchesHostname(t *testing.T) {
+	// URL 에 port 가 포함되어도 u.Hostname() 으로 정규화되어 host_pattern 매칭 성공
+	// (gemini #3274133274 / Copilot #3274137309).
+	r := bus.NewRuleBasedPriorityResolver(core.PriorityNormal)
+	r.SetHostPathRules([]bus.HostPathPriorityRule{
+		{HostPattern: "api.example.com", PathPattern: "", Priority: core.PriorityHigh},
+	})
+
+	cases := []string{
+		"https://api.example.com/v1/x",
+		"https://api.example.com:443/v1/x",
+		"https://api.example.com:8080/v1/x",
+		"http://api.example.com:80/v1/x",
+	}
+	for _, url := range cases {
+		job := makeJobWithURL(url)
+		assert.True(t, r.CanResolve(job), "URL %s should match hostname (port stripped)", url)
+		assert.Equal(t, core.PriorityHigh, r.Resolve(job))
+	}
+}
+
+func TestRuleBasedPriorityResolver_HostPathRule_HostCaseInsensitive(t *testing.T) {
+	// URL 의 host 대소문자가 달라도 lowercase 정규화로 매칭 (Copilot #3274137309).
+	r := bus.NewRuleBasedPriorityResolver(core.PriorityNormal)
+	r.SetHostPathRules([]bus.HostPathPriorityRule{
+		// 룰 host 도 대문자 포함 — SetHostPathRules 가 lowercase 정규화.
+		{HostPattern: "API.Example.com", PathPattern: "", Priority: core.PriorityHigh},
+	})
+
+	job := makeJobWithURL("https://api.example.COM/")
+	assert.True(t, r.CanResolve(job))
+	assert.Equal(t, core.PriorityHigh, r.Resolve(job))
+}
+
 func TestRuleBasedPriorityResolver_HostPathRule_SpecificPathBeatsCatchAll(t *testing.T) {
 	// 같은 host 안에서 catch-all (path="") 룰이 specific path 룰을 shadow 하면 안 됨
 	// (coderabbit 피드백 #3274112935). SetHostPathRules 가 LENGTH(path) DESC 정렬 수행.

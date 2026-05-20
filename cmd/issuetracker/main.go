@@ -10,6 +10,7 @@ import (
 	storagecfg "issuetracker/pkg/config/storage"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -261,18 +262,30 @@ func main() {
 		service.WithParserRuleInvalidator(ruleResolver),
 	)
 
-	// 이슈 #521 — RuleBasedPriorityResolver hydrate. parser_rules 의 enabled 룰에서
-	// (host_pattern, path_pattern, crawl_priority) 추출 후 atomic 으로 resolver 에 주입.
+	// 이슈 #521 — RuleBasedPriorityResolver hydrate. parser_rules 의 enabled 룰 (target_type=page)
+	// 에서 (host_pattern, path_pattern, crawl_priority) 추출 후 atomic 으로 resolver 에 주입.
+	//
+	// target_type=page 만 로드 — Copilot #3274137388 피드백: 같은 host 의 page/list 룰이 priority
+	// 가 다를 경우 모호. URL crawl priority 분기는 page (article body) 단위가 자연스러우므로
+	// 본 단계에서는 page 만 hydrate.
+	//
+	// Limit (default 10000, env PRIORITY_RULES_LOAD_LIMIT) 도달 시 WARN — silent truncation 회피
+	// (gemini #3274133287 / Copilot #3274137421 피드백).
+	//
 	// 부팅 직후 1회 + 주기 refresh (default 5분, env PRIORITY_RULES_REFRESH_INTERVAL).
 	priorityRefreshInterval := envDurationOrDefault("PRIORITY_RULES_REFRESH_INTERVAL", 5*time.Minute)
+	priorityLoadLimit := envIntOrDefault("PRIORITY_RULES_LOAD_LIMIT", 10000)
 	priorityLoader := func(loadCtx context.Context) ([]bus.HostPathPriorityRule, error) {
-		// 룰 수가 ~10k 미만 가정 — 한 번에 전부 fetch. 50개 default LIMIT 회피.
 		records, err := parserRuleRepoRaw.List(loadCtx, model.ParserRuleFilter{
 			OnlyEnabled: true,
-			Limit:       10000,
+			TargetType:  model.TargetTypePage,
+			Limit:       priorityLoadLimit,
 		})
 		if err != nil {
 			return nil, err
+		}
+		if len(records) == priorityLoadLimit {
+			log.WithField("limit", priorityLoadLimit).Warn("priority rules load reached limit, possible truncation — raise PRIORITY_RULES_LOAD_LIMIT")
 		}
 		rules := make([]bus.HostPathPriorityRule, 0, len(records))
 		for _, rec := range records {
@@ -286,7 +299,10 @@ func main() {
 	}
 	priorityRefresher := bus.NewPriorityRulesRefresher(ruleBasedResolver, priorityLoader, priorityRefreshInterval, log)
 	priorityRefresher.Start(ctx)
-	log.WithField("interval_ms", priorityRefreshInterval.Milliseconds()).Info("priority rules refresher started")
+	log.WithFields(map[string]interface{}{
+		"interval_ms": priorityRefreshInterval.Milliseconds(),
+		"load_limit":  priorityLoadLimit,
+	}).Info("priority rules refresher started")
 	// page-parse 블랙리스트 — 카테고리 → article job 발행 단계에서 매칭 URL 차단.
 	// Enabled=false 시 Matcher 미주입 → parser_worker 가 모든 링크 그대로 발행 (기능 OFF).
 	//
@@ -1258,6 +1274,20 @@ func envDurationOrDefault(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// envIntOrDefault 는 환경변수에서 양의 int 를 파싱하여 반환합니다 (이슈 #521).
+// 미설정 / 파싱 실패 / 0 이하 값은 def 반환.
+func envIntOrDefault(key string, def int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return def
+	}
+	return v
 }
 
 // priorityFromInt16 은 DB 의 crawl_priority (SMALLINT, 1~3) 를 core.Priority 로 변환합니다 (이슈 #521).

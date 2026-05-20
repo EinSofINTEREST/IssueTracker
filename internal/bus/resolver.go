@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"issuetracker/internal/processor/fetcher/core"
@@ -197,8 +198,9 @@ func (r *RuleBasedPriorityResolver) AddRule(
 func (r *RuleBasedPriorityResolver) SetHostPathRules(rules []HostPathPriorityRule) {
 	compiled := make([]compiledHostPathRule, 0, len(rules))
 	for _, rule := range rules {
+		// host 정규화 — matchHostPath 의 u.Hostname() lowercase 매칭과 일관 (gemini #3274133274 / Copilot #3274137309).
 		entry := compiledHostPathRule{
-			host:     rule.HostPattern,
+			host:     strings.ToLower(rule.HostPattern),
 			pathLen:  len(rule.PathPattern),
 			priority: rule.Priority,
 		}
@@ -224,6 +226,10 @@ func (r *RuleBasedPriorityResolver) SetHostPathRules(rules []HostPathPriorityRul
 // matchHostPath 는 job 의 URL 에서 host/path 룰 매칭을 시도하여 priority + 매칭 여부를 반환합니다.
 //
 // URL parse 실패 시 (false, _) — 호출자가 fallback 처리.
+//
+// 호스트 정규화 (gemini #3274133274 / Copilot #3274137309):
+//   - u.Hostname() 로 port 제외 (parser_rules.host_pattern 은 보통 port 없는 도메인)
+//   - strings.ToLower 로 대소문자 통일 (parser_rule resolver 와 일관)
 func (r *RuleBasedPriorityResolver) matchHostPath(job *core.CrawlJob) (core.Priority, bool) {
 	rulesPtr := r.hostPathPtr.Load()
 	if rulesPtr == nil || len(*rulesPtr) == 0 {
@@ -233,7 +239,7 @@ func (r *RuleBasedPriorityResolver) matchHostPath(job *core.CrawlJob) (core.Prio
 	if err != nil || u.Host == "" {
 		return 0, false
 	}
-	host := u.Host
+	host := strings.ToLower(u.Hostname())
 	path := u.Path
 	if path == "" {
 		path = "/"
