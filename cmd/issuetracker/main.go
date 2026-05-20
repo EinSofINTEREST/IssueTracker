@@ -677,6 +677,7 @@ func main() {
 			rawIDTracker,
 			rawSvc,
 			jobPublisher, // 이슈 #388 — bus.UpgradePublisher (단일 facade)
+			resolver,     // 이슈 #521 — host/path 기반 priority 결정
 			redisRaw,     // nil 허용 — in-flight lock 비활성 (단일 인스턴스)
 			log,
 		)

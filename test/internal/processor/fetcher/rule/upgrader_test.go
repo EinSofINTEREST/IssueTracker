@@ -17,7 +17,7 @@ import (
 // 전체 흐름 검증은 통합 테스트 영역.
 func TestNewUpgrader_NilDependencies_ReturnsError(t *testing.T) {
 	// 모두 nil
-	_, err := fetcherRule.NewUpgrader(nil, nil, nil, nil, nil, nil, nil)
+	_, err := fetcherRule.NewUpgrader(nil, nil, nil, nil, nil, nil, nil, nil)
 	assert.Error(t, err)
 }
 
