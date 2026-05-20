@@ -43,9 +43,9 @@ const stageName = "parser"
 type Stage struct {
 	worker  *worker.Worker
 	cleaner *worker.RawContentCleaner
-	llmGen  *llmgen.Generator   // nil 허용
-	refiner *refiner.Refiner    // nil 허용
-	intake  *worker.ZSetIntake  // nil 허용 — ZSET 인입 모드일 때만 (이슈 #522)
+	llmGen  *llmgen.Generator  // nil 허용
+	refiner *refiner.Refiner   // nil 허용
+	intake  *worker.ZSetIntake // nil 허용 — ZSET 인입 모드일 때만 (이슈 #522)
 	log     *logger.Logger
 }
 

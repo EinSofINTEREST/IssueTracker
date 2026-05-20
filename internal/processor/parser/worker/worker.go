@@ -311,8 +311,8 @@ func (w *Worker) Stop(ctx context.Context) error {
 //   - ProcessMessage 성공 → commit
 //   - ErrStageGateNotAcquired → commit skip (Debug — 다른 worker 가 처리 중인 정상 dedup)
 //   - 기타 transient 에러:
-//     - retryScheduler 주입 시 (이슈 #522): RetryScheduler.Enqueue → commit (메시지 손실 방지)
-//     - retryScheduler 미주입 시: commit skip (Warn — Kafka 가 redeliver, 기존 동작)
+//   - retryScheduler 주입 시 (이슈 #522): RetryScheduler.Enqueue → commit (메시지 손실 방지)
+//   - retryScheduler 미주입 시: commit skip (Warn — Kafka 가 redeliver, 기존 동작)
 //
 // commit 실패는 ctx cancel 인 경우 강등하지 않으면 셧다운 시점에 noise. Warn 으로 가시성 유지.
 func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
@@ -355,16 +355,29 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 
 // enqueueRetry 는 ProcessMessage 실패한 메시지를 RetryScheduler 경유로 재시도 큐에 등록합니다 (이슈 #522).
 //
-// RawContentRef → CrawlJob 변환 — URL + CrawlerName 보존. priority 는 메시지 header 에서 추출
-// (1=high / 2=normal / 3=low, 잘못된 값은 normal). Target.Type=Article (parse 단계 메시지는
-// raw 1건의 article 처리 의미). retry_reason / original_raw_id 헤더로 추적 가시성 제공.
+// RawContentRef → CrawlJob 변환은 BuildRetryJob 으로 분리 (unit test 용이성).
 func (w *Worker) enqueueRetry(ctx context.Context, msg *queue.Message, lastErr error) error {
+	job, err := BuildRetryJob(msg)
+	if err != nil {
+		return err
+	}
+	return w.retryScheduler.Enqueue(ctx, job, lastErr)
+}
+
+// BuildRetryJob 은 parse 실패한 Kafka 메시지를 retry 용 CrawlJob 으로 변환합니다 (이슈 #522).
+//
+// RawContentRef.URL + CrawlerName 보존 + priority header 추출 (1=high / 2=normal / 3=low,
+// 잘못된 값은 normal). Target.Type=Article (parse 단계 메시지는 raw 1건의 article 처리 의미).
+// retry_reason / original_raw_id 헤더로 추적 가시성 제공.
+//
+// 빈 URL 또는 unmarshal 실패 시 error — 호출자가 retry 불가로 분기.
+func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 	var ref core.RawContentRef
 	if uerr := json.Unmarshal(msg.Value, &ref); uerr != nil {
-		return fmt.Errorf("retry unmarshal: %w", uerr)
+		return nil, fmt.Errorf("retry unmarshal: %w", uerr)
 	}
 	if ref.URL == "" {
-		return fmt.Errorf("retry unmarshal: empty URL in RawContentRef %s", ref.ID)
+		return nil, fmt.Errorf("retry unmarshal: empty URL in RawContentRef %s", ref.ID)
 	}
 
 	priority := core.PriorityNormal
@@ -382,7 +395,7 @@ func (w *Worker) enqueueRetry(ctx context.Context, msg *queue.Message, lastErr e
 		crawlerName = "parser-retry"
 	}
 
-	job := &core.CrawlJob{
+	return &core.CrawlJob{
 		ID:          ref.ID,
 		CrawlerName: crawlerName,
 		Target: core.Target{
@@ -397,8 +410,7 @@ func (w *Worker) enqueueRetry(ctx context.Context, msg *queue.Message, lastErr e
 		ScheduledAt: time.Now(),
 		Timeout:     defaultJobTimeout,
 		MaxRetries:  3,
-	}
-	return w.retryScheduler.Enqueue(ctx, job, lastErr)
+	}, nil
 }
 
 // ErrStageGateNotAcquired 는 parser stage 의 ProcessingLock 이 다른 worker 에 점유 중이라

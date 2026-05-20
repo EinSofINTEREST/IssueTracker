@@ -107,7 +107,7 @@ func (i *ZSetIntake) handleOne(ctx context.Context, msg *queue.Message) {
 		return
 	}
 
-	priority := priorityFromHeader(msg.Headers)
+	priority := PriorityFromHeader(msg.Headers)
 
 	if err := i.zsetQueue.Push(ctx, priority, ref.ID, msg.Value); err != nil {
 		// Redis 일시 장애 — commit skip 으로 Kafka 가 redeliver. 다음 polling 에서 자연 retry.
@@ -130,9 +130,9 @@ func (i *ZSetIntake) handleOne(ctx context.Context, msg *queue.Message) {
 	}).Debug("intake pushed to zset and committed")
 }
 
-// priorityFromHeader 는 Kafka 메시지 헤더의 "priority" 값을 int 로 파싱합니다.
+// PriorityFromHeader 는 Kafka 메시지 헤더의 "priority" 값을 int 로 파싱합니다.
 // 미설정 / 파싱 실패 / 범위 밖 (1~3 외) 은 PriorityNormal (2) 로 보정.
-func priorityFromHeader(headers map[string]string) int {
+func PriorityFromHeader(headers map[string]string) int {
 	v, ok := headers["priority"]
 	if !ok {
 		return int(core.PriorityNormal)
