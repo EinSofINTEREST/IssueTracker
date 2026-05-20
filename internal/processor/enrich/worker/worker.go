@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"time"
 
 	"issuetracker/internal/bus"
@@ -62,6 +63,13 @@ type Worker struct {
 	workerCount    int
 
 	pool *workerpool.ConsumerPool
+
+	// retryScheduler 는 process 실패 시 재시도 발행 경로 (이슈 #524 / 메타 #515 Phase 2).
+	// nil 허용 — nil 이면 기존 동작 (commit skip → Kafka redeliver).
+	//
+	// ZSET 인입 모드에서는 BZPOPMIN 이 곧 ack 라 commit skip 으로 redeliver 불가 — RetryScheduler
+	// 주입 필수. 주입 시 Handle 이 process error 에 대해 Enqueue 후 commit (메시지 손실 방지).
+	retryScheduler bus.RetryScheduler
 }
 
 // NewWorker 는 새로운 Worker 를 생성합니다.
@@ -116,6 +124,16 @@ func NewWorker(
 	}
 }
 
+// SetRetryScheduler 는 process 실패 시 재시도 발행 경로를 주입합니다 (이슈 #524 / 메타 #515 Phase 2).
+//
+// nil 주입 시 기존 동작 (commit skip → Kafka redeliver) 유지. ZSET 인입 모드에서는 pop 이
+// 곧 ack 이라 commit skip 으로는 redeliver 불가 — 본 setter 로 RetryScheduler 를 반드시 주입.
+//
+// Start 호출 전 wiring 단계에서 1회 설정.
+func (w *Worker) SetRetryScheduler(rs bus.RetryScheduler) {
+	w.retryScheduler = rs
+}
+
 // Start 는 workerpool harness 를 기동합니다. 인스턴스당 1회만 호출 (2회차는 panic).
 func (w *Worker) Start(ctx context.Context) {
 	if w.pool != nil {
@@ -145,14 +163,152 @@ func (w *Worker) Stop(ctx context.Context) error {
 }
 
 // Handle 은 workerpool.Handler 구현 — 각 메시지마다 호출됩니다.
+//
+// process 의 결과에 따른 분기:
+//   - nil → 성공 (process 내부에서 commit 이미 수행)
+//   - context.Canceled → graceful shutdown (DEBUG 강등)
+//   - 그 외 process 실패:
+//   - retryScheduler 주입 시 (이슈 #524): RetryScheduler.Enqueue → commit (메시지 손실 방지)
+//   - enqueue 실패 시 DLQ fallback (영구 손실 방지)
+//   - 미주입 시: commit skip (Kafka redeliver, 기존 동작)
 func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 	log := logger.FromContext(ctx)
-	if err := w.process(ctx, msg); err != nil {
-		if errors.Is(err, context.Canceled) {
-			log.WithError(err).Debug("enrich worker canceled during shutdown")
-		} else {
-			log.WithError(err).Error("enrich worker failed to process message")
+	err := w.process(ctx, msg)
+	if err == nil {
+		return
+	}
+	if errors.Is(err, context.Canceled) {
+		log.WithError(err).Debug("enrich worker canceled during shutdown")
+		return
+	}
+	if w.retryScheduler != nil {
+		if enqueueErr := w.enqueueRetry(ctx, msg, err); enqueueErr != nil {
+			// ZSET 모드에서 메시지는 이미 pop 됐으므로 enqueue 실패 시 영구 손실 — fallback 으로
+			// DLQ 발행하여 운영 가시성 + 수동 복구 가능.
+			log.WithError(enqueueErr).Warn("retry enqueue failed, sending to dlq as fallback")
+			if dlqErr := w.sendToDLQ(ctx, msg, fmt.Errorf("retry enqueue failed: %w (original: %v)", enqueueErr, err)); dlqErr != nil {
+				log.WithError(dlqErr).Error("dlq fallback failed, message will be lost in zset mode")
+				return
+			}
+			if commitErr := w.commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+				log.WithError(commitErr).Warn("commit after dlq fallback failed")
+			}
+			return
 		}
+		if commitErr := w.commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+			log.WithError(commitErr).Warn("commit after retry enqueue failed")
+		}
+		log.WithError(err).Info("enrich process failed, enqueued for retry")
+		return
+	}
+	log.WithError(err).Error("enrich worker failed to process message")
+}
+
+// enqueueRetry 는 process 실패한 메시지를 RetryScheduler 경유로 재시도 큐에 등록합니다 (이슈 #524).
+//
+// ContentRef → CrawlJob 변환은 BuildRetryJob 으로 분리 (unit test 용이성).
+func (w *Worker) enqueueRetry(ctx context.Context, msg *queue.Message, lastErr error) error {
+	job, err := BuildRetryJob(msg)
+	if err != nil {
+		return err
+	}
+	return w.retryScheduler.Enqueue(ctx, job, lastErr)
+}
+
+// BuildRetryJob 은 process 실패한 Kafka 메시지를 retry 용 CrawlJob 으로 변환합니다 (이슈 #524).
+//
+// ProcessingMessage.Data 에서 ContentRef 를 추출하여 URL + CrawlerName + priority + target_type
+// 을 복원. msg.Headers 가 우선:
+//   - crawler 헤더 우선, 없으면 ContentRef.SourceInfo.Name, 둘 다 빈 값이면 "enrich-retry"
+//   - priority 헤더는 PriorityFromHeader 헬퍼로 통일
+//   - target_type 헤더가 유효 (article/category) 이면 사용, 없으면 Article default
+//
+// retry_reason / original_ref_id 메타로 추적 가시성 제공.
+//
+// 빈 URL 또는 unmarshal 실패 시 error — 호출자가 retry 불가로 분기.
+func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
+	var pm core.ProcessingMessage
+	if uerr := json.Unmarshal(msg.Value, &pm); uerr != nil {
+		return nil, fmt.Errorf("retry unmarshal processing message: %w", uerr)
+	}
+	var ref core.ContentRef
+	if uerr := json.Unmarshal(pm.Data, &ref); uerr != nil {
+		return nil, fmt.Errorf("retry unmarshal content ref: %w", uerr)
+	}
+	if ref.URL == "" {
+		return nil, fmt.Errorf("retry unmarshal: empty URL in ContentRef %s", ref.ID)
+	}
+
+	priority := core.Priority(PriorityFromHeader(msg.Headers))
+
+	crawlerName := msg.Headers["crawler"]
+	if crawlerName == "" {
+		crawlerName = ref.SourceInfo.Name
+	}
+	if crawlerName == "" {
+		crawlerName = "enrich-retry"
+	}
+
+	targetType := core.TargetTypeArticle
+	if t, ok := msg.Headers["target_type"]; ok {
+		if tt := core.TargetType(t); isValidTargetType(tt) {
+			targetType = tt
+		}
+	}
+
+	// timeout — 원본 timeout_ms 헤더 계승, 부재 시 기본 (gemini PR #527 #3275211693 패턴).
+	jobTimeout := buildRetryDefaultTimeout
+	if raw := msg.Headers[core.HeaderTimeoutMs]; raw != "" {
+		if ms, perr := strconv.Atoi(raw); perr == nil && ms > 0 {
+			jobTimeout = time.Duration(ms) * time.Millisecond
+		}
+	}
+
+	return &core.CrawlJob{
+		ID:          ref.ID,
+		CrawlerName: crawlerName,
+		Target: core.Target{
+			URL:  ref.URL,
+			Type: targetType,
+			Metadata: map[string]interface{}{
+				"retry_reason":    "enrich_process_failed",
+				"original_ref_id": ref.ID,
+			},
+		},
+		Priority:    priority,
+		ScheduledAt: time.Now(),
+		Timeout:     jobTimeout,
+		MaxRetries:  bus.DefaultMaxRetries,
+	}, nil
+}
+
+// buildRetryDefaultTimeout 은 BuildRetryJob 의 timeout_ms 헤더가 부재할 때 사용하는 기본값입니다.
+const buildRetryDefaultTimeout = 30 * time.Second
+
+// PriorityFromHeader 는 Kafka 메시지 헤더의 "priority" 값을 int 로 파싱합니다 (이슈 #524).
+// 미설정 / 파싱 실패 / 범위 밖 (1~3 외) 은 PriorityNormal (2) 로 보정.
+//
+// 본 함수는 Parser / Validate 의 동일 이름 함수와 1:1 — 향후 공통 helper 로 이관 가능.
+func PriorityFromHeader(headers map[string]string) int {
+	v, ok := headers["priority"]
+	if !ok {
+		return int(core.PriorityNormal)
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > 3 {
+		return int(core.PriorityNormal)
+	}
+	return n
+}
+
+// isValidTargetType 은 retry job 에 적용 가능한 TargetType 인지 검증합니다.
+// article / category 만 허용 — 알 수 없는 값은 caller 가 Article default 로 보정.
+func isValidTargetType(t core.TargetType) bool {
+	switch t {
+	case core.TargetTypeArticle, core.TargetTypeCategory:
+		return true
+	default:
+		return false
 	}
 }
 
