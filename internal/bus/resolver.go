@@ -147,9 +147,9 @@ type compiledHostPathRule struct {
 // SetHostPathRules 는 atomic 교체로 동시 Resolve 호출과 race-safe — periodic refresher
 // goroutine 이 안전하게 새 룰 슬라이스로 교체 가능 (이슈 #521).
 type RuleBasedPriorityResolver struct {
-	rules        []PriorityRule
-	hostPathPtr  atomic.Pointer[[]compiledHostPathRule]
-	fallback     core.Priority
+	rules       []PriorityRule
+	hostPathPtr atomic.Pointer[[]compiledHostPathRule]
+	fallback    core.Priority
 }
 
 // NewRuleBasedPriorityResolver 는 기본 우선순위를 지정하여 빈 resolver 를 생성합니다.
