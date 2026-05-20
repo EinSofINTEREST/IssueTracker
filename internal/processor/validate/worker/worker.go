@@ -153,8 +153,8 @@ func (w *Worker) Stop(ctx context.Context) error {
 //   - nil → 성공 (process 내부에서 commit 이미 수행)
 //   - context.Canceled → graceful shutdown (DEBUG 강등)
 //   - 그 외 process 실패:
-//     - retryScheduler 주입 시 (이슈 #523): RetryScheduler.Enqueue → commit (메시지 손실 방지)
-//     - 미주입 시: commit skip (Kafka redeliver, 기존 동작)
+//   - retryScheduler 주입 시 (이슈 #523): RetryScheduler.Enqueue → commit (메시지 손실 방지)
+//   - 미주입 시: commit skip (Kafka redeliver, 기존 동작)
 func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 	log := logger.FromContext(ctx)
 	err := w.process(ctx, msg)
