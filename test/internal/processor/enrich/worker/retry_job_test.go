@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"issuetracker/internal/processor/enrich/worker"
 	"issuetracker/internal/processor/fetcher/core"
-	"issuetracker/internal/processor/validate/worker"
 	"issuetracker/pkg/queue"
 )
 
@@ -42,7 +42,7 @@ func TestBuildRetryJob_ValidRef_ReturnsCrawlJob(t *testing.T) {
 	assert.Equal(t, "cnn", job.CrawlerName)
 	assert.Equal(t, core.PriorityHigh, job.Priority)
 	assert.Equal(t, core.TargetTypeArticle, job.Target.Type)
-	assert.Equal(t, "validate_process_failed", job.Target.Metadata["retry_reason"])
+	assert.Equal(t, "enrich_process_failed", job.Target.Metadata["retry_reason"])
 	assert.Equal(t, "ref-1", job.Target.Metadata["original_ref_id"])
 }
 
@@ -83,7 +83,7 @@ func TestBuildRetryJob_EmptyAllCrawler_UsesFallback(t *testing.T) {
 	msg := makeRetryMsg(t, "ref-h3", "https://example.com/", "", nil)
 	job, err := worker.BuildRetryJob(msg)
 	require.NoError(t, err)
-	assert.Equal(t, "validate-retry", job.CrawlerName)
+	assert.Equal(t, "enrich-retry", job.CrawlerName)
 }
 
 func TestBuildRetryJob_TargetTypeHeader_Category(t *testing.T) {

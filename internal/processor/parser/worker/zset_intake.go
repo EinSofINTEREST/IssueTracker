@@ -23,7 +23,6 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"time"
 
 	"issuetracker/internal/bus"
@@ -123,7 +122,7 @@ func (i *ZSetIntake) handleOne(ctx context.Context, msg *queue.Message) {
 		return
 	}
 
-	priority := PriorityFromHeader(msg.Headers)
+	priority := queue.PriorityFromHeader(msg.Headers)
 
 	if err := i.zsetQueue.Push(ctx, priority, ref.ID, msg.Value); err != nil {
 		// Redis 일시 장애 — commit skip 으로 Kafka 가 redeliver. 다음 polling 에서 자연 retry.
@@ -146,16 +145,5 @@ func (i *ZSetIntake) handleOne(ctx context.Context, msg *queue.Message) {
 	}).Debug("intake pushed to zset and committed")
 }
 
-// PriorityFromHeader 는 Kafka 메시지 헤더의 "priority" 값을 int 로 파싱합니다.
-// 미설정 / 파싱 실패 / 범위 밖 (1~3 외) 은 PriorityNormal (2) 로 보정.
-func PriorityFromHeader(headers map[string]string) int {
-	v, ok := headers["priority"]
-	if !ok {
-		return int(core.PriorityNormal)
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 || n > 3 {
-		return int(core.PriorityNormal)
-	}
-	return n
-}
+// 이슈 #524 (gemini #3278202670 DRY) — PriorityFromHeader 는 queue.PriorityFromHeader 로 이관.
+// 본 패키지의 동일 이름 함수는 제거. 단위 테스트는 test/pkg/queue/priority_header_test.go.
