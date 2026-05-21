@@ -1117,14 +1117,45 @@ func main() {
 	enrichKafkaCfg := queue.DefaultConfig()
 	enrichKafkaCfg.GroupID = queue.GroupEnrichers
 
-	enrichConsumer := queue.NewConsumer(enrichKafkaCfg, queue.TopicValidated)
-	defer enrichConsumer.Close()
+	enrichKafkaConsumer := queue.NewConsumer(enrichKafkaCfg, queue.TopicValidated)
+	defer enrichKafkaConsumer.Close()
 
 	enrichProducer := queue.NewProducer(enrichKafkaCfg)
 	defer enrichProducer.Close()
 
 	// publisher facade — enrich 는 Forward (validated → enriched) 만 사용.
 	enrichPublisher := bus.New(enrichProducer, nil, log)
+
+	// 이슈 #524 — ZSET 인입 모드 (ENRICH_PRIORITY_QUEUE_ENABLED + redisClientShared + stage enabled):
+	//   - Kafka consumer → ZSET intake goroutine 이 ZSET 으로 적재
+	//   - Worker 는 ZSET consumer 로 BZPOPMIN → priority sub-ordering 보장
+	//   - 처리 실패 시 RetryScheduler 경유 + DLQ fallback
+	enrichPriorityQueueEnabled := stagesCfg.EnrichEnabled &&
+		envBoolOrDefault("ENRICH_PRIORITY_QUEUE_ENABLED", false) &&
+		redisClientShared != nil
+	var enrichConsumer bus.Consumer = enrichKafkaConsumer
+	var enrichZSetIntake *enrichWorkerPkg.ZSetIntake
+	if enrichPriorityQueueEnabled {
+		zsetCfg := queue.PriorityZSetConfig{
+			ZSetKey:        envOrDefault("ENRICH_ZSET_QUEUE_KEY", "enrich:zset:queue"),
+			EntryKeyPrefix: envOrDefault("ENRICH_ZSET_ENTRY_PREFIX", "enrich:zset:entry:"),
+			MaxSize:        int64(envIntOrDefault("ENRICH_ZSET_MAX_SIZE", int(queue.PriorityZSetMaxSize))),
+			EntryTTL:       envDurationOrDefault("ENRICH_ZSET_ENTRY_TTL", queue.PriorityZSetEntryTTL),
+		}
+		enrichZSetQueue, qerr := queue.NewPriorityZSetQueue(redisClientShared.Raw(), zsetCfg)
+		if qerr != nil {
+			log.WithError(qerr).Fatal("failed to construct enrich priority zset queue")
+		}
+		zsetConsumer := queue.NewPriorityZSetConsumer(enrichZSetQueue, "enrich:zset", envDurationOrDefault("ENRICH_ZSET_POP_TIMEOUT", time.Second))
+		enrichConsumer = zsetConsumer
+		enrichZSetIntake = enrichWorkerPkg.NewZSetIntake(enrichKafkaConsumer, enrichZSetQueue, log)
+		log.WithFields(map[string]interface{}{
+			"zset_key":     zsetCfg.ZSetKey,
+			"entry_prefix": zsetCfg.EntryKeyPrefix,
+			"max_size":     zsetCfg.MaxSize,
+			"entry_ttl_ms": zsetCfg.EntryTTL.Milliseconds(),
+		}).Info("enrich priority zset queue enabled")
+	}
 
 	enrichCap := runtimecfg.CapPerStage(workerCountsCfg.Enrich, stageGateCfg.EnrichMaxConcurrentPerStage)
 	enrichGate := locks.BuildStageGate(locks.StageEnricher, enrichCap, procLock, log)
@@ -1205,6 +1236,15 @@ func main() {
 
 	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichVerifier, enrichContextualizer, enrichScorer, enrichedRepo, enrichGate, workerCountsCfg.Enrich)
 
+	// 이슈 #524 — ZSET 모드 활성 시 RetryScheduler 필수 (메시지 손실 방지 가드).
+	if enrichPriorityQueueEnabled {
+		if retryScheduler == nil {
+			log.Fatal("enrich priority zset queue enabled but retry scheduler not configured — set REDIS_HOST or disable ENRICH_PRIORITY_QUEUE_ENABLED")
+		}
+		enrichW.SetRetryScheduler(retryScheduler)
+		log.Info("enrich worker: retry scheduler injected (zset mode message loss guard)")
+	}
+
 	log.WithFields(map[string]interface{}{
 		"worker_count": workerCountsCfg.Enrich,
 		"input_topic":  queue.TopicValidated,
@@ -1239,6 +1279,9 @@ func main() {
 	enrichStage, err := enrich.NewStage(enrichW)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct enrich stage")
+	}
+	if enrichZSetIntake != nil {
+		enrichStage.SetZSetIntake(enrichZSetIntake)
 	}
 
 	// 이슈 #443 — stage 별 활성 플래그에 따라 selective Start.

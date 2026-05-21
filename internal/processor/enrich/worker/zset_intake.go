@@ -1,6 +1,6 @@
-// ZSetIntake — Validate 의 Kafka → Redis ZSET 인입 단계 (이슈 #523 / 메타 #515 Phase 2).
+// ZSetIntake — Enrich 의 Kafka → Redis ZSET 인입 단계 (이슈 #524 / 메타 #515 Phase 2).
 //
-// 단일 goroutine 이 TopicNormalized Kafka 메시지를 받아 priority + arrival timestamp 로
+// 단일 goroutine 이 TopicValidated Kafka 메시지를 받아 priority + arrival timestamp 로
 // score 를 계산해 ZSET 에 적재 + Kafka commit. Worker pool 은 ZSET 에서 BZPOPMIN 으로
 // pop 하여 처리 — Kafka partition FIFO 제약을 우회한 priority sub-ordering 보장.
 //
@@ -58,12 +58,12 @@ func NewZSetIntake(consumer bus.Consumer, zsetQueue queue.PriorityPusher, log *l
 // goroutine 으로 시작 권장 — 본 함수는 blocking. 종료 시 defer consumer.Close() 로 Kafka
 // reader 자원 누수 방지.
 func (i *ZSetIntake) Run(ctx context.Context) {
-	i.log.Info("validate zset intake started")
+	i.log.Info("enrich zset intake started")
 	defer func() {
 		if err := i.consumer.Close(); err != nil {
 			i.log.WithError(err).Warn("intake consumer close failed")
 		}
-		i.log.Info("validate zset intake stopped")
+		i.log.Info("enrich zset intake stopped")
 	}()
 
 	for {
@@ -94,7 +94,7 @@ func (i *ZSetIntake) HandleOneForTest(ctx context.Context, msg *queue.Message) {
 
 // handleOne 은 단일 메시지를 ZSET 에 적재 + Kafka commit 합니다.
 //
-// Validate 는 ProcessingMessage 한 단계 wrap 위에 ContentRef 가 들어 있으므로 인입 시점에는
+// Enrich 는 ProcessingMessage 한 단계 wrap 위에 ContentRef 가 들어 있으므로 인입 시점에는
 // ContentRef.ID 를 ZSET key 로 사용 — Worker.process 가 동일 형식으로 다시 unmarshal 함.
 func (i *ZSetIntake) handleOne(ctx context.Context, msg *queue.Message) {
 	log := i.log.WithFields(map[string]interface{}{
