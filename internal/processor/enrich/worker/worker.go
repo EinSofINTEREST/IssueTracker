@@ -239,7 +239,7 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 		return nil, fmt.Errorf("retry unmarshal: empty URL in ContentRef %s", ref.ID)
 	}
 
-	priority := core.Priority(PriorityFromHeader(msg.Headers))
+	priority := core.Priority(queue.PriorityFromHeader(msg.Headers))
 
 	crawlerName := msg.Headers["crawler"]
 	if crawlerName == "" {
@@ -285,21 +285,8 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 // buildRetryDefaultTimeout 은 BuildRetryJob 의 timeout_ms 헤더가 부재할 때 사용하는 기본값입니다.
 const buildRetryDefaultTimeout = 30 * time.Second
 
-// PriorityFromHeader 는 Kafka 메시지 헤더의 "priority" 값을 int 로 파싱합니다 (이슈 #524).
-// 미설정 / 파싱 실패 / 범위 밖 (1~3 외) 은 PriorityNormal (2) 로 보정.
-//
-// 본 함수는 Parser / Validate 의 동일 이름 함수와 1:1 — 향후 공통 helper 로 이관 가능.
-func PriorityFromHeader(headers map[string]string) int {
-	v, ok := headers["priority"]
-	if !ok {
-		return int(core.PriorityNormal)
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 || n > 3 {
-		return int(core.PriorityNormal)
-	}
-	return n
-}
+// 이슈 #524 (gemini #3278202670 DRY) — PriorityFromHeader 는 queue.PriorityFromHeader 로 이관.
+// 본 패키지의 동일 이름 함수는 제거. 단위 테스트는 test/pkg/queue/priority_header_test.go.
 
 // isValidTargetType 은 retry job 에 적용 가능한 TargetType 인지 검증합니다.
 // article / category 만 허용 — 알 수 없는 값은 caller 가 Article default 로 보정.

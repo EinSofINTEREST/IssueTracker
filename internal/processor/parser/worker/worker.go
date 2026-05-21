@@ -386,7 +386,7 @@ func BuildRetryJob(msg *queue.Message) (*core.CrawlJob, error) {
 		return nil, fmt.Errorf("retry unmarshal: empty URL in RawContentRef %s", ref.ID)
 	}
 
-	priority := core.Priority(PriorityFromHeader(msg.Headers))
+	priority := core.Priority(queue.PriorityFromHeader(msg.Headers))
 
 	crawlerName := msg.Headers["crawler"]
 	if crawlerName == "" {

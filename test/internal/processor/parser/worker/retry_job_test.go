@@ -166,27 +166,3 @@ func TestBuildRetryJob_MalformedJSON_ReturnsError(t *testing.T) {
 	_, err := worker.BuildRetryJob(msg)
 	assert.Error(t, err)
 }
-
-func TestPriorityFromHeader_Mapping(t *testing.T) {
-	tests := []struct {
-		name    string
-		headers map[string]string
-		want    int
-	}{
-		{"high (1)", map[string]string{"priority": "1"}, 1},
-		{"normal (2)", map[string]string{"priority": "2"}, 2},
-		{"low (3)", map[string]string{"priority": "3"}, 3},
-		{"missing key → normal", nil, 2},
-		{"empty value → normal", map[string]string{"priority": ""}, 2},
-		{"non-numeric → normal", map[string]string{"priority": "xx"}, 2},
-		{"out of range 0 → normal", map[string]string{"priority": "0"}, 2},
-		{"out of range 4 → normal", map[string]string{"priority": "4"}, 2},
-		{"negative → normal", map[string]string{"priority": "-1"}, 2},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := worker.PriorityFromHeader(tt.headers)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}

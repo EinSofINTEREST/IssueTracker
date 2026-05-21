@@ -128,7 +128,7 @@ func (i *ZSetIntake) handleOne(ctx context.Context, msg *queue.Message) {
 		return
 	}
 
-	priority := PriorityFromHeader(msg.Headers)
+	priority := queue.PriorityFromHeader(msg.Headers)
 
 	if err := i.zsetQueue.Push(ctx, priority, ref.ID, msg.Value); err != nil {
 		log.WithError(err).WithField("ref_id", ref.ID).Warn("intake zset push failed, skipping commit for redeliver")
