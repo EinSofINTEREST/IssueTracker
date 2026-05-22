@@ -34,22 +34,18 @@ const (
 	maxWorkerCount = 16
 )
 
-// PoolConfig 는 stage 별 Pool 구성을 위한 옵션 (이슈 #530).
+// PoolConfig 는 agent.PoolConfig type alias 입니다 (이슈 #530 재설계).
 //
-// Name 으로 env prefix + 로깅 필드를 분리하여 parser / enrich 등 stage 마다 독립 풀을
-// 구성합니다. 미지정 (빈 문자열) 시 기존 단일 풀 호환 — `CLAUDE_CODE_*` 만 lookup.
+// claude 전용 옵션이 추가 필요한 경우 본 alias 를 별도 struct 로 분리하고 agent.PoolConfig 를
+// embed 하면 됩니다. 현재는 Name 만 사용 — agent 공용 struct 를 그대로 노출.
 //
 // 우선순위 (예 Name="parser"):
 //  1. PARSER_CLAUDE_CODE_WORKER_COUNT — stage 별 명시
 //  2. CLAUDE_CODE_WORKER_COUNT — fallback
 //  3. defaultWorkerCount
 //
-// 같은 정책이 CLAUDE_CODE_TIMEOUT / 기타 env 에도 적용 — env.go 의 stageEnv 헬퍼 참조.
-type PoolConfig struct {
-	// Name 은 stage 식별자 (소문자 권장). UPPER_SNAKE 로 정규화되어 env prefix 가 됨.
-	// 예: "parser" → "PARSER_". 빈 문자열은 단일 풀 호환.
-	Name string
-}
+// 같은 정책이 CLAUDE_CODE_TIMEOUT / IMAGE / MODEL 등에도 적용 — agent.StageEnv 참조.
+type PoolConfig = agent.PoolConfig
 
 // Pool 은 Worker N replica 를 round-robin 분배로 사용하는 풀입니다.
 //
@@ -112,7 +108,7 @@ func NewPoolFromConfig(cfg PoolConfig, loader prompt.Loader, log *logger.Logger)
 	if loader == nil {
 		return nil, errors.New("claude: NewPoolFromConfig requires non-nil prompt loader")
 	}
-	envR := stageEnv{name: cfg.Name}
+	envR := agent.NewStageEnv(cfg.Name)
 	poolLog := log
 	if cfg.Name != "" {
 		poolLog = log.WithField("agent_pool", cfg.Name)
@@ -139,8 +135,8 @@ func NewPoolFromConfig(cfg PoolConfig, loader prompt.Loader, log *logger.Logger)
 
 // resolveWorkerCount 는 stage prefix 우선 + base fallback 으로 WorkerCount 를 파싱합니다.
 // [1, maxWorkerCount] 로 clamp. parse 실패 / 음수 / 0 시 default 적용 + WARN.
-func resolveWorkerCount(envR stageEnv, log *logger.Logger) int {
-	raw, key := envR.get(envWorkerCount)
+func resolveWorkerCount(envR agent.StageEnv, log *logger.Logger) int {
+	raw, key := envR.Get(envWorkerCount)
 	if raw == "" {
 		return defaultWorkerCount
 	}

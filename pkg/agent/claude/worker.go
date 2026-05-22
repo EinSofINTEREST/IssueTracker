@@ -37,6 +37,7 @@ import (
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage/model"
+	"issuetracker/pkg/agent"
 	agentdb "issuetracker/pkg/agent/dependency/db"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
@@ -127,20 +128,20 @@ func NewFromEnv(loader prompt.Loader, log *logger.Logger) (*Worker, error) {
 	if loader == nil {
 		return nil, errors.New("claude: NewFromEnv requires non-nil prompt loader")
 	}
-	return newWorkerFromStageEnv(stageEnv{}, loader, log)
+	return newWorkerFromStageEnv(agent.StageEnv{}, loader, log)
 }
 
 // newWorkerFromStageEnv 는 stage prefix 인지 env 해석으로 Worker 를 생성합니다 (이슈 #530).
 //
-// envR.name 이 빈 문자열이면 NewFromEnv 와 동일 동작 — `CLAUDE_CODE_*` 만 lookup.
+// envR.Name() 이 빈 문자열이면 NewFromEnv 와 동일 동작 — `CLAUDE_CODE_*` 만 lookup.
 // 명시 시 `<NAME>_CLAUDE_CODE_*` 가 우선 + 미설정 시 base fallback.
-func newWorkerFromStageEnv(envR stageEnv, loader prompt.Loader, log *logger.Logger) (*Worker, error) {
-	authDir, err := resolveAuthDir(envR.getOr("CLAUDE_CODE_AUTH_DIR", ""))
+func newWorkerFromStageEnv(envR agent.StageEnv, loader prompt.Loader, log *logger.Logger) (*Worker, error) {
+	authDir, err := resolveAuthDir(envR.GetOr("CLAUDE_CODE_AUTH_DIR", ""))
 	if err != nil {
 		return nil, err
 	}
 	timeout := defaultSessionTimeout
-	if s, key := envR.get("CLAUDE_CODE_TIMEOUT"); s != "" {
+	if s, key := envR.Get("CLAUDE_CODE_TIMEOUT"); s != "" {
 		d, perr := time.ParseDuration(s)
 		if perr != nil {
 			log.WithFields(map[string]interface{}{"env": key, "value": s}).WithError(perr).
@@ -153,10 +154,10 @@ func newWorkerFromStageEnv(envR stageEnv, loader prompt.Loader, log *logger.Logg
 		}
 	}
 	return &Worker{
-		image:             envR.getOr("CLAUDE_CODE_IMAGE", defaultImage),
-		model:             envR.getOr("CLAUDE_CODE_MODEL", defaultModel),
+		image:             envR.GetOr("CLAUDE_CODE_IMAGE", defaultImage),
+		model:             envR.GetOr("CLAUDE_CODE_MODEL", defaultModel),
 		authDir:           authDir,
-		containerAuthPath: envR.getOr("CLAUDE_CODE_CONTAINER_AUTH_PATH", defaultContainerAuthPath),
+		containerAuthPath: envR.GetOr("CLAUDE_CODE_CONTAINER_AUTH_PATH", defaultContainerAuthPath),
 		sessionTimeout:    timeout,
 		runner:            &execContainerRunner{},
 		loader:            loader,
