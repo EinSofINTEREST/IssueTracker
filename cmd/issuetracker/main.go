@@ -880,44 +880,60 @@ func main() {
 		log.Info("llmgen: 의미 검증 ValidatorPool 활성화")
 	}
 
-	// ── Claude Code 추출기 ──────────────────────────────────────
-	// LLM_EXTRACTOR=claude-code 일 때 활성화 — Claude 구독 환경의 sonnet 으로 셀렉터 추출.
-	// 미지정 / gemini (기본) 일 때는 buildLLMGenerator 가 설정한 기본 LLM provider 추출.
-	// Start 실패 시 Gemini 경로로 graceful fallback (fatal 아님).
-	// 종료 시 stages.Stop 이후 worker.Stop 호출 — llmGen.Stop 으로 in-flight Extract 완료 보장 후 컨테이너 정리.
-	// 이슈 #352 — 단일 worker → Pool (N replica, default 2) 로 throughput 향상.
-	// CLAUDE_CODE_WORKER_COUNT 로 운영자 조정 가능. 기존 단일 worker 동작은 N=1 로 동등 재현 가능.
-	var claudegenPool *claude.Pool
+	// ── Claude Code 추출기 (stage 별 pool 분리, 이슈 #530) ──────────
+	// LLM_EXTRACTOR=claude-code 일 때 활성화 — Claude 구독 환경의 sonnet 으로 셀렉터 추출 +
+	// enrich 의 4 component (extract / verify / context / score) 가 별도 풀에서 동작.
+	//
+	// Parser pool: LLM rule 자동 생성 (이슈 #149) — MCP postgres 도구 미연결 (least-privilege).
+	// Enrich pool: enricher_ro MCP postgres 도구 mount (이슈 #472) — extraction 검증에 DB 참조.
+	//
+	// 환경변수 prefix:
+	//   - PARSER_CLAUDE_CODE_*  (parser pool 전용) — 우선
+	//   - ENRICH_CLAUDE_CODE_*  (enrich pool 전용) — 우선
+	//   - CLAUDE_CODE_*         (양 pool 공통 fallback)
+	//
+	// Start 실패 시 해당 풀만 graceful fallback (fatal 아님) — 다른 stage 는 영향 X.
+	// 종료 시 stages.Stop 이후 두 풀 모두 Stop — 순서: parser → enrich (역의존 없음).
+	var parserClaudegenPool, enrichClaudegenPool *claude.Pool
 	llmExtractor := os.Getenv("LLM_EXTRACTOR")
 	switch {
 	case llmExtractor != "claude-code":
 		// 기본 경로 — 분기 미발생 (Gemini 등 buildLLMGenerator 의 provider 사용).
 	case llmGen == nil:
-		// LLM_ENABLED=false / API key 부재 등으로 llmGen 비활성 — silent skip 회피.
 		log.Warn("LLM_EXTRACTOR=claude-code requested but LLM generator is disabled (check LLM_ENABLED / API key); claudegen extractor not registered")
 	case promptLoader == nil:
 		log.Warn("LLM_EXTRACTOR=claude-code requested but prompt loader is disabled; claudegen extractor not registered")
 	default:
-		pool, perr := claude.NewPoolFromEnv(promptLoader, log)
-		if perr != nil {
-			log.WithError(perr).Warn("claudegen pool construction failed, falling back to default extractor")
+		// Parser pool — STAGES_PARSER_ENABLED=false 환경에서 idle 컨테이너 비용 회피
+		// (coderabbit #3289026304). MCP 미적용 (parser 는 selector 추출만 — least-privilege).
+		if !stagesCfg.ParserEnabled {
+			log.Info("parser stage disabled, skipping parser claudegen pool")
+		} else if p := startClaudegenPool(ctx, claude.PoolConfig{Name: "parser"}, promptLoader, nil, log); p != nil {
+			llmGen.SetExtractor(p)
+			parserClaudegenPool = p
+			log.WithFields(map[string]interface{}{
+				"worker_count": p.WorkerCount(),
+				"agent_pool":   "parser",
+			}).Info("llmgen: Claude Code parser pool 활성화")
+		}
+		// Enrich pool — enricher_ro MCP postgres 도구 mount (이슈 #472).
+		// STAGES_ENRICH_ENABLED=false 시 동일하게 skip.
+		if !stagesCfg.EnrichEnabled {
+			log.Info("enrich stage disabled, skipping enrich claudegen pool")
 		} else {
-			// 이슈 #472 — enricher_ro DSN 이 설정되어 있으면 MCP postgres 도구를 풀에 mount.
-			// DSN 미설정 시 nil 유지 → 기존 동작 (MCP 없이 RunSession) 그대로.
+			var enrichMCP *agentdb.MCPConfig
 			if mcp, mErr := buildEnricherROMCPConfig(log); mErr != nil {
-				log.WithError(mErr).Warn("enricher_ro MCP config build failed; claudegen pool will run without DB tool")
+				log.WithError(mErr).Warn("enricher_ro MCP config build failed; enrich pool will run without DB tool")
 			} else if mcp != nil {
-				pool.WithMCPConfig(mcp)
-				log.Info("claudegen pool: MCP postgres read-only tool mounted (issue #472)")
+				enrichMCP = mcp
+				log.Info("enrich pool: MCP postgres read-only tool will be mounted (issue #472)")
 			}
-			if serr := pool.Start(ctx); serr != nil {
-				log.WithError(serr).Warn("claudegen pool start failed, falling back to default extractor")
-			} else {
-				llmGen.SetExtractor(pool)
-				claudegenPool = pool
+			if p := startClaudegenPool(ctx, claude.PoolConfig{Name: "enrich"}, promptLoader, enrichMCP, log); p != nil {
+				enrichClaudegenPool = p
 				log.WithFields(map[string]interface{}{
-					"worker_count": pool.WorkerCount(),
-				}).Info("llmgen: Claude Code 웜 컨테이너 pool 활성화")
+					"worker_count": p.WorkerCount(),
+					"agent_pool":   "enrich",
+				}).Info("enrich: Claude Code enrich pool 활성화")
 			}
 		}
 	}
@@ -1173,8 +1189,8 @@ func main() {
 	// prompt loader 가 없으면 NoopExtractor 로 fallback (worker 는 항상 forward 보장 — extract
 	// 실패가 파이프라인을 막지 않음).
 	var enrichExtractor enrichcore.Extractor = enrichcore.NewNoopExtractor()
-	if claudegenPool != nil && promptLoader != nil {
-		ce, ceErr := enrichcore.NewClaudegenExtractor(claudegenPool, promptLoader)
+	if enrichClaudegenPool != nil && promptLoader != nil {
+		ce, ceErr := enrichcore.NewClaudegenExtractor(enrichClaudegenPool, promptLoader)
 		if ceErr != nil {
 			log.WithError(ceErr).Warn("claudegen enrich extractor construction failed, using noop")
 		} else {
@@ -1188,8 +1204,8 @@ func main() {
 	// 이슈 #448 — claudegen 기반 enricher verifier (cross-verification) wiring. extractor 와
 	// 동일 fallback 정책.
 	var enrichVerifier enrichcore.Verifier = enrichcore.NewNoopVerifier()
-	if claudegenPool != nil && promptLoader != nil {
-		cv, cvErr := enrichcore.NewClaudegenVerifier(claudegenPool, promptLoader)
+	if enrichClaudegenPool != nil && promptLoader != nil {
+		cv, cvErr := enrichcore.NewClaudegenVerifier(enrichClaudegenPool, promptLoader)
 		if cvErr != nil {
 			log.WithError(cvErr).Warn("claudegen enrich verifier construction failed, using noop")
 		} else {
@@ -1203,8 +1219,8 @@ func main() {
 	// 이슈 #449 — claudegen 기반 enricher contextualizer (외부 맥락 수집) wiring.
 	// extractor / verifier 와 동일 fallback 정책.
 	var enrichContextualizer enrichcore.Contextualizer = enrichcore.NewNoopContextualizer()
-	if claudegenPool != nil && promptLoader != nil {
-		cc, ccErr := enrichcore.NewClaudegenContextualizer(claudegenPool, promptLoader)
+	if enrichClaudegenPool != nil && promptLoader != nil {
+		cc, ccErr := enrichcore.NewClaudegenContextualizer(enrichClaudegenPool, promptLoader)
 		if ccErr != nil {
 			log.WithError(ccErr).Warn("claudegen enrich contextualizer construction failed, using noop")
 		} else {
@@ -1217,8 +1233,8 @@ func main() {
 
 	// 이슈 #450 — claudegen 기반 enricher scorer (trust_score) + enriched_contents 영속화 wiring.
 	var enrichScorer enrichcore.Scorer = enrichcore.NewNoopScorer()
-	if claudegenPool != nil && promptLoader != nil {
-		cs, csErr := enrichcore.NewClaudegenScorer(claudegenPool, promptLoader)
+	if enrichClaudegenPool != nil && promptLoader != nil {
+		cs, csErr := enrichcore.NewClaudegenScorer(enrichClaudegenPool, promptLoader)
 		if csErr != nil {
 			log.WithError(csErr).Warn("claudegen enrich scorer construction failed, using noop")
 		} else {
@@ -1391,18 +1407,52 @@ func main() {
 	// shutdownCtx 가 stages.Stop 에서 timeout 으로 cancel 되더라도 docker rm -f 자체는 반드시 시도되어야
 	// 컨테이너 누수가 발생하지 않으므로, 별도의 cleanupCtx 를 사용.
 	// WithoutCancel(ctx) 로 ctx values 보존.
-	if claudegenPool != nil {
+	// 이슈 #530 — stage 별 분리된 pool 들을 모두 정리. 순서: parser → enrich (역의존 없어 임의 순서 가능).
+	for _, p := range []*claude.Pool{parserClaudegenPool, enrichClaudegenPool} {
+		if p == nil {
+			continue
+		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownCfg.ClaudegenTimeout)
 		cleanupCtx = log.ToContext(cleanupCtx)
-		if err := claudegenPool.Stop(cleanupCtx); err != nil {
-			log.WithError(err).Error("claudegen pool stop failed")
+		if err := p.Stop(cleanupCtx); err != nil {
+			log.WithFields(map[string]interface{}{"agent_pool": p.Name()}).WithError(err).Error("claudegen pool stop failed")
 		} else {
-			log.Info("claudegen pool stopped")
+			log.WithFields(map[string]interface{}{"agent_pool": p.Name()}).Info("claudegen pool stopped")
 		}
 		cleanupCancel()
 	}
 
 	log.Info("shutdown completed")
+}
+
+// startClaudegenPool 은 PoolConfig 로 claude pool 을 생성 / start 하고 실패 시 nil 반환합니다 (이슈 #530).
+//
+// 호출자 (main.go) 가 parser / enrich 등 stage 별로 1회씩 호출 — 실패는 graceful fallback
+// (nil 반환 시 호출자가 SetExtractor / NewClaudegenExtractor 등록을 skip 하여 기본 LLM 경로로 동작).
+//
+// mcp 가 non-nil 이면 pool 의 모든 worker 에 mount — stage 별 least-privilege 적용 진입점.
+func startClaudegenPool(
+	ctx context.Context,
+	cfg claude.PoolConfig,
+	loader prompt.Loader,
+	mcp *agentdb.MCPConfig,
+	log *logger.Logger,
+) *claude.Pool {
+	pool, perr := claude.NewPoolFromConfig(cfg, loader, log)
+	if perr != nil {
+		log.WithFields(map[string]interface{}{"agent_pool": cfg.Name}).WithError(perr).
+			Warn("claudegen pool construction failed, falling back to default extractor")
+		return nil
+	}
+	if mcp != nil {
+		pool.WithMCPConfig(mcp)
+	}
+	if serr := pool.Start(ctx); serr != nil {
+		log.WithFields(map[string]interface{}{"agent_pool": cfg.Name}).WithError(serr).
+			Warn("claudegen pool start failed, falling back to default extractor")
+		return nil
+	}
+	return pool
 }
 
 // envDurationOrDefault 는 환경변수에서 time.Duration 을 파싱하여 반환합니다 (이슈 #521).

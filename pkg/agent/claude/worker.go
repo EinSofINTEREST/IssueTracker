@@ -37,6 +37,7 @@ import (
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage/model"
+	"issuetracker/pkg/agent"
 	agentdb "issuetracker/pkg/agent/dependency/db"
 	"issuetracker/pkg/llm/prompt"
 	"issuetracker/pkg/logger"
@@ -112,11 +113,14 @@ func (w *Worker) WithMCPConfig(c *agentdb.MCPConfig) *Worker {
 // llmgen.Generator 가 DB description 에 기록할 때 사용합니다.
 func (w *Worker) ModelName() string { return w.model }
 
-// NewFromEnv 는 환경변수 기반 Worker 를 생성합니다.
+// NewFromEnv 는 환경변수 기반 Worker 를 생성합니다 (단일 풀 호환).
 // Start() 를 호출하기 전까지는 컨테이너가 기동되지 않습니다.
 //
 // CLAUDE_CODE_AUTH_DIR 미지정 시 $HOME/.claude 를 사용합니다.
 // 인증 디렉토리가 없거나 접근 불가하면 fail-fast — 호스트 `claude` CLI 사전 로그인 필요.
+//
+// 이슈 #530 — stage 별 풀이 필요한 경우 NewPoolFromConfig 가 본 함수가 아닌
+// newWorkerFromStageEnv 를 호출하여 stage prefix env 도 lookup 합니다.
 func NewFromEnv(loader prompt.Loader, log *logger.Logger) (*Worker, error) {
 	if log == nil {
 		return nil, errors.New("claude: NewFromEnv requires non-nil logger")
@@ -124,28 +128,36 @@ func NewFromEnv(loader prompt.Loader, log *logger.Logger) (*Worker, error) {
 	if loader == nil {
 		return nil, errors.New("claude: NewFromEnv requires non-nil prompt loader")
 	}
-	authDir, err := resolveAuthDir(os.Getenv("CLAUDE_CODE_AUTH_DIR"))
+	return newWorkerFromStageEnv(agent.StageEnv{}, loader, log)
+}
+
+// newWorkerFromStageEnv 는 stage prefix 인지 env 해석으로 Worker 를 생성합니다 (이슈 #530).
+//
+// envR.Name() 이 빈 문자열이면 NewFromEnv 와 동일 동작 — `CLAUDE_CODE_*` 만 lookup.
+// 명시 시 `<NAME>_CLAUDE_CODE_*` 가 우선 + 미설정 시 base fallback.
+func newWorkerFromStageEnv(envR agent.StageEnv, loader prompt.Loader, log *logger.Logger) (*Worker, error) {
+	authDir, err := resolveAuthDir(envR.GetOr("CLAUDE_CODE_AUTH_DIR", ""))
 	if err != nil {
 		return nil, err
 	}
 	timeout := defaultSessionTimeout
-	if s := os.Getenv("CLAUDE_CODE_TIMEOUT"); s != "" {
-		d, err := time.ParseDuration(s)
-		if err != nil {
-			log.WithFields(map[string]interface{}{"value": s}).WithError(err).
+	if s, key := envR.Get("CLAUDE_CODE_TIMEOUT"); s != "" {
+		d, perr := time.ParseDuration(s)
+		if perr != nil {
+			log.WithFields(map[string]interface{}{"env": key, "value": s}).WithError(perr).
 				Warn("CLAUDE_CODE_TIMEOUT parse failed, using default")
 		} else if d <= 0 {
-			log.WithFields(map[string]interface{}{"value": s}).
+			log.WithFields(map[string]interface{}{"env": key, "value": s}).
 				Warn("CLAUDE_CODE_TIMEOUT must be positive, using default")
 		} else {
 			timeout = d
 		}
 	}
 	return &Worker{
-		image:             envOr("CLAUDE_CODE_IMAGE", defaultImage),
-		model:             envOr("CLAUDE_CODE_MODEL", defaultModel),
+		image:             envR.GetOr("CLAUDE_CODE_IMAGE", defaultImage),
+		model:             envR.GetOr("CLAUDE_CODE_MODEL", defaultModel),
 		authDir:           authDir,
-		containerAuthPath: envOr("CLAUDE_CODE_CONTAINER_AUTH_PATH", defaultContainerAuthPath),
+		containerAuthPath: envR.GetOr("CLAUDE_CODE_CONTAINER_AUTH_PATH", defaultContainerAuthPath),
 		sessionTimeout:    timeout,
 		runner:            &execContainerRunner{},
 		loader:            loader,
@@ -571,13 +583,6 @@ func newSessionID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 func truncate(s string, n int) string {

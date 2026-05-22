@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -35,6 +34,19 @@ const (
 	maxWorkerCount = 16
 )
 
+// PoolConfig 는 agent.PoolConfig type alias 입니다 (이슈 #530 재설계).
+//
+// claude 전용 옵션이 추가 필요한 경우 본 alias 를 별도 struct 로 분리하고 agent.PoolConfig 를
+// embed 하면 됩니다. 현재는 Name 만 사용 — agent 공용 struct 를 그대로 노출.
+//
+// 우선순위 (예 Name="parser"):
+//  1. PARSER_CLAUDE_CODE_WORKER_COUNT — stage 별 명시
+//  2. CLAUDE_CODE_WORKER_COUNT — fallback
+//  3. defaultWorkerCount
+//
+// 같은 정책이 CLAUDE_CODE_TIMEOUT / IMAGE / MODEL 등에도 적용 — agent.StageEnv 참조.
+type PoolConfig = agent.PoolConfig
+
 // Pool 은 Worker N replica 를 round-robin 분배로 사용하는 풀입니다.
 //
 // 모든 worker 가 동일한 환경 (image / model / authDir / timeout) 을 공유하므로 외부에서
@@ -46,10 +58,14 @@ const (
 //
 // goroutine-safe: nextIdx 가 atomic, 각 worker 가 자체 mu/wg 로 동시 호출 safe.
 type Pool struct {
+	name    string // stage 식별자 — 로깅용 (이슈 #530). 빈 문자열이면 미부착.
 	workers []*Worker
 	nextIdx atomic.Uint64
 	log     *logger.Logger
 }
+
+// Name 은 pool 의 stage 식별자를 반환합니다 — 진단/메트릭 용. 빈 문자열이면 단일 풀.
+func (p *Pool) Name() string { return p.name }
 
 // NewPool 은 주어진 worker slice 로 Pool 을 생성합니다 (DI 용).
 //
@@ -70,62 +86,81 @@ func NewPool(workers []*Worker, log *logger.Logger) (*Pool, error) {
 	return &Pool{workers: workers, log: log}, nil
 }
 
-// NewPoolFromEnv 는 CLAUDE_CODE_WORKER_COUNT 환경변수 기준으로 pool 을 구성합니다.
+// NewPoolFromEnv 는 단일 풀 호환 진입점 — 기존 호출처 보존용 (이슈 #530 이전 시그니처).
 //
-// 기본값: defaultWorkerCount (2). 상한: maxWorkerCount (16) — 운영자 입력값이 더 크면 clamp.
-// 0 / 음수 / parse 실패 시 default 적용 (WARN 로그).
-// 각 worker 는 동일 환경변수 set (image / model / authDir / timeout) 으로 구성.
+// 새 코드는 NewPoolFromConfig(PoolConfig{Name: "<stage>"}, ...) 사용 권장.
+// 본 함수는 PoolConfig{Name: ""} 로 위임 — CLAUDE_CODE_* env 만 lookup.
 func NewPoolFromEnv(loader prompt.Loader, log *logger.Logger) (*Pool, error) {
+	return NewPoolFromConfig(PoolConfig{}, loader, log)
+}
+
+// NewPoolFromConfig 는 PoolConfig 기반으로 stage 별 Pool 을 구성합니다 (이슈 #530).
+//
+// cfg.Name 이 비어 있으면 NewPoolFromEnv 와 동일 동작 (단일 풀). 명시 시 stage prefix 환경
+// 변수가 우선 적용됩니다 — `<NAME>_CLAUDE_CODE_*` 이 있으면 사용, 없으면 `CLAUDE_CODE_*` fallback.
+//
+// 각 worker 도 동일 stage prefix 환경 변수로 구성 (image / model / authDir / timeout 등).
+// MCPConfig 는 별도 — main wiring 에서 stage 의도에 맞게 WithMCPConfig 호출.
+func NewPoolFromConfig(cfg PoolConfig, loader prompt.Loader, log *logger.Logger) (*Pool, error) {
 	if log == nil {
-		return nil, errors.New("claude: NewPoolFromEnv requires non-nil logger")
+		return nil, errors.New("claude: NewPoolFromConfig requires non-nil logger")
 	}
 	if loader == nil {
-		return nil, errors.New("claude: NewPoolFromEnv requires non-nil prompt loader")
+		return nil, errors.New("claude: NewPoolFromConfig requires non-nil prompt loader")
 	}
-	count := resolveWorkerCount(log)
+	envR := agent.NewStageEnv(cfg.Name)
+	poolLog := log
+	if cfg.Name != "" {
+		poolLog = log.WithField("agent_pool", cfg.Name)
+	}
+	count := resolveWorkerCount(envR, poolLog)
 	workers := make([]*Worker, 0, count)
 	for i := 0; i < count; i++ {
-		w, err := NewFromEnv(loader, log)
+		w, err := newWorkerFromStageEnv(envR, loader, poolLog)
 		if err != nil {
-			return nil, fmt.Errorf("claude: NewPoolFromEnv worker[%d]: %w", i, err)
+			return nil, fmt.Errorf("claude: NewPoolFromConfig worker[%d]: %w", i, err)
 		}
 		workers = append(workers, w)
 	}
-	pool, err := NewPool(workers, log)
+	pool, err := NewPool(workers, poolLog)
 	if err != nil {
 		return nil, err
 	}
-	// 생성 시점 — 아직 컨테이너 기동 전. Start() 가 성공해야 warm container 상태가 됨.
-	log.WithFields(map[string]interface{}{
+	pool.name = cfg.Name
+	poolLog.WithFields(map[string]interface{}{
 		"worker_count": count,
 	}).Info("claude worker pool constructed (containers not started yet)")
 	return pool, nil
 }
 
-// resolveWorkerCount 는 CLAUDE_CODE_WORKER_COUNT 를 파싱하고 [1, maxWorkerCount] 로 clamp 합니다.
-func resolveWorkerCount(log *logger.Logger) int {
-	raw := os.Getenv(envWorkerCount)
+// resolveWorkerCount 는 stage prefix 우선 + base fallback 으로 WorkerCount 를 파싱합니다.
+// [1, maxWorkerCount] 로 clamp. parse 실패 / 음수 / 0 시 default 적용 + WARN.
+func resolveWorkerCount(envR agent.StageEnv, log *logger.Logger) int {
+	raw, key := envR.Get(envWorkerCount)
 	if raw == "" {
 		return defaultWorkerCount
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil {
 		log.WithFields(map[string]interface{}{
+			"env":   key,
 			"value": raw,
-		}).WithError(err).Warn("CLAUDE_CODE_WORKER_COUNT parse failed, using default")
+		}).WithError(err).Warn("worker count parse failed, using default")
 		return defaultWorkerCount
 	}
 	if n <= 0 {
 		log.WithFields(map[string]interface{}{
+			"env":   key,
 			"value": n,
-		}).Warn("CLAUDE_CODE_WORKER_COUNT must be positive, using default")
+		}).Warn("worker count must be positive, using default")
 		return defaultWorkerCount
 	}
 	if n > maxWorkerCount {
 		log.WithFields(map[string]interface{}{
+			"env":   key,
 			"value": n,
 			"cap":   maxWorkerCount,
-		}).Warn("CLAUDE_CODE_WORKER_COUNT exceeds upper bound, clamping")
+		}).Warn("worker count exceeds upper bound, clamping")
 		return maxWorkerCount
 	}
 	return n
