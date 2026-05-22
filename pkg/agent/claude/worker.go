@@ -584,12 +584,6 @@ func newSessionID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
 
 func truncate(s string, n int) string {
 	var count int
