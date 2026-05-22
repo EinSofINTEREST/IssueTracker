@@ -584,7 +584,6 @@ func newSessionID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-
 func truncate(s string, n int) string {
 	var count int
 	for i := range s {

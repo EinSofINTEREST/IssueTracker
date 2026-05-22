@@ -22,12 +22,19 @@ type stageEnv struct {
 	name string
 }
 
+// stageNameReplacer 는 stage 이름의 비-식별자 문자를 underscore 로 정규화합니다.
+// "parser-llm" → "PARSER_LLM_*", "validate gate" → "VALIDATE_GATE_*" 등 (coderabbit #3289026313).
+var stageNameReplacer = strings.NewReplacer(" ", "_", "-", "_", ".", "_")
+
 // prefix 는 stage 이름을 UPPER_SNAKE 로 정규화하여 반환합니다. 빈 이름이면 "".
+//
+// 정규화: 공백 / 하이픈 / 점 → underscore. 이후 ToUpper 적용 + 끝에 "_" 부착.
+// 즉 "parser" → "PARSER_", "parser-llm" → "PARSER_LLM_".
 func (s stageEnv) prefix() string {
 	if s.name == "" {
 		return ""
 	}
-	return strings.ToUpper(s.name) + "_"
+	return strings.ToUpper(stageNameReplacer.Replace(s.name)) + "_"
 }
 
 // get 은 stage prefix 우선 + base fallback 으로 환경변수 값을 반환합니다.

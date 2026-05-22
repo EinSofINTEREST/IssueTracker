@@ -125,5 +125,31 @@ func TestNewPoolFromConfig_InvalidValue_UsesDefault(t *testing.T) {
 	}
 }
 
+// TestNewPoolFromConfig_NameNormalization: stage name 의 공백/하이픈/점 → underscore 정규화.
+// "parser-llm" → PARSER_LLM_*, "validate gate" → VALIDATE_GATE_* 등 (coderabbit #3289026313).
+func TestNewPoolFromConfig_NameNormalization(t *testing.T) {
+	cases := []struct {
+		name   string
+		stage  string
+		envKey string
+	}{
+		{"hyphen", "parser-llm", "PARSER_LLM_CLAUDE_CODE_WORKER_COUNT"},
+		{"space", "validate gate", "VALIDATE_GATE_CLAUDE_CODE_WORKER_COUNT"},
+		{"dot", "stage.x", "STAGE_X_CLAUDE_CODE_WORKER_COUNT"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_AUTH_DIR", t.TempDir())
+			t.Setenv("CLAUDE_CODE_WORKER_COUNT", "2") // base default
+			t.Setenv(tt.envKey, "5")                  // 정규화된 prefix 에 매칭
+
+			pool, err := claude.NewPoolFromConfig(claude.PoolConfig{Name: tt.stage}, stubLoader{}, newTestLogger())
+			require.NoError(t, err)
+			assert.Equal(t, 5, pool.WorkerCount(),
+				"stage %q → env key %q 로 정규화되어야 함", tt.stage, tt.envKey)
+		})
+	}
+}
+
 // 컴파일 타임 — stubLoader 가 prompt.Loader 만족하는지 확인.
 var _ prompt.Loader = stubLoader{}

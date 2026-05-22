@@ -904,8 +904,11 @@ func main() {
 	case promptLoader == nil:
 		log.Warn("LLM_EXTRACTOR=claude-code requested but prompt loader is disabled; claudegen extractor not registered")
 	default:
-		// Parser pool — MCP 미적용 (parser 는 selector 추출 만, DB 접근 불필요).
-		if p := startClaudegenPool(ctx, claude.PoolConfig{Name: "parser"}, promptLoader, nil, log); p != nil {
+		// Parser pool — STAGES_PARSER_ENABLED=false 환경에서 idle 컨테이너 비용 회피
+		// (coderabbit #3289026304). MCP 미적용 (parser 는 selector 추출만 — least-privilege).
+		if !stagesCfg.ParserEnabled {
+			log.Info("parser stage disabled, skipping parser claudegen pool")
+		} else if p := startClaudegenPool(ctx, claude.PoolConfig{Name: "parser"}, promptLoader, nil, log); p != nil {
 			llmGen.SetExtractor(p)
 			parserClaudegenPool = p
 			log.WithFields(map[string]interface{}{
@@ -914,19 +917,24 @@ func main() {
 			}).Info("llmgen: Claude Code parser pool 활성화")
 		}
 		// Enrich pool — enricher_ro MCP postgres 도구 mount (이슈 #472).
-		var enrichMCP *agentdb.MCPConfig
-		if mcp, mErr := buildEnricherROMCPConfig(log); mErr != nil {
-			log.WithError(mErr).Warn("enricher_ro MCP config build failed; enrich pool will run without DB tool")
-		} else if mcp != nil {
-			enrichMCP = mcp
-			log.Info("enrich pool: MCP postgres read-only tool will be mounted (issue #472)")
-		}
-		if p := startClaudegenPool(ctx, claude.PoolConfig{Name: "enrich"}, promptLoader, enrichMCP, log); p != nil {
-			enrichClaudegenPool = p
-			log.WithFields(map[string]interface{}{
-				"worker_count": p.WorkerCount(),
-				"agent_pool":   "enrich",
-			}).Info("enrich: Claude Code enrich pool 활성화")
+		// STAGES_ENRICH_ENABLED=false 시 동일하게 skip.
+		if !stagesCfg.EnrichEnabled {
+			log.Info("enrich stage disabled, skipping enrich claudegen pool")
+		} else {
+			var enrichMCP *agentdb.MCPConfig
+			if mcp, mErr := buildEnricherROMCPConfig(log); mErr != nil {
+				log.WithError(mErr).Warn("enricher_ro MCP config build failed; enrich pool will run without DB tool")
+			} else if mcp != nil {
+				enrichMCP = mcp
+				log.Info("enrich pool: MCP postgres read-only tool will be mounted (issue #472)")
+			}
+			if p := startClaudegenPool(ctx, claude.PoolConfig{Name: "enrich"}, promptLoader, enrichMCP, log); p != nil {
+				enrichClaudegenPool = p
+				log.WithFields(map[string]interface{}{
+					"worker_count": p.WorkerCount(),
+					"agent_pool":   "enrich",
+				}).Info("enrich: Claude Code enrich pool 활성화")
+			}
 		}
 	}
 
