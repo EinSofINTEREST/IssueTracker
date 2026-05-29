@@ -327,7 +327,12 @@ func (w *Worker) Stop(ctx context.Context) error {
 		w.log.Warn("stop timeout — forcing container removal with in-flight sessions")
 	}
 
-	if err := w.runner.StopContainer(ctx, containerID); err != nil {
+	// gemini #3321915451 — ctx 가 이미 cancel 된 경우 StopContainer 의 exec.CommandContext 가
+	// 즉시 실패 → docker rm 미실행 → 컨테이너 누수. 별도 stopCtx 로 cleanup 보장.
+	stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer stopCancel()
+
+	if err := w.runner.StopContainer(stopCtx, containerID); err != nil {
 		// 실패 시 state 복원 — 다음 Stop() 호출로 재시도 가능.
 		w.mu.Lock()
 		if w.containerID == "" {

@@ -37,7 +37,8 @@ func (r *execContainerRunner) StartContainer(ctx context.Context, image, workDir
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("docker run: %w (stderr: %s)", err, truncate(stderr.String(), truncateStdoutLen))
+		// stderr 는 truncateStderrLen (512) 사용 — stdout (256) 과 분리 (gemini #3321915455).
+		return "", fmt.Errorf("docker run: %w (stderr: %s)", err, truncate(stderr.String(), truncateStderrLen))
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }

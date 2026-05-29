@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // RunSession 은 새 세션을 만들어 files 를 세션 디렉토리에 기록한 뒤 promptText 로
@@ -64,8 +65,10 @@ func (w *Worker) RunSession(
 	defer os.RemoveAll(sessionHostDir)
 
 	for name, data := range files {
-		// name 검증: 호출자가 ".." 같은 path traversal 을 넣지 못하도록 baseName 만 허용.
-		if name == "" || name != filepath.Base(name) {
+		// name 검증 (gemini #3321915441 — Security-High):
+		// filepath.Base("..") / filepath.Base(".") 는 자기 자신 반환 → 기존 baseName 비교만으로는 부족.
+		// "." / ".." / 경로 구분자 (/ 또는 \) 포함 모두 명시 거부.
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
 			return "", fmt.Errorf("invalid session file name %q", name)
 		}
 		if err := os.WriteFile(filepath.Join(sessionHostDir, name), data, 0o644); err != nil {
