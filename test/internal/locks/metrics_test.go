@@ -1,6 +1,9 @@
 package locks_test
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -9,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/locks"
+	"issuetracker/pkg/logger"
 )
 
 // registry 가 nil 인 환경 (METRICS 비활성) 에서도 호출자가 nil 검사 없이 쓸 수 있어야 한다.
@@ -103,4 +107,63 @@ func mustCounter(t *testing.T, reg *prometheus.Registry, name string, labels map
 	}
 	t.Fatalf("counter %s with labels %v not found", name, labels)
 	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// StageGate 배선 검증 — collector 가 정의만 되고 호출되지 않는 사고 방지.
+// (PR #555 Copilot 지적: not_owned 라벨이 실제 경로에서 생성되지 않았음)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// gate 선점 시 skip 이 실제로 기록되어야 한다.
+func TestStageGate_RecordsSkip(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := locks.NewGateMetrics(reg)
+	gate := locks.BuildStageGate(locks.StageParser, 1, newStubLock(false),
+		logger.New(logger.DefaultConfig()), locks.WithGateMetrics(m))
+
+	_, acquired, err := gate.Acquire(context.Background(), "https://example.com/skip")
+	require.NoError(t, err)
+	require.False(t, acquired)
+
+	assert.Equal(t, 1.0, testutil.ToFloat64(
+		mustCounter(t, reg, "stage_gate_skipped_total", map[string]string{"stage": locks.StageParser})))
+}
+
+// 소유권 상실(ErrLockNotOwned)은 not_owned 로 기록되어야 한다 — infra 와 섞이면
+// "TTL 튜닝 대상" 인지 "Redis 장애" 인지 구분할 수 없다.
+func TestStageGate_RecordsReleaseFailure_NotOwned(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := locks.NewGateMetrics(reg)
+	lk := newStubLock(true)
+	lk.releaseErr = fmt.Errorf("wrapped: %w", locks.ErrLockNotOwned)
+
+	gate := locks.BuildStageGate(locks.StageEnricher, 1, lk,
+		logger.New(logger.DefaultConfig()), locks.WithGateMetrics(m))
+
+	release, acquired, err := gate.Acquire(context.Background(), "https://example.com/expired")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	release()
+
+	assert.Equal(t, 1.0, testutil.ToFloat64(mustCounter(t, reg, "stage_gate_release_failed_total",
+		map[string]string{"stage": locks.StageEnricher, "reason": locks.ReleaseFailNotOwned})))
+}
+
+// 그 외 실패는 infra 로 기록되어야 한다.
+func TestStageGate_RecordsReleaseFailure_Infra(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := locks.NewGateMetrics(reg)
+	lk := newStubLock(true)
+	lk.releaseErr = errors.New("redis timeout")
+
+	gate := locks.BuildStageGate(locks.StageValidator, 1, lk,
+		logger.New(logger.DefaultConfig()), locks.WithGateMetrics(m))
+
+	release, acquired, err := gate.Acquire(context.Background(), "https://example.com/infra")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	release()
+
+	assert.Equal(t, 1.0, testutil.ToFloat64(mustCounter(t, reg, "stage_gate_release_failed_total",
+		map[string]string{"stage": locks.StageValidator, "reason": locks.ReleaseFailInfra})))
 }
