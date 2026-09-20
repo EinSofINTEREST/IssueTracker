@@ -126,6 +126,8 @@ type Worker struct {
 	// ZSET 인입 모드에서는 pop 이 곧 ack 이라 commit skip 으로 redeliver 불가 — RetryScheduler
 	// 주입 필수. 주입 시 Handle 이 ProcessMessage 실패에 대해 Enqueue 후 commit (메시지 손실 방지).
 	retryScheduler bus.RetryScheduler
+	// gateSkipScheduler: gate-skip 재큐 전용 (이슈 #540). 모드 무관하게 주입된다.
+	gateSkipScheduler bus.RetryScheduler
 }
 
 // PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 최소 인터페이스입니다.
@@ -1258,11 +1260,9 @@ func isNotFound(err error) bool {
 func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) bool {
 	log := logger.FromContext(ctx)
 
-	// pool 은 Start 에서 생성된다 — 미기동 상태면 commit 수단이 없으므로 재큐도 하지 않는다
-	// (재큐만 하고 commit 을 못 하면 중복 처리가 된다).
-	if w.retryScheduler == nil || w.pool == nil {
+	if w.gateSkipScheduler == nil {
 		log.WithField("offset", msg.Offset).
-			Debug("gate skip: no retry scheduler or pool, leaving message uncommitted for redelivery")
+			Debug("gate skip: no retry scheduler, leaving message uncommitted for redelivery")
 		return false
 	}
 
@@ -1274,10 +1274,13 @@ func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) b
 	}
 	job.ScheduledAt = time.Now().Add(locks.GateSkipRetryDelay)
 
-	if enqErr := w.retryScheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); enqErr != nil {
+	if enqErr := w.gateSkipScheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); enqErr != nil {
+		// parser 에는 DLQ 발행 경로가 없다 — 일반 실패 경로(Handle)와 동일한 한계이며,
+		// ZSET 모드에서는 pop=ack 이라 여기서 메시지가 소실된다. 같은 문구로 남겨 운영자가
+		// 두 경로를 한 번에 grep 할 수 있게 한다.
 		if ctx.Err() == nil {
 			log.WithError(enqErr).WithField("offset", msg.Offset).
-				Warn("gate skip: retry enqueue failed, leaving message uncommitted")
+				Warn("retry enqueue failed, message will be lost in zset mode")
 		}
 		return false
 	}
@@ -1287,8 +1290,32 @@ func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) b
 		"delay_ms": locks.GateSkipRetryDelay.Milliseconds(),
 	}).Debug("gate skip requeued with delay")
 
-	if commitErr := w.pool.Commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+	if commitErr := w.commitMessage(ctx, msg); commitErr != nil && ctx.Err() == nil {
 		log.WithError(commitErr).Warn("commit after gate skip requeue failed")
 	}
 	return true
+}
+
+// commitMessage 는 pool 유무와 무관하게 commit 합니다.
+//
+// pool 은 Start 에서 생성되므로 단위 테스트가 Handle 만 격리 호출하면 nil 입니다.
+// validate / enrich worker 의 commit 헬퍼와 동일한 fallback 패턴.
+func (w *Worker) commitMessage(ctx context.Context, msg *queue.Message) error {
+	if w.pool == nil {
+		return workerpool.CommitWithDrain(ctx, w.consumer, msg, workerpool.DefaultDrainTimeout)
+	}
+	return w.pool.Commit(ctx, msg)
+}
+
+// SetGateSkipScheduler 는 StageGate 선점 재큐 전용 RetryScheduler 를 주입합니다 (이슈 #540).
+//
+// **SetRetryScheduler 와 분리한 이유**: 후자는 우선순위 ZSET 모드에서만 주입됩니다 —
+// 일반 Kafka 모드에서는 "commit 안 함 → redeliver" 가 성립하므로 일반 실패 경로에 스케줄러가
+// 필요 없기 때문입니다 (이슈 #522 / #523 의 결정).
+//
+// 그러나 gate-skip 은 **두 모드 모두에서** redeliver 가 성립하지 않습니다. 락을 쥔 worker 는
+// 자기 offset 만 커밋하므로 이 offset 은 아무도 커밋하지 않고, 같은 파티션의 뒤 메시지가
+// 커밋되면 함께 소비 처리됩니다. 따라서 모드와 무관하게 재큐 수단이 필요합니다.
+func (w *Worker) SetGateSkipScheduler(rs bus.RetryScheduler) {
+	w.gateSkipScheduler = rs
 }

@@ -725,8 +725,30 @@ func logShutdownAware(ctx context.Context, log *logger.Logger, err error, msg st
 func (p *KafkaConsumerPool) requeueGateSkip(ctx context.Context, msg *queue.Message, job *core.CrawlJob) error {
 	log := logger.FromContext(ctx)
 
-	scheduler := p.resolveRetryScheduler()
 	job.RetryCount++
+
+	// 한도 초과 — 일반 실패 경로와 동일하게 DLQ 로 격리하고 commit 한다 (Copilot 피드백).
+	// 이 검사가 없으면 gate 가 계속 acquired=false 를 반환할 때 재큐가 무한 반복된다.
+	if job.MaxRetries > 0 && job.RetryCount > job.MaxRetries {
+		log.WithFields(map[string]interface{}{
+			"job_id":      job.ID,
+			"crawler":     job.CrawlerName,
+			"url":         job.Target.URL,
+			"retry":       job.RetryCount,
+			"max_retries": job.MaxRetries,
+		}).Warn("gate skip requeue limit exceeded, sending to dlq")
+
+		if dlqErr := p.sendToDLQ(ctx, msg, locks.ErrStageGateHeld); dlqErr != nil {
+			logShutdownAware(ctx, log, dlqErr, "gate skip dlq failed, leaving message uncommitted")
+			return nil
+		}
+		if commitErr := p.pool.Commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+			log.WithError(commitErr).Warn("commit after gate skip dlq failed")
+		}
+		return nil
+	}
+
+	scheduler := p.resolveRetryScheduler()
 	job.ScheduledAt = time.Now().Add(locks.GateSkipRetryDelay)
 
 	if err := scheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); err != nil {
