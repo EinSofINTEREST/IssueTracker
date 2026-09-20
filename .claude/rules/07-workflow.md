@@ -98,6 +98,9 @@ mutation($issueId: ID!, $subIssueId: ID!) {
 - 의존성 추가 (`go get`) — 단 신규 외부 모듈은 규약 4 적용
 - Branch 생성, 정상 push (force-push 아닌)
 - Commit 단위 결정 및 실행
+- **구조 변경 시 `make harness-check` 통과 확인** — cmd 추가/삭제, 디렉토리 이동, Go 버전 변경,
+  CI 임계값 변경 등은 규약 문서도 같이 고쳐야 한다 (이슈 #539). 문서가 낡으면 다음 세션의 AI 가
+  잘못된 전제를 받는다.
 - PR 본문 작성
 - **`scripts/` 하위 스크립트 실행** — 프로젝트 도구는 경로 확인 없이 실행
 - **이슈 / PR Label · Type 부여** — `scripts/gh-meta.sh` 활용, 별도 승인 불필요
