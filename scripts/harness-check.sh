@@ -146,13 +146,19 @@ else
   ok "prompt asset ${asset_count}개 (계약 검증은 test/internal/promptcontract)"
 fi
 
-# ── 6-1. loop 자동 종료 임계값 ────────────────────────────────────────────
-echo "── 7. loop 종료 조건 대조"
-loop_threshold=$(grep -oE 'idle_streak >= [0-9]+' .claude/loop.md | head -1 | grep -oE '[0-9]+')
-if [ -n "$loop_threshold" ] && grep -q "${loop_threshold}회 연속" CLAUDE.md; then
-  ok "loop 종료 임계값 ${loop_threshold}회 가 CLAUDE.md 와 일치"
+# ── 7. 폐지된 cron loop 자산이 되살아나지 않았는지 ────────────────────────
+# 이슈 #548 로 cron loop 방식은 폐지됐다. 파일이 다시 생기거나 규약이 cron 등록을 지시하면
+# AI 가 매 PR 마다 cron 을 걸려 하고, 그때마다 사용자가 예외를 지시해야 한다.
+echo "── 7. 폐지된 cron loop 자산 확인"
+for dead in .claude/loop.md .claude/pr-feedback.md scripts/pr-feedback.sh; do
+  [ -e "$dead" ] && fail "폐지된 cron loop 자산이 존재: $dead (이슈 #548)"
+done
+# 규약이 cron 등록을 "지시" 하는지 — 폐지를 설명하는 문맥은 제외
+if grep -hnE 'CronCreate|cron 으로 등록|cron 자동 등록' CLAUDE.md .claude/rules/*.md 2>/dev/null \
+     | grep -vE '금지|폐지|구 규약|구 #129|호출하지 않는다|대체' | grep -q .; then
+  fail "규약이 여전히 cron 등록을 지시하는 것으로 보임 — CLAUDE.md / 07-workflow 확인"
 else
-  fail "loop.md 임계값(${loop_threshold:-?}회) 과 CLAUDE.md 서술이 불일치"
+  ok "cron loop 자산 부재 + 규약이 cron 등록을 지시하지 않음"
 fi
 
 echo
