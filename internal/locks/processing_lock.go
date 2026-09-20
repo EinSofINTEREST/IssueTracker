@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -71,13 +73,25 @@ func ProcessingKey(stage, url string) string {
 type RedisProcessingLock struct {
 	locker redisLocker
 	ttl    time.Duration
+
+	// tokens 는 key → 소유권 토큰 매핑입니다 (이슈 #63).
+	//
+	// Acquire 가 받은 토큰을 보관했다가 Release 에서 사용 — 토큰이 일치할 때만 지우므로
+	// TTL 초과 후 다른 인스턴스가 재획득한 락을 삭제하지 않습니다.
+	// 엔트리 수는 동시 처리 중인 (stage, url) 수로 제한되며 (stage 슬롯 cap 합) Release 에서
+	// 제거됩니다. internal/storage/redis 의 inflight locker 와 동일 패턴.
+	mu     sync.Mutex
+	tokens map[string]string
 }
 
 // redisLocker 는 Redis 락 조작을 추상화하는 내부 인터페이스입니다.
 // pkg/redis.Client 의 메서드 집합과 일치하며 테스트에서 mock 으로 교체됩니다.
 type redisLocker interface {
-	AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error)
-	ReleaseLock(ctx context.Context, key string) error
+	// AcquireLockWithToken 은 소유권 토큰과 함께 락을 획득합니다 (이슈 #63).
+	AcquireLockWithToken(ctx context.Context, key string, ttl time.Duration) (string, bool, error)
+	// ReleaseLockOwned 는 토큰이 일치할 때만 해제합니다. released=false 는 에러가 아니라
+	// "이미 만료됐거나 타 인스턴스가 재획득" 을 뜻합니다.
+	ReleaseLockOwned(ctx context.Context, key, token string) (bool, error)
 }
 
 // NewRedisProcessingLock 는 RedisProcessingLock 을 생성합니다.
@@ -86,7 +100,7 @@ func NewRedisProcessingLock(locker redisLocker, ttl time.Duration) *RedisProcess
 	if ttl <= 0 {
 		ttl = DefaultProcessingLockTTL
 	}
-	return &RedisProcessingLock{locker: locker, ttl: ttl}
+	return &RedisProcessingLock{locker: locker, ttl: ttl, tokens: make(map[string]string)}
 }
 
 // Acquire 는 key 의 처리 marker 를 SET NX EX 로 atomic 시도합니다.
@@ -96,16 +110,58 @@ func (l *RedisProcessingLock) Acquire(ctx context.Context, key string) (bool, er
 	if l == nil || l.locker == nil {
 		return false, fmt.Errorf("processing lock locker is nil")
 	}
-	return l.locker.AcquireLock(ctx, key, l.ttl)
+	token, acquired, err := l.locker.AcquireLockWithToken(ctx, key, l.ttl)
+	if err != nil || !acquired {
+		return false, err
+	}
+
+	l.mu.Lock()
+	if l.tokens == nil {
+		l.tokens = make(map[string]string)
+	}
+	l.tokens[key] = token
+	l.mu.Unlock()
+	return true, nil
 }
 
-// Release 는 key 의 marker 를 즉시 제거합니다.
+// Release 는 이 인스턴스가 획득한 경우에만 key 의 marker 를 제거합니다 (이슈 #63).
+//
+// 토큰이 없으면 (= 이 인스턴스가 잡은 적 없음) no-op. 토큰이 있어도 Redis 상의 값이 다르면
+// (TTL 만료 후 타 인스턴스가 재획득) 삭제하지 않고 ErrLockNotOwned 를 반환합니다 —
+// 호출자가 이를 WARN 으로 남겨 TTL 초과 빈도를 관측할 수 있습니다.
 func (l *RedisProcessingLock) Release(ctx context.Context, key string) error {
 	if l == nil || l.locker == nil {
 		return fmt.Errorf("processing lock locker is nil")
 	}
-	return l.locker.ReleaseLock(ctx, key)
+
+	l.mu.Lock()
+	token, ok := l.tokens[key]
+	if ok {
+		delete(l.tokens, key)
+	}
+	l.mu.Unlock()
+
+	if !ok {
+		// 이 인스턴스가 소유하지 않음 — 지울 권한이 없으므로 아무것도 하지 않는다.
+		return nil
+	}
+
+	released, err := l.locker.ReleaseLockOwned(ctx, key, token)
+	if err != nil {
+		return err
+	}
+	if !released {
+		return fmt.Errorf("%w: %s", ErrLockNotOwned, key)
+	}
+	return nil
 }
+
+// ErrLockNotOwned 는 Release 시점에 락이 더 이상 이 인스턴스 소유가 아님을 나타냅니다 (이슈 #63).
+//
+// 원인: 처리가 ProcessingLock TTL 을 초과하여 락이 만료되고, 그 사이 다른 인스턴스가 같은 키를
+// 재획득. **정상 동작이며 데이터 손상은 아닙니다** — 오히려 예전 구현이라면 이 시점에 남의 락을
+// 지웠을 상황입니다. 다만 TTL 이 실제 처리 시간보다 짧다는 신호이므로 호출자는 WARN 으로 남깁니다.
+var ErrLockNotOwned = errors.New("locks: processing lock no longer owned by this instance")
 
 // NoopProcessingLock 은 lock 을 사용하지 않는 no-op 구현체입니다.
 // Redis 부재 환경 (단일 인스턴스, 테스트) 에서 fallback 으로 사용 — 항상 acquired=true.

@@ -119,10 +119,18 @@ func (g *stageGate) Acquire(ctx context.Context, url string) (func(), bool, erro
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stageGateLockReleaseTimeout)
 		defer cancel()
 		if err := g.lock.Release(drainCtx, key); err != nil {
-			g.log.WithFields(map[string]interface{}{
+			fields := map[string]interface{}{
 				"stage": g.stage,
 				"url":   url,
-			}).WithError(err).Warn("stage gate lock release failed")
+			}
+			// 소유권 상실은 인프라 실패가 아니라 "처리가 TTL 을 넘겼다" 는 신호다 (이슈 #63).
+			// 메시지를 구분해 운영자가 TTL 튜닝 대상인지 Redis 장애인지 즉시 판별하게 한다.
+			if errors.Is(err, ErrLockNotOwned) {
+				g.log.WithFields(fields).WithError(err).
+					Warn("stage gate lock expired before release; processing exceeded lock TTL")
+			} else {
+				g.log.WithFields(fields).WithError(err).Warn("stage gate lock release failed")
+			}
 		}
 	}
 	return release, true, nil
