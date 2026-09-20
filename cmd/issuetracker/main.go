@@ -36,6 +36,7 @@ import (
 	"issuetracker/internal/processor/precheck"
 	"issuetracker/internal/processor/validate"
 	validateWorkerPkg "issuetracker/internal/processor/validate/worker"
+	"issuetracker/internal/promptcontract"
 	"issuetracker/internal/scheduler"
 	"issuetracker/internal/storage/decorator"
 	"issuetracker/internal/storage/model"
@@ -609,7 +610,7 @@ func main() {
 		if warn != "" {
 			log.Warn(warn)
 		}
-		promptLoader = loader
+		promptLoader = verifiedPromptLoader(loader, log)
 		log.WithFields(map[string]interface{}{
 			"env_dir":     promptCfg.Dir,
 			"env_dir_set": promptCfg.DirSet,
@@ -1544,4 +1545,33 @@ func buildEnricherROMCPConfig(log *logger.Logger) (*agentdb.MCPConfig, error) {
 		"dsn": dsn.String(),
 	}).Debug("enricher_ro MCP config constructed")
 	return &cfg, nil
+}
+
+// verifiedPromptLoader 는 기동 시점에 prompt 계약을 검증하고, 깨졌으면 내장 prompt 로 격하합니다
+// (이슈 #539).
+//
+// Loader 는 lazy 라 검증이 없으면 이름 오타나 LLM_PROMPT_DIR override 누락이 해당 stage 의 첫
+// 실제 요청에서야 드러납니다. 더 나쁜 경우는 템플릿이 쓰는 {{TOKEN}} 을 호출자가 공급하지 않는
+// 상황 — 치환되지 않은 토큰이 그대로 LLM 에 전달되어 응답 품질이 조용히 무너지고 호출 비용만
+// 나갑니다.
+//
+// 정책: 계약 위반 시 embed-only 로 격하 (내장 asset 은 테스트가 계약 만족을 강제하므로 안전한
+// 기준점). 내장까지 위반이면 빌드 시점 결함이므로 ERROR 만 남기고 그대로 진행 — prompt 문제로
+// 부팅이 막히는 가용성 사고를 만들지 않는다는 pkg/llm/prompt 의 정책과 일관.
+func verifiedPromptLoader(loader prompt.Loader, log *logger.Logger) prompt.Loader {
+	contracts := promptcontract.All()
+	err := prompt.Verify(loader, contracts)
+	if err == nil {
+		log.WithField("prompt_count", len(contracts)).Info("prompt contracts verified")
+		return loader
+	}
+
+	embedOnly := prompt.NewEmbedLoader()
+	if fallbackErr := prompt.Verify(embedOnly, contracts); fallbackErr != nil {
+		log.WithError(err).Error("prompt contract verification failed for embedded prompts, continuing as-is")
+		return loader
+	}
+
+	log.WithError(err).Error("prompt contract verification failed, falling back to embedded prompts")
+	return embedOnly
 }
