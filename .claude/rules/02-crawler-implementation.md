@@ -309,6 +309,13 @@ type Target struct {
 
 ### Kafka Topic Structure
 
+> ⚠️ **실제 클라이언트는 `segmentio/kafka-go` 이며, 직접 쓰지 않고 `pkg/queue` 래퍼를 통합니다.**
+> 아래 예제는 confluent-kafka-go 스타일 (`kafka.ConfigMap`, `kafka.NewConsumer`) 로 적혀 있어
+> **API 가 실제와 다릅니다** — 개념 설명으로만 읽고, 코드를 쓸 때는 `pkg/queue` 의
+> `Producer` / `Consumer` 인터페이스와 `internal/bus` 의 `Publisher` 를 보세요.
+> consumer pool lifecycle 은 `internal/workerpool` harness 가 담당합니다.
+
+
 1. **Topic Naming Convention**
    ```
    issuetracker.crawl.{priority}      # crawl-high, crawl-normal, crawl-low
@@ -481,17 +488,27 @@ type Target struct {
 
 ### Per-Source Modules
 
+소스별 Go 패키지를 두던 초기 설계 (`news/us/cnn/` 등) 는 **DB-driven 방식으로 대체** 됐습니다.
+사이트를 추가할 때 Go 코드를 쓰지 않고 `fetcher_rules` / `parsing_rules` row 를 넣습니다 —
+selector 는 LLM 이 자동 생성하고 (`parser/rule/llmgen`), 실패 시 재학습합니다.
+
 ```
-internal/processor/fetcher/news/us/
-├── cnn/
-│   ├── crawler.go      # Implements Crawler interface
-│   ├── parser.go       # HTML parsing logic
-│   ├── config.go       # Source configuration
-│   └── crawler_test.go
-├── nytimes/
-│   └── ...
-└── registry.go         # Register all US news crawlers
+internal/processor/fetcher/
+├── core/             # Crawler 인터페이스 + RawContent + CrawlerError + HTTP client + retry
+├── handler/          # crawler_name → Handler registry
+├── implementation/   # 전송 구현체
+│   ├── goquery/      # 정적 HTML
+│   └── chromedp/     # JS 렌더링 (lazy-load 감지 시 자동 전환)
+├── domain/           # 도메인별 chain handler
+│   ├── general/      # 일반 사이트 — chain_handler / source_crawler / sources
+│   └── search/       # 검색 기반 수집 (Google CSE)
+├── rule/             # fetcher_rules resolver + chromedp 자동 up/downgrade
+├── rate_limiter/     # IP 단위 token bucket
+└── worker/           # PoolManager + consumer pool + CircuitBreaker
 ```
+
+새 사이트 추가 절차는 코드가 아니라 **DB row + (필요 시) LLM 룰 생성** 입니다. 전용 Go 핸들러는
+일반 경로로 처리되지 않는 사이트에 한해 `domain/` 아래에 추가합니다.
 
 ### Common Patterns
 

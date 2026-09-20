@@ -65,7 +65,7 @@
   - Comprehensive error handling
   - Structured logging with zerolog
   - Context-aware logging
-  - 92.1% test coverage
+  - 테스트 커버리지 — CI 게이트 40% (`ci-quality.yml`). 실측값은 PR Summary 참조
   - Standard Go project layout
   - Makefile build automation
   - Command-line entry points
@@ -90,23 +90,29 @@ Following [Standard Go Project Layout](https://github.com/golang-standards/proje
 ```
 issuetracker/
 ├── cmd/                        # Application entry points (all build to bin/)
-│   ├── api/                   # ✅ HTTP API server → bin/api
+│   ├── issuetracker/          # ✅ Fetcher + Parser + Validate + Enrich + Scheduler → bin/issuetracker
 │   │   └── main.go
 │   ├── processor/             # ✅ Validator-only standalone → bin/processor
-│   │   └── main.go
-│   ├── issuetracker/          # ✅ Fetcher + Parser + Validator combined → bin/issuetracker
 │   │   └── main.go
 │   ├── migrate/               # ✅ DB migration (up) → bin/migrate
 │   │   └── main.go
 │   ├── migrate-down/          # ✅ DB migration (down) → bin/migrate-down
 │   │   └── main.go
-│   └── rldebug/               # ✅ Rate limiter debug 도구 → bin/rldebug
+│   └── rule-validator/        # ✅ parsing rule 검증 도구 → bin/rule-validator
 │       └── main.go
+│   # HTTP API server (이슈 #21) 는 미구현 — cmd/api 없음
 │
 ├── internal/                   # Private application code
-│   ├── locks/                 # ✅ 단계 무관 distributed lock — fetcher/parser/validator 공유 (이슈 #197)
-│   │   ├── ingestion_lock.go  # IngestionLock (Publisher 가 Kafka enqueue 직전 사용)
-│   │   └── processing_lock.go # ProcessingLock + ProcessingKey(stage, url)
+│   ├── bus/                   # ✅ Publisher / Consumer / RetryScheduler — Kafka I/O 단일 출처 (이슈 #385)
+│   ├── workerpool/            # ✅ stage 공용 consumer pool harness (poll → dispatch → commit, 이슈 #403)
+│   ├── scheduler/             # ✅ 시드 URL 주기 발행 (scheduler_entries 기반)
+│   ├── promptcontract/        # ✅ 전 stage prompt placeholder 계약 집계 (이슈 #539)
+│   ├── classifier/            # ⚠️ grpc/http client — 현재 파이프라인에 미연결 (이슈 #544)
+│   ├── locks/                 # ✅ 단계 무관 distributed lock — 4 stage 공유 (이슈 #197)
+│   │   ├── ingestion_lock.go  # IngestionLock — SET NX 진입 마커 (release 없음, 이슈 #541 에서 개명 예정)
+│   │   ├── processing_lock.go # ProcessingLock + ProcessingKey(stage, url)
+│   │   ├── semaphore.go       # in-process 동시 슬롯 cap (인스턴스 간 비공유 — 이슈 #545)
+│   │   └── stage_gate.go      # Semaphore + ProcessingLock 합성
 │   ├── processor/             # ✅ 파이프라인 단계별 정렬 — 모든 stage 가 본 디렉토리 하위 (이슈 #195)
 │   │   ├── fetcher/           # ✅ Web fetch + DB-driven parse 라우팅 + worker pool (이슈 #198)
 │   │   │   ├── core/          # 인터페이스 + 모델 + 에러 + HTTP client + retry
@@ -122,21 +128,23 @@ issuetracker/
 │   │   │   │   ├── pathinfer/ # path_pattern 추론 알고리즘 (이슈 #173)
 │   │   │   │   └── refiner/   # path_pattern 정밀화 polling
 │   │   │   └── worker/        # Claim Check 기반 ParserWorker (Kafka consumer) + RawContentCleaner
-│   │   └── validate/          # Validate worker (Validation logic)
-│   ├── embedding/             # Embedding & ML (planned)
-│   │   ├── model/             # Embedding models
-│   │   ├── cluster/           # Clustering logic
-│   │   └── index/             # Vector indexing
-│   └── storage/               # Storage layer (planned)
-│       ├── repository/        # Data access layer
-│       └── models/            # Domain models
+│   │   ├── validate/          # ✅ Validate worker (품질 점수 기반 Validation)
+│   │   └── enrich/            # ✅ Enrich worker — extract / cross-verify / context / score (이슈 #445)
+│   └── storage/               # ✅ postgres / redis / service / decorator / model
+│   # internal/embedding (Embedding & ML) 은 미구현 — 이슈 #17 #18 #20
 │
 ├── pkg/                        # Public library code
-│   ├── logger/                # ✅ Reusable logger package
-│   │   └── logger.go
-│   ├── http/                  # HTTP utilities (planned)
-│   ├── queue/                 # Queue abstractions (planned)
-│   └── config/                # Configuration (planned)
+│   ├── logger/                # ✅ zerolog wrapper + context 주입
+│   ├── config/                # ✅ 환경변수 로딩 (app / llm / runtime / storage)
+│   ├── queue/                 # ✅ Kafka producer / consumer + 우선순위 ZSET 큐
+│   ├── redis/                 # ✅ client + lock + leader lock + retry ZSET
+│   ├── llm/                   # ✅ provider (gemini/openai/anthropic) + prompt loader·계약
+│   │   └── prompt/assets/     # 내장 prompt 자산 (parser / enrich)
+│   ├── agent/                 # ✅ CLI agent 추상 (Agent) + claude 구현 + MCP dependency
+│   ├── links/                 # ✅ URL 정규화 / 링크 추출
+│   ├── metrics/               # ✅ Prometheus registry
+│   ├── resilience/            # ✅ circuit breaker / failure counter
+│   └── urlguard/              # ✅ URL 차단 규칙
 │
 ├── test/                       # Test files (mirrors service architecture)
 │   ├── internal/              # ✅ internal/ 패키지 테스트
@@ -201,7 +209,7 @@ issuetracker/
 ## Technology Stack
 
 ### Core (✅ Implemented)
-- **Language**: Go 1.22.2
+- **Language**: Go 1.24 (`go.mod` 의 `go` 지시자가 단일 출처 — CI 는 `go-version-file: go.mod`)
 - **HTTP Client**: ✅ Custom client with connection pooling (max 100 idle)
 - **Rate Limiting**: ✅ Token bucket algorithm
 - **Retry Logic**: ✅ Exponential backoff with configurable policies
