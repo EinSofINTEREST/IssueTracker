@@ -184,7 +184,7 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 [CLAUDE.md](../../CLAUDE.md#pr-생성-후-피드백-대응-이슈-548--구-129-cron-방식-폐지) 참조. 요약:
 
 - **세션이 살아있으면** `Monitor` 로 CI·코멘트를 감시하고 그 세션에서 처리 — 작업 맥락 보존
-- **세션을 닫은 뒤 / 타인 리뷰** 는 `@claude` 멘션 → GitHub Action (이슈 #549)
+- **세션을 닫은 뒤 / 타인 리뷰** 는 `@claude` 멘션 → [`.github/workflows/claude.yml`](../../.github/workflows/claude.yml) (이슈 #549). write 권한 보유자만 트리거 가능, 봇은 기본 차단
 - **cron 자동 등록 금지** — 사용자가 명시적으로 요청하지 않는 한 `CronCreate` 를 호출하지 않는다
 
 구 규약은 `gh pr create` 직후 loop.md (현재 삭제됨) 를 3분 cron 으로 자동 등록했다. cron 이 띄우는
