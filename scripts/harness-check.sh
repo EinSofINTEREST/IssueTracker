@@ -66,7 +66,10 @@ done
 echo "── 2. cmd/ 목록 대조"
 actual_cmds=$(find cmd -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | sort | tr '\n' ' ')
 for c in $actual_cmds; do
-  grep -q "$c" CLAUDE.md || fail "cmd/$c 가 CLAUDE.md 디렉토리 요약에 없음"
+  # 부분 문자열 매칭 금지 — "migrate" 누락을 "migrate-down" 이 가려주면 대조가 무의미해진다.
+  # 앞뒤가 단어 경계(또는 줄 끝)인 토큰 전체 일치만 인정.
+  grep -qE "(^|[^A-Za-z0-9_-])${c}([^A-Za-z0-9_-]|$)" CLAUDE.md \
+    || fail "cmd/$c 가 CLAUDE.md 디렉토리 요약에 없음"
 done
 # 문서에만 있고 실재하지 않는 cmd 탐지
 while IFS= read -r c; do

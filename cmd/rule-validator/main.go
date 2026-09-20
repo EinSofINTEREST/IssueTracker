@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"issuetracker/internal/processor/parser/rule/validator"
+	"issuetracker/internal/promptcontract"
 	"issuetracker/internal/storage/decorator"
 	pgstore "issuetracker/internal/storage/postgres"
 	"issuetracker/pkg/llm"
@@ -89,6 +90,10 @@ func main() {
 	if warn != "" {
 		log.Warn(warn)
 	}
+	// cmd/issuetracker 와 같은 prompt 자산을 공유하므로 여기서도 계약을 검증한다 (이슈 #539).
+	// 한쪽만 검증하면 잘못된 LLM_PROMPT_DIR override 가 이 CLI 로는 그대로 흘러간다.
+	loader = promptcontract.VerifiedLoader(loader, log)
+
 	llmValidator, err := validator.NewLLMValidator(llmProvider, loader)
 	if err != nil {
 		log.WithError(err).Fatal("failed to init llm validator")
