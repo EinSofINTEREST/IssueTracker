@@ -337,7 +337,7 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 				return
 			}
 			// Enqueue 성공 — commit (메시지 손실 방지). ZSETConsumer 의 Commit 은 no-op.
-			if commitErr := w.pool.Commit(ctx, msg); commitErr != nil {
+			if commitErr := w.commitMessage(ctx, msg); commitErr != nil {
 				if ctx.Err() == nil {
 					log.WithError(commitErr).Warn("commit after retry enqueue failed")
 				}
@@ -350,7 +350,7 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 		return
 	}
 
-	if commitErr := w.pool.Commit(ctx, msg); commitErr != nil {
+	if commitErr := w.commitMessage(ctx, msg); commitErr != nil {
 		if ctx.Err() == nil {
 			log.WithError(commitErr).Warn("commit failed after success")
 		}
