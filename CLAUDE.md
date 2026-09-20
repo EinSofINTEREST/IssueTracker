@@ -13,11 +13,11 @@
 
 | 작업 | 참조 문서 | 핵심 내용 |
 |------|-----------|-----------|
-| 코드 스타일 확인 | `.claude/rules/06-code-style.md` | 탭 인들트, 네이밍, 한국어 커밋 |
+| 코드 스타일 확인 | `.claude/rules/06-code-style.md` | 탭 인덴트, 네이밍, 한국어 커밋 |
 | 크롤러 구현 | `.claude/rules/02-crawler-implementation.md` | Crawler 인터페이스, HTTP 클라이언트, 파싱 |
 | 데이터 처리 | `.claude/rules/03-data-processing.md` | 정규화 → 검증 → 임베딩 → 클러스터링 |
 | 에러 처리 | `.claude/rules/04-error-handling.md` | 에러 타입, 재시도, 로깅 필드 |
-| 테스트 작성 | `.claude/rules/05-testing.md` | test/ 디렉토리 구조, 커버리지 70% |
+| 테스트 작성 | `.claude/rules/05-testing.md` | test/ 디렉토리 구조, 커버리지 (CI 게이트 40%) |
 | 아키텍처 이해 | `.claude/rules/01-architecture.md` | 레이어, 디렉토리, 데이터 흐름 |
 | **AI 작업 진행** | `.claude/rules/07-workflow.md` | **자율 진행 / commit-per-TODO / PR 자동 / 권한 최소화** |
 | CI/머지 게이트 | `docs/ci/conventions.md` | Required checks, CODEOWNERS, Ruleset |
@@ -31,7 +31,7 @@
 2. **PR 타이틀**: `[카테고리#이슈번호] 제목` (CI 정규식 강제, 이슈 #121). 카테고리는 위 5종, 이슈번호 누락이나 카테고리 오타 시 머지 차단.
 3. **gofmt**: `gofmt -w .` 로 포맷 정리 후 커밋.
 4. **빌드**: `go build ./...` 통과.
-5. **테스트**: `go test -race ./...` 통과. 커버리지 70% 이상.
+5. **테스트**: `go test -race ./...` 통과. **커버리지 40% 이상** (CI 강제값 — `ci-quality.yml` 의 `threshold`). `05-testing.md` 의 70% 는 core 패키지 목표치이며 CI 가 강제하지 않는다.
 6. **린트**: `golangci-lint run` 통과.
 
 ## 빌드/테스트 명령어
@@ -47,7 +47,7 @@ make fmt         # gofmt
 ## 디렉토리 구조 (요약)
 
 ```
-cmd/            → 실행 바이너리 (issuetracker, processor, api, migrate, migrate-down, rldebug)
+cmd/            → 실행 바이너리 (issuetracker, processor, migrate, migrate-down, rule-validator)
 internal/       → 비공개 비즈니스 로직
 pkg/            → 공개 유틸리티 (logger, config, queue, redis)
 test/           → 테스트 (internal/, pkg/ 미러링)
@@ -86,4 +86,4 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 - 사용자가 명시적으로 "loop 등록하지 마" 라고 지시하면 생략
 - draft PR 등 후속 polling 이 무의미한 케이스가 명백하면 사용자에게 묻고 진행
 
-자동 종료는 `.claude/loop.md` 의 "자동 중단 (4회 연속 무동작 시)" 섹션이 처리한다 — 12분간 의미 있는 변화가 없으면 cron 본인이 자체 정리.
+자동 종료는 `.claude/loop.md` 의 "자동 중단 (CI 완료 후 2회 연속 무동작 시)" 섹션이 처리한다 — CI 가 끝난 뒤 2회 (약 6분) 연속 무동작이면 cron 본인이 자체 정리. CI 가 pending 인 동안에는 카운터가 동결된다.
