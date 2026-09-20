@@ -16,19 +16,19 @@ import (
 	"issuetracker/pkg/queue"
 )
 
-// fakeIngestionLock — 메모리 SETNX 시뮬레이션 (publisher 테스트 전용 — worker 패키지의
+// fakeIngestionMarker — 메모리 SETNX 시뮬레이션 (publisher 테스트 전용 — worker 패키지의
 // 동일 인터페이스를 구조적 타이핑으로 만족).
-type fakeIngestionLock struct {
+type fakeIngestionMarker struct {
 	mu       sync.Mutex
 	keys     map[string]struct{}
 	failOnce error
 }
 
-func newFakeLock() *fakeIngestionLock {
-	return &fakeIngestionLock{keys: make(map[string]struct{})}
+func newFakeMarker() *fakeIngestionMarker {
+	return &fakeIngestionMarker{keys: make(map[string]struct{})}
 }
 
-func (f *fakeIngestionLock) Acquire(_ context.Context, url string) (bool, error) {
+func (f *fakeIngestionMarker) Acquire(_ context.Context, url string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failOnce != nil {
@@ -77,8 +77,8 @@ func (m *lockMockProducer) urls() []string {
 func TestPublisher_IngestionLock_BlocksDuplicateOnSecondPublish(t *testing.T) {
 	prod := &lockMockProducer{}
 	pub := bus.New(prod, noopResolver{}, gateLog())
-	// SetIngestionLock 은 1회만 호출 — 같은 lock 인스턴스가 두 Publish 호출 모두에 적용됨.
-	pub.SetIngestionLock(newFakeLock())
+	// SetIngestionMarker 은 1회만 호출 — 같은 lock 인스턴스가 두 Publish 호출 모두에 적용됨.
+	pub.SetIngestionMarker(newFakeMarker())
 
 	urls := []string{"https://example.com/a", "https://example.com/b"}
 	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
@@ -92,7 +92,7 @@ func TestPublisher_IngestionLock_BlocksDuplicateOnSecondPublish(t *testing.T) {
 func TestPublisher_IngestionLock_SkippedForCategory(t *testing.T) {
 	prod := &lockMockProducer{}
 	pub := bus.New(prod, noopResolver{}, gateLog())
-	pub.SetIngestionLock(newFakeLock())
+	pub.SetIngestionMarker(newFakeMarker())
 
 	urls := []string{"https://example.com/category/news"}
 	// 두 번 publish 해도 카테고리는 둘 다 통과
@@ -107,9 +107,9 @@ func TestPublisher_IngestionLock_FailOpenOnError(t *testing.T) {
 	prod := &lockMockProducer{}
 	pub := bus.New(prod, noopResolver{}, gateLog())
 
-	lock := newFakeLock()
+	lock := newFakeMarker()
 	lock.failOnce = errors.New("redis timeout")
-	pub.SetIngestionLock(lock)
+	pub.SetIngestionMarker(lock)
 
 	urls := []string{"https://example.com/x", "https://example.com/y"}
 	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
@@ -118,12 +118,12 @@ func TestPublisher_IngestionLock_FailOpenOnError(t *testing.T) {
 	assert.Len(t, prod.urls(), 2, "lock 에러 시 fail-open — 모든 URL 통과")
 }
 
-// SetIngestionLock(nil) 후 publish 는 dedup 미적용 — 동일 URL 두 번 모두 통과.
+// SetIngestionMarker(nil) 후 publish 는 dedup 미적용 — 동일 URL 두 번 모두 통과.
 func TestPublisher_IngestionLock_NilDisablesDedup(t *testing.T) {
 	prod := &lockMockProducer{}
 	pub := bus.New(prod, noopResolver{}, gateLog())
-	pub.SetIngestionLock(newFakeLock())
-	pub.SetIngestionLock(nil) // 비활성화
+	pub.SetIngestionMarker(newFakeMarker())
+	pub.SetIngestionMarker(nil) // 비활성화
 
 	urls := []string{"https://example.com/x"}
 	require.NoError(t, pub.PublishChained(context.Background(), "test", urls, core.TargetTypeArticle, time.Second))
@@ -137,7 +137,7 @@ func TestPublisher_Normalizer_AppliedBeforeLock(t *testing.T) {
 	prod := &lockMockProducer{}
 	pub := bus.New(prod, noopResolver{}, gateLog())
 	pub.SetNormalizer(links.NewNormalizer())
-	pub.SetIngestionLock(newFakeLock())
+	pub.SetIngestionMarker(newFakeMarker())
 
 	// 두 URL 은 정규화 후 동일 (fragment 제거 + utm_* 쿼리 제거)
 	urls := []string{

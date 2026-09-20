@@ -14,13 +14,21 @@ const (
 	// Redis 운영자가 grep / SCAN 으로 진입 marker 만 식별할 수 있도록 namespace 분리.
 	ingestionKeyPrefix = "ingestion:url:"
 
-	// DefaultIngestionMarkTTL 은 Ingestion Lock 의 기본 TTL 입니다.
+	// DefaultIngestionMarkTTL 은 진입 마커의 기본 TTL 입니다.
 	// 파이프라인 전체 통과 예상 시간 (publish → fetch → parse → validate → ...) 보다
 	// 충분히 길게 — 24h 가 default. 환경변수로 운영 환경별 override 권장.
 	DefaultIngestionMarkTTL = 24 * time.Hour
 )
 
-// IngestionMarker 은 URL 이 파이프라인에 진입한 상태를 marker 로 표시합니다.
+// IngestionMarker 는 URL 이 파이프라인에 진입한 상태를 marker 로 표시합니다.
+//
+// # 이름에 대하여 (이슈 #541)
+//
+// 본 타입은 IngestionLock 이라 불렸으나 **락이 아닙니다** — SET NX 로 표시만 하고 정상 흐름에서
+// 해제하지 않으며 TTL 만료로 회수됩니다. 이름 때문에 "처리 중 보호" 를 담당하는 ProcessingLock
+// 과 같은 종류로 오해를 샀습니다. 역할이 드러나도록 Marker 로 개명했습니다.
+//
+// **Redis 키 prefix (`ingestion:url:`) 는 바꾸지 않았습니다** — 운영 중인 키와의 호환 때문입니다.
 //
 // 의도:
 //
@@ -50,7 +58,7 @@ type IngestionMarker interface {
 	Invalidate(ctx context.Context, url string) error
 }
 
-// RedisIngestionMarker 은 Redis SET NX EX 기반 IngestionMarker 구현체입니다.
+// RedisIngestionMarker 는 Redis SET NX EX 기반 IngestionMarker 구현체입니다.
 //
 // 키 형식: "ingestion:url:<sha256(normalized_url)>"
 //   - sha256 으로 키 길이를 64자 고정 — 긴 URL (수백자) 도 안전
@@ -61,14 +69,14 @@ type RedisIngestionMarker struct {
 	ttl    time.Duration
 }
 
-// redisIngestionMarker 는 Redis 락 조작을 추상화하는 내부 인터페이스입니다.
+// redisIngestionMarker 는 Redis marker 조작을 추상화하는 내부 인터페이스입니다.
 // pkg/redis.Client 의 메서드 집합과 일치하며 테스트에서 mock 으로 교체됩니다.
 type redisIngestionMarker interface {
 	AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error)
 	ReleaseLock(ctx context.Context, key string) error
 }
 
-// NewRedisIngestionMarker 은 RedisIngestionMarker 을 생성합니다.
+// NewRedisIngestionMarker 는 RedisIngestionMarker 를 생성합니다.
 // ttl 이 0 이하이면 DefaultIngestionMarkTTL 사용.
 func NewRedisIngestionMarker(locker redisIngestionMarker, ttl time.Duration) *RedisIngestionMarker {
 	if ttl <= 0 {
@@ -120,7 +128,7 @@ func ingestionKey(url string) string {
 	return fmt.Sprintf("%s%s", ingestionKeyPrefix, hex.EncodeToString(h[:]))
 }
 
-// NoopIngestionMarker 은 lock 을 사용하지 않는 no-op 구현체입니다.
+// NoopIngestionMarker 는 marker 를 사용하지 않는 no-op 구현체입니다.
 // Redis 부재 환경 (단일 인스턴스, 테스트) 에서 fallback 으로 사용 — 항상 acquired=true.
 //
 // **운영 영향**: Noop 사용 시 dedup 비활성 — 같은 URL 이 여러 번 publish/fetch 가능.

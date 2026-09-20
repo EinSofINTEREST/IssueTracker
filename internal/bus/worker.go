@@ -71,7 +71,7 @@ type PriorityResolver interface {
 //
 //	pub := bus.New(producer, resolver, log)
 //	pub.SetNormalizer(...)        // 선택
-//	pub.SetPipelineGuard(...)     // 선택 (또는 SetIngestionLock fallback)
+//	pub.SetPipelineGuard(...)     // 선택 (또는 SetIngestionMarker fallback)
 //	pub.SetGate(...)              // 선택
 //	pub.PublishChained(ctx, ...)  // chained URL 발행
 type Publisher struct {

@@ -81,7 +81,7 @@ type RedisProcessingLock struct {
 	ttl    time.Duration
 }
 
-// redisLocker 는 Redis 락 조작을 추상화하는 내부 인터페이스입니다.
+// redisLocker 는 Redis marker 조작을 추상화하는 내부 인터페이스입니다.
 // pkg/redis.Client 의 메서드 집합과 일치하며 테스트에서 mock 으로 교체됩니다.
 type redisLocker interface {
 	// AcquireLockWithToken 은 소유권 토큰과 함께 락을 획득합니다 (이슈 #63).
@@ -140,7 +140,7 @@ func (l *RedisProcessingLock) Release(ctx context.Context, key, token string) er
 // 지웠을 상황입니다. 다만 TTL 이 실제 처리 시간보다 짧다는 신호이므로 호출자는 WARN 으로 남깁니다.
 var ErrLockNotOwned = errors.New("locks: processing lock no longer owned by this instance")
 
-// NoopProcessingLock 은 lock 을 사용하지 않는 no-op 구현체입니다.
+// NoopProcessingLock 은 marker 를 사용하지 않는 no-op 구현체입니다.
 // Redis 부재 환경 (단일 인스턴스, 테스트) 에서 fallback 으로 사용 — 항상 acquired=true.
 //
 // **운영 영향**: Noop 사용 시 단계별 dedup 비활성 — Kafka rebalance / 재배달 시 같은 URL 의

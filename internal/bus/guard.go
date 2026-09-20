@@ -8,7 +8,7 @@ import (
 	"issuetracker/pkg/urlguard"
 )
 
-// IngestionMarker 은 publish 직전에 URL 의 파이프라인 진입 marker 를 atomic 으로 set
+// IngestionMarker 는 publish 직전에 URL 의 파이프라인 진입 marker 를 atomic 으로 set
 // 하는 최소 인터페이스입니다.
 //
 // 의도적으로 작은 인터페이스 — Publisher 는 단지 "이 URL 의 진입 슬롯을 잡을 수 있는가?"
@@ -62,14 +62,14 @@ func (p *Publisher) SetNormalizer(n *links.Normalizer) {
 	p.normalizer.Store(n)
 }
 
-// SetIngestionLock 은 Publish 시 atomic SETNX 로 진입 marker 를 잡을 IngestionMarker 을
+// SetIngestionMarker 은 Publish 시 atomic SETNX 로 진입 marker 를 잡을 IngestionMarker 를
 // 설정합니다. nil 전달 시 dedup 비활성 (기존 동작 유지).
 //
 // atomic 으로 race-safe 한 swap 보장.
 //
 // Deprecated: SetPipelineGuard 사용 권장 — target type 별 TTL 정책 적용.
 // 본 메소드는 backward compat 로 유지 — guard 미설정 시 fallback 으로 사용됨.
-func (p *Publisher) SetIngestionLock(l IngestionMarker) {
+func (p *Publisher) SetIngestionMarker(l IngestionMarker) {
 	if l == nil {
 		p.lock.Store(nil)
 		return

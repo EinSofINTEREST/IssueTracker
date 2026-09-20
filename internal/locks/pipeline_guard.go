@@ -23,7 +23,7 @@ const DefaultCategoryTTL = 60 * time.Second
 //
 //	"Scheduler / Publisher / 그 외 publish 진입점이 일관된 시맨틱으로 pipeline 진입을 통제."
 //
-// IngestionMarker 을 wrap 하여 target type 별 TTL 정책을 적용:
+// IngestionMarker 를 wrap 하여 target type 별 TTL 정책을 적용:
 //   - Category: 단명 TTL (default 60s) — cycle 완료 시 release 또는 TTL fallback
 //   - Article : 24h TTL (기존 IngestionMarker 정책 유지)
 //
