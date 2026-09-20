@@ -9,7 +9,7 @@
 // 외부 facade 단일화 — caller 는 *Publisher 의 메소드만 사용하면 됨. 내부 file 분리:
 //   - worker.go : facade struct + 생성자 + 공통 Kafka helpers (buildMessage / CrawlTopic / newJobID)
 //   - chain.go     : PublishChained 메소드 + 정규화 / guard / ingestion lock helper
-//   - guard.go     : IngestionLock / PipelineGuard / atomic wrapper + Set* setters
+//   - guard.go     : IngestionMarker / PipelineGuard / atomic wrapper + Set* setters
 //
 // 의존 관계 (이슈 #385 책임 분리 원칙):
 //   - 본 패키지 = Kafka I/O + 라우팅 (priority resolver) + guard/lock 책임
@@ -79,7 +79,7 @@ type Publisher struct {
 	resolver   PriorityResolver
 	gate       atomic.Pointer[urlguard.Gate]
 	normalizer atomic.Pointer[links.Normalizer]
-	lock       atomic.Pointer[ingestionLockRef]
+	lock       atomic.Pointer[ingestionMarkerRef]
 	guard      atomic.Pointer[guardRef]
 	log        *logger.Logger
 

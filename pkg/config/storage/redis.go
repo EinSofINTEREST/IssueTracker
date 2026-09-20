@@ -21,10 +21,10 @@ type RedisConfig struct {
 	ReadTimeout  time.Duration // REDIS_READ_TIMEOUT (default: 3s)
 	WriteTimeout time.Duration // REDIS_WRITE_TIMEOUT (default: 3s)
 	PoolSize     int           // REDIS_POOL_SIZE (default: 10)
-	// IngestionLockTTL: 파이프라인 진입 marker 의 TTL.
+	// IngestionMarkTTL: 파이프라인 진입 marker 의 TTL.
 	// publisher 가 atomic SETNX 로 marker 를 잡고, 본 TTL 만료 시 자연스럽게 재크롤 가능.
-	// 환경변수: REDIS_INGESTION_LOCK_TTL (default 24h).
-	IngestionLockTTL time.Duration
+	// 환경변수: REDIS_INGESTION_MARK_TTL (default 24h). 구 이름 REDIS_INGESTION_LOCK_TTL 도 인식.
+	IngestionMarkTTL time.Duration
 
 	// PipelineGuardCategoryTTL: PipelineGuard 의 Category target 전용 단명 TTL.
 	// fetch + ParseLinks 한 cycle 진행 중에만 marker 유지 — 정상 흐름은 명시적 Release,
@@ -50,7 +50,7 @@ func DefaultRedisConfig() RedisConfig {
 		ReadTimeout:              3 * time.Second,
 		WriteTimeout:             3 * time.Second,
 		PoolSize:                 10,
-		IngestionLockTTL:         24 * time.Hour,
+		IngestionMarkTTL:         24 * time.Hour,
 		PipelineGuardCategoryTTL: 60 * time.Second,
 		InflightLockTTL:          5 * time.Minute,
 	}
@@ -134,15 +134,23 @@ func LoadRedis(envFiles ...string) (RedisConfig, error) {
 		}
 		cfg.PoolSize = n
 	}
-	if v := os.Getenv("REDIS_INGESTION_LOCK_TTL"); v != "" {
-		d, err := time.ParseDuration(v)
+	// 새 이름 우선, 구 이름은 호환 alias (이슈 #541).
+	// 운영 중인 배포의 환경 설정을 깨지 않으려 둘 다 인식한다 — 구 이름은 향후 제거 대상.
+	ingestionTTLKey := "REDIS_INGESTION_MARK_TTL"
+	ingestionTTLRaw := os.Getenv(ingestionTTLKey)
+	if ingestionTTLRaw == "" {
+		ingestionTTLKey = "REDIS_INGESTION_LOCK_TTL"
+		ingestionTTLRaw = os.Getenv(ingestionTTLKey)
+	}
+	if ingestionTTLRaw != "" {
+		d, err := time.ParseDuration(ingestionTTLRaw)
 		if err != nil {
-			return RedisConfig{}, fmt.Errorf("parse REDIS_INGESTION_LOCK_TTL %q: %w", v, err)
+			return RedisConfig{}, fmt.Errorf("parse %s %q: %w", ingestionTTLKey, ingestionTTLRaw, err)
 		}
 		if d <= 0 {
-			return RedisConfig{}, fmt.Errorf("invalid REDIS_INGESTION_LOCK_TTL %q: must be positive", v)
+			return RedisConfig{}, fmt.Errorf("invalid %s %q: must be positive", ingestionTTLKey, ingestionTTLRaw)
 		}
-		cfg.IngestionLockTTL = d
+		cfg.IngestionMarkTTL = d
 	}
 	if v := os.Getenv("PIPELINE_GUARD_CATEGORY_TTL"); v != "" {
 		d, err := time.ParseDuration(v)

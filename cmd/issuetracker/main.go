@@ -133,7 +133,7 @@ func main() {
 	crawlerKafkaCfg := queue.DefaultConfig()
 	crawlerKafkaCfg.GroupID = queue.GroupCrawlerWorkers
 
-	// Redis client 조기 초기화 — JobBuffer / ProcessingLock / IngestionLock / RetryScheduler 가
+	// Redis client 조기 초기화 — JobBuffer / ProcessingLock / IngestionMarker / RetryScheduler 가
 	// 모두 공유 (이슈 #510). 실패 시 graceful degrade — 모든 Redis 기반 기능은 noop fallback.
 	var redisClientShared *redis.Client
 	redisCfg, err := storagecfg.LoadRedis()
@@ -446,7 +446,7 @@ func main() {
 		}
 	}
 
-	// Redis 기반 ProcessingLock / IngestionLock / DelayedRetryScheduler — redisClientShared 가
+	// Redis 기반 ProcessingLock / IngestionMarker / DelayedRetryScheduler — redisClientShared 가
 	// 위쪽에서 이미 초기화됨 (이슈 #510 — JobBuffer 와 client 공유). 본 블록은 lock/retry 만 wire.
 	// 단일 인스턴스를 fetcher / parser / validator 가 공유 — 단계 구분은 ProcessingKey(stage, url)
 	// 의 stage prefix 로 처리. worker/manager 가 nil 을 NoopProcessingLock 로 fallback 처리.
@@ -455,12 +455,12 @@ func main() {
 	gateMetrics := locks.NewGateMetrics(metricsRegistry)
 
 	var procLock locks.ProcessingLock
-	var ingestionLock locks.IngestionLock
+	var ingestionLock locks.IngestionMarker
 	var retryScheduler bus.RetryScheduler
 	var retrySchedulerStop func()
 	if redisClientShared != nil {
 		procLock = locks.NewRedisProcessingLock(redisClientShared, locks.DefaultProcessingLockTTL)
-		ingestionLock = locks.NewRedisIngestionLock(redisClientShared, redisCfg.IngestionLockTTL)
+		ingestionLock = locks.NewRedisIngestionMarker(redisClientShared, redisCfg.IngestionMarkTTL)
 
 		// Delayed retry queue: retry 를 Redis ZSET 에 보관하고 별도
 		// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
@@ -499,7 +499,7 @@ func main() {
 
 	// URL dedup — Ingestion Lock → Pipeline Guard 통합:
 	// Publisher / Scheduler / Worker 가 동일 guard 를 공유하여 target type 별 정책 적용:
-	//   - Article: 24h TTL (기존 IngestionLock 정책 유지)
+	//   - Article: 24h TTL (기존 IngestionMarker 정책 유지)
 	//   - Category: 단명 TTL (default 60s) — cycle 종료 시 명시적 release + TTL fallback
 	jobPublisher.SetNormalizer(links.NewNormalizer())
 	var pipelineGuard *locks.PipelineGuard
@@ -507,7 +507,7 @@ func main() {
 		pipelineGuard = locks.NewPipelineGuard(ingestionLock, redisCfg.PipelineGuardCategoryTTL)
 		jobPublisher.SetPipelineGuard(pipelineGuard)
 		log.WithFields(map[string]interface{}{
-			"article_ttl":  redisCfg.IngestionLockTTL.String(),
+			"article_ttl":  redisCfg.IngestionMarkTTL.String(),
 			"category_ttl": redisCfg.PipelineGuardCategoryTTL.String(),
 		}).Info("publisher pipeline guard enabled (Article 24h / Category 단명)")
 	}

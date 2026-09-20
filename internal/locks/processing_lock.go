@@ -102,7 +102,7 @@ func NewRedisProcessingLock(locker redisLocker, ttl time.Duration) *RedisProcess
 
 // Acquire 는 key 의 처리 marker 를 SET NX EX 로 atomic 시도합니다.
 //
-// nil receiver / nil locker 보호 — RedisIngestionLock 과 동일 패턴.
+// nil receiver / nil locker 보호 — RedisIngestionMarker 와 동일 패턴.
 func (l *RedisProcessingLock) Acquire(ctx context.Context, key string) (string, bool, error) {
 	if l == nil || l.locker == nil {
 		return "", false, fmt.Errorf("processing lock locker is nil")

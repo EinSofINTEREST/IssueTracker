@@ -29,7 +29,7 @@ func JobBufferKey(label string) string {
 // MaxLen <= 0 이면 길이 제한 없음 (운영 cautious 시 0 가능, 단 metric 으로 모니터링 필수).
 //
 // LTRIM 은 oldest 부터 제거 — buffer 가 임계 도달 시 가장 오래된 (= drain 기회를 가장 오래 못 받은)
-// 항목이 소실되지만, 정책상 신규 publish 우선. 호출자는 enqueue 직전 IngestionLock 로 dedup 책임.
+// 항목이 소실되지만, 정책상 신규 publish 우선. 호출자는 enqueue 직전 IngestionMarker 로 dedup 책임.
 //
 // label / payload 빈 값은 명시적 error — silent corruption 회피.
 //

@@ -39,7 +39,7 @@ func (c *Client) AcquireLock(ctx context.Context, key string, ttl time.Duration)
 //
 // ReleaseLock releases a lock by deleting the key, without ownership verification.
 //
-// **용도 한정**: 운영자의 명시적 무효화 (IngestionLock.Invalidate 등) 처럼 "누가 잡았든 지운다"
+// **용도 한정**: 운영자의 명시적 무효화 (IngestionMarker.Invalidate 등) 처럼 "누가 잡았든 지운다"
 // 가 의도인 경우에만 사용합니다. 처리 중 보호 목적의 락 해제에는 ReleaseLockOwned 를
 // 사용하세요 — 그렇지 않으면 TTL 만료 후 다른 인스턴스가 재획득한 락을 지울 수 있습니다 (이슈 #63).
 func (c *Client) ReleaseLock(ctx context.Context, key string) error {
