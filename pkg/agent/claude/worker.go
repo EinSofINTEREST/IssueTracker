@@ -280,6 +280,11 @@ func (w *Worker) Start(ctx context.Context) error {
 		return fmt.Errorf("chmod workspace dir: %w", err)
 	}
 
+	// 프로세스 crash 후 고아 workspace 를 다음 기동에서 식별할 수 있도록 PID 기록 (이슈 #539).
+	if ownerErr := writeWorkspaceOwner(workDir); ownerErr != nil {
+		w.log.WithError(ownerErr).Warn("failed to record workspace owner pid; orphan cleanup will skip this workspace")
+	}
+
 	containerID, err := w.runner.StartContainer(ctx, w.image, workDir, w.authDir, w.containerAuthPath)
 	if err != nil {
 		os.RemoveAll(workDir)

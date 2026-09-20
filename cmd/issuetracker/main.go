@@ -895,6 +895,13 @@ func main() {
 	//
 	// Start 실패 시 해당 풀만 graceful fallback (fatal 아님) — 다른 stage 는 영향 X.
 	// 종료 시 stages.Stop 이후 두 풀 모두 Stop — 순서: parser → enrich (역의존 없음).
+	// 이전 프로세스가 crash 로 남긴 claudegen workspace 정리 (이슈 #539).
+	// 정상 종료는 Worker.Stop 이 지우지만 SIGKILL / OOM 시에는 남고, 진행 중이던 세션의
+	// .mcp.json (enricher_ro 자격증명) 이 함께 남을 수 있음.
+	if removed := claude.CleanupOrphanedWorkspaces(log); removed > 0 {
+		log.WithField("removed", removed).Info("cleaned up orphaned claudegen workspaces")
+	}
+
 	var parserClaudegenPool, enrichClaudegenPool *claude.Pool
 	llmExtractor := os.Getenv("LLM_EXTRACTOR")
 	switch {
