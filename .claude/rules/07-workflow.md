@@ -24,6 +24,10 @@
   - 메인 이슈 본문에 전체 그림 + sub-issue 목록 + 완료 조건 명시
   - **GitHub 의 Sub-issue 기능 + Relation 적극 활용** — `gh api graphql` 의 `addSubIssue` mutation 으로 메인 ↔ sub 관계 활성화하여 GitHub UI 에서 계층 명시
   - 본문 link (`Parent: #<메인>`) 만으로 표기하던 기존 방식은 보조용. native sub-issue 가 우선
+  - **제약: sub-issue 는 부모를 1개만 가진다.** 이미 다른 메인 이슈의 sub 인 이슈를 새 메타에
+    붙이려 하면 `Sub issue may only have one parent` 로 거부됩니다. 이 경우 기존 부모를 유지하고
+    새 메타 본문에서 **참조만** 하세요 (표에 "기존 — 부모 #N 유지, 본 메타는 참조만" 표기).
+    부모를 옮기는 것은 기존 계층을 바꾸는 일이라 사용자 확인 대상입니다.
 - 각 sub-issue 단위로 `branch → 작업 → commit → PR` 사이클 반복
 - PR closing reference 는 그 sub-issue (`Closes #<sub>`). 메인 이슈는 모든 sub-issue 가 close 될 때까지 OPEN 유지하고 마지막 sub-issue PR 에서 함께 close
 
@@ -44,6 +48,11 @@
 "이거 큰가?" 가 50/50 이면 **메인 + sub-issue 분할 쪽** 으로 보수 분류.
 
 #### Sub-issue 등록 명령
+
+> 규약 6 의 "`gh api graphql` 직접 호출은 사용하지 않는다" 는 **Label · Issue Type 부여** 에
+> 대한 규칙입니다 (그쪽은 `scripts/gh-meta.sh` 가 대체). sub-issue relation 은 아직 스크립트가
+> 없어 아래 graphql 호출을 그대로 사용합니다 — 두 규약은 충돌하지 않습니다.
+
 
 ```bash
 # 메인 이슈에 sub-issue 등록 (Relation 자동 활성화)
