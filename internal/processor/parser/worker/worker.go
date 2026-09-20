@@ -322,7 +322,9 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 		// StageGate not-acquired sentinel — commit 없이 다음 메시지로. 정상 dedup 경로라
 		// Warn 대신 Debug (이슈 #355 PR #358 리뷰 반영).
 		if errors.Is(err, ErrStageGateNotAcquired) {
-			log.WithField("offset", msg.Offset).Debug("stage gate not acquired by this worker, uncommitted")
+			// 이슈 #540 — commit 없이 return 하면 이 offset 을 커밋할 주체가 없어 소실된다.
+			// 지연 재큐 후 commit. 재큐 실패 시에만 기존 동작(미커밋 → redeliver)으로 degrade.
+			w.enqueueGateSkipRetry(ctx, msg)
 			return
 		}
 		// retryScheduler 주입 시 — Enqueue 후 commit. ZSET 인입 모드 (pop=ack) 에서는 commit skip
@@ -438,9 +440,10 @@ func isValidTargetType(t core.TargetType) bool {
 // 본 worker 가 스킵해야 함을 나타내는 sentinel. Handle 메소드가 본 에러를 감지하면 Warn 대신
 // Debug 로 처리하여 정상 dedup 경로를 시끄럽게 만들지 않습니다 (PR #358 리뷰 반영).
 //
-// commit 정책: 본 sentinel 반환 시 호출자는 commit 하지 않음 — 같은 partition 의 다음 msg
-// 처리로 진행하고, 본 offset 의 commit 은 실제 처리 담당 worker 가 수행 (또는 재배달 stream
-// 에서 다시 결정).
+// commit 정책 (이슈 #540 으로 변경): 본 sentinel 반환 시 호출자는 메시지를 **지연 재큐한 뒤
+// commit** 한다. 예전에는 commit 없이 넘어가며 "본 offset 의 commit 은 실제 처리 담당 worker 가
+// 수행" 한다고 보았으나, 그 worker 는 자기 offset 만 커밋하므로 본 offset 은 아무도 커밋하지
+// 않고 소실됐다.
 //
 // exported 이유: 외부 테스트 / 모니터링 코드에서 errors.Is 매칭으로 dedup-skip 을 일반 실패와
 // 구분할 수 있도록.
@@ -1238,4 +1241,54 @@ func parseTimeoutHeader(s string) time.Duration {
 // isNotFound 는 storage 의 NotFound 에러 여부를 판별합니다.
 func isNotFound(err error) bool {
 	return errors.Is(err, storage.ErrNotFound)
+}
+
+// enqueueGateSkipRetry 는 StageGate 선점으로 건너뛴 메시지를 지연 재큐합니다 (이슈 #540).
+//
+// **왜 버리지 않는가**: 락을 쥔 worker 는 **자기 메시지(다른 offset)** 를 커밋할 뿐 이 offset 을
+// 커밋하지 않는다. 같은 파티션의 뒤 메시지가 커밋되면 이 offset 은 함께 소비 처리되어 사라진다.
+// 우선순위 ZSET 인입 모드에서는 pop 이 곧 ack 이라 확정 소실이다 — 본 파일 Handle 의 주석이
+// 이미 "ZSET 모드에서는 commit skip 으로 redeliver 가 불가능" 하다고 적고 있었으나, 일반 에러만
+// RetryScheduler 로 보내고 gate-skip 분기는 예외로 남아 있었다.
+//
+// **대가**: 락 홀더가 정상 처리 중이었다면 재큐된 job 이 같은 URL 을 다시 처리한다 (중복 작업).
+// Kafka rebalance / 재배달처럼 드문 상황에서만 발생하고, 중복은 하위 단계의 중복 감지가 흡수한다.
+//
+// 반환값: true 면 재큐 + commit 완료. false 면 호출자는 commit 하지 않고 redeliver 에 맡긴다.
+func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) bool {
+	log := logger.FromContext(ctx)
+
+	// pool 은 Start 에서 생성된다 — 미기동 상태면 commit 수단이 없으므로 재큐도 하지 않는다
+	// (재큐만 하고 commit 을 못 하면 중복 처리가 된다).
+	if w.retryScheduler == nil || w.pool == nil {
+		log.WithField("offset", msg.Offset).
+			Debug("gate skip: no retry scheduler or pool, leaving message uncommitted for redelivery")
+		return false
+	}
+
+	job, err := BuildRetryJob(msg)
+	if err != nil {
+		log.WithError(err).WithField("offset", msg.Offset).
+			Warn("gate skip: failed to build retry job, leaving message uncommitted")
+		return false
+	}
+	job.ScheduledAt = time.Now().Add(locks.GateSkipRetryDelay)
+
+	if enqErr := w.retryScheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); enqErr != nil {
+		if ctx.Err() == nil {
+			log.WithError(enqErr).WithField("offset", msg.Offset).
+				Warn("gate skip: retry enqueue failed, leaving message uncommitted")
+		}
+		return false
+	}
+
+	log.WithFields(map[string]interface{}{
+		"offset":   msg.Offset,
+		"delay_ms": locks.GateSkipRetryDelay.Milliseconds(),
+	}).Debug("gate skip requeued with delay")
+
+	if commitErr := w.pool.Commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+		log.WithError(commitErr).Warn("commit after gate skip requeue failed")
+	}
+	return true
 }

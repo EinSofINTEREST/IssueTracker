@@ -339,7 +339,9 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
 			"ref_id": ref.ID,
-		}).Debug("enricher processing lock already held by another worker, skipping")
+		}).Debug("enricher processing lock already held by another worker, requeueing")
+		// 이슈 #540 — commit 없이 return 하면 이 offset 을 커밋할 주체가 없어 소실된다.
+		w.enqueueGateSkipRetry(ctx, msg)
 		return nil
 	} else {
 		defer release()
@@ -824,4 +826,53 @@ func marshalFactsTriple(facts *enrichcore.EnrichedFacts) (factsJSON, verificatio
 		}
 	}
 	return factsJSON, verificationsJSON, contextJSON, nil
+}
+
+// enqueueGateSkipRetry 는 StageGate 선점으로 건너뛴 메시지를 지연 재큐합니다 (이슈 #540).
+//
+// **왜 버리지 않는가**: 기존 코드는 "처리 담당 worker 의 commit 에 의존" 한다는 전제로 commit
+// 없이 return 했다. 그러나 락을 쥔 worker 는 **자기 메시지(다른 offset)** 를 커밋할 뿐 이
+// offset 을 커밋하지 않는다. 같은 파티션의 뒤 메시지가 커밋되면 이 offset 은 함께 소비 처리되어
+// 사라진다. 우선순위 ZSET 인입 모드에서는 pop 이 곧 ack 이라 확정 소실이다.
+//
+// **대가**: 락 홀더가 정상 처리 중이었다면 재큐된 job 이 같은 URL 을 다시 처리한다 (중복 작업).
+// Kafka rebalance / 재배달처럼 드문 상황에서만 발생하고, 중복은 하위 단계의 content hash 중복
+// 감지와 ErrNotFound 경로가 흡수한다. 드문 낭비를 받아들이고 소실 경로를 없애는 쪽을 택했다.
+//
+// 반환값: true 면 재큐 + commit 까지 완료. false 면 재큐 실패 — 호출자는 commit 하지 않고
+// Kafka redeliver 에 맡긴다 (기존 동작으로 degrade).
+func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) bool {
+	log := logger.FromContext(ctx)
+
+	if w.retryScheduler == nil {
+		log.WithField("offset", msg.Offset).
+			Debug("gate skip: no retry scheduler, leaving message uncommitted for redelivery")
+		return false
+	}
+
+	job, err := BuildRetryJob(msg)
+	if err != nil {
+		log.WithError(err).WithField("offset", msg.Offset).
+			Warn("gate skip: failed to build retry job, leaving message uncommitted")
+		return false
+	}
+	job.ScheduledAt = time.Now().Add(locks.GateSkipRetryDelay)
+
+	if enqErr := w.retryScheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); enqErr != nil {
+		if ctx.Err() == nil {
+			log.WithError(enqErr).WithField("offset", msg.Offset).
+				Warn("gate skip: retry enqueue failed, leaving message uncommitted")
+		}
+		return false
+	}
+
+	log.WithFields(map[string]interface{}{
+		"offset":   msg.Offset,
+		"delay_ms": locks.GateSkipRetryDelay.Milliseconds(),
+	}).Debug("gate skip requeued with delay")
+
+	if commitErr := w.commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+		log.WithError(commitErr).Warn("commit after gate skip requeue failed")
+	}
+	return true
 }
