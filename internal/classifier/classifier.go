@@ -6,6 +6,16 @@
 //
 // HTTP와 gRPC 중 프로토콜을 선택하여 사용하거나, Handler를 통해
 // 우선순위 기반 자동 전환(gRPC 우선, HTTP fallback)을 활용할 수 있습니다.
+//
+// # 현재 상태 — 파이프라인 미연결 (이슈 #544)
+//
+// 본 패키지는 완성되어 있으나 **어느 stage 에서도 호출되지 않습니다** — cmd/ 와
+// internal/processor/ 에 참조가 없습니다. 현재 콘텐츠 분류는 두 경로가 담당합니다.
+//
+//   - 데이터 유효성: internal/processor/validate 의 규칙 기반 품질 점수
+//   - 파싱 룰 의미 검증: internal/processor/parser/rule/validator 의 LLM 검증
+//
+// 연결할지 / 제거할지는 미결정입니다. 새 코드를 여기에 의존시키기 전에 먼저 확인하세요.
 package classifier
 
 import "context"

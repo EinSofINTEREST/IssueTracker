@@ -16,9 +16,8 @@ const (
 	// Chrome 인스턴스 동시 호출 수를 제어. 우선순위 분리는 본 sub scope 외 (단일 토픽).
 	TopicCrawlChromedp = "issuetracker.crawl.chromedp"
 
-	// 원본 데이터 토픽 (국가별)
-	TopicRawUS = "issuetracker.raw.us"
-	TopicRawKR = "issuetracker.raw.kr"
+	// 국가별 raw 토픽 (issuetracker.raw.us / .kr) 은 초기 설계안으로, 실제 파이프라인은
+	// 아래 TopicFetched 단일 토픽을 쓴다. 사용처가 없어 제거 (이슈 #544).
 
 	// TopicFetched: fetcher worker 가 RawContent 저장 후 RawContentRef 발행하는 토픽.
 	// payload 는 raw_id + url + source_info 만 포함 (HTML 본문 미포함, < 1KB).
@@ -26,11 +25,21 @@ const (
 	TopicFetched = "issuetracker.fetched"
 
 	// 처리 파이프라인 토픽
+
+	// TopicNormalized: **이름과 실제 역할이 다르다.** 별도의 normalize stage 는 없으며,
+	// fetcher / parser 가 파싱을 마친 Content 를 발행하고 validate worker 가 consume 한다.
+	// (parser → validate 구간). 이름은 초기 설계의 잔재이고, 운영 중 토픽이라 개명하지 않는다.
 	TopicNormalized = "issuetracker.normalized"
 	TopicValidated  = "issuetracker.validated"
-	TopicEnriched   = "issuetracker.enriched"
-	TopicEmbedded   = "issuetracker.embedded"
-	TopicClusters   = "issuetracker.clusters"
+
+	// TopicEnriched: 현재 파이프라인의 **종단** 이다 — enrich worker 가 발행하지만 consumer 가
+	// 없다. 임베딩 / 클러스터링 도입 시 소비처가 생긴다 (이슈 #17 / #18 / #20).
+	TopicEnriched = "issuetracker.enriched"
+
+	// planned — 임베딩(이슈 #17) / 클러스터링(이슈 #18) / Vector DB(이슈 #20) 도입 시 사용.
+	// 현재 발행·소비 코드 모두 없다. 상수만 남겨 토픽 이름 규약을 고정한다.
+	TopicEmbedded = "issuetracker.embedded"
+	TopicClusters = "issuetracker.clusters"
 
 	// 시스템 토픽
 	TopicDLQ = "issuetracker.dlq"
@@ -44,10 +53,13 @@ const (
 	// Chrome 자원과 1:1 매핑된 worker 수 + semaphore 로 동시 호출량 제한.
 	GroupChromedpFetchers = "issuetracker-chromedp-fetchers"
 	// GroupParsers: TopicFetched 를 consume 하여 raw 로드 + 파싱 + content 저장 + raw 삭제.
-	GroupParsers     = "issuetracker-parsers"
+	GroupParsers    = "issuetracker-parsers"
+	GroupValidators = "issuetracker-validators"
+	GroupEnrichers  = "issuetracker-enrichers"
+
+	// planned — 해당 stage 미구현. GroupNormalizers 는 별도 normalize stage 가 존재하지 않아
+	// (TopicNormalized 주석 참조) 도입 계획도 없다.
 	GroupNormalizers = "issuetracker-normalizers"
-	GroupValidators  = "issuetracker-validators"
-	GroupEnrichers   = "issuetracker-enrichers"
 	GroupEmbedders   = "issuetracker-embedders"
 	GroupClusterers  = "issuetracker-clusterers"
 )

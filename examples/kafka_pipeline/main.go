@@ -2,6 +2,12 @@
 // CrawlJob → KafkaConsumerPool → ContentRef(normalized) 파이프라인 전체 흐름을 검증합니다.
 //
 // 실행: go run ./examples/kafka_pipeline/
+// ⚠️ 본 파일은 **예제** 입니다 — 실제 파이프라인 동작이 아닙니다 (이슈 #544).
+//
+// 특히 queue.TopicDLQ 를 consume 하는 유일한 코드이지만, 운영 파이프라인에는 DLQ consumer 가
+// 없습니다 (fetcher / validate / enrich 가 발행만 함). DLQ 격리 메시지의 재처리는 현재
+// 운영자 수동 작업이며, 자동화는 이슈 #542 에서 다룹니다.
+
 package main
 
 import (
