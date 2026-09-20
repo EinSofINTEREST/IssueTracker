@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -47,6 +48,62 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+# Notion 재시도 정책 (이슈 #563).
+#
+# 동시에 여러 PR 이 갱신되면 (브랜치 여러 개를 연속 push) 같은 workspace 로 요청이 몰려
+# 429 가 난다. replace_page_body 가 블록을 하나씩 DELETE 하므로 PR 하나당 요청 수도 많다.
+NOTION_MAX_ATTEMPTS = 6
+NOTION_MAX_BACKOFF = 30.0
+
+
+def retry_delay(retry_after_header: str | None, body_text: str, attempt: int) -> float:
+    """재시도 대기 시간을 초 단위로 반환합니다.
+
+    **서버가 알려준 값을 최우선** 으로 씁니다 — 기존 구현은 Retry-After 를 무시하고 1초만
+    기다려 다시 429 를 받았습니다. Notion 은 헤더와 body(additional_data.retry_after) 양쪽에
+    힌트를 줄 수 있어 둘 다 봅니다.
+
+    힌트가 없으면 exponential backoff. 동시에 실행된 workflow run 들이 같은 시점에 몰려
+    재시도하지 않도록 jitter 를 더합니다.
+    """
+    hinted = _parse_retry_hint(retry_after_header)
+    if hinted is None:
+        hinted = _parse_retry_hint(_retry_after_from_body(body_text))
+
+    if hinted is not None:
+        base = hinted
+    else:
+        base = float(2 ** attempt)
+
+    return min(base + random.uniform(0, 1), NOTION_MAX_BACKOFF)
+
+
+def _parse_retry_hint(value: str | None) -> float | None:
+    """Retry-After 값을 초로 파싱합니다. 음수 / 비수치는 무시 (None)."""
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _retry_after_from_body(body_text: str) -> str | None:
+    """429 응답 body 의 additional_data.retry_after 를 꺼냅니다."""
+    if not body_text:
+        return None
+    try:
+        payload = json.loads(body_text)
+    except json.JSONDecodeError:
+        return None
+    additional = payload.get("additional_data")
+    if not isinstance(additional, dict):
+        return None
+    hint = additional.get("retry_after")
+    return str(hint) if hint is not None else None
+
+
 def notion_request(path: str, method: str = "GET", body: dict | None = None,
                    token: str | None = None) -> dict:
     token = token or os.environ["NOTION_API_TOKEN"]
@@ -61,7 +118,8 @@ def notion_request(path: str, method: str = "GET", body: dict | None = None,
         },
         method=method,
     )
-    for attempt in range(4):
+    last_attempt = NOTION_MAX_ATTEMPTS - 1
+    for attempt in range(NOTION_MAX_ATTEMPTS):
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 raw = resp.read()
@@ -69,14 +127,16 @@ def notion_request(path: str, method: str = "GET", body: dict | None = None,
                     return {}
                 return json.loads(raw)
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < 3:
-                time.sleep(2 ** attempt)
+            if e.code == 429 and attempt < last_attempt:
+                # 429 body 는 한 번만 읽을 수 있으므로 먼저 확보 — 재시도 힌트와 에러 메시지에 모두 필요.
+                body_text = e.read().decode(errors="replace")
+                time.sleep(retry_delay(e.headers.get("Retry-After"), body_text, attempt))
                 continue
             body_text = e.read().decode(errors="replace")[:800]
             raise RuntimeError(f"Notion {method} {path} -> {e.code}: {body_text}") from e
         except urllib.error.URLError as e:
-            if attempt < 3:
-                time.sleep(2 ** attempt)
+            if attempt < last_attempt:
+                time.sleep(retry_delay(None, "", attempt))
                 continue
             raise
 

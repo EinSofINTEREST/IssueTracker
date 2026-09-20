@@ -237,3 +237,54 @@ def test_pr_to_body_blocks_clears_context_on_exception():
         nps.pr_to_body_blocks(pr)
     assert nps._link_context["repo_url"] == ""
     assert nps._link_context["ref"] == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# retry_delay — 429 재시도 대기 (이슈 #563)
+#
+# 기존 구현은 Retry-After 를 무시하고 1초만 기다려 다시 429 를 받았다. 여러 PR 을 연속
+# push 하면 sync job 이 실패하던 원인.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_retry_delay_prefers_header_over_backoff():
+    """서버가 알려준 값이 exponential backoff 보다 우선해야 한다."""
+    # attempt=0 의 backoff 는 1초지만, 서버가 3초를 요구하면 3초 이상 기다려야 한다.
+    delay = nps.retry_delay("3", "", 0)
+    assert 3.0 <= delay <= 4.0
+
+
+def test_retry_delay_falls_back_to_body_hint():
+    """Notion 은 body 의 additional_data.retry_after 로도 힌트를 준다."""
+    body = '{"additional_data":{"retry_after":"5"}}'
+    delay = nps.retry_delay(None, body, 0)
+    assert 5.0 <= delay <= 6.0
+
+
+def test_retry_delay_uses_exponential_backoff_without_hint():
+    delay = nps.retry_delay(None, "", 3)  # 2^3 = 8
+    assert 8.0 <= delay <= 9.0
+
+
+def test_retry_delay_caps_backoff():
+    """상한이 없으면 attempt 가 커질 때 비현실적으로 오래 기다린다."""
+    delay = nps.retry_delay(None, "", 10)  # 2^10 = 1024
+    assert delay == nps.NOTION_MAX_BACKOFF
+
+
+@pytest.mark.parametrize("bad_header", ["soon", "", None, "-5"])
+def test_retry_delay_ignores_invalid_header(bad_header):
+    """파싱 불가 / 음수 헤더는 무시하고 backoff 로 — 예외를 던져 sync 를 죽이면 안 된다."""
+    delay = nps.retry_delay(bad_header, "", 1)  # 2^1 = 2
+    assert 2.0 <= delay <= 3.0
+
+
+def test_retry_delay_ignores_malformed_body():
+    delay = nps.retry_delay(None, "not json", 2)  # 2^2 = 4
+    assert 4.0 <= delay <= 5.0
+
+
+def test_retry_delay_applies_jitter():
+    """동시에 실행된 run 들이 같은 시점에 재시도하면 429 가 반복된다."""
+    values = {round(nps.retry_delay("3", "", 0), 4) for _ in range(50)}
+    assert len(values) > 40, "jitter 가 적용되지 않으면 재시도가 몰린다"
