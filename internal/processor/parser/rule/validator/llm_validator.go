@@ -69,7 +69,7 @@ func (v *LLMValidator) Validate(ctx context.Context, html string, selectors mode
 		return Result{}, fmt.Errorf("extract content for validation: %w", err)
 	}
 
-	system, err := v.loader.Load("parser/validator/system")
+	system, err := v.loader.Load(PromptNameSystem)
 	if err != nil {
 		return Result{}, fmt.Errorf("load validator system prompt: %w", err)
 	}
@@ -108,7 +108,7 @@ func (v *LLMValidator) Validate(ctx context.Context, html string, selectors mode
 func buildValidationPrompt(ec extractedContent, targetType model.TargetType, loader prompt.Loader) (string, error) {
 	switch targetType {
 	case model.TargetTypeList:
-		template, err := loader.Load("parser/validator/list.user")
+		template, err := loader.Load(PromptNameList)
 		if err != nil {
 			return "", fmt.Errorf("load validator list user prompt: %w", err)
 		}
@@ -122,7 +122,7 @@ func buildValidationPrompt(ec extractedContent, targetType model.TargetType, loa
 		), nil
 
 	default: // TargetTypePage
-		template, err := loader.Load("parser/validator/page.user")
+		template, err := loader.Load(PromptNamePage)
 		if err != nil {
 			return "", fmt.Errorf("load validator page user prompt: %w", err)
 		}
