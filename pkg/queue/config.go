@@ -16,8 +16,12 @@ const (
 	// Chrome 인스턴스 동시 호출 수를 제어. 우선순위 분리는 본 sub scope 외 (단일 토픽).
 	TopicCrawlChromedp = "issuetracker.crawl.chromedp"
 
-	// 국가별 raw 토픽 (issuetracker.raw.us / .kr) 은 초기 설계안으로, 실제 파이프라인은
-	// 아래 TopicFetched 단일 토픽을 쓴다. 사용처가 없어 제거 (이슈 #544).
+	// Deprecated: 국가별 raw 토픽은 초기 설계안이며 실제 파이프라인은 아래 TopicFetched 단일
+	// 토픽을 씁니다. 저장소 내부 사용처는 0 이지만 pkg/ 는 internal 경계 밖이라 삭제가 외부
+	// consumer 의 소스 호환성을 깨므로 alias 로 남깁니다 (이슈 #544 리뷰). 신규 코드에서 사용 금지.
+	TopicRawUS = "issuetracker.raw.us"
+	// Deprecated: TopicRawUS 주석 참조.
+	TopicRawKR = "issuetracker.raw.kr"
 
 	// TopicFetched: fetcher worker 가 RawContent 저장 후 RawContentRef 발행하는 토픽.
 	// payload 는 raw_id + url + source_info 만 포함 (HTML 본문 미포함, < 1KB).
