@@ -179,10 +179,17 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 - **이슈 링크**: PR 본문 또는 Development sidebar 에 closing reference
 - **Label 부여 필수**: 규약 6 매핑 표에 따라 PR 에도 동일 label 부여 (`gh pr create --label <label>` 또는 생성 직후 `gh pr edit --add-label`)
 
-#### PR 생성 직후 자동 동작 (이슈 #129)
+#### PR 생성 직후 피드백 대응 (이슈 #548 — 구 #129 cron 방식 폐지)
 
-[CLAUDE.md](../../CLAUDE.md#pr-생성-후-자동-동작-이슈-129) 의 자동 동작 — `@.claude/loop.md`
-3분 cron 등록. 본 규약은 그 동작이 자동 발동되도록 PR 생성을 보장.
+[CLAUDE.md](../../CLAUDE.md#pr-생성-후-피드백-대응-이슈-548--구-129-cron-방식-폐지) 참조. 요약:
+
+- **세션이 살아있으면** `Monitor` 로 CI·코멘트를 감시하고 그 세션에서 처리 — 작업 맥락 보존
+- **세션을 닫은 뒤 / 타인 리뷰** 는 `@claude` 멘션 → GitHub Action (이슈 #549)
+- **cron 자동 등록 금지** — 사용자가 명시적으로 요청하지 않는 한 `CronCreate` 를 호출하지 않는다
+
+구 규약은 `gh pr create` 직후 `.claude/loop.md` 를 3분 cron 으로 자동 등록했다. cron 이 띄우는
+새 세션은 PR diff 만 보고 판단해 "왜 그렇게 구현했는지" 를 잃고, 토큰이 누적되며, 자체 상태
+기계를 유지해야 했다. 세션 내 처리와 GitHub Action 두 경로로 대체됐다.
 
 #### 예외
 
@@ -308,7 +315,7 @@ scripts/gh-meta.sh pr <PR_NUMBER>
 3. **destructive / 시스템 / 외부 영향?** Yes → 사용자 확인 / No → 진행
 4. **새 권한 / 외부 의존성 필요?** Yes → 사용자 확인 / No → 진행 (규약 5)
 5. **작업 진행** — sub-issue 단위로 branch / 논리 단위마다 commit (규약 3)
-6. **작업 완료 → PR 자동 생성 + Label 부여** (규약 4 + 규약 6) — `Closes #<sub-issue>` 명시, 마지막 sub-issue PR 에서 메인 이슈도 close → cron 자동 등록 (이슈 #129)
+6. **작업 완료 → PR 자동 생성 + Label 부여** (규약 4 + 규약 6) — `Closes #<sub-issue>` 명시, 마지막 sub-issue PR 에서 메인 이슈도 close → 세션 내 `Monitor` 로 CI·코멘트 감시 (이슈 #548)
 
 <br>
 
@@ -320,7 +327,8 @@ scripts/gh-meta.sh pr <PR_NUMBER>
   - [05-testing.md](05-testing.md) — 작업 단위 테스트 기준
 - 관련 이슈:
   - 이슈 #121 — PR 타이틀 lint 정규식
-  - 이슈 #129 — PR 생성 직후 cron 자동 등록
+  - 이슈 #129 — PR 생성 직후 cron 자동 등록 (**폐지** — 이슈 #548 로 대체)
+  - 이슈 #548 / #549 — 세션 내 Monitor 처리 + GitHub Action 전환
   - 이슈 #199 — 이슈 먼저 (issue-first) 워크플로 명문화 (규약 1 도입)
   - 이슈 #210 — Label · Issue Type · Sub-issue Relation 정책 명문화 (규약 6 도입)
   - 이슈 #212 — 규약 6 의 prefix 표기 체계 3분리 (commit / PR / 이슈) 명문화
