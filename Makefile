@@ -17,6 +17,7 @@ ISSUETRACKER_BINARY=$(BINARY_DIR)/issuetracker
 MIGRATE_BINARY=$(BINARY_DIR)/migrate
 MIGRATE_DOWN_BINARY=$(BINARY_DIR)/migrate-down
 RULE_VALIDATOR_BINARY=$(BINARY_DIR)/rule-validator
+ADMIN_BINARY=$(BINARY_DIR)/admin
 CLAUDEGEN_IMAGE_TAG ?= issuetracker-claudegen:local
 EXAMPLE_BINARY=$(BINARY_DIR)/basic_usage
 COMPARISON_BINARY=$(BINARY_DIR)/crawler_comparison
@@ -64,6 +65,7 @@ build: ## 모든 바이너리 빌드
 	$(GO) build $(GOFLAGS) -o $(ISSUETRACKER_BINARY) ./cmd/issuetracker
 	$(GO) build $(GOFLAGS) -o $(MIGRATE_BINARY) ./cmd/migrate
 	$(GO) build $(GOFLAGS) -o $(MIGRATE_DOWN_BINARY) ./cmd/migrate-down
+	$(GO) build $(GOFLAGS) -o $(ADMIN_BINARY) ./cmd/admin
 	$(GO) build $(GOFLAGS) -o $(RULE_VALIDATOR_BINARY) ./cmd/rule-validator
 	@echo "Build complete: $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY), $(MIGRATE_BINARY), $(MIGRATE_DOWN_BINARY), $(RULE_VALIDATOR_BINARY)"
 
