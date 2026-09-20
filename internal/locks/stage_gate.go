@@ -44,10 +44,11 @@ type StageGate interface {
 
 // stageGate 는 StageGate 의 기본 구현체입니다.
 type stageGate struct {
-	stage string
-	sem   Semaphore
-	lock  ProcessingLock
-	log   *logger.Logger
+	stage   string
+	sem     Semaphore
+	lock    ProcessingLock
+	log     *logger.Logger
+	metrics *GateMetrics // nil 허용 — 모든 Record* 가 noop
 }
 
 // NewStageGate 는 (stage, semaphore, lock) 합성 StageGate 를 생성합니다.
@@ -69,6 +70,17 @@ func NewStageGate(stage string, sem Semaphore, lock ProcessingLock, log *logger.
 		panic("locks: NewStageGate requires non-nil logger")
 	}
 	return &stageGate{stage: stage, sem: sem, lock: lock, log: log}
+}
+
+// GateOption 은 BuildStageGate 의 선택적 설정입니다 (이슈 #543).
+//
+// 기존 호출자를 깨지 않으려 variadic 으로 받습니다 — metric 은 부가 기능이므로 미지정 시
+// noop 으로 동작해야 합니다.
+type GateOption func(*stageGate)
+
+// WithGateMetrics 는 StageGate 에 Prometheus collector 를 주입합니다.
+func WithGateMetrics(m *GateMetrics) GateOption {
+	return func(g *stageGate) { g.metrics = m }
 }
 
 // isNilInterface 는 nil interface (untyped) 와 typed-nil (예: var p *T; var i I = p) 양쪽을 감지합니다.
@@ -102,6 +114,7 @@ func (g *stageGate) Acquire(ctx context.Context, url string) (func(), bool, erro
 	}
 	if !acquired {
 		g.sem.Release()
+		g.metrics.RecordSkip(g.stage)
 		return nil, false, nil
 	}
 
@@ -164,7 +177,7 @@ func (NoopStageGate) Acquire(_ context.Context, _ string) (func(), bool, error) 
 //   - typed-nil 가드: NewStageGate 자체는 typed-nil procLock 을 panic 으로 검출.
 //     본 헬퍼는 그 대신 NoopStageGate 로 graceful degrade — wiring 단계에서 invariant 위반
 //     없이 fallback 가능하도록.
-func BuildStageGate(stage string, capacity int, procLock ProcessingLock, log *logger.Logger) StageGate {
+func BuildStageGate(stage string, capacity int, procLock ProcessingLock, log *logger.Logger, opts ...GateOption) StageGate {
 	if isNilInterface(procLock) {
 		return NewNoopStageGate()
 	}
@@ -172,7 +185,13 @@ func BuildStageGate(stage string, capacity int, procLock ProcessingLock, log *lo
 		capacity = 1
 	}
 	sem := NewSemaphore(capacity)
-	return NewStageGate(stage, sem, procLock, log)
+	gate := NewStageGate(stage, sem, procLock, log)
+	if concrete, ok := gate.(*stageGate); ok {
+		for _, opt := range opts {
+			opt(concrete)
+		}
+	}
+	return gate
 }
 
 // ErrStageGateNil 은 nil StageGate 가 의도치 않게 사용될 때 식별용.
