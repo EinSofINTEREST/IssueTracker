@@ -77,3 +77,17 @@ func TestCleanupOrphanedWorkspaces_NilLogger_DoesNotPanic(t *testing.T) {
 	newWorkspace(t, 4194303)
 	assert.NotPanics(t, func() { claude.CleanupOrphanedWorkspaces(nil) })
 }
+
+// .owner 기록 실패는 기동을 중단시켜야 한다 (CodeRabbit 피드백).
+//
+// 경고만 남기고 진행하면, 이후 비정상 종료 시 자격증명이 담긴 workspace 에 .owner 가 없어
+// CleanupOrphanedWorkspaces 가 영영 건너뛴다 — 고아 정리 기능이 무력화된다.
+func TestCleanupOrphanedWorkspaces_OwnerlessDir_IsPreserved(t *testing.T) {
+	// 도입 이전 버전이 만든 workspace 를 흉내 — 살아있는 프로세스의 것일 수 있으므로 보존.
+	legacy := newWorkspace(t, -1)
+
+	claude.CleanupOrphanedWorkspaces(testLog())
+
+	_, err := os.Stat(legacy)
+	assert.NoError(t, err, "소유자를 알 수 없는 legacy workspace 는 일괄 회수하지 않아야 함")
+}

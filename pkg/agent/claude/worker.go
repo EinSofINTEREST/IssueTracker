@@ -281,8 +281,14 @@ func (w *Worker) Start(ctx context.Context) error {
 	}
 
 	// 프로세스 crash 후 고아 workspace 를 다음 기동에서 식별할 수 있도록 PID 기록 (이슈 #539).
-	if ownerErr := writeWorkspaceOwner(workDir); ownerErr != nil {
-		w.log.WithError(ownerErr).Warn("failed to record workspace owner pid; orphan cleanup will skip this workspace")
+	//
+	// **실패 시 기동을 중단한다** (CodeRabbit 피드백). 경고만 남기고 진행하면, 이후 프로세스가
+	// 비정상 종료됐을 때 자격증명(.mcp.json)이 담긴 workspace 에 .owner 가 없어
+	// CleanupOrphanedWorkspaces 가 영영 건너뛴다 — 고아 정리 기능 자체가 무력화되고 자격증명이
+	// 무기한 잔류한다. MkdirTemp / Chmod 실패와 동일하게 workspace 를 지우고 에러를 올린다.
+	if err := writeWorkspaceOwner(workDir); err != nil {
+		os.RemoveAll(workDir)
+		return fmt.Errorf("record workspace owner: %w", err)
 	}
 
 	containerID, err := w.runner.StartContainer(ctx, w.image, workDir, w.authDir, w.containerAuthPath)

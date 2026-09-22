@@ -39,8 +39,11 @@ func writeWorkspaceOwner(dir string) error {
 // CleanupOrphanedWorkspaces 는 죽은 프로세스가 남긴 claudegen workspace 를 제거합니다 (이슈 #539).
 //
 // 판별: workspace 안의 .owner 가 가리키는 PID 가 더 이상 살아있지 않으면 고아.
-//   - .owner 가 없으면 건너뜁니다 — 본 기능 도입 이전 버전이 만든 것이거나 기록에 실패한 경우로,
-//     살아있는 workspace 를 지우는 위험보다 남기는 쪽이 안전합니다.
+//   - .owner 가 없으면 건너뜁니다 — 본 기능 도입 이전 버전이 만든 workspace 로, 지금도 살아있는
+//     프로세스의 것일 수 있습니다. 소유자를 알 수 없는 디렉토리를 일괄 회수하면 그런 legacy
+//     workspace 를 실행 중에 지우게 되므로 건너뛰는 편이 안전합니다. 정리가 필요하면 별도
+//     migration 정책으로 다룹니다 (CodeRabbit 피드백).
+//     기록 실패는 이 분기로 오지 않습니다 — Worker.Start 가 기동을 중단시킵니다.
 //   - 자기 자신의 PID 는 당연히 살아있으므로 제외됩니다.
 //
 // 반환: 제거한 디렉토리 수. 에러는 개별 디렉토리 단위로 경고만 남기고 계속 진행 —
