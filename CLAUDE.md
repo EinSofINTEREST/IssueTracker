@@ -47,7 +47,7 @@ make fmt         # gofmt
 ## 디렉토리 구조 (요약)
 
 ```
-cmd/            → 실행 바이너리 (issuetracker, processor, migrate, migrate-down, rule-validator)
+cmd/            → 실행 바이너리 (issuetracker, processor, migrate, migrate-down, rule-validator, admin)
 internal/       → 비공개 비즈니스 로직
 pkg/            → 공개 유틸리티 (logger, config, queue, redis)
 test/           → 테스트 (internal/, pkg/ 미러링)

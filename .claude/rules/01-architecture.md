@@ -98,7 +98,9 @@ issuetracker/
 │   │   └── main.go
 │   ├── migrate-down/          # ✅ DB migration (down) → bin/migrate-down
 │   │   └── main.go
-│   └── rule-validator/        # ✅ parsing rule 검증 도구 → bin/rule-validator
+│   ├── rule-validator/        # ✅ parsing rule 검증 도구 → bin/rule-validator
+│   │   └── main.go
+│   └── admin/                 # ✅ 운영자 도구 — 진입 마커 무효화 / 강제 재크롤 / DLQ 확인 (이슈 #542)
 │       └── main.go
 │   # HTTP API server (이슈 #21) 는 미구현 — cmd/api 없음
 │
