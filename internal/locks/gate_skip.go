@@ -17,3 +17,13 @@ const GateSkipRetryDelay = DefaultProcessingLockTTL / 2
 //
 // RetryScheduler 에 last_err 로 전달되어, 운영자가 재큐 사유를 실패(에러)와 구분할 수 있습니다.
 var ErrStageGateHeld = errors.New("locks: stage gate held by another worker")
+
+// MaxGateSkipRequeues 는 StageGate 선점으로 재큐할 수 있는 최대 횟수입니다 (이슈 #540).
+//
+// 이 상한이 없으면 gate 가 계속 점유된 URL 이 무한히 재큐됩니다 — parser / validate / enrich 의
+// 재큐는 새 CrawlJob 을 만들어 RetryCount 가 0 에서 다시 시작하므로 job 자체로는 멈추지 않습니다.
+//
+// 3회 × GateSkipRetryDelay(5분) = 15분. ProcessingLock TTL(10분) 보다 길어, stale 락이라면
+// 그 전에 만료되어 재시도가 성공합니다. 상한에 도달했다는 것은 락이 계속 정상 점유되고 있다는
+// 뜻이므로 DLQ 로 보내 운영자가 확인하게 합니다.
+const MaxGateSkipRequeues = 3

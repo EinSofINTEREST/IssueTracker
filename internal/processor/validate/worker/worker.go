@@ -811,6 +811,22 @@ func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) b
 		return false
 	}
 
+	// 재큐 예산 (이슈 #540, CodeRabbit 피드백).
+	//
+	// BuildRetryJob 은 **새 CrawlJob** 을 만들어 RetryCount 가 0 에서 시작하므로 job 자체로는
+	// 상한이 성립하지 않는다. stage 를 건너 누적되는 헤더 카운터로 상한을 건다 —
+	// HeaderGateSkipCount 는 전파 화이트리스트에 등록되어 fetcher → parser → validate → enrich
+	// 로 이어진다.
+	skipCount := parseGateSkipCount(msg.Headers)
+	if skipCount >= locks.MaxGateSkipRequeues {
+		log.WithFields(map[string]interface{}{
+			"offset":          msg.Offset,
+			"gate_skip_count": skipCount,
+			"max":             locks.MaxGateSkipRequeues,
+		}).Warn("gate skip requeue limit exceeded")
+		return w.gateSkipLimitExceeded(ctx, msg)
+	}
+
 	job, err := BuildRetryJob(msg)
 	if err != nil {
 		log.WithError(err).WithField("offset", msg.Offset).
@@ -818,6 +834,7 @@ func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) b
 		return false
 	}
 	job.ScheduledAt = time.Now().Add(locks.GateSkipRetryDelay)
+	carryGateSkipCount(job, skipCount+1)
 
 	if enqErr := w.gateSkipScheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); enqErr != nil {
 		// ZSET 모드에서는 pop 이 곧 ack 이라 미커밋으로 두어도 redeliver 가 없다 — 그대로
@@ -857,4 +874,47 @@ func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) b
 // 커밋되면 함께 소비 처리됩니다. 따라서 모드와 무관하게 재큐 수단이 필요합니다.
 func (w *Worker) SetGateSkipScheduler(rs bus.RetryScheduler) {
 	w.gateSkipScheduler = rs
+}
+
+// parseGateSkipCount 는 헤더에서 gate-skip 재큐 누적 횟수를 읽습니다 (이슈 #540).
+// 미설정 / 파싱 불가 / 음수는 0 — 상한 검사가 보수적으로(=재큐 허용) 동작합니다.
+func parseGateSkipCount(headers map[string]string) int {
+	raw := headers[core.HeaderGateSkipCount]
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// carryGateSkipCount 는 증가된 재큐 횟수를 job 에 실어 다음 사이클로 전달합니다 (이슈 #540).
+//
+// RetryScheduler 는 job 을 재직렬화해 발행하므로 msg.Headers 는 보존되지 않는다.
+// Target.Metadata 는 CrawlJob 과 함께 직렬화되고, bus 의 applyRetryHeaders 가 이를 다시
+// 헤더로 복원한다.
+func carryGateSkipCount(job *core.CrawlJob, next int) {
+	if job.Target.Metadata == nil {
+		job.Target.Metadata = map[string]interface{}{}
+	}
+	job.Target.Metadata[core.HeaderGateSkipCount] = strconv.Itoa(next)
+}
+
+// gateSkipLimitExceeded 는 재큐 상한 도달 시 DLQ 로 격리하고 commit 합니다 (이슈 #540).
+//
+// 상한에 닿았다는 것은 락이 계속 정상 점유되고 있다는 뜻이므로, 조용히 재큐를 반복하는 대신
+// 운영자가 볼 수 있는 곳으로 옮긴다.
+func (w *Worker) gateSkipLimitExceeded(ctx context.Context, msg *queue.Message) bool {
+	log := logger.FromContext(ctx)
+	if dlqErr := w.sendToDLQ(ctx, msg, locks.ErrStageGateHeld); dlqErr != nil {
+		log.WithError(dlqErr).WithField("offset", msg.Offset).
+			Error("gate skip limit dlq failed, leaving message uncommitted")
+		return false
+	}
+	if commitErr := w.commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+		log.WithError(commitErr).Warn("commit after gate skip limit dlq failed")
+	}
+	return true
 }

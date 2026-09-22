@@ -8,6 +8,7 @@ package worker_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -161,4 +162,66 @@ func newGatedWorkerWithConsumer(consumer *countingConsumer, gate locks.StageGate
 		1,        // workerCount
 		log,
 	)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 재큐 예산 (이슈 #540, CodeRabbit 피드백)
+//
+// BuildRetryJob 이 새 CrawlJob 을 만들어 RetryCount 가 0 부터 시작하므로, job 자체로는
+// 상한이 성립하지 않는다. stage 를 건너 누적되는 헤더 카운터가 그 역할을 한다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 상한 도달 전에는 재큐하고, 다음 사이클로 증가된 카운터를 전달해야 한다.
+func TestHandle_GateSkip_CarriesIncrementedCount(t *testing.T) {
+	gate := &fakeStageGate{acquired: false}
+	consumer := &countingConsumer{}
+	sched := &fakeRetryScheduler{}
+
+	pw := newGatedWorkerWithConsumer(consumer, gate, &fakeRawSvc{}, logger.New(logger.DefaultConfig()))
+	pw.SetGateSkipScheduler(sched)
+
+	msg := newMsgForURL(t, "raw-budget", "https://example.com/budget")
+	msg.Headers[core.HeaderGateSkipCount] = "1"
+
+	pw.Handle(context.Background(), msg)
+
+	require.Equal(t, 1, sched.calls(), "상한 미도달이면 재큐되어야 함")
+	got := sched.jobs[0].Target.Metadata[core.HeaderGateSkipCount]
+	assert.Equal(t, "2", got, "다음 사이클로 +1 된 카운터가 전달되어야 함")
+}
+
+// 상한에 닿으면 재큐를 멈춰야 한다 — 멈추지 않으면 gate 가 계속 점유된 URL 이 무한 순환한다.
+func TestHandle_GateSkip_StopsAtLimit(t *testing.T) {
+	gate := &fakeStageGate{acquired: false}
+	consumer := &countingConsumer{}
+	sched := &fakeRetryScheduler{}
+
+	pw := newGatedWorkerWithConsumer(consumer, gate, &fakeRawSvc{}, logger.New(logger.DefaultConfig()))
+	pw.SetGateSkipScheduler(sched)
+
+	msg := newMsgForURL(t, "raw-limit", "https://example.com/limit")
+	msg.Headers[core.HeaderGateSkipCount] = strconv.Itoa(locks.MaxGateSkipRequeues)
+
+	pw.Handle(context.Background(), msg)
+
+	assert.Equal(t, 0, sched.calls(), "상한 도달 시 재큐하면 안 됨")
+	assert.Equal(t, 1, consumer.commitCount(), "종단 처리 후 commit 되어야 순환이 끊긴다")
+}
+
+// 헤더가 깨져 있어도 크래시하지 않고 0 으로 취급해야 한다.
+func TestHandle_GateSkip_MalformedCountTreatedAsZero(t *testing.T) {
+	gate := &fakeStageGate{acquired: false}
+	consumer := &countingConsumer{}
+	sched := &fakeRetryScheduler{}
+
+	pw := newGatedWorkerWithConsumer(consumer, gate, &fakeRawSvc{}, logger.New(logger.DefaultConfig()))
+	pw.SetGateSkipScheduler(sched)
+
+	msg := newMsgForURL(t, "raw-bad", "https://example.com/bad")
+	msg.Headers[core.HeaderGateSkipCount] = "not-a-number"
+
+	pw.Handle(context.Background(), msg)
+
+	require.Equal(t, 1, sched.calls())
+	assert.Equal(t, "1", sched.jobs[0].Target.Metadata[core.HeaderGateSkipCount])
 }

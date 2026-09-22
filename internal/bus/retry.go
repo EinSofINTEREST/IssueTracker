@@ -87,6 +87,16 @@ func applyRetryHeaders(h map[string]string, job *core.CrawlJob, lastErr error) {
 	if lastErr != nil {
 		h["last-error"] = lastErr.Error()
 	}
+	// gate-skip 재큐 횟수를 metadata → 헤더로 복원 (이슈 #540).
+	//
+	// 재큐 job 은 재직렬화되어 발행되므로 원본 msg.Headers 는 사라진다. parser / validate /
+	// enrich 는 BuildRetryJob 으로 새 CrawlJob 을 만들어 RetryCount 가 0 부터 시작하므로,
+	// stage 를 건너 누적되는 이 카운터가 없으면 재큐 상한이 성립하지 않는다.
+	if v, ok := job.Target.Metadata[core.HeaderGateSkipCount]; ok {
+		if str, isStr := v.(string); isStr && str != "" {
+			h[core.HeaderGateSkipCount] = str
+		}
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

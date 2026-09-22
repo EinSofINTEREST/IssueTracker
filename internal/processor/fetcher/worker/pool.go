@@ -725,11 +725,11 @@ func logShutdownAware(ctx context.Context, log *logger.Logger, err error, msg st
 func (p *KafkaConsumerPool) requeueGateSkip(ctx context.Context, msg *queue.Message, job *core.CrawlJob) error {
 	log := logger.FromContext(ctx)
 
-	job.RetryCount++
-
-	// 한도 초과 — 일반 실패 경로와 동일하게 DLQ 로 격리하고 commit 한다 (Copilot 피드백).
-	// 이 검사가 없으면 gate 가 계속 acquired=false 를 반환할 때 재큐가 무한 반복된다.
-	if job.MaxRetries > 0 && job.RetryCount > job.MaxRetries {
+	// 한도 검사는 **증가 전** 에, 일반 실패 경로와 동일한 규칙으로 (CodeRabbit 피드백).
+	// 이전 구현은 증가 후 `MaxRetries > 0 && RetryCount > MaxRetries` 를 봐서 off-by-one 이었고,
+	// MaxRetries==0 (일반 경로는 즉시 DLQ) 을 아예 건너뛰었다.
+	// 일반 경로: processJob 의 `if job.RetryCount >= job.MaxRetries { sendToDLQ }`.
+	if job.RetryCount >= job.MaxRetries {
 		log.WithFields(map[string]interface{}{
 			"job_id":      job.ID,
 			"crawler":     job.CrawlerName,
@@ -749,6 +749,7 @@ func (p *KafkaConsumerPool) requeueGateSkip(ctx context.Context, msg *queue.Mess
 	}
 
 	scheduler := p.resolveRetryScheduler()
+	job.RetryCount++
 	job.ScheduledAt = time.Now().Add(locks.GateSkipRetryDelay)
 
 	if err := scheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); err != nil {

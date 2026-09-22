@@ -46,6 +46,7 @@ func InboxHeadersFromContext(ctx context.Context) map[string]string {
 //
 // 포함 항목:
 //   - validate_reparse_count / validate_reparse_reason — validator → parser 재학습 cycle (#363)
+//   - gate_skip_count — StageGate 선점 재큐 횟수 (#540). 누적되지 않으면 상한이 성립하지 않음
 //   - x-trace-id / x-request-id — observability (분산 추적 메타데이터)
 //
 // 호출자 (publishFetchedRef / publishContents) 가 본 슬라이스를 iterate 하여 incoming 헤더 값
@@ -53,6 +54,8 @@ func InboxHeadersFromContext(ctx context.Context) map[string]string {
 var propagatedInboxHeaderKeys = []string{
 	HeaderValidateReparseCount,
 	HeaderValidateReparseReason,
+	// gate-skip 재큐 횟수 — stage 를 건너 누적되어야 상한이 성립 (이슈 #540).
+	HeaderGateSkipCount,
 	"x-trace-id",
 	"x-request-id",
 }
