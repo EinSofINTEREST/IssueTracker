@@ -13,10 +13,10 @@
 
 | 파일                                                                                 | 역할                                                            |
 |-------------------------------------------------------------------------------------|-----------------------------------------------------------------|
-| [validator.go](../../../../internal/processor/validate/validator.go)                 | `NewValidator(SourceType, ValidateConfig)` — news/community 분기 |
-| [worker.go](../../../../internal/processor/validate/worker.go)                       | `Worker` — Kafka consumer + at-least-once 처리                  |
-| [community/](../../../../internal/processor/validate/community/)                     | community 도메인 검증 규칙                                       |
-| [news/](../../../../internal/processor/validate/news/)                               | news 도메인 검증 규칙                                            |
+| [validator.go](../../../../internal/processor/validate/worker/validator.go)                 | `NewValidator(SourceType, ValidateConfig)` — news/community 분기 |
+| [worker.go](../../../../internal/processor/validate/worker/worker.go)                       | `Worker` — Kafka consumer + at-least-once 처리                  |
+| [community/](../../../../internal/processor/validate/domain/community/)                     | community 도메인 검증 규칙                                       |
+| [news/](../../../../internal/processor/validate/domain/news/)                               | news 도메인 검증 규칙                                            |
 
 <br>
 

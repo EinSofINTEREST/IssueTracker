@@ -42,7 +42,7 @@ stage 추가 (예: enrich, embed) 시 `Stage` 인터페이스만 만족하면 ma
 | Stage | Wrapper 위치 | wrapping 대상 |
 |---|---|---|
 | `fetcher` | [`fetcher/stage.go`](../../../../internal/processor/fetcher/stage.go) | `worker.PoolManager` (단일) |
-| `parser` | [`parser/stage/stage.go`](../../../../internal/processor/parser/stage/stage.go) | `worker.ParserWorker` + `worker.RawContentCleaner` + `llmgen.Generator` (선택) + `refiner.Refiner` (선택) — 여러 background goroutine 묶음 |
+| `parser` | [`parser/stage/stage.go`](../../../../internal/processor/parser/stage.go) | `worker.ParserWorker` + `worker.RawContentCleaner` + `llmgen.Generator` (선택) + `refiner.Refiner` (선택) — 여러 background goroutine 묶음 |
 | `validate` | [`validate/stage.go`](../../../../internal/processor/validate/stage.go) | `validate.Worker` (단일) |
 
 > **`parser/stage` 가 sub-package 인 이유:** `parser/parser.go` 의 `Page` 타입을 `rule/*` 가 import 하므로,
@@ -97,8 +97,8 @@ validate/worker.go → types  (RunValidation 이 types.Validator 인자)
 
 ## 향후 확장
 
-- `internal/processor/embed/` — vector embedding
-- `internal/processor/classify/` — [internal/classifier](../classifier/README.md) 호출 stage
+- `internal/processor/embed/` — vector embedding (**미구현** — 이슈 #17 #18 #20)
+- `internal/processor/classify/` — [internal/classifier](../classifier/README.md) 호출 stage (**미구현** — 이슈 #544)
 
 새 stage 추가 시:
 1. `internal/processor/<stage>/` 디렉토리 생성

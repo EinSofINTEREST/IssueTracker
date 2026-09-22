@@ -226,7 +226,7 @@ git push origin --delete feat/your-feature-name
 
 ### Build Commands
 ```bash
-make build         # Build crawler binary
+make build         # Build all binaries into bin/
 make clean         # Clean build artifacts
 make deps          # Update dependencies
 ```
@@ -243,12 +243,14 @@ make coverage-html # Generate HTML coverage report
 ```bash
 make fmt           # Format code
 make lint          # Run linter
+make harness-check # 규약 문서와 코드 구조 대조
 ```
 
 ### Run Commands
 ```bash
-make run-crawler   # Run crawler
-make run-example   # Run example
+make run-issuetracker  # Run the main pipeline
+make run-processor     # Run validator-only processor
+make run-example       # Run example
 ```
 
 ### Help
@@ -299,8 +301,8 @@ func TestFunction(t *testing.T) {
 ```
 
 ### Coverage Requirements
-- Minimum: **70%**
-- Target: **90%+** for core packages
+- CI 게이트: **40%** (`ci-quality.yml` 의 threshold — 이 값만 머지를 막는다)
+- core 패키지 목표: **70%**
 - Critical paths: **100%**
 
 ```bash
@@ -331,7 +333,7 @@ go install github.com/go-delve/delve/cmd/dlv@latest
 dlv test ./test/internal/processor/fetcher/core -- -test.run TestName
 
 # Debug binary
-dlv exec ./bin/crawler
+dlv exec ./bin/issuetracker
 ```
 
 ### Common Issues
@@ -361,7 +363,7 @@ make clean
 make build
 
 # Check Go version
-go version  # Should be 1.22+
+go version  # Should be 1.24+
 ```
 
 ## Release Process

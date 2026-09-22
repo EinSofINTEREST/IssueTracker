@@ -177,7 +177,7 @@ issuetracker/
 │   │   ├── service/                # 비즈니스 로직 (ContentService, BlacklistService, ParserRuleService, …)
 │   │   ├── postgres/               # PostgreSQL 구현
 │   │   └── redis/                  # Redis 구현 (lock, sliding window)
-│   ├── locks/                      # ProcessingLock / IngestionLock (Redis)
+│   ├── locks/                      # ProcessingLock / IngestionMarker (Redis)
 │   ├── bus/                        # Kafka producer/consumer + retry scheduler
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives

@@ -13,7 +13,7 @@
 |--------------------------------------------------------------|-------------------------------------------------------|
 | [scheduler.go](../../../internal/scheduler/scheduler.go)      | `Scheduler` — entry 별 polling goroutine 관리         |
 | [entries.go](../../../internal/scheduler/entries.go)          | `DefaultEntries(SchedulerConfig)` — CNN/Naver/Yonhap/Daum entries  |
-| [emitter.go](../../../internal/scheduler/emitter.go)          | `JobEmitter` — Kafka 발행 어댑터                      |
+| [emitter.go](../../../internal/scheduler/source.go)          | `JobEmitter` — Kafka 발행 어댑터                      |
 | [source.go](../../../internal/scheduler/source.go)            | source 별 entry 빌더 helper                            |
 | [throttle.go](../../../internal/scheduler/throttle.go)        | `BacklogThrottler` — consumer-group lag 임계값 검사  |
 

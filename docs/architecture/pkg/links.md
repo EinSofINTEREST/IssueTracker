@@ -65,5 +65,5 @@ func (e *HTMLLinkExtractor) Extract(raw *RawContent) ([]Link, error) {
 ## 호출 측
 
 - [`internal/bus`](../internal/bus.md) — Publisher.SetNormalizer
-- [`internal/processor/parser/rule/discovery`](../internal/processor/parser/rule.md) — full-page link discovery
-- [`internal/processor/fetcher/core/extractor`](../internal/processor/fetcher/core.md) — boundary wrapper
+- `discovery` in [`internal/processor/parser/rule`](../internal/processor/parser/rule.md) — full-page link discovery
+- `extractor` in [`internal/processor/fetcher/core`](../internal/processor/fetcher/core.md) — boundary wrapper

@@ -94,7 +94,7 @@ worker ──→ handler ──→ (domain/general → fetcher) ──→ implem
 
 - **Kafka**: `issuetracker.crawl.{high,normal,low}` consume / `issuetracker.fetched` produce
 - **PostgreSQL**: `raw_contents` (Claim Check 저장 — parser 단계가 소비/정리)
-- **Redis**: ProcessingLock (SETNX) / IngestionLock / RetryQueue (ZSET)
+- **Redis**: ProcessingLock (SETNX) / IngestionMarker / RetryQueue (ZSET)
 - **Chrome (CDP)**: `implementation/chromedp` 가 `ws://localhost:9222` 또는 컨테이너 내장 chrome 사용
 
 <br>

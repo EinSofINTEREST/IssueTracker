@@ -18,7 +18,7 @@ defer client.Close()
 있으나, 현재 시스템에서는 **`*Client` 를 직접 받아** 다음 컴포넌트들이 필요한 명령을 발행합니다:
 
 - `RedisProcessingLock` ([`internal/locks`](../internal/locks/README.md)) — `SET ... NX PX ttl` (이슈 #178)
-- `RedisIngestionLock` ([`internal/locks`](../internal/locks/README.md)) — `SET ... NX PX ttl`
+- `RedisIngestionMarker` ([`internal/locks`](../internal/locks/README.md)) — `SET ... NX PX ttl`
 - `RedisDelayedRetryScheduler` ([`internal/processor/fetcher/worker`](../internal/processor/fetcher/worker.md)) — ZSET (`ZADD score=runAt`, `ZRANGEBYSCORE`, `ZREM`)
 
 <br>
@@ -37,7 +37,8 @@ defer client.Close()
 [`pkg/config.LoadRedis`](config.md):
 - `Host`, `Port`, `Password`, `DB`
 - `DialTimeout`, `ReadTimeout`, `WriteTimeout`, `PoolSize`
-- `IngestionLockTTL` — IngestionLock 의 SET PX 값 (URL 진입 marker 유효 시간)
+- `IngestionMarkTTL` — IngestionMarker 의 SET PX 값 (URL 진입 marker 유효 시간).
+  환경변수 `REDIS_INGESTION_MARK_TTL` (구 이름 `REDIS_INGESTION_LOCK_TTL` 도 인식)
 
 <br>
 
@@ -51,7 +52,7 @@ defer client.Close()
 ## 호출 측
 
 - [`cmd/issuetracker`](../cmd/issuetracker.md) 단계 7 — `redis.New(ctx, cfg)` + `defer client.Close()`
-- [`internal/locks`](../internal/locks/README.md) — Client 를 받아 ProcessingLock / IngestionLock 구현
+- [`internal/locks`](../internal/locks/README.md) — Client 를 받아 ProcessingLock / IngestionMarker 구현
 - [`internal/processor/fetcher/worker`](../internal/processor/fetcher/worker.md) — Client 를 받아 RetryScheduler 구현
 
 Redis 가 부재일 때 [`cmd/issuetracker`](../cmd/issuetracker.md) 는 graceful degrade — `NoopProcessingLock`

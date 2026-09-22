@@ -68,7 +68,7 @@
 | [`decorator/`](../../../../internal/storage/decorator/) | Cross-cutting (timeout / cache invalidate) | `WrapBlacklistWithTimeout`, `WrapBlacklistWithInvalidator`, `WrapWithInvalidator` (parser_rule), `WrapContentWithTimeout`, `WrapRawContentWithTimeout`, `WrapFetcherRuleWithTimeout` |
 | [`service/`](../../../../internal/storage/service/) | 비즈니스 로직 (boundary) — [service.md](service.md) 참조 | `ContentService`, `RawContentService`, `BlacklistService` (이슈 #431, #480), `ParserRuleService` (이슈 #431) |
 | [`postgres/`](../../../../internal/storage/postgres/) | PostgreSQL 구현 — [postgres.md](postgres.md) 참조 (query-level timeout 은 `decorator/timeout.go` 가 담당) | `NewBlacklistRepository`, `NewParserRuleRepository`, `NewContentRepository`, ... |
-| [`redis/`](../../../../internal/storage/redis/) | Redis 구현 (분산 lock, sliding window) | `NewInflightLocker`, `NewIngestionLocker`, `NewSlidingWindow` 등 |
+| [`redis/`](../../../../internal/storage/redis/) | Redis 구현 (분산 lock, sliding window) | `NewInflightLocker`, `NewIngestionMarker`, `NewSlidingWindow` 등 |
 
 <br>
 
@@ -131,7 +131,7 @@ pgxpool 의 `Acquire()` 가 풀 고갈 시 **무한 블로킹** 되는 문제 �
 ## 의존
 
 - [`internal/processor/fetcher/core`](../processor/fetcher/core.md) — `Content`, `RawContent`
-- [`pkg/config/storage`](../../pkg/config.md) — `Load` (DB), `LoadRedis`, `IngestionLockTTL`
+- [`pkg/config/storage`](../../pkg/config.md) — `Load` (DB), `LoadRedis`, `IngestionMarkTTL`
 - [`pkg/logger`](../../pkg/logger.md)
 - 외부: `github.com/jackc/pgx/v5`, `github.com/jackc/pgerrcode`, `github.com/redis/go-redis/v9`
 

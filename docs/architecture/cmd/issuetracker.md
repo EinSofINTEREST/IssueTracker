@@ -29,7 +29,7 @@
 7. rule.Parser + WithBlacklistAutoDemote   (#477 — blacklistSvc 있을 때만 옵션 wiring)
 8. raw_contents Service / Content Service  (Claim Check)
 9. Source 등록                              (kr.Register / us.Register → handler.Registry)
-10. Redis: ProcessingLock / IngestionLock / DelayedRetryScheduler (이슈 #178, #82)
+10. Redis: ProcessingLock / IngestionMarker / DelayedRetryScheduler (이슈 #178, #82)
 11. PoolManager (3-tier crawler workers)
 12. LLM provider (chain policy, 이슈 #149)
 13. ParserWorker (consumer group: parsers)
@@ -46,7 +46,7 @@
 각 단계의 자세한 책임은 해당 패키지 문서 참조:
 
 - [internal/processor/fetcher/worker.md](../internal/processor/fetcher/worker.md) — PoolManager, RetryScheduler
-- [internal/locks/README.md](../internal/locks/README.md) — ProcessingLock, IngestionLock
+- [internal/locks/README.md](../internal/locks/README.md) — ProcessingLock, IngestionMarker
 - [internal/processor/parser/rule.md](../internal/processor/parser/rule.md) — rule.Parser, indexonly, auto_demote, llmgen, refiner, blacklist matcher
 - [internal/processor/parser/README.md](../internal/processor/parser/README.md) — ParserWorker (Claim Check)
 - [internal/processor/validate.md](../internal/processor/validate.md) — Validator

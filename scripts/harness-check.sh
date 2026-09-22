@@ -57,9 +57,36 @@ is_placeholder() {
 }
 
 # 같은 줄에서 "없다 / 미구현 / 목표" 로 이미 부재를 밝힌 경우는 정상 서술.
+#
+# 개명 · 이전 이력도 정상이다 — "본 패키지는 이전에 internal/publisher 였다" 처럼
+# 지금은 없는 경로를 **과거형으로** 언급하는 문장은 드리프트가 아니라 기록이다.
+# 이걸 인정하지 않으면 개명을 문서에 남길 때마다 경고가 뜬다 (이슈 #565).
+# 부재를 밝히는 문구. "없음" 처럼 짧고 흔한 토큰은 넣지 않는다 —
+# "release 없음" 같은 무관한 설명까지 부재 선언으로 오인해 실제 드리프트를 덮는다 (이슈 #565).
+ABSENT_RE='미구현|존재하지 않|없습니다|아직 없|은 없다|는 없다|부재|planned|목표|제안|예시|이전에|이전됨|로 이전|통합됐|통합되|개명|renamed|moved to|구 이름'
+
 declared_absent() {
-  # -A2: 부재를 밝히는 문구가 줄바꿈으로 다음 줄에 걸린 경우까지 인정한다.
-  grep -F -A2 "$2" "$1" | grep -qE '미구현|존재하지 않|없습니다|없음|부재|planned|목표|제안|예시'
+  # 경로가 적힌 줄 자체에 부재 표기가 있으면 인정한다.
+  grep -F -- "$2" "$1" | grep -qE "$ABSENT_RE" && return 0
+
+  # 산문에서 부재 표기가 다음 줄로 넘어간 경우(-A1)까지만 인정한다.
+  # -A2 로 넓히면 표(表) 아래 붙은 무관한 "미구현" 주석이 윗줄의 멀쩡한 경로까지
+  # 면제시킨다 — cmd/admin 을 cmd/adminx 로 바꿔도 통과하던 원인 (이슈 #565).
+  # 표 행(| 로 시작) 은 자기 줄만 본다.
+  grep -F -- "$2" "$1" | grep -qE '^[[:space:]]*\|' && return 1
+  grep -F -A1 "$2" "$1" | grep -qE "$ABSENT_RE" && return 0
+
+  # 트리 블록에서 복원한 경로는 원문에 전체 문자열로 존재하지 않는다
+  # ("docs/en/api.md" 는 트리에 "│   ├── api.md" 로만 적힌다). 이 경우
+  # 조상 디렉토리 줄에 달린 "목표 / 미존재" 표기를 부재 선언으로 인정한다.
+  # 트리에서 복원한 경로는 원문에 전체 문자열로 없다 ("docs/en" 은 "└── en/" 으로만 적힌다).
+  # 이때 자기 자신의 마지막 세그먼트 줄에 달린 표기만 인정한다.
+  #
+  # 조상까지 거슬러 올라가지 않는다 — "internal/" 한 줄에 붙은 "미구현" 이 그 아래 모든
+  # 경로를 면제시켜, 트리 안의 실제 드리프트를 통째로 덮어 버린다 (이슈 #565).
+  local leaf="${2##*/}"
+  grep -F -A2 -- "── ${leaf}/" "$1" | grep -qE "$ABSENT_RE" && return 0
+  return 1
 }
 
 # gitignore 대상은 저장소에 없는 것이 정상 (예: .claude/settings.local.json).
@@ -100,6 +127,9 @@ strip_code_blocks() {
 expand_tree_paths() {
   awk -v families="${PATH_FAMILIES}" '
     BEGIN { n = split(families, fa, "|"); for (i = 1; i <= n; i++) isfamily[fa[i]] = 1 }
+    # 블록 안에 "목표 구조" 표시가 있으면 그 트리는 아직 만들지 않은 구조다 — 통째로 건너뛴다.
+    # 표시는 블록 첫 줄 주석에 둔다 (예: "# ↓ 목표 구조 — docs/en/ 은 현재 존재하지 않습니다").
+    /목표 구조|목표 상태|planned structure/ { if (infence) skip = 1; next }
     /^[[:space:]]*```[[:alnum:]]/ { skip = 1; next }          # 태그 블록은 통째로 건너뛴다
     /^[[:space:]]*```/ { infence = !infence; if (!infence) skip = 0; delete parent; root = ""; next }
     !infence { next }
@@ -170,7 +200,10 @@ for doc in "${HARNESS_DOCS[@]}"; do
     # test/internal/... 처럼 접두사가 붙은 경로의 중간 매치 방지 — 앞이 / 또는 단어문자면 제외
     # 저장소 최상위 디렉토리를 실제로 훑어 family 목록을 만든다 (CodeRabbit 피드백).
     # 하드코딩하면 docs/ · .github/ · .claude/ 처럼 문서가 실제로 참조하는 경로를 놓친다.
-  done < <({ strip_code_blocks "$doc" \
+  # sed 's|(../)+||g': 마크다운 상대 링크 "(../../../internal/bus/)" 의 ../ 접두를 벗긴다.
+  # 벗기지 않으면 앞의 "/" 가 부정 후방탐색에 걸려 경로가 통째로 추출되지 않는다 —
+  # docs/architecture/ 의 링크는 대부분 이 형태라 사각지대가 컸다 (이슈 #565).
+  done < <({ strip_code_blocks "$doc" | sed 's|\(\.\./\)\+||g' \
                | grep -ohP "(?<![\w/])(${PATH_FAMILIES})/[\w./-]+"
              expand_tree_paths "$doc" \
                | grep -P "^(${PATH_FAMILIES})/"
