@@ -22,6 +22,23 @@ GitHub Ruleset과 PR 템플릿은 모두 이 문서의 이름과 **토씨 단위
 | `Commit Lint` | `ci-convention.yml` / `commit-lint` | 커밋 메시지 `[카테고리]:` 포맷 강제 | Yes |
 | `PR Title Lint` | `ci-convention.yml` / `pr-title-lint` | PR 타이틀 `[카테고리#이슈번호] 제목` (또는 `[카테고리#이슈번호]: 제목`) 엄격 강제 (이슈 #121, PR only) | Yes |
 | `Linked Issue Check` | `ci-convention.yml` / `linked-issue` | PR 에 머지 시 close 될 이슈(closing reference) 가 최소 1개 연결되어 있는지 검증 (`closingIssuesReferences.totalCount ≥ 1`, PR only) | Yes |
+| `Harness Check` | `ci-convention.yml` / `harness-check` | 규약 문서가 저장소 실체와 맞는지 대조 + 검출력 셀프테스트 (이슈 #539, #565, #567) | **아직 미등록** |
+
+> ⚠️ `Harness Check` 는 워크플로에는 추가됐지만 **Ruleset 의 required 목록에는 아직 등록되지
+> 않았습니다.** 등록 전까지는 실행은 되나 실패해도 머지를 막지 못합니다. 등록은 저장소 설정
+> 변경이라 소유자 권한이 필요합니다 — 아래 "변경 절차" 3번 참조.
+
+### `Harness Check` 의 실패 기준
+
+| 대상 | 동작 | 이유 |
+|---|---|---|
+| cmd 목록 · Go 버전 · 커버리지 임계값 · status check 이름 · prompt asset · 폐지 자산 재등장 | **job 실패** | 사실 대조라 오탐이 없다 |
+| 문서가 언급한 경로 부재 | **경고만** (Summary 에 표시) | 코드 블록의 예시 경로와 목표 상태 서술을 기계적으로 구분할 수 없어 사람이 판단한다 (이슈 #539 설계) |
+| 셀프테스트 (`harness-check-selftest.sh`) | **job 실패** | 검사기 자신이 드리프트를 놓치면서 "경고 0건" 을 유지하는 무력화를 막는다 (이슈 #565) |
+
+경로 경고를 머지 차단으로 승격하려면 `scripts/harness-check.sh` 의 `missing_paths` 를
+`fail_count` 에 반영해야 한다. 목표 구조를 서술하는 문서마다 코드 블록 첫 줄에
+`# ↓ 목표 구조 — ...` 표기가 필요해지므로, 승격 전에 그 비용을 감안할 것.
 
 ## 변경 절차
 

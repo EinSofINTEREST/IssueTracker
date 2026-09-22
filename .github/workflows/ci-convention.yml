@@ -1,6 +1,6 @@
 name: CI - Convention
 
-# PR 메타데이터(커밋 메시지 / PR 타이틀) 형식 강제 워크플로
+# PR 메타데이터(커밋 메시지 / PR 타이틀) 형식 + 규약 문서 정합성 강제 워크플로
 # 코드 빌드·테스트와는 독립적으로 운영하여 책임 영역을 분리합니다.
 # job `name:` 값은 GitHub Required Status Check 컨텍스트로 사용되므로 변경 금지
 # (docs/ci/status-checks.md 단일 소스 참조).
@@ -205,4 +205,63 @@ jobs:
             echo ""
             echo "머지 시 close 될 이슈 ${total}건 (상위 ${shown}건 표시):"
             echo "$response" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[] | "- #\(.number) \(.title) (\(.state))"'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  harness-check:
+    name: Harness Check
+    # 규약 문서(CLAUDE.md / .claude/rules / .cursor/rules / docs)가 저장소 실체와
+    # 어긋나지 않는지 대조한다 (이슈 #539, #565, #567).
+    #
+    # Go 툴체인이 필요 없어 ci-quality.yml 이 아니라 본 경량 워크플로에 둔다 —
+    # harness-check.sh 는 go.mod 를 텍스트로 읽을 뿐 빌드하지 않는다.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify docs match repository structure
+        run: |
+          set -o pipefail
+          # 종료 코드 의미 (이슈 #539 설계 — #567 에서 CI 에 연결):
+          #   exit 1 = 구조 불일치. cmd 목록 / Go 버전 / 커버리지 임계값 /
+          #            status check 이름 / prompt asset / 폐지 자산 재등장.
+          #            사실 대조라 오탐이 없으므로 머지를 막는다.
+          #   경고    = 문서가 언급한 경로 부재. 코드 블록의 예시 경로와 목표 상태
+          #            서술을 기계적으로 구분할 수 없어 사람이 판단한다.
+          #            job 을 실패시키지 않되 Summary 에 남긴다.
+          scripts/harness-check.sh | tee harness-check.log
+
+      - name: Verify the checker itself still detects drift
+        run: |
+          # harness-check 는 "경고 0건" 이 목표라, 억제 로직이 과해지면 드리프트를
+          # 놓치면서도 0건을 유지한다 — 조용히 무력화된다. 알려진 드리프트를 심어
+          # 검출되는지 확인한다 (이슈 #565).
+          scripts/harness-check-selftest.sh
+
+      - name: Report
+        if: always()
+        run: |
+          # grep -c 는 0건일 때 "0" 을 출력하고 exit 1 을 낸다 — `|| echo 0` 을 붙이면
+          # "0\n0" 이 되어 이후 정수 비교가 깨진다. 종료 코드만 삼킨다.
+          warnings=$(grep -c 'WARN' harness-check.log 2>/dev/null || true)
+          warnings=${warnings:-0}
+          {
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "## ✅ Harness Check 통과"
+            else
+              echo "## ❌ Harness Check 실패"
+            fi
+            echo ""
+            echo "문서 드리프트 경고: **${warnings}건** (경고는 머지를 막지 않습니다)"
+            if [ "$warnings" -gt 0 ]; then
+              echo ""
+              echo '```'
+              grep 'WARN' harness-check.log | sed 's/\x1b\[[0-9;]*m//g' || true
+              echo '```'
+              echo ""
+              echo "예시 경로나 목표 구조 서술이면 해당 코드 블록 첫 줄에"
+              echo "\`# ↓ 목표 구조 — ...\` 표기를 넣어 주세요."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
