@@ -137,7 +137,7 @@ ENRICHER_DB_RO_USER=enricher_ro
 ENRICHER_DB_RO_PASSWORD=enricher_ro_dev_pw
 ```
 
-`cmd/issuetracker.go` 의 `buildEnricherROMCPConfig` 가 본 env 를 `mcp.json` 으로 변환 → claudegen container 의 `--mcp-config` 인자로 mount. LLM 은 prompt 내에서 `mcp__issuetracker_ro__query` tool 로 SELECT 가능 (statement_timeout 5s).
+`cmd/issuetracker` 의 `buildEnricherROMCPConfig` 가 본 env 를 `mcp.json` 으로 변환 → claudegen container 의 `--mcp-config` 인자로 mount. LLM 은 prompt 내에서 `mcp__issuetracker_ro__query` tool 로 SELECT 가능 (statement_timeout 5s).
 
 미설정 시 MCP tool 없이 WebFetch / WebSearch 만으로 verify / context 진행 — graceful degrade.
 

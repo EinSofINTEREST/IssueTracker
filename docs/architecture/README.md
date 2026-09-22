@@ -23,12 +23,10 @@ docs/architecture/
 ├── README.md                              ← (you are here)
 ├── cmd/                                   ← entry point 별 역할
 │   ├── README.md
-│   ├── api.md
 │   ├── issuetracker.md                    ← 통합 파이프라인 오케스트레이터 (main wiring)
 │   ├── processor.md                       ← validator-only 단독 실행체
 │   ├── migrate.md
-│   ├── migrate-down.md
-│   └── rldebug.md
+│   └── migrate-down.md
 ├── internal/                              ← 비공개 비즈니스 로직
 │   ├── README.md
 │   ├── classifier/                        ← ELArchive Classifier client (gRPC + HTTP fallback)
@@ -36,7 +34,7 @@ docs/architecture/
 │   │   ├── grpc.md
 │   │   └── http.md
 │   ├── locks/                             ← 단계 무관 distributed lock (이슈 #197)
-│   │   └── README.md                      ← ProcessingLock + IngestionLock (Redis SETNX)
+│   │   └── README.md                      ← ProcessingLock + IngestionMarker (Redis SETNX)
 │   ├── processor/                         ← 파이프라인 단계별 정렬 (이슈 #195)
 │   │   ├── README.md
 │   │   ├── fetcher/                       ← Web fetch + DB-driven parse + rate limit + worker pool (이슈 #198)
@@ -51,7 +49,7 @@ docs/architecture/
 │   │   │   ├── README.md
 │   │   │   └── rule.md                    ← rule.Parser (DB-driven) + llmgen + pathinfer + refiner
 │   │   └── validate.md                    ← news/community Validator
-│   ├── publisher.md                       ← chained job 발행 + IngestionLock
+│   ├── bus.md                             ← chained job 발행 + IngestionMarker + DLQ
 │   ├── scheduler.md                       ← seed job 주기적 발행
 │   └── storage/
 │       ├── README.md
@@ -165,7 +163,7 @@ docs/architecture/
 |----------------------------|------------------------------------------------------------|-----------------------------------------------|
 | Kafka                      | [pkg/queue/](../../pkg/queue/)                              | 모든 stage 간 메시지 버스                      |
 | PostgreSQL                 | [internal/storage/postgres/](../../internal/storage/postgres/) | contents / content_bodies / content_meta / raw_contents / parsing_rules / sample_urls / schema_migrations |
-| Redis                      | [pkg/redis/](../../pkg/redis/), [internal/locks/](../../internal/locks/), [internal/processor/fetcher/worker/](../../internal/processor/fetcher/worker/) | ProcessingLock + IngestionLock (locks) / RetryQueue ZSET (processor/fetcher/worker) |
+| Redis                      | [pkg/redis/](../../pkg/redis/), [internal/locks/](../../internal/locks/), [internal/bus/](../../internal/bus/) | ProcessingLock + IngestionMarker (locks) / RetryQueue ZSET (bus/retry.go) |
 | LLM (Gemini/OpenAI/Claude) | [pkg/llm/](../../pkg/llm/)                                  | parser rule 자동 생성 / path_pattern refinement |
 | Chrome (CDP)               | [internal/processor/fetcher/implementation/chromedp/](../../internal/processor/fetcher/implementation/chromedp/) | 동적 페이지 헤드리스 렌더                      |
 | ELArchive Classifier       | [internal/classifier/](../../internal/classifier/) + [proto/classifier/](../../proto/classifier/) | 카테고리 분류 (gRPC primary, HTTP fallback)    |
@@ -180,12 +178,12 @@ docs/architecture/
 
 | 테이블             | Repository                                                       | 설명                                                 |
 |--------------------|------------------------------------------------------------------|------------------------------------------------------|
-| `contents`         | [ContentRepository](../../internal/storage/content.go)           | 정규화된 Content 메타 (id, url, title, source 등)   |
+| `contents`         | [ContentRepository](../../internal/storage/repository/content.go)           | 정규화된 Content 메타 (id, url, title, source 등)   |
 | `content_bodies`   | (same)                                                           | 본문 분리 저장 (큰 텍스트)                            |
 | `content_meta`     | (same)                                                           | validation_status, classifier 결과 등 메타           |
-| `raw_contents`     | [RawContentRepository](../../internal/storage/raw_content.go)    | Claim Check — 임시 HTML 저장 후 parser 가 정리       |
-| `parsing_rules`    | [ParsingRuleRepository](../../internal/storage/parsing_rule.go)  | host_pattern + path_pattern → SelectorMap (이슈 #100) |
-| `sample_urls`      | [SampleURLRepository](../../internal/storage/sample_url.go)      | refiner 가 path_pattern 정밀화에 사용 (이슈 #173)    |
+| `raw_contents`     | [RawContentRepository](../../internal/storage/repository/raw_content.go)    | Claim Check — 임시 HTML 저장 후 parser 가 정리       |
+| `parsing_rules`    | [ParsingRuleRepository](../../internal/storage/repository/parser_rule.go)  | host_pattern + path_pattern → SelectorMap (이슈 #100) |
+| `sample_urls`      | [SampleURLRepository](../../internal/storage/repository/sample_url.go)      | refiner 가 path_pattern 정밀화에 사용 (이슈 #173)    |
 | `schema_migrations`| (migrations 자체 관리)                                            | 마이그레이션 버전 추적                                |
 
 <br>

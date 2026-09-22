@@ -16,8 +16,11 @@
 | [`cmd/processor/`](../../../cmd/processor/)       | `bin/processor`     | **검증 단독 실행** — `issuetracker.normalized` → `issuetracker.validated` | [processor.md](processor.md)                |
 | [`cmd/migrate/`](../../../cmd/migrate/)           | `bin/migrate`       | DB 마이그레이션 적용 (forward)                | [migrate.md](migrate.md)                    |
 | [`cmd/migrate-down/`](../../../cmd/migrate-down/) | `bin/migrate-down`  | DB 마이그레이션 롤백 (배포 환경 전용)         | [migrate-down.md](migrate-down.md)          |
-| [`cmd/api/`](../../../cmd/api/)                   | (미구현)             | REST/GraphQL API 서버 — placeholder           | (계획)                                       |
-| [`cmd/rldebug/`](../../../cmd/rldebug/)           | (미구현)             | Rate limiter 디버깅 도구 — placeholder        | (계획)                                       |
+| [`cmd/rule-validator/`](../../../cmd/rule-validator/) | `bin/rule-validator` | parsing rule 검증 도구                   | (문서 미작성)                                 |
+| [`cmd/admin/`](../../../cmd/admin/)               | `bin/admin`         | 운영자 도구 — 진입 마커 무효화 / 강제 재크롤 / DLQ 확인 (이슈 #542) | (문서 미작성)          |
+
+> REST/GraphQL API 서버(이슈 #21)는 **미구현** 이며 `cmd/api` 디렉토리도 없습니다.
+> Rate limiter 디버깅 도구(`cmd/rldebug`) 역시 **존재하지 않습니다**.
 
 새 바이너리 추가 시 [`Makefile`](../../../Makefile) 의 `build` 타겟과 `*_BINARY` 변수를 동시 갱신
 ([01-architecture.md](../../../.claude/rules/01-architecture.md) 의 cmd/ 규칙).
@@ -43,4 +46,6 @@ cmd/issuetracker  ──→ internal/* (전부) + pkg/* (전부)
 cmd/processor     ──→ internal/{processor/validate, storage/*, locks(NoopProcessingLock)} + pkg/*
 cmd/migrate       ──→ internal/storage/postgres + migrations
 cmd/migrate-down  ──→ internal/storage/postgres + migrations
+cmd/rule-validator──→ internal/processor/parser/rule + internal/storage/* + pkg/llm
+cmd/admin         ──→ internal/locks + internal/storage/* + pkg/{queue,redis}
 ```

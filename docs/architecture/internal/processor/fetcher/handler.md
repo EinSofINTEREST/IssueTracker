@@ -60,4 +60,4 @@ race 가 없습니다 (등록/조회 동시성을 도입한다면 별도 mutex �
 
 ## Test 위치
 
-[`test/internal/processor/fetcher/handler/`](../../../../test/internal/) (있다면) — Registry 등록/조회/충돌 처리 검증.
+Registry 등록 / 조회 / 충돌 처리 검증 테스트는 아직 없다 (`test/internal/processor/fetcher/` 하위에 추가 예정).

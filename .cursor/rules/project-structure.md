@@ -6,62 +6,60 @@ IssueTracker follows the [Standard Go Project Layout](https://github.com/golang-
 
 ```
 issuetracker/
-├── cmd/                        # Application entry points
-│   ├── crawler/               # Crawler executable
-│   │   └── main.go
-│   ├── processor/             # Processor executable (planned)
-│   └── api/                   # API server executable (planned)
+├── cmd/                        # Application entry points (모두 bin/ 으로 빌드)
+│   ├── issuetracker/          # Fetcher + Parser + Validate + Enrich + Scheduler
+│   ├── processor/             # Validator-only standalone
+│   ├── migrate/               # DB migration (up)
+│   ├── migrate-down/          # DB migration (down)
+│   ├── rule-validator/        # parsing rule 검증 도구
+│   └── admin/                 # 운영자 도구 (진입 마커 무효화 / 강제 재크롤 / DLQ)
 │
 ├── internal/                   # Private application code
-│   └── crawler/
-│       └── core/              # ✅ Core crawler implementation
-│           ├── crawler.go     # Crawler interface
-│           ├── errors.go      # Error types
-│           ├── http_client.go # HTTP client
-│           ├── models.go      # Data models
-│           ├── rate_limiter.go# Rate limiter
-│           └── retry.go       # Retry logic
+│   ├── bus/                   # Kafka I/O 단일 출처 (Publisher / RetryScheduler)
+│   ├── workerpool/            # stage 공용 consumer pool harness
+│   ├── scheduler/             # 시드 URL 주기 발행
+│   ├── promptcontract/        # prompt placeholder 계약 집계
+│   ├── classifier/            # grpc/http client (현재 파이프라인 미연결)
+│   ├── locks/                 # IngestionMarker / ProcessingLock / StageGate
+│   ├── processor/             # 파이프라인 단계
+│   │   ├── fetcher/           # Web fetch + parse 라우팅 + worker pool
+│   │   ├── parser/            # DB-driven rule engine + ParserWorker
+│   │   ├── validate/          # 품질 점수 기반 Validation
+│   │   └── enrich/            # extract / cross-verify / context / score
+│   └── storage/               # postgres / redis / service / decorator / model
 │
 ├── pkg/                        # Public library code
-│   └── logger/                # ✅ Reusable logger package
-│       └── logger.go
+│   ├── logger/                # zerolog wrapper
+│   ├── config/                # 환경변수 로딩
+│   ├── queue/                 # Kafka producer / consumer + 우선순위 ZSET
+│   ├── redis/                 # client + lock + leader lock
+│   ├── llm/                   # provider + prompt loader·계약
+│   ├── agent/                 # CLI agent 추상 + claude 구현
+│   ├── links/                 # URL 정규화 / 링크 추출
+│   ├── metrics/               # Prometheus registry
+│   ├── resilience/            # circuit breaker
+│   └── urlguard/              # URL 차단 규칙
 │
 ├── test/                       # Test files (mirrors service architecture)
-│   ├── internal/              # internal/ 패키지 테스트
-│   │   ├── classifier/        # ← internal/classifier/
-│   │   ├── processor/fetcher/core/ # ← internal/processor/fetcher/core/
-│   │   └── storage/           # ← internal/storage/
-│   └── pkg/                   # pkg/ 패키지 테스트
-│       ├── config/            # ← pkg/config/
-│       └── logger/            # ← pkg/logger/
+│   ├── internal/              # ← internal/
+│   └── pkg/                   # ← pkg/
 │
 ├── examples/                   # Usage examples
-│   └── basic_usage.go
+├── migrations/                 # SQL migrations
+├── proto/                      # gRPC 정의
+├── scripts/                    # 운영 / 검증 스크립트 (harness-check.sh 등)
+├── deployments/                # Deployment configurations
 │
-├── configs/                    # Configuration files (planned)
-├── scripts/                    # Build and deployment scripts (planned)
-├── deployments/                # Deployment configurations (planned)
-│   └── docker/
-│
-├── docs/                       # Documentation (planned)
-│   ├── en/                    # English docs
-│   └── ko/                    # Korean docs
+├── docs/                       # Documentation
+│   ├── architecture/          # 코드 구조 문서 (cmd / internal / pkg / proto)
+│   ├── ci/                    # CI 운영 규약, status check 단일 소스
+│   └── ko/                    # 한국어 문서
 │
 ├── .claude/                    # Claude AI development rules
 │   └── rules/
-│       ├── 01-architecture.md
-│       ├── 02-crawler-implementation.md
-│       ├── 03-data-processing.md
-│       ├── 04-error-handling.md
-│       ├── 05-testing.md
-│       └── 06-code-style.md
 │
 ├── .cursor/                    # Cursor IDE rules
-│   ├── README.md
-│   ├── git-conventions.md
-│   ├── code-style.md
-│   ├── project-structure.md
-│   └── development-workflow.md
+│   └── rules/
 │
 ├── Makefile                    # Build automation
 ├── go.mod                      # Go module definition
@@ -77,10 +75,10 @@ issuetracker/
 - Each subdirectory represents an executable
 - Contains only `main.go` with minimal logic
 - Imports and orchestrates from `internal/` and `pkg/`
-- Examples: `crawler`, `processor`, `api`
+- Examples: `issuetracker`, `processor`, `migrate`, `rule-validator`, `admin`
 
 ```go
-// cmd/crawler/main.go
+// cmd/issuetracker/main.go
 package main
 
 import (
@@ -332,7 +330,7 @@ type Crawler struct {
 ✓ crawler → models
 ✗ crawler → models → crawler
 
-✓ cmd/crawler → internal/processor/fetcher/core → pkg/logger
+✓ cmd/issuetracker → internal/processor/fetcher/core → pkg/logger
 ✗ pkg/logger → internal/processor/fetcher/core
 ```
 
@@ -340,28 +338,40 @@ type Crawler struct {
 
 As the project grows, maintain structure:
 
-### Adding New Features
+### Adding New Sources
+
+**사이트를 추가할 때 Go 패키지를 만들지 않는다.** 소스별 디렉토리를 두던 초기 설계
+(`crawler/news/us/cnn/` 등) 는 **DB-driven 방식으로 대체** 됐다
+([02-crawler-implementation.md](../../.claude/rules/02-crawler-implementation.md) 참조).
+
+- `fetcher_rules` / `parsing_rules` row 를 넣는다
+- selector 는 LLM 이 자동 생성한다 (`parser/rule/llmgen`)
+- 일반 경로로 처리되지 않는 사이트만 `internal/processor/fetcher/domain/` 아래에
+  전용 Go 핸들러를 추가한다
+
+### Adding New Stages
+
+파이프라인 단계를 늘릴 때만 새 패키지를 만든다 — 기존 stage 와 같은 층위에 둔다.
+
 ```
-internal/
-├── crawler/
-│   ├── core/          # Core interfaces
-│   ├── news/          # News crawlers
-│   │   ├── us/        # US sources
-│   │   │   ├── cnn/
-│   │   │   └── nytimes/
-│   │   └── kr/        # Korean sources
-│   │       ├── naver/
-│   │       └── daum/
-│   └── community/     # Community crawlers
+internal/processor/
+├── fetcher/           # 기존
+├── parser/            # 기존
+├── validate/          # 기존
+├── enrich/            # 기존
+└── embed/             # 신규 stage 예시 (미구현 — 이슈 #17 #18 #20)
 ```
 
 ### Adding New Services
+
+새 바이너리는 `cmd/` 아래에 두고, **`Makefile` 의 `build` 타겟과 `*_BINARY` 변수를
+함께 갱신** 한다 (누락 시 `make harness-check` 가 잡는다).
+
 ```
 cmd/
-├── crawler/       # Crawler service
-├── processor/     # Processing service
-├── api/           # API service
-└── scheduler/     # Job scheduler
+├── issuetracker/  # 통합 파이프라인 (기존)
+├── processor/     # validator-only (기존)
+└── api/           # API 서버 예시 (미구현 — 이슈 #21)
 ```
 
 ### Adding New Libraries

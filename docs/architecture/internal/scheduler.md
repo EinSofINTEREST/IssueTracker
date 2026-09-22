@@ -3,7 +3,7 @@
 소스: [`internal/scheduler/`](../../../internal/scheduler/)
 
 등록된 카테고리 URL 목록 (CNN sections / Naver categories / …) 을 **주기적으로 Kafka crawl 토픽에
-시드 발행**합니다. 크롤 결과로부터 발견된 URL 의 chained 발행은 [publisher](publisher.md) 책임.
+시드 발행**합니다. 크롤 결과로부터 발견된 URL 의 chained 발행은 [bus](bus.md) 책임.
 
 <br>
 
@@ -13,9 +13,13 @@
 |--------------------------------------------------------------|-------------------------------------------------------|
 | [scheduler.go](../../../internal/scheduler/scheduler.go)      | `Scheduler` — entry 별 polling goroutine 관리         |
 | [entries.go](../../../internal/scheduler/entries.go)          | `DefaultEntries(SchedulerConfig)` — CNN/Naver/Yonhap/Daum entries  |
-| [emitter.go](../../../internal/scheduler/emitter.go)          | `JobEmitter` — Kafka 발행 어댑터                      |
-| [source.go](../../../internal/scheduler/source.go)            | source 별 entry 빌더 helper                            |
+| [source.go](../../../internal/scheduler/source.go)            | `ScheduleEntry` + source 별 entry 빌더 helper          |
+| [resolver.go](../../../internal/scheduler/resolver.go)        | `EntryResolver` — DB(`scheduler_entries`) 기반 entry 해석 |
+| [buffer_drainer.go](../../../internal/scheduler/buffer_drainer.go) | `BufferDrainer` — leader lock 하에 버퍼 배출      |
 | [throttle.go](../../../internal/scheduler/throttle.go)        | `BacklogThrottler` — consumer-group lag 임계값 검사  |
+
+> Kafka 발행은 본 패키지에 없다 — 구 `scheduler.JobEmitter` 는 이슈 #387 에서 제거되고
+> [`bus.Publisher.PublishSeed`](bus.md) 로 이동했다. Scheduler 가 `bus.Publisher` 를 직접 의존한다.
 
 <br>
 

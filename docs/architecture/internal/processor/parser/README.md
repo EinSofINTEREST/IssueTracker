@@ -74,7 +74,7 @@ Worker 가 이상 종료 / rule.Error 잔존 / LLM 재처리 윈도우 만료된
 - [`internal/locks`](../../locks/README.md) — `ProcessingLock`
 - [`internal/storage/service`](../../storage/service.md) — `RawContentService`, `ContentService`, `BlacklistService` (auto-demote 의존성 역전)
 - [`internal/storage`](../../storage/README.md) — `SampleURLRepository`
-- [`internal/publisher`](../../publisher.md) — chained job 발행 (BlacklistMatcher.Classify 사후 분류)
+- [`internal/bus`](../../bus.md) — chained job 발행 (BlacklistMatcher.Classify 사후 분류)
 - [`internal/processor/precheck`](../precheck.md) — 발행 직전 URL 처리 가부 게이트 (이슈 #425)
 - [`pkg/agent/claude`](../../../pkg/agent/claude.md) — EnrichedExtractor (llmgen 의 LLM 호출 백엔드)
 - [`pkg/queue`](../../../pkg/queue.md), [`pkg/logger`](../../../pkg/logger.md)

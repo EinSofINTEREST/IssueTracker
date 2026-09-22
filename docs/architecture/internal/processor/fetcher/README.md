@@ -83,7 +83,7 @@ worker ──→ handler ──→ (domain/general → fetcher) ──→ implem
 8. RawContentRef 를 issuetracker.fetched 토픽에 발행
        │
        ▼
-   (parser stage 로 핸드오프 — internal/processor/parser/README.md)
+   (parser stage 로 핸드오프 — docs/architecture/internal/processor/parser/README.md)
 ```
 
 각 단계의 자세한 책임은 위 패키지별 문서 참조.
@@ -94,7 +94,7 @@ worker ──→ handler ──→ (domain/general → fetcher) ──→ implem
 
 - **Kafka**: `issuetracker.crawl.{high,normal,low}` consume / `issuetracker.fetched` produce
 - **PostgreSQL**: `raw_contents` (Claim Check 저장 — parser 단계가 소비/정리)
-- **Redis**: ProcessingLock (SETNX) / IngestionLock / RetryQueue (ZSET)
+- **Redis**: ProcessingLock (SETNX) / IngestionMarker / RetryQueue (ZSET)
 - **Chrome (CDP)**: `implementation/chromedp` 가 `ws://localhost:9222` 또는 컨테이너 내장 chrome 사용
 
 <br>

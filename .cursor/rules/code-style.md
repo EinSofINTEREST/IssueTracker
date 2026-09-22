@@ -3,18 +3,18 @@
 ## Go Formatting Standards
 
 ### Indentation
-- **2 spaces** (NOT tabs)
-- Configure your editor to use 2 spaces for Go files
+- **탭 (tabs)** — gofmt 기본값. `make fmt` 가 강제하고 CI 의 Format Check 가 검증한다.
+- 2-space 는 Go 코드에 쓰지 않는다. SQL / YAML 에만 적용.
 
 ```go
-// Good
+// Good — 탭 인덴트
 func process() {
-  if condition {
-    doSomething()
-  }
+	if condition {
+		doSomething()
+	}
 }
 
-// Bad (tabs or 4 spaces)
+// Bad — 스페이스 인덴트 (gofmt 가 되돌리고 CI 가 실패한다)
 func process() {
     if condition {
         doSomething()
@@ -455,5 +455,5 @@ Before submitting code:
 - [ ] Logging includes context
 - [ ] Code is self-documenting
 - [ ] Comments explain WHY, not WHAT
-- [ ] 2-space indentation
-- [ ] Test coverage >= 70%
+- [ ] 탭 인덴트 (`make fmt` 통과)
+- [ ] Test coverage — CI 게이트 40% 이상, core 패키지 목표 70%

@@ -111,7 +111,7 @@ issuetracker/
 │   ├── promptcontract/        # ✅ 전 stage prompt placeholder 계약 집계 (이슈 #539)
 │   ├── classifier/            # ⚠️ grpc/http client — 현재 파이프라인에 미연결 (이슈 #544)
 │   ├── locks/                 # ✅ 단계 무관 distributed lock — 4 stage 공유 (이슈 #197)
-│   │   ├── ingestion_lock.go  # IngestionLock — SET NX 진입 마커 (release 없음, 이슈 #541 에서 개명 예정)
+│   │   ├── ingestion_marker.go # IngestionMarker — SET NX 진입 마커 (release 없음, 이슈 #541)
 │   │   ├── processing_lock.go # ProcessingLock + ProcessingKey(stage, url)
 │   │   ├── semaphore.go       # in-process 동시 슬롯 cap (인스턴스 간 비공유 — 이슈 #545)
 │   │   └── stage_gate.go      # Semaphore + ProcessingLock 합성
@@ -124,7 +124,7 @@ issuetracker/
 │   │   │   ├── rate_limiter/  # IP 단위 token bucket
 │   │   │   └── worker/        # PoolManager + KafkaConsumerPool + RetryScheduler + CircuitBreaker
 │   │   ├── parser/            # ✅ Domain-agnostic parser + DB-driven rule engine + ParserWorker (이슈 #100, #196, #204)
-│   │   │   ├── parser.go      # ContentParser / LinkListParser interfaces + Page model
+│   │   │   ├── stage.go       # ContentParser / LinkListParser interfaces + Page model
 │   │   │   ├── rule/          # parsing_rules 기반 단일 engine
 │   │   │   │   ├── llmgen/    # LLM 기반 selector 자동 생성 (이슈 #149)
 │   │   │   │   ├── pathinfer/ # path_pattern 추론 알고리즘 (이슈 #173)
@@ -159,16 +159,20 @@ issuetracker/
 │       └── logger/            # ← pkg/logger/
 │
 ├── examples/                   # Usage examples
-│   └── basic_usage.go         # ✅ Basic usage example
+│   ├── basic_usage/           # ✅ 기본 사용 예제
+│   ├── crawler_comparison/    # ✅ fetcher 구현체 비교
+│   └── kafka_pipeline/        # ✅ Kafka 파이프라인 예제
 │
 ├── configs/                    # Configuration files (planned)
 ├── scripts/                    # Build and deployment scripts (planned)
 ├── deployments/                # Deployment configurations (planned)
 │   └── docker/
 │
-├── docs/                       # Documentation (planned)
-│   ├── en/                    # English docs
-│   └── ko/                    # Korean docs
+├── docs/                       # Documentation
+│   ├── architecture/          # ✅ 코드 구조 문서 (cmd / internal / pkg / proto)
+│   ├── ci/                    # ✅ CI 운영 규약, status check 단일 소스
+│   ├── ko/                    # ✅ 한국어 문서
+│   └── en/                    # English docs — 목표, 현재 미존재
 │
 ├── .claude/                    # Claude AI development rules
 │   └── rules/

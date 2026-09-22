@@ -13,7 +13,7 @@
 | [db.go](../../../../internal/storage/postgres/db.go)                          | `NewPool(ctx, DBConfig, log)` — pgxpool 생성 + ping + 풀 설정        |
 | [content.go](../../../../internal/storage/postgres/content.go)                | `ContentRepository` 구현 — 3-table 트랜잭션 (`contents` + `content_bodies` + `content_meta`) |
 | [raw_content.go](../../../../internal/storage/postgres/raw_content.go)        | `RawContentRepository` 구현                                         |
-| [parsing_rule.go](../../../../internal/storage/postgres/parsing_rule.go)      | `ParsingRuleRepository` 구현 (regex pattern 컬럼)                   |
+| [parser_rule.go](../../../../internal/storage/postgres/parser_rule.go)       | `ParserRuleRepository` 구현 (regex pattern 컬럼)                    |
 | [sample_url.go](../../../../internal/storage/postgres/sample_url.go)          | `SampleURLRepository` 구현 (cap 100/rule)                           |
 | [scanner.go](../../../../internal/storage/postgres/scanner.go)                | row → struct scan helper (시간/JSONB 변환)                          |
 

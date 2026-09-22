@@ -31,7 +31,7 @@
 | `app.LoadMetrics` | app | `MetricsConfig` | `METRICS_ADDR` (default `:9090`) |
 | `app.LoadShutdown` | app | `ShutdownConfig` | overall + claudegen shutdown timeout |
 | `storage.Load` | storage | `DBConfig` | PostgreSQL host/port/user/password/database/MaxConns/MinConns/QueryTimeout |
-| `storage.LoadRedis` | storage | `RedisConfig` | host/port/password/DB/IngestionLockTTL/poolSize |
+| `storage.LoadRedis` | storage | `RedisConfig` | host/port/password/DB/IngestionMarkTTL/poolSize |
 | `fetcher.LoadChromedpPool` | fetcher | `ChromedpPoolConfig` | worker_count, semaphore, remote URLs |
 | `fetcher.LoadAutoUpgrade` | fetcher | `AutoUpgradeConfig` | goquery → chromedp 자동 승격 임계값 |
 | `processor.LoadBlacklist` | processor | `BlacklistConfig` | parser_blacklist 활성/캐시 TTL (이슈 #295/#297) |

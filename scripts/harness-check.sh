@@ -25,7 +25,12 @@ warn() { echo "${YELLOW}WARN${RESET} $*"; warn_count=$((warn_count + 1)); }
 ok()   { echo "${GREEN} ok ${RESET} $*"; }
 
 HARNESS_DOCS=(CLAUDE.md .claude/loop.md .claude/pr-feedback.md)
-while IFS= read -r f; do HARNESS_DOCS+=("$f"); done < <(find .claude/rules -name '*.md' | sort)
+# AI 세션이 전제로 읽는 문서 전부가 대상이다. .claude/rules 만 보면 Cursor 가 읽는
+# .cursor/rules 와 구조 문서 docs/ 의 드리프트를 통째로 놓친다 (이슈 #565).
+for d in .claude/rules .cursor/rules docs; do
+  [ -d "$d" ] || continue
+  while IFS= read -r f; do HARNESS_DOCS+=("$f"); done < <(find "$d" -name '*.md' | sort)
+done
 
 # ── 1. 문서가 언급한 저장소 경로의 실재 여부 ───────────────────────────────
 # 코드 블록 안의 예시 경로 (foo/bar 등) 와 목표 상태 서술을 구분할 수 없으므로,
@@ -45,13 +50,47 @@ is_placeholder() {
   esac
   # "core.CrawlerError" 처럼 경로가 아니라 Go 심볼을 가리키는 표기
   [[ "$1" =~ \.[A-Z] ]] && return 0
+  # "pkg/agent/Agent", "internal/classifier/Handler" — 마지막 세그먼트가 대문자로 시작하고
+  # 확장자가 없으면 파일이 아니라 타입/인터페이스 이름이다.
+  [[ "${1##*/}" =~ ^[A-Z][A-Za-z0-9]*$ ]] && return 0
   return 1
 }
 
 # 같은 줄에서 "없다 / 미구현 / 목표" 로 이미 부재를 밝힌 경우는 정상 서술.
+#
+# 개명 · 이전 이력도 정상이다 — "본 패키지는 이전에 internal/publisher 였다" 처럼
+# 지금은 없는 경로를 **과거형으로** 언급하는 문장은 드리프트가 아니라 기록이다.
+# 이걸 인정하지 않으면 개명을 문서에 남길 때마다 경고가 뜬다 (이슈 #565).
+# 부재를 밝히는 문구. "없음" 처럼 짧고 흔한 토큰은 넣지 않는다 —
+# "release 없음" 같은 무관한 설명까지 부재 선언으로 오인해 실제 드리프트를 덮는다 (이슈 #565).
+# "부재" 는 뺀다 — "Redis 부재 시 in-memory fallback" 같은 운영 문맥이 흔해,
+# 경로 부재 선언과 구분되지 않는다 (Copilot 피드백).
+ABSENT_RE='미구현|존재하지 않|없습니다|아직 없|은 없다|는 없다|planned|목표|제안|예시|이전에|이전됨|로 이전|통합됐|통합되|개명|renamed|moved to|구 이름'
+
 declared_absent() {
-  # -A2: 부재를 밝히는 문구가 줄바꿈으로 다음 줄에 걸린 경우까지 인정한다.
-  grep -F -A2 "$2" "$1" | grep -qE '미구현|존재하지 않|없습니다|없음|부재|planned|목표|제안|예시'
+  # 경로가 적힌 줄 자체에 부재 표기가 있으면 인정한다.
+  grep -F -- "$2" "$1" | grep -qE "$ABSENT_RE" && return 0
+
+  # 산문에서 부재 표기가 다음 줄로 넘어간 경우(-A1)까지만 인정한다.
+  # -A2 로 넓히면 표(表) 아래 붙은 무관한 "미구현" 주석이 윗줄의 멀쩡한 경로까지
+  # 면제시킨다 — cmd/admin 을 cmd/adminx 로 바꿔도 통과하던 원인 (이슈 #565).
+  # 표 행(| 로 시작) 은 자기 줄만 본다.
+  grep -F -- "$2" "$1" | grep -qE '^[[:space:]]*\|' && return 1
+  grep -F -A1 "$2" "$1" | grep -qE "$ABSENT_RE" && return 0
+
+  # 트리 블록에서 복원한 경로는 원문에 전체 문자열로 존재하지 않는다
+  # ("docs/en/api.md" 는 트리에 "│   ├── api.md" 로만 적힌다). 이 경우
+  # 조상 디렉토리 줄에 달린 "목표 / 미존재" 표기를 부재 선언으로 인정한다.
+  # 트리에서 복원한 경로는 원문에 전체 문자열로 없다 ("docs/en" 은 "└── en/" 으로만 적힌다).
+  # 이때 자기 자신의 마지막 세그먼트 줄에 달린 표기만 인정한다.
+  #
+  # 조상까지 거슬러 올라가지 않는다 — "internal/" 한 줄에 붙은 "미구현" 이 그 아래 모든
+  # 경로를 면제시켜, 트리 안의 실제 드리프트를 통째로 덮어 버린다 (이슈 #565).
+  # 디렉토리는 "── name/", 파일은 "── name" 으로 적힌다 — 둘 다 매치해야
+  # 트리의 파일 항목에 붙인 "# 미구현 / 목표" 표기가 인정된다 (Copilot 피드백).
+  local leaf="${2##*/}"
+  grep -E -A2 -- "── ${leaf}/?([[:space:]]|$)" "$1" | grep -qE "$ABSENT_RE" && return 0
+  return 1
 }
 
 # gitignore 대상은 저장소에 없는 것이 정상 (예: .claude/settings.local.json).
@@ -59,20 +98,111 @@ is_ignored() {
   git check-ignore -q "$1" 2>/dev/null
 }
 
-# 펜스 코드 블록(```)을 제거한 본문을 출력한다.
+# 예시용 코드 블록을 제거한 본문을 출력한다.
 #
-# 문서의 코드 블록은 **예시** 다 — CI 워크플로 샘플, 목표 디렉토리 구조, 마이그레이션 파일명
-# 같은 것들이 들어 있어 실재 여부를 물을 대상이 아니다. 산문에 적힌 경로만 검사해야 경고가
-# 신호로 남는다 (CodeRabbit 피드백으로 스캔 범위를 넓히면서 함께 도입).
+# 언어 태그가 붙은 블록(```go, ```yaml, ```bash ...)은 **예시** 다 — CI 워크플로 샘플,
+# 마이그레이션 파일명, confluent-kafka 스타일 의사코드 같은 것들이 들어 있어 실재 여부를
+# 물을 대상이 아니다.
+#
+# 반면 태그 없는 블록에는 **디렉토리 트리** 가 들어 있고, 이것은 예시가 아니라 저장소 구조의
+# 정경(正經)이다. 이전에는 펜스를 일괄 제거해 트리가 통째로 검사에서 빠졌고, 그 결과
+# ingestion_lock.go 처럼 이미 개명된 파일이 계속 문서에 남아 있었다 (이슈 #565).
+# 따라서 태그 없는 블록은 남긴다.
 strip_code_blocks() {
-  awk '/^[[:space:]]*```/ { infence = !infence; next } !infence' "$1"
+  awk '
+    /^[[:space:]]*```/ {
+      if (infence) { infence = 0; tagged = 0 }
+      else {
+        infence = 1
+        # ``` 뒤에 언어 태그가 붙어 있으면 예시 블록으로 본다.
+        tagged = ($0 ~ /^[[:space:]]*```[[:alnum:]]/)
+      }
+      next
+    }
+    !infence || !tagged
+  ' "$1"
+}
+
+# 디렉토리 트리 블록에서 전체 경로를 복원해 출력한다.
+#
+# 트리는 파일명만 적는다 — "│   │   ├── ingestion_marker.go" 에는 internal/locks/ 접두사가
+# 없어 경로 정규식이 매치하지 않는다. 들여쓰기 깊이로 부모를 추적해 전체 경로를 만든다.
+# 루트는 블록 첫 줄(예: "internal/processor/fetcher/" 또는 "issuetracker/").
+expand_tree_paths() {
+  awk -v families="${PATH_FAMILIES}" '
+    BEGIN { n = split(families, fa, "|"); for (i = 1; i <= n; i++) isfamily[fa[i]] = 1 }
+    # 블록 안에 "목표 구조" 표시가 있으면 그 트리는 아직 만들지 않은 구조다 — 통째로 건너뛴다.
+    # 표시는 블록 첫 줄 주석에 둔다 (예: "# ↓ 목표 구조 — docs/en/ 은 현재 존재하지 않습니다").
+    /목표 구조|목표 상태|planned structure/ { if (infence) skip = 1; next }
+    # fence 토글 — 여는 줄에서 태그 유무로 skip 을 정하고, 닫는 줄에서 상태를 모두 초기화한다.
+    # 태그 블록에서 infence 를 세우지 않으면 닫는 fence 가 "새 여는 fence" 로 처리돼
+    # 이후 문서의 트리가 통째로 skip 된다 (Copilot 피드백).
+    /^[[:space:]]*```/ {
+      if (infence) { infence = 0; skip = 0 }
+      else { infence = 1; skip = ($0 ~ /^[[:space:]]*```[[:alnum:]]/) }
+      delete parent; root = ""
+      next
+    }
+    !infence { next }
+    skip { next }
+
+    # 트리 문자가 없는 첫 줄 = 루트 (예: "issuetracker/", "internal/locks/")
+    !/[├└│]/ {
+      line = $0
+      sub(/#.*$/, "", line)
+      gsub(/[[:space:]]/, "", line)
+      if (line ~ /^[A-Za-z0-9_.][A-Za-z0-9_.\/-]*\/$/) {
+        # 루트의 첫 세그먼트가 저장소 최상위 디렉토리면 실제 접두사 (예: "internal/locks/").
+        # 아니면 저장소 자신을 가리키는 표기 (예: "issuetracker/") 이므로 벗겨낸다.
+        # 디렉토리명 대소문자에 의존하지 않기 위해 이름 비교가 아니라 family 소속으로 판정한다.
+        split(line, seg, "/")
+        root = (seg[1] in isfamily) ? line : ""
+        delete parent
+      }
+      next
+    }
+
+    {
+      # "│   │   ├── name" → 접두부 길이로 깊이를 계산 (트리 한 단계 = 4칸)
+      match($0, /[├└]── /)
+      if (RSTART == 0) next
+      depth = int((RSTART - 1) / 4)
+      name = substr($0, RSTART + RLENGTH)
+      sub(/[[:space:]]*#.*$/, "", name)         # "# 설명" 형식 주석
+      sub(/[[:space:]]*←.*$/, "", name)         # "← 설명" 형식 주석 (docs/architecture 관행)
+      sub(/[[:space:]]+$/, "", name)
+      if (name == "") next
+
+      isdir = (name ~ /\/$/)
+      base = name; sub(/\/$/, "", base)
+
+      # 부모 경로 조립
+      full = root
+      bad = 0
+      for (i = 0; i < depth; i++) {
+        if (!(i in parent)) { bad = 1; break }
+        full = full parent[i] "/"
+      }
+      if (bad) next
+
+      if (isdir) { parent[depth] = base; for (i = depth + 1; i in parent; i++) delete parent[i] }
+      print full base
+    }
+  ' "$1"
 }
 
 missing_paths=0
 for doc in "${HARNESS_DOCS[@]}"; do
   [ -f "$doc" ] || continue
+  doc_dir=$(dirname "$doc")
   while IFS= read -r p; do
     [ -e "$p" ] && continue
+    # docs/architecture/ 의 문서들은 서로를 자기 디렉토리 기준 상대 경로로 링크한다
+    # (예: docs/architecture/cmd/issuetracker.md 안의 "internal/scheduler.md" 는
+    #  docs/architecture/internal/scheduler.md 를 가리킨다).
+    [ -e "$doc_dir/$p" ] && continue
+    # docs/architecture/<family>/... 처럼 저장소 구조를 미러링하는 문서 트리도 인정한다.
+    [ -e "docs/architecture/$p" ] && continue
     is_placeholder "$p" && continue
     is_ignored "$p" && continue
     declared_absent "$doc" "$p" && continue
@@ -81,9 +211,14 @@ for doc in "${HARNESS_DOCS[@]}"; do
     # test/internal/... 처럼 접두사가 붙은 경로의 중간 매치 방지 — 앞이 / 또는 단어문자면 제외
     # 저장소 최상위 디렉토리를 실제로 훑어 family 목록을 만든다 (CodeRabbit 피드백).
     # 하드코딩하면 docs/ · .github/ · .claude/ 처럼 문서가 실제로 참조하는 경로를 놓친다.
-  done < <(strip_code_blocks "$doc" \
-             | grep -ohP "(?<![\w/])(${PATH_FAMILIES})/[\w./-]+" \
-             | sed 's/[.,)`]*$//' | sort -u)
+  # sed 's|(../)+||g': 마크다운 상대 링크 "(../../../internal/bus/)" 의 ../ 접두를 벗긴다.
+  # 벗기지 않으면 앞의 "/" 가 부정 후방탐색에 걸려 경로가 통째로 추출되지 않는다 —
+  # docs/architecture/ 의 링크는 대부분 이 형태라 사각지대가 컸다 (이슈 #565).
+  done < <({ strip_code_blocks "$doc" | sed 's|\(\.\./\)\+||g' \
+               | grep -ohP "(?<![\w/])(${PATH_FAMILIES})/[\w./-]+"
+             expand_tree_paths "$doc" \
+               | grep -P "^(${PATH_FAMILIES})/"
+           } | sed 's/[.,)`]*$//' | sort -u)
 done
 [ "$missing_paths" -eq 0 ] && ok "문서가 언급한 internal/ pkg/ cmd/ 경로가 모두 실재 (placeholder·부재 명시 제외)"
 
@@ -110,9 +245,9 @@ while IFS= read -r line; do
   doc=${line%%:*}; ver=$(grep -oE 'Go 1\.[0-9]+' <<<"$line" | head -1)
   [ -z "$ver" ] && continue
   [ "${ver#Go }" = "$gomod_minor" ] || fail "$doc 의 '$ver' 가 go.mod ($gomod_ver) 와 불일치"
-done < <(grep -rn 'Go 1\.[0-9]\+' CLAUDE.md .claude/rules/*.md 2>/dev/null)
-grep -rq "go-version: '1\." .claude/rules/*.md 2>/dev/null \
-  && fail ".claude/rules 의 CI 예시가 go-version 을 하드코딩 (go-version-file: go.mod 사용)" \
+done < <(grep -n 'Go 1\.[0-9]\+' "${HARNESS_DOCS[@]}" 2>/dev/null)
+grep -q "go-version: '1\." "${HARNESS_DOCS[@]}" 2>/dev/null \
+  && fail "규약 문서의 CI 예시가 go-version 을 하드코딩 (go-version-file: go.mod 사용)" \
   || ok "Go 버전 서술이 go.mod ($gomod_ver) 와 일치"
 
 # ── 4. 커버리지 임계값 ────────────────────────────────────────────────────

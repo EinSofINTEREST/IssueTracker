@@ -63,9 +63,9 @@ provider 빌더는 각 서브패키지 `init()` 에서 [`RegisterProvider`](../.
 
 | 디렉토리                                                  | 역할                                                  |
 |----------------------------------------------------------|-------------------------------------------------------|
-| [`pkg/llm/anthropic/`](../../../pkg/llm/anthropic/)       | Claude Messages API 어댑터                            |
-| [`pkg/llm/gemini/`](../../../pkg/llm/gemini/)             | Gemini Generative API 어댑터                          |
-| [`pkg/llm/openai/`](../../../pkg/llm/openai/)             | OpenAI Chat Completions 어댑터                        |
+| [`pkg/llm/providers/anthropic/`](../../../pkg/llm/providers/anthropic/) | Claude Messages API 어댑터                  |
+| [`pkg/llm/providers/gemini/`](../../../pkg/llm/providers/gemini/)       | Gemini Generative API 어댑터                |
+| [`pkg/llm/providers/openai/`](../../../pkg/llm/providers/openai/)       | OpenAI Chat Completions 어댑터              |
 | [`pkg/llm/providers/`](../../../pkg/llm/providers/)       | side-effect import — 모든 provider 의 init() 트리거    |
 | [`pkg/llm/chain/`](../../../pkg/llm/chain/)               | Chain-of-Responsibility 합성 (이슈 #142)              |
 | [`pkg/llm/policy/`](../../../pkg/llm/policy/)             | 라우팅 정책 — fixed / cheapest / hybrid / latency     |
@@ -114,7 +114,7 @@ p := chain.NewWithPolicy(pol, []llm.Provider{...}, chain.WithPolicyLogger(log))
 
 ## 호출 측
 
-- [`cmd/issuetracker.buildLLMProvider`](../cmd/issuetracker.md) — chain 구성
+- `buildLLMProvider` in [`cmd/issuetracker`](../cmd/issuetracker.md) — chain 구성
 - [`internal/processor/parser/rule/llmgen`](../internal/processor/parser/rule.md) — selector 자동 생성
 - [`internal/processor/parser/rule/refiner`](../internal/processor/parser/rule.md) — path_pattern 정밀화
 

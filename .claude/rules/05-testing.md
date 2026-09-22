@@ -703,7 +703,7 @@ test/                               # 모든 테스트 파일의 루트
 │   │   ├── errors_test.go
 │   │   ├── http_client_test.go
 │   │   ├── models_test.go
-│   │   ├── rate_limiter_test.go
+│   │   │   └── (rate_limiter 는 test/internal/processor/fetcher/rate_limiter/)
 │   │   └── retry_test.go
 │   └── storage/                    # ← internal/storage/
 │       ├── content_service_test.go
@@ -884,6 +884,7 @@ locust -f locustfile.py --host=https://api.issuetracker.com
 Document test scenarios in `docs/testing/`:
 
 ```
+# ↓ 목표 구조 — docs/testing/ 은 현재 존재하지 않습니다
 docs/testing/
 ├── test-plan.md           # Overall test strategy
 ├── crawler-tests.md       # Crawler-specific scenarios

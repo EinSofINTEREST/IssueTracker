@@ -9,9 +9,9 @@
 
 | 타입                              | 위치                                                                | 책임                                                          |
 |----------------------------------|---------------------------------------------------------------------|---------------------------------------------------------------|
-| `IngestionLock` (interface)       | [ingestion_lock.go](../../../../internal/locks/ingestion_lock.go)   | URL pipeline 진입 marker — Publisher 가 사용 (이슈 #178, #126) |
-| `RedisIngestionLock`              | [ingestion_lock.go](../../../../internal/locks/ingestion_lock.go)   | Redis SETNX 기반 구현                                          |
-| `NoopIngestionLock`               | [ingestion_lock.go](../../../../internal/locks/ingestion_lock.go)   | 항상 acquired=true (단일 프로세스 / dev)                        |
+| `IngestionMarker` (interface)       | [ingestion_marker.go](../../../../internal/locks/ingestion_marker.go)   | URL pipeline 진입 marker — Publisher 가 사용 (이슈 #178, #126) |
+| `RedisIngestionMarker`              | [ingestion_marker.go](../../../../internal/locks/ingestion_marker.go)   | Redis SETNX 기반 구현                                          |
+| `NoopIngestionMarker`               | [ingestion_marker.go](../../../../internal/locks/ingestion_marker.go)   | 항상 acquired=true (단일 프로세스 / dev)                        |
 | `ProcessingLock` (interface)      | [processing_lock.go](../../../../internal/locks/processing_lock.go) | URL 동시 처리 방지 — fetcher/parser/validator 공유 (이슈 #178)  |
 | `RedisProcessingLock`             | [processing_lock.go](../../../../internal/locks/processing_lock.go) | Redis SETNX 기반 구현                                          |
 | `NoopProcessingLock`              | [processing_lock.go](../../../../internal/locks/processing_lock.go) | 항상 acquired=true (단일 프로세스 / dev)                        |
@@ -36,10 +36,10 @@ defer lock.Release(ctx, key)
 
 stage 분기는 호출자 책임 — `locks` 패키지 자체는 단순 key/value SETNX 만 노출.
 
-## IngestionLock 패턴
+## IngestionMarker 패턴
 
 ```go
-type IngestionLock interface {
+type IngestionMarker interface {
     Acquire(ctx context.Context, url string) (acquired bool, err error)
     Invalidate(ctx context.Context, url string) error
 }
@@ -51,11 +51,11 @@ if !acquired {
 }
 ```
 
-기본 TTL 은 `redisCfg.IngestionLockTTL` (`INGESTION_LOCK_TTL` 환경변수).
+기본 TTL 은 `redisCfg.IngestionMarkTTL` (`REDIS_INGESTION_MARK_TTL` 환경변수 — 구 이름 `REDIS_INGESTION_LOCK_TTL` 도 인식).
 
 ## 호출 측
 
-- [`internal/publisher`](../publisher.md) — `IngestionLock` (Kafka enqueue 직전 dedup)
+- [`internal/bus`](../bus.md) — `IngestionMarker` (Kafka enqueue 직전 dedup)
 - [`internal/processor/fetcher/worker`](../processor/fetcher/worker.md) — fetcher worker pool 의 `ProcessingLock(StageFetcher)`
 - [`internal/processor/parser/worker`](../processor/parser/README.md) — parser worker 의 `ProcessingLock(StageParser)`
 - [`internal/processor/validate`](../processor/validate.md) — validator 의 `ProcessingLock(StageValidator)`

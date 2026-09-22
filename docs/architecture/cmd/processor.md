@@ -46,5 +46,5 @@
 |-------------------------|---------------------------------------|----------------------------------------|
 | 실행 stage              | validate 만                            | crawler + parser + validator + scheduler + refiner |
 | ProcessingLock          | `NoopProcessingLock{}` (no-op)         | `NewRedisProcessingLock` (Redis SETNX)  |
-| RetryScheduler / IngestionLock | 없음                            | Redis 기반 (이슈 #82, #178)             |
+| RetryScheduler / IngestionMarker | 없음                            | Redis 기반 (이슈 #82, #178)             |
 | 다중 인스턴스 안전성    | Kafka consumer group rebalance 로 동시 처리 가능성 — dev/test 권장 | 단일 ProcessingLock 공유로 안전        |

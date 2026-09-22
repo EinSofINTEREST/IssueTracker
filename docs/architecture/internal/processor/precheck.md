@@ -109,7 +109,7 @@ case precheck.VerdictExtractLinksOnly:
 
 | 호출자 | 사용 메소드 | 비고 |
 |---|---|---|
-| [`internal/publisher`](../publisher.md) | `Decider.CheckURL` | publish 직전 마지막 게이트 |
+| [`internal/bus`](../bus.md) | `Decider.CheckURL` | publish 직전 마지막 게이트 |
 | [`internal/processor/parser/worker`](parser/README.md) | `Decider.CheckURL` | parser 진입점 — list / page 라우팅 결정 (이미 wiring 완료, main.go) |
 | [`internal/processor/fetcher/handler`](fetcher/handler.md) | `Decider.CheckURL` | fetch 시작 전 게이트 (이미 wiring 완료, main.go) |
 

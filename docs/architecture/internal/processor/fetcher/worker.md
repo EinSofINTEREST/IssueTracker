@@ -5,7 +5,7 @@
 크롤러 단계의 핵심 오케스트레이터. **3-tier priority Kafka consumer pool** 을 운영하며, **Redis 기반
 RetryScheduler** 로 지연 재시도를 처리하고 **per-source CircuitBreaker** 로 실패 폭주를 차단합니다.
 
-> 단계 무관 distributed lock (ProcessingLock / IngestionLock) 은 [`internal/locks`](../../locks/README.md)
+> 단계 무관 distributed lock (ProcessingLock / IngestionMarker) 은 [`internal/locks`](../../locks/README.md)
 > 로 분리됨 (이슈 #197). fetcher worker 는 `locks.ProcessingLock(stage="fetcher", url)` 형태로 사용.
 
 <br>
@@ -16,9 +16,9 @@ RetryScheduler** 로 지연 재시도를 처리하고 **per-source CircuitBreake
 |-------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------------|
 | `PoolManager`                  | [manager.go](../../../../internal/processor/fetcher/worker/manager.go)           | 3개 priority pool 의 lifecycle 관리                              |
 | `KafkaConsumerPool`            | [pool.go](../../../../internal/processor/fetcher/worker/pool.go)                 | 단일 priority 의 worker goroutine pool + retry 라우팅           |
-| `RetryScheduler` (interface)   | [retry_scheduler.go](../../../../internal/processor/fetcher/worker/retry_scheduler.go) | 지연 retry — Redis ZSET 또는 즉시 republish                  |
-| `CircuitBreakerRegistry`       | [circuit_breaker.go](../../../../internal/processor/fetcher/worker/circuit_breaker.go) | per-source 실패율 트래킹 + 차단                              |
-| `PriorityResolver` (interface) | [resolver.go](../../../../internal/processor/fetcher/worker/resolver.go)         | retry/escalation 시 새 priority 결정 전략                       |
+| `RetryScheduler` (interface)   | [retry.go](../../../../internal/bus/retry.go) | 지연 retry — Redis ZSET 또는 즉시 republish                  |
+| `CircuitBreakerRegistry`       | [circuit_breaker.go](../../../../pkg/resilience/circuit_breaker.go) | per-source 실패율 트래킹 + 차단                              |
+| `PriorityResolver` (interface) | [resolver.go](../../../../internal/bus/resolver.go)         | retry/escalation 시 새 priority 결정 전략                       |
 
 <br>
 
@@ -68,17 +68,17 @@ type RetryScheduler interface {
 score 로 사용하거나 즉시 발행하거나의 차이만 흡수.
 
 구현:
-- [`NewRedisDelayedRetryScheduler`](../../../../internal/processor/fetcher/worker/retry_scheduler.go) — Redis ZSET
+- [`NewRedisDelayedRetryScheduler`](../../../../internal/bus/retry.go) — Redis ZSET
   (score=`ScheduledAt` unix timestamp) + 별도 goroutine (`Start(ctx)` / `Stop()`) 이 ready job 을
   Kafka 에 publish — worker slot 미점유 (이슈 #82)
-- [`KafkaImmediateRetryScheduler`](../../../../internal/processor/fetcher/worker/retry_scheduler.go) — Redis 부재 시
+- [`KafkaImmediateRetryScheduler`](../../../../internal/bus/retry.go) — Redis 부재 시
   fallback, 즉시 republish 후 worker 가 `ScheduledAt` 까지 sleep (worker slot 점유)
 
 <br>
 
 ## CircuitBreaker (per-source)
 
-[circuit_breaker.go](../../../../internal/processor/fetcher/worker/circuit_breaker.go). 사이트별 실패율을 추적하다가
+[circuit_breaker.go](../../../../pkg/resilience/circuit_breaker.go). 사이트별 실패율을 추적하다가
 일정 threshold 초과 시 일정 시간 차단 (Closed → Open → HalfOpen).
 
 상태 전이는 INFO 로 로그.
@@ -87,7 +87,7 @@ score 로 사용하거나 즉시 발행하거나의 차이만 흡수.
 
 ## PriorityResolver
 
-[resolver.go](../../../../internal/processor/fetcher/worker/resolver.go). retry 시 새 priority 결정 전략. 합성
+[resolver.go](../../../../internal/bus/resolver.go). retry 시 새 priority 결정 전략. 합성
 가능 — `CompositeResolver` 가 여러 전략을 fallback chain 으로:
 
 ```go
@@ -112,7 +112,7 @@ resolver.Add(NewRuleBasedPriorityResolver(PriorityNormal)) // 룰 기반 우선�
 | 시스템    | 용도                                                              |
 |----------|------------------------------------------------------------------|
 | Kafka    | TopicCrawlHigh/Normal/Low consume / TopicFetched / TopicDLQ produce |
-| Redis    | ProcessingLock (SETNX) / IngestionLock (SETNX) / RetryQueue (ZSET) |
+| Redis    | ProcessingLock (SETNX) / IngestionMarker (SETNX) / RetryQueue (ZSET) |
 
 <br>
 

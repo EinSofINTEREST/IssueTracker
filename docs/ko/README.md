@@ -177,7 +177,7 @@ issuetracker/
 │   │   ├── service/                # 비즈니스 로직 (ContentService, BlacklistService, ParserRuleService, …)
 │   │   ├── postgres/               # PostgreSQL 구현
 │   │   └── redis/                  # Redis 구현 (lock, sliding window)
-│   ├── locks/                      # ProcessingLock / IngestionLock (Redis)
+│   ├── locks/                      # ProcessingLock / IngestionMarker (Redis)
 │   ├── bus/                        # Kafka producer/consumer + retry scheduler
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives
@@ -204,7 +204,7 @@ issuetracker/
 ├── test/                           # 소스 트리 미러링
 └── docs/
     ├── architecture/               # canonical architecture 문서
-    ├── en/  └── ko/                # README 번역
+    └── ko/                         # 한국어 문서 (docs/en/ 은 미존재 — 목표 구조)
 ```
 
 ### 주요 설계 결정

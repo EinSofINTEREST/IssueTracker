@@ -382,7 +382,11 @@
    ```
 
 2. **Package Organization**: By functionality
+
+   아래는 패키지 구성 방식을 보이는 **예시** 이며 실재하는 경로가 아니다 —
+   본 저장소의 crawler 는 `internal/processor/fetcher/` 로 정렬돼 있다 (이슈 #198).
    ```
+   # ↓ 목표 구조 표기 — 구성 방식 예시이며 실재 경로가 아닙니다
    internal/
    └── crawler/
        ├── crawler.go      # Main interface
@@ -952,6 +956,7 @@ func process() {
 
 - **Directory structure** (목표):
   ```
+  # ↓ 목표 구조 — docs/en/ 은 현재 존재하지 않습니다
   docs/
   ├── en/           # English documentation (primary)
   │   ├── README.md
@@ -1175,26 +1180,27 @@ MIT
 1. **Write English First**
    - All documentation **MUST** be written in English first
    - English version is the source of truth
-   - Store in `docs/en/` directory
+   - Store in `docs/en/` directory (목표 구조 — 현재 미존재)
 
 2. **Translate to Korean**
    - Create Korean translation after English is complete
-   - Store in `docs/ko/` directory
+   - Store in `docs/ko/` directory (현재는 `docs/ko/README.md` 만 존재)
    - Maintain same file structure as English
    - Keep synchronized with English updates
 
-3. **Directory Organization**
+3. **Directory Organization** (목표 구조 — 현재 미존재)
    ```
+   # ↓ 목표 구조 — docs/en/ 은 현재 존재하지 않습니다
    project/
    ├── README.md              # English (root level)
    ├── docs/
-   │   ├── en/                # English documentation (source)
+   │   ├── en/                # English documentation (source) — 목표, 현재 미존재
    │   │   ├── README.md
    │   │   ├── architecture.md
    │   │   ├── api.md
    │   │   ├── deployment.md
    │   │   └── troubleshooting.md
-   │   └── ko/                # Korean translation
+   │   └── ko/                # Korean translation — 목표 (현재 README.md 만 존재)
    │       ├── README.md
    │       ├── architecture.md
    │       ├── api.md
