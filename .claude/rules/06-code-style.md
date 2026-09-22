@@ -1211,12 +1211,12 @@ MIT
 
 5. **API Documentation**
    - Generate with `godoc` (English)
-   - Provide Korean translation in `docs/ko/api.md`
+   - Provide Korean translation in `docs/ko/api.md` (목표 구조 — 현재 미존재)
    - Include Korean in code comments for developers
 
 6. **Architecture Docs**
-   - Write in English first (`docs/en/architecture.md`)
-   - Translate to Korean (`docs/ko/architecture.md`)
+   - Write in English first (`docs/en/architecture.md`) (목표 구조 — 현재 미존재)
+   - Translate to Korean (`docs/ko/architecture.md`) (목표 구조 — 현재 미존재)
    - Include English technical terms in Korean version
 
 7. **Changelogs**

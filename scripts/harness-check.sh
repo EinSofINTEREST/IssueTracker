@@ -30,6 +30,12 @@ while IFS= read -r f; do HARNESS_DOCS+=("$f"); done < <(find .claude/rules -name
 # ── 1. 문서가 언급한 저장소 경로의 실재 여부 ───────────────────────────────
 # 코드 블록 안의 예시 경로 (foo/bar 등) 와 목표 상태 서술을 구분할 수 없으므로,
 # 경고로만 보고한다 — 판단은 사람이.
+# 스캔 대상 path family — 저장소 최상위의 디렉토리에서 동적으로 만든다.
+# 하드코딩된 6종(internal|pkg|cmd|scripts|deployments|configs)만 보면 문서가 참조하는
+# docs/ · .github/ · .claude/ 경로의 드리프트를 통째로 놓친다 (CodeRabbit 피드백).
+PATH_FAMILIES=$(find . -maxdepth 1 -mindepth 1 -type d -printf '%f\n' \
+  | grep -vE '^(\.git|bin|vendor|node_modules)$' | sort | paste -sd'|')
+
 echo "── 1. 문서가 언급한 경로 실재 확인"
 
 # 오탐 제외 — 문법 설명용 placeholder, Go 심볼 표기, 캐시 경로 등.
@@ -44,7 +50,22 @@ is_placeholder() {
 
 # 같은 줄에서 "없다 / 미구현 / 목표" 로 이미 부재를 밝힌 경우는 정상 서술.
 declared_absent() {
-  grep -F "$2" "$1" | grep -qE '미구현|존재하지 않|없습니다|없음|부재|planned|목표|제안|예시'
+  # -A2: 부재를 밝히는 문구가 줄바꿈으로 다음 줄에 걸린 경우까지 인정한다.
+  grep -F -A2 "$2" "$1" | grep -qE '미구현|존재하지 않|없습니다|없음|부재|planned|목표|제안|예시'
+}
+
+# gitignore 대상은 저장소에 없는 것이 정상 (예: .claude/settings.local.json).
+is_ignored() {
+  git check-ignore -q "$1" 2>/dev/null
+}
+
+# 펜스 코드 블록(```)을 제거한 본문을 출력한다.
+#
+# 문서의 코드 블록은 **예시** 다 — CI 워크플로 샘플, 목표 디렉토리 구조, 마이그레이션 파일명
+# 같은 것들이 들어 있어 실재 여부를 물을 대상이 아니다. 산문에 적힌 경로만 검사해야 경고가
+# 신호로 남는다 (CodeRabbit 피드백으로 스캔 범위를 넓히면서 함께 도입).
+strip_code_blocks() {
+  awk '/^[[:space:]]*```/ { infence = !infence; next } !infence' "$1"
 }
 
 missing_paths=0
@@ -53,11 +74,15 @@ for doc in "${HARNESS_DOCS[@]}"; do
   while IFS= read -r p; do
     [ -e "$p" ] && continue
     is_placeholder "$p" && continue
+    is_ignored "$p" && continue
     declared_absent "$doc" "$p" && continue
     warn "$doc → 존재하지 않는 경로: $p"
     missing_paths=$((missing_paths + 1))
     # test/internal/... 처럼 접두사가 붙은 경로의 중간 매치 방지 — 앞이 / 또는 단어문자면 제외
-  done < <(grep -ohP '(?<![\w/])(internal|pkg|cmd|scripts|deployments|configs)/[\w./-]+' "$doc" \
+    # 저장소 최상위 디렉토리를 실제로 훑어 family 목록을 만든다 (CodeRabbit 피드백).
+    # 하드코딩하면 docs/ · .github/ · .claude/ 처럼 문서가 실제로 참조하는 경로를 놓친다.
+  done < <(strip_code_blocks "$doc" \
+             | grep -ohP "(?<![\w/])(${PATH_FAMILIES})/[\w./-]+" \
              | sed 's/[.,)`]*$//' | sort -u)
 done
 [ "$missing_paths" -eq 0 ] && ok "문서가 언급한 internal/ pkg/ cmd/ 경로가 모두 실재 (placeholder·부재 명시 제외)"
