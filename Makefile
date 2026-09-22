@@ -4,7 +4,7 @@
         run-kafka-pipeline \
         kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics kafka-init \
         pg-start pg-stop pg-clean pg-migrate pg-status pg-psql \
-        proto claudegen-build
+        proto claudegen-build harness-check
 
 # 기본 변수
 BINARY_DIR=bin
@@ -314,6 +314,9 @@ coverage-html: coverage ## 커버리지 HTML 리포트 생성
 
 lint: ## golangci-lint 실행 (scripts/lint.sh — 루트 경로 고정)
 	@scripts/lint.sh
+
+harness-check: ## AI 협업 규약 문서가 저장소 실체와 맞는지 대조 (이슈 #539)
+	@scripts/harness-check.sh
 
 fmt: ## 코드 포맷팅
 	@echo "Formatting code..."

@@ -49,7 +49,7 @@
 - **`internal/` 의 helper / 내부 함수**
   - 패키지 외부로 노출되지 않는 helper 는 fmt.Errorf 로 충분.
   - 외부 노출 함수에서 최종 boundary 변환만 보장하면 됩니다.
-- **`internal/classifier`, `internal/publisher` 의 비-boundary 경로**
+- **`internal/classifier`, `internal/bus` (Publisher / Consumer / RetryScheduler) 의 비-boundary 경로**
   - 외부 시스템(grpc/http) 호출 자체에서 발생한 에러는 호출처에서 카테고리화.
 
 ### 예시 — boundary 변환 패턴

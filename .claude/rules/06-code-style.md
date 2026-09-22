@@ -792,7 +792,7 @@ log.Error().Err(err).Msg("error")
 [DOCS]: 크롤러 API 문서 및 사용 예제 작성
 
 - 크롤러 인터페이스 GoDoc 주석 추가
-- examples/basic_usage.go 작성
+- examples/ 에 사용 예제 추가
 - README.md에 Quick Start 섹션 추가
 ```
 
@@ -945,7 +945,12 @@ func process() {
 **Documentation Files**:
 - **MUST** write all documentation in English first
 - **MUST** provide Korean translation in separate directory
-- **Directory structure**:
+> ⚠️ **현재 저장소는 이 구조를 따르지 않습니다.** 실제는 `docs/architecture/` (코드 구조 문서,
+> 한국어) · `docs/ci/` · `docs/ko/README.md` 이며 `docs/en/` 은 없습니다. 아래 en/ko 이중 구조는
+> **목표 상태** 입니다. 새 문서를 쓸 때 기존 위치 (`docs/architecture/` 등) 를 따를지 이 구조로
+> 옮길지는 작업 전에 확인하세요 — 현행 문서를 이 규칙 위반으로 보고 임의로 옮기지 마세요.
+
+- **Directory structure** (목표):
   ```
   docs/
   ├── en/           # English documentation (primary)
@@ -1081,7 +1086,7 @@ embedding and clustering.
 
 ### Requirements
 
-- Go 1.21+
+- Go 1.24+
 - PostgreSQL 15+
 - Apache Kafka 3.5+
 - Redis 7+
@@ -1135,7 +1140,7 @@ IssueTracker는 전 세계의 뉴스, 커뮤니티, 소셜 미디어에서 이�
 
 ### 요구사항
 
-- Go 1.21+
+- Go 1.24+
 - PostgreSQL 15+
 - Apache Kafka 3.5+
 - Redis 7+
@@ -1206,12 +1211,12 @@ MIT
 
 5. **API Documentation**
    - Generate with `godoc` (English)
-   - Provide Korean translation in `docs/ko/api.md`
+   - Provide Korean translation in `docs/ko/api.md` (목표 구조 — 현재 미존재)
    - Include Korean in code comments for developers
 
 6. **Architecture Docs**
-   - Write in English first (`docs/en/architecture.md`)
-   - Translate to Korean (`docs/ko/architecture.md`)
+   - Write in English first (`docs/en/architecture.md`) (목표 구조 — 현재 미존재)
+   - Translate to Korean (`docs/ko/architecture.md`) (목표 구조 — 현재 미존재)
    - Include English technical terms in Korean version
 
 7. **Changelogs**

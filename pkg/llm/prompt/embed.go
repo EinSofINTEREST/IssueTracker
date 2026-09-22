@@ -4,7 +4,9 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path"
+	"sort"
 	"strings"
 )
 
@@ -54,6 +56,32 @@ func (l *EmbedLoader) Load(name string) (string, error) {
 		return "", fmt.Errorf("prompt: embedded %q is empty", p)
 	}
 	return body, nil
+}
+
+// EmbeddedNames 는 binary 에 내장된 모든 prompt 이름을 정렬해 반환합니다.
+//
+// 반환 형식은 Loader.Load 의 name 과 동일 (embedRoot prefix 와 ".txt" suffix 제거).
+// 용도: 계약 (Contract) 이 asset 전부를 덮는지 검증 — 새 prompt 파일을 추가하고 Contract
+// 등록을 빠뜨리면 그 prompt 는 placeholder 검증 없이 운영에 나가므로, 테스트가 이 함수로
+// 누락을 잡습니다.
+func EmbeddedNames() ([]string, error) {
+	var names []string
+	err := fs.WalkDir(embeddedAssets, embedRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".txt") {
+			return nil
+		}
+		rel := strings.TrimSuffix(strings.TrimPrefix(p, embedRoot+"/"), ".txt")
+		names = append(names, rel)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prompt: walk embedded assets: %w", err)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // ChainLoader 는 여러 Loader 를 순서대로 시도하는 fallback chain 입니다.

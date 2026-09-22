@@ -36,6 +36,7 @@ import (
 	"issuetracker/internal/processor/precheck"
 	"issuetracker/internal/processor/validate"
 	validateWorkerPkg "issuetracker/internal/processor/validate/worker"
+	"issuetracker/internal/promptcontract"
 	"issuetracker/internal/scheduler"
 	"issuetracker/internal/storage/decorator"
 	"issuetracker/internal/storage/model"
@@ -609,7 +610,7 @@ func main() {
 		if warn != "" {
 			log.Warn(warn)
 		}
-		promptLoader = loader
+		promptLoader = promptcontract.VerifiedLoader(loader, log)
 		log.WithFields(map[string]interface{}{
 			"env_dir":     promptCfg.Dir,
 			"env_dir_set": promptCfg.DirSet,
@@ -894,6 +895,13 @@ func main() {
 	//
 	// Start 실패 시 해당 풀만 graceful fallback (fatal 아님) — 다른 stage 는 영향 X.
 	// 종료 시 stages.Stop 이후 두 풀 모두 Stop — 순서: parser → enrich (역의존 없음).
+	// 이전 프로세스가 crash 로 남긴 claudegen workspace 정리 (이슈 #539).
+	// 정상 종료는 Worker.Stop 이 지우지만 SIGKILL / OOM 시에는 남고, 진행 중이던 세션의
+	// .mcp.json (enricher_ro 자격증명) 이 함께 남을 수 있음.
+	if removed := claude.CleanupOrphanedWorkspaces(log); removed > 0 {
+		log.WithField("removed", removed).Info("cleaned up orphaned claudegen workspaces")
+	}
+
 	var parserClaudegenPool, enrichClaudegenPool *claude.Pool
 	llmExtractor := os.Getenv("LLM_EXTRACTOR")
 	switch {
@@ -1184,6 +1192,11 @@ func main() {
 	} else {
 		log.Warn("processing lock unavailable, enrich stage gate falls back to noop")
 	}
+
+	// stage 동시 슬롯 cap 과 agent pool 크기의 관계 검증 (이슈 #539).
+	// 둘은 독립 환경변수라 어긋날 수 있고, 어긋나면 한 컨테이너에 세션이 중첩된다.
+	warnAgentPoolCapMismatch(locks.StageEnricher, enrichCap, enrichClaudegenPool, log)
+	warnAgentPoolCapMismatch(locks.StageParser, parserCap, parserClaudegenPool, log)
 
 	// 이슈 #447 — claudegen 기반 enricher extractor wiring. claudegen pool 이 미활성이거나
 	// prompt loader 가 없으면 NoopExtractor 로 fallback (worker 는 항상 forward 보장 — extract
@@ -1544,4 +1557,31 @@ func buildEnricherROMCPConfig(log *logger.Logger) (*agentdb.MCPConfig, error) {
 		"dsn": dsn.String(),
 	}).Debug("enricher_ro MCP config constructed")
 	return &cfg, nil
+}
+
+// warnAgentPoolCapMismatch 는 stage 동시 슬롯 cap 이 agent pool worker 수를 넘는지 경고합니다
+// (이슈 #539).
+//
+// claude.Pool.pick() 은 대기 없는 round-robin 이라 풀보다 많은 동시 호출이 오면 한 컨테이너에
+// 여러 세션이 겹칩니다. stage cap 은 <STAGE>_WORKER_COUNT 에서, 풀 크기는
+// <STAGE>_CLAUDE_CODE_WORKER_COUNT 에서 오는 **독립 설정** 이라 한쪽만 올리면 조용히 어긋납니다.
+// 기본값 (enrich: worker 4 → cap 2, 풀 2) 은 우연히 맞아떨어진 상태이므로, 그 관계가 깨질 때
+// 운영자가 알 수 있도록 기동 시 1회 경고합니다.
+//
+// 차단하지 않고 경고만 — 세션 중첩은 성능 저하이지 오동작이 아니며, 운영자가 의도적으로
+// 오버커밋할 수도 있습니다.
+func warnAgentPoolCapMismatch(stage string, stageCap int, pool *claude.Pool, log *logger.Logger) {
+	if pool == nil {
+		return
+	}
+	poolSize := pool.WorkerCount()
+	if poolSize < 1 || stageCap <= poolSize {
+		return
+	}
+	log.WithFields(map[string]interface{}{
+		"stage":                  stage,
+		"stage_cap":              stageCap,
+		"agent_pool_size":        poolSize,
+		"sessions_per_container": (stageCap + poolSize - 1) / poolSize,
+	}).Warn("stage concurrency cap exceeds agent pool size; multiple sessions may share one container")
 }

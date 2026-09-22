@@ -242,6 +242,13 @@ func TestArticleRepository_Insert(t *testing.T) {
 
 ### Kafka Integration Tests
 
+> ⚠️ **실제 클라이언트는 `segmentio/kafka-go` 이며, 직접 쓰지 않고 `pkg/queue` 래퍼를 통합니다.**
+> 아래 예제는 confluent-kafka-go 스타일 (`kafka.ConfigMap`, `kafka.NewConsumer`) 로 적혀 있어
+> **API 가 실제와 다릅니다** — 개념 설명으로만 읽고, 코드를 쓸 때는 `pkg/queue` 의
+> `Producer` / `Consumer` 인터페이스와 `internal/bus` 의 `Publisher` 를 보세요.
+> consumer pool lifecycle 은 `internal/workerpool` harness 가 담당합니다.
+
+
 ```go
 func TestKafka_PublishConsume(t *testing.T) {
     // Start Kafka container with testcontainers
@@ -594,6 +601,10 @@ go tool pprof mem.prof
 
 ### Pre-Commit Checks
 
+> ℹ️ 본 저장소에는 `.pre-commit-config.yaml` 이 **없습니다.** 품질 게이트는 GitHub Actions
+> (`Format Check` / `Build` / `Test` / `Lint`) 가 담당합니다. 로컬에서는 `make fmt && make lint
+> && make test` 로 같은 검사를 수행하세요. 아래는 pre-commit 을 도입할 경우의 참고 예시입니다.
+
 Create `.pre-commit-config.yaml`:
 
 ```yaml
@@ -704,6 +715,13 @@ test/                               # 모든 테스트 파일의 루트
         └── logger_test.go
 ```
 
+**예외 — `internal/` 서브패키지:**
+
+Go 의 `internal/` 규칙상 `pkg/config/internal/parse` 같은 패키지는 **외부에서 import 할 수
+없어** `test/` 아래 외부 테스트 패키지로 옮길 수 없습니다. 이런 패키지에 한해 소스와 같은
+디렉토리에 `_test.go` 를 두는 것을 허용합니다 (현재 해당: `pkg/config/internal/parse/parse_test.go`).
+그 외에는 예외 없이 `test/` 아래에 둡니다.
+
 **새 패키지에 테스트 추가 시:**
 - 소스 경로 `internal/foo/bar/` → 테스트 경로 `test/internal/foo/bar/`
 - 소스 경로 `pkg/foo/` → 테스트 경로 `test/pkg/foo/`
@@ -776,7 +794,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'
+          go-version-file: go.mod   # 실제 CI 와 동일 — 버전을 여기 하드코딩하지 않는다
 
       - name: Cache Go modules
         uses: actions/cache@v3
@@ -858,6 +876,10 @@ locust -f locustfile.py --host=https://api.issuetracker.com
 ## Test Documentation
 
 ### Test Plans
+
+> ℹ️ `docs/testing/` 은 **아직 존재하지 않습니다.** 현재 테스트 관련 문서는
+> `docs/ci/conventions.md` (머지 게이트) 와 `docs/ci/status-checks.md` (체크 이름 단일 소스)
+> 뿐입니다. 아래 구조는 도입 시의 제안입니다.
 
 Document test scenarios in `docs/testing/`:
 

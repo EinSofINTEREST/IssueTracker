@@ -432,6 +432,13 @@ type ValidationError struct {
 
 ### Pipeline Orchestration with Kafka
 
+> ⚠️ **실제 클라이언트는 `segmentio/kafka-go` 이며, 직접 쓰지 않고 `pkg/queue` 래퍼를 통합니다.**
+> 아래 예제는 confluent-kafka-go 스타일 (`kafka.ConfigMap`, `kafka.NewConsumer`) 로 적혀 있어
+> **API 가 실제와 다릅니다** — 개념 설명으로만 읽고, 코드를 쓸 때는 `pkg/queue` 의
+> `Producer` / `Consumer` 인터페이스와 `internal/bus` 의 `Publisher` 를 보세요.
+> consumer pool lifecycle 은 `internal/workerpool` harness 가 담당합니다.
+
+
 1. **Kafka Topic-Based Pipeline**
    ```
    Crawler → [issuetracker.raw.{country}] → Normalizer →

@@ -110,7 +110,7 @@ Important for:
 **Code Style and Conventions**
 
 Covers:
-- Go formatting standards (2-space indentation)
+- Go formatting standards (gofmt 기본 — 탭 인덴트)
 - Naming conventions
 - Error handling patterns
 - Function and struct design
@@ -232,7 +232,7 @@ Essential for:
 ### While Writing Code
 
 1. **Follow the Style Guide** ([06-code-style.md](06-code-style.md))
-   - 2-space indentation
+   - 탭 인덴트 (gofmt 기본). 2-space 는 SQL / YAML 에만 적용
    - Clear, self-documenting names
    - Minimal comments (only WHY)
    - Early returns for errors
@@ -271,7 +271,7 @@ Essential for:
    - Check test coverage (≥70%)
    - Run benchmarks
    - Verify no new warnings
-   - Check code formatting (2-space indent)
+   - Check code formatting (`gofmt -l .` — 탭 인덴트)
 
 3. **Integration Verification**
    - Test with real data (dev environment)
@@ -434,10 +434,13 @@ These rules are living documents and should evolve with the project:
 
 ### Internal Documentation
 
-- API Documentation: `docs/api/`
-- Deployment Guide: `docs/deployment/`
-- Runbooks: `docs/runbooks/`
-- Architecture Diagrams: `docs/architecture/`
+- Architecture Docs: `docs/architecture/` (cmd / internal / pkg / proto 별 구조 문서)
+- CI 운영 규약: `docs/ci/conventions.md`, `docs/ci/status-checks.md`
+- Prompt 자산: `pkg/llm/prompt/assets/` (내장), `docs/prompts/`
+- 한국어 문서: `docs/ko/`
+
+> API 문서 (`docs/api/`) · 배포 가이드 (`docs/deployment/`) · 런북 (`docs/runbooks/`) 은
+> 아직 존재하지 않습니다. 필요해지면 추가하고 본 목록을 갱신하세요.
 
 ## Getting Help
 
