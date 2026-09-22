@@ -445,9 +445,10 @@ func (p *KafkaConsumerPool) processJob(ctx context.Context, msg *queue.Message, 
 			"job_id":  job.ID,
 			"crawler": job.CrawlerName,
 			"url":     job.Target.URL,
-		}).Debug("fetcher processing lock already held by another worker, skipping")
-		// 다른 워커가 처리 중 — commit 없이 종료. 처리 담당 워커의 commit 에 의존.
-		return nil
+		}).Debug("fetcher processing lock already held by another worker, requeueing")
+		// 이슈 #540 — 예전에는 commit 없이 return 했으나, 이 offset 을 커밋할 주체가 없어
+		// 메시지가 소실됐다. 지연 재큐로 전환.
+		return p.requeueGateSkip(ctx, msg, job)
 	} else {
 		log.WithFields(map[string]interface{}{
 			"job_id":  job.ID,
@@ -706,4 +707,71 @@ func logShutdownAware(ctx context.Context, log *logger.Logger, err error, msg st
 		return
 	}
 	log.WithError(err).Error(msg)
+}
+
+// requeueGateSkip 은 StageGate 선점으로 건너뛴 job 을 지연 재큐합니다 (이슈 #540).
+//
+// **왜 버리지 않는가**: 기존 코드는 "처리 담당 워커의 commit 에 의존" 한다는 전제로 commit 없이
+// return 했다. 그러나 락을 쥔 워커는 **자기 메시지(다른 offset)** 를 커밋할 뿐 이 offset 을
+// 커밋하지 않는다. 같은 파티션의 뒤 메시지가 커밋되면 이 offset 은 함께 소비 처리되어 사라진다.
+// 우선순위 ZSET 인입 모드에서는 pop 이 곧 ack 이라 확정 소실이다.
+//
+// **대가**: 락 홀더가 정상 처리 중이었다면 재큐된 job 이 같은 URL 을 다시 fetch 한다 (중복 작업).
+// Kafka rebalance / 재배달처럼 드문 상황에서만 발생하고, 중복 콘텐츠는 하위 단계의 content hash
+// 중복 감지가 흡수한다. 드문 낭비를 받아들이고 소실 경로를 없애는 쪽을 택했다.
+//
+// RetryCount 를 증가시켜 재큐가 무한 반복되지 않도록 상한을 건다 — stale 락이 TTL 로 풀리지 않는
+// 이상 상황에서도 결국 DLQ 로 빠져 운영자에게 보인다.
+func (p *KafkaConsumerPool) requeueGateSkip(ctx context.Context, msg *queue.Message, job *core.CrawlJob) error {
+	log := logger.FromContext(ctx)
+
+	// 한도 검사는 **증가 전** 에, 일반 실패 경로와 동일한 규칙으로 (CodeRabbit 피드백).
+	// 이전 구현은 증가 후 `MaxRetries > 0 && RetryCount > MaxRetries` 를 봐서 off-by-one 이었고,
+	// MaxRetries==0 (일반 경로는 즉시 DLQ) 을 아예 건너뛰었다.
+	// 일반 경로: processJob 의 `if job.RetryCount >= job.MaxRetries { sendToDLQ }`.
+	if job.RetryCount >= job.MaxRetries {
+		log.WithFields(map[string]interface{}{
+			"job_id":      job.ID,
+			"crawler":     job.CrawlerName,
+			"url":         job.Target.URL,
+			"retry":       job.RetryCount,
+			"max_retries": job.MaxRetries,
+		}).Warn("gate skip requeue limit exceeded, sending to dlq")
+
+		if dlqErr := p.sendToDLQ(ctx, msg, locks.ErrStageGateHeld); dlqErr != nil {
+			logShutdownAware(ctx, log, dlqErr, "gate skip dlq failed, leaving message uncommitted")
+			return nil
+		}
+		if commitErr := p.pool.Commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+			log.WithError(commitErr).Warn("commit after gate skip dlq failed")
+		}
+		return nil
+	}
+
+	scheduler := p.resolveRetryScheduler()
+	job.RetryCount++
+	job.ScheduledAt = time.Now().Add(locks.GateSkipRetryDelay)
+
+	if err := scheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); err != nil {
+		// 재큐 실패 — commit 하지 않고 종료하여 Kafka redeliver 에 맡긴다 (기존 동작으로 degrade).
+		logShutdownAware(ctx, log.WithFields(map[string]interface{}{
+			"job_id":  job.ID,
+			"crawler": job.CrawlerName,
+			"url":     job.Target.URL,
+		}), err, "gate skip requeue failed, leaving message uncommitted for redelivery")
+		return nil
+	}
+
+	log.WithFields(map[string]interface{}{
+		"job_id":   job.ID,
+		"crawler":  job.CrawlerName,
+		"url":      job.Target.URL,
+		"retry":    job.RetryCount,
+		"delay_ms": locks.GateSkipRetryDelay.Milliseconds(),
+	}).Debug("gate skip requeued with delay")
+
+	if commitErr := p.pool.Commit(ctx, msg); commitErr != nil && ctx.Err() == nil {
+		log.WithError(commitErr).Warn("commit after gate skip requeue failed")
+	}
+	return nil
 }

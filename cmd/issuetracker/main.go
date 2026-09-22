@@ -795,6 +795,10 @@ func main() {
 	// RetryScheduler 가 주입되어야 ProcessMessage 실패 시 Kafka 재발행 → 다음 intake → ZSET 재진입
 	// 패턴으로 메시지 손실 방지. retryScheduler 가 nil 인 환경에서 ZSET 모드 활성화하면 처리 실패가
 	// 메시지 손실로 이어지므로 fatal.
+	// gate-skip 재큐는 ZSET / Kafka 두 모드 모두에서 필요하다 (이슈 #540) — 조건 밖에서 주입.
+	// retryScheduler 가 nil (Redis 부재) 이면 helper 가 미커밋 경로로 degrade 한다.
+	w.SetGateSkipScheduler(retryScheduler)
+
 	if parserPriorityQueueEnabled {
 		if retryScheduler == nil {
 			log.Fatal("parser priority zset queue enabled but retry scheduler not configured — set REDIS_HOST or disable PARSER_PRIORITY_QUEUE_ENABLED")
@@ -1120,6 +1124,10 @@ func main() {
 
 	// 이슈 #523 — ZSET 인입 모드에서는 BZPOPMIN 이 곧 ack 이므로 RetryScheduler 가 필수.
 	// nil 이면 fatal (메시지 손실 방지 가드).
+	// gate-skip 재큐는 ZSET / Kafka 두 모드 모두에서 필요하다 (이슈 #540) — 조건 밖에서 주입.
+	// retryScheduler 가 nil (Redis 부재) 이면 helper 가 미커밋 경로로 degrade 한다.
+	validateWorker.SetGateSkipScheduler(retryScheduler)
+
 	if validatePriorityQueueEnabled {
 		if retryScheduler == nil {
 			log.Fatal("validate priority zset queue enabled but retry scheduler not configured — set REDIS_HOST or disable VALIDATE_PRIORITY_QUEUE_ENABLED")
@@ -1266,6 +1274,10 @@ func main() {
 	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichVerifier, enrichContextualizer, enrichScorer, enrichedRepo, enrichGate, workerCountsCfg.Enrich)
 
 	// 이슈 #524 — ZSET 모드 활성 시 RetryScheduler 필수 (메시지 손실 방지 가드).
+	// gate-skip 재큐는 ZSET / Kafka 두 모드 모두에서 필요하다 (이슈 #540) — 조건 밖에서 주입.
+	// retryScheduler 가 nil (Redis 부재) 이면 helper 가 미커밋 경로로 degrade 한다.
+	enrichW.SetGateSkipScheduler(retryScheduler)
+
 	if enrichPriorityQueueEnabled {
 		if retryScheduler == nil {
 			log.Fatal("enrich priority zset queue enabled but retry scheduler not configured — set REDIS_HOST or disable ENRICH_PRIORITY_QUEUE_ENABLED")

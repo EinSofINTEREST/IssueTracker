@@ -2,6 +2,7 @@ package worker_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"issuetracker/internal/locks"
 	"issuetracker/internal/processor/fetcher/core"
@@ -61,11 +63,13 @@ func runPoolWithGate(t *testing.T, consumer *mockConsumer, pool *worker.KafkaCon
 	_ = pool.Stop(stopCtx)
 }
 
-// TestKafkaConsumerPool_StageGate_AlreadyAcquired_SkipsWithoutCommit 는
-// 다른 worker 가 이미 lock 을 보유 중일 때 처리와 commit 을 모두 건너뛰는지 검증합니다.
-// 메시지 유실 방지: lock 보유 worker 가 처리 도중 장애로 종료되어도 해당 worker 가 commit 하지
-// 않았다면 Kafka 가 메시지를 재전달하여 재처리가 보장됩니다.
-func TestKafkaConsumerPool_StageGate_AlreadyAcquired_SkipsWithoutCommit(t *testing.T) {
+// TestKafkaConsumerPool_StageGate_AlreadyAcquired_RequeuesWithDelay 는
+// 다른 worker 가 이미 lock 을 보유 중일 때 **지연 재큐 후 commit** 하는지 검증합니다 (이슈 #540).
+//
+// 구 동작(commit 없이 skip)은 메시지 소실 경로였다 — 락을 쥔 worker 는 자기 offset 만 커밋하므로
+// 이 offset 을 커밋할 주체가 없고, 같은 파티션의 뒤 메시지가 커밋되면 함께 소비 처리된다.
+// ZSET 인입 모드에서는 pop 이 곧 ack 이라 확정 소실이었다.
+func TestKafkaConsumerPool_StageGate_AlreadyAcquired_RequeuesWithDelay(t *testing.T) {
 	consumer := new(mockConsumer)
 	producer := new(mockProducer)
 	handler := new(mockJobHandler)
@@ -84,14 +88,34 @@ func TestKafkaConsumerPool_StageGate_AlreadyAcquired_SkipsWithoutCommit(t *testi
 	// 이미 다른 worker 가 lock 을 보유 중 (acquired=false, err=nil)
 	gate.On("Acquire", mock.Anything, job.Target.URL).Return(nil, false, nil)
 
+	var requeued queue.Message
+	producer.On("Publish", mock.Anything, mock.MatchedBy(func(m queue.Message) bool {
+		requeued = m
+		return true
+	})).Return(nil).Once()
+	consumer.On("CommitMessages", mock.Anything, mock.Anything).Return(nil).Once()
+
 	runPoolWithGate(t, consumer, pool, msg)
 
-	// handler, producer, commit 모두 미호출 검증
+	// 실제 처리는 하지 않는다 — 락 홀더가 처리 중이므로.
 	handler.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
-	producer.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
-	consumer.AssertNotCalled(t, "CommitMessages", mock.Anything, mock.Anything)
 	gate.AssertExpectations(t)
 	assert.Equal(t, int32(0), gate.ReleaseCalls(), "skip 시 release 호출 X")
+
+	// 재큐 + commit 이 모두 일어나야 메시지가 보존된다.
+	producer.AssertExpectations(t)
+	consumer.AssertExpectations(t)
+
+	assert.Equal(t, locks.ErrStageGateHeld.Error(), requeued.Headers["last-error"],
+		"재큐 사유가 gate 선점으로 기록되어야 함")
+
+	var requeuedJob core.CrawlJob
+	require.NoError(t, json.Unmarshal(requeued.Value, &requeuedJob))
+	assert.Equal(t, job.Target.URL, requeuedJob.Target.URL)
+	assert.Equal(t, job.RetryCount+1, requeuedJob.RetryCount,
+		"무한 재큐 방지를 위해 RetryCount 가 증가해야 함")
+	assert.WithinDuration(t, time.Now().Add(locks.GateSkipRetryDelay), requeuedJob.ScheduledAt, time.Minute,
+		"ProcessingLock TTL 의 절반만큼 지연되어야 함")
 }
 
 // TestKafkaConsumerPool_StageGate_Acquired_ReleasedAfterProcessing 는

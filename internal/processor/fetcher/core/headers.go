@@ -25,6 +25,16 @@ const (
 	// claudegen 의 LLM prompt 에 컨텍스트로 주입되어 multi-turn agent 가 selector 보강 또는
 	// validity=blacklist 결정에 활용. 헤더 부재 = reparse 가 아닌 일반 처리 경로.
 	HeaderValidateReparseReason = "validate_reparse_reason"
+
+	// HeaderGateSkipCount: StageGate 선점으로 재큐된 횟수 (이슈 #540).
+	//
+	// parser / validate / enrich 의 gate-skip 재큐는 BuildRetryJob 으로 **새 CrawlJob** 을 만드는데
+	// 그 RetryCount 는 0 에서 시작합니다. 따라서 job 의 RetryCount 로는 상한을 걸 수 없고,
+	// stage 를 건너 누적되는 별도 카운터가 필요합니다 — 그 역할을 본 헤더가 합니다.
+	// HeaderValidateReparseCount 와 동일한 패턴 (전파 화이트리스트 + 최대 횟수 상수).
+	//
+	// "0" 또는 미설정 = gate-skip 재큐를 거치지 않은 메시지.
+	HeaderGateSkipCount = "gate_skip_count"
 )
 
 // MaxValidateReparseCount: validate → parser 재학습 cycle 최대 횟수 (이슈 #364).

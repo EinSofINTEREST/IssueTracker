@@ -126,6 +126,8 @@ type Worker struct {
 	// ZSET 인입 모드에서는 pop 이 곧 ack 이라 commit skip 으로 redeliver 불가 — RetryScheduler
 	// 주입 필수. 주입 시 Handle 이 ProcessMessage 실패에 대해 Enqueue 후 commit (메시지 손실 방지).
 	retryScheduler bus.RetryScheduler
+	// gateSkipScheduler: gate-skip 재큐 전용 (이슈 #540). 모드 무관하게 주입된다.
+	gateSkipScheduler bus.RetryScheduler
 }
 
 // PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 최소 인터페이스입니다.
@@ -322,7 +324,9 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 		// StageGate not-acquired sentinel — commit 없이 다음 메시지로. 정상 dedup 경로라
 		// Warn 대신 Debug (이슈 #355 PR #358 리뷰 반영).
 		if errors.Is(err, ErrStageGateNotAcquired) {
-			log.WithField("offset", msg.Offset).Debug("stage gate not acquired by this worker, uncommitted")
+			// 이슈 #540 — commit 없이 return 하면 이 offset 을 커밋할 주체가 없어 소실된다.
+			// 지연 재큐 후 commit. 재큐 실패 시에만 기존 동작(미커밋 → redeliver)으로 degrade.
+			w.enqueueGateSkipRetry(ctx, msg)
 			return
 		}
 		// retryScheduler 주입 시 — Enqueue 후 commit. ZSET 인입 모드 (pop=ack) 에서는 commit skip
@@ -333,7 +337,7 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 				return
 			}
 			// Enqueue 성공 — commit (메시지 손실 방지). ZSETConsumer 의 Commit 은 no-op.
-			if commitErr := w.pool.Commit(ctx, msg); commitErr != nil {
+			if commitErr := w.commitMessage(ctx, msg); commitErr != nil {
 				if ctx.Err() == nil {
 					log.WithError(commitErr).Warn("commit after retry enqueue failed")
 				}
@@ -346,7 +350,7 @@ func (w *Worker) Handle(ctx context.Context, msg *queue.Message) {
 		return
 	}
 
-	if commitErr := w.pool.Commit(ctx, msg); commitErr != nil {
+	if commitErr := w.commitMessage(ctx, msg); commitErr != nil {
 		if ctx.Err() == nil {
 			log.WithError(commitErr).Warn("commit failed after success")
 		}
@@ -438,9 +442,10 @@ func isValidTargetType(t core.TargetType) bool {
 // 본 worker 가 스킵해야 함을 나타내는 sentinel. Handle 메소드가 본 에러를 감지하면 Warn 대신
 // Debug 로 처리하여 정상 dedup 경로를 시끄럽게 만들지 않습니다 (PR #358 리뷰 반영).
 //
-// commit 정책: 본 sentinel 반환 시 호출자는 commit 하지 않음 — 같은 partition 의 다음 msg
-// 처리로 진행하고, 본 offset 의 commit 은 실제 처리 담당 worker 가 수행 (또는 재배달 stream
-// 에서 다시 결정).
+// commit 정책 (이슈 #540 으로 변경): 본 sentinel 반환 시 호출자는 메시지를 **지연 재큐한 뒤
+// commit** 한다. 예전에는 commit 없이 넘어가며 "본 offset 의 commit 은 실제 처리 담당 worker 가
+// 수행" 한다고 보았으나, 그 worker 는 자기 offset 만 커밋하므로 본 offset 은 아무도 커밋하지
+// 않고 소실됐다.
 //
 // exported 이유: 외부 테스트 / 모니터링 코드에서 errors.Is 매칭으로 dedup-skip 을 일반 실패와
 // 구분할 수 있도록.
@@ -1238,4 +1243,188 @@ func parseTimeoutHeader(s string) time.Duration {
 // isNotFound 는 storage 의 NotFound 에러 여부를 판별합니다.
 func isNotFound(err error) bool {
 	return errors.Is(err, storage.ErrNotFound)
+}
+
+// enqueueGateSkipRetry 는 StageGate 선점으로 건너뛴 메시지를 지연 재큐합니다 (이슈 #540).
+//
+// **왜 버리지 않는가**: 락을 쥔 worker 는 **자기 메시지(다른 offset)** 를 커밋할 뿐 이 offset 을
+// 커밋하지 않는다. 같은 파티션의 뒤 메시지가 커밋되면 이 offset 은 함께 소비 처리되어 사라진다.
+// 우선순위 ZSET 인입 모드에서는 pop 이 곧 ack 이라 확정 소실이다 — 본 파일 Handle 의 주석이
+// 이미 "ZSET 모드에서는 commit skip 으로 redeliver 가 불가능" 하다고 적고 있었으나, 일반 에러만
+// RetryScheduler 로 보내고 gate-skip 분기는 예외로 남아 있었다.
+//
+// **대가**: 락 홀더가 정상 처리 중이었다면 재큐된 job 이 같은 URL 을 다시 처리한다 (중복 작업).
+// Kafka rebalance / 재배달처럼 드문 상황에서만 발생하고, 중복은 하위 단계의 중복 감지가 흡수한다.
+//
+// 반환값: true 면 재큐 + commit 완료. false 면 호출자는 commit 하지 않고 redeliver 에 맡긴다.
+func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) bool {
+	log := logger.FromContext(ctx)
+
+	if w.gateSkipScheduler == nil {
+		log.WithField("offset", msg.Offset).
+			Debug("gate skip: no retry scheduler, leaving message uncommitted for redelivery")
+		return false
+	}
+
+	// 재큐 예산 (이슈 #540, CodeRabbit 피드백).
+	//
+	// BuildRetryJob 은 **새 CrawlJob** 을 만들어 RetryCount 가 0 에서 시작하므로 job 자체로는
+	// 상한이 성립하지 않는다. stage 를 건너 누적되는 헤더 카운터로 상한을 건다 —
+	// HeaderGateSkipCount 는 전파 화이트리스트에 등록되어 fetcher → parser → validate → enrich
+	// 로 이어진다.
+	skipCount := parseGateSkipCount(msg.Headers)
+	if skipCount >= locks.MaxGateSkipRequeues {
+		log.WithFields(map[string]interface{}{
+			"offset":          msg.Offset,
+			"gate_skip_count": skipCount,
+			"max":             locks.MaxGateSkipRequeues,
+		}).Warn("gate skip requeue limit exceeded")
+		return w.gateSkipLimitExceeded(ctx, msg)
+	}
+
+	job, err := BuildRetryJob(msg)
+	if err != nil {
+		log.WithError(err).WithField("offset", msg.Offset).
+			Warn("gate skip: failed to build retry job, leaving message uncommitted")
+		return false
+	}
+	job.ScheduledAt = time.Now().Add(locks.GateSkipRetryDelay)
+	carryGateSkipCount(job, skipCount+1)
+
+	if enqErr := w.gateSkipScheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); enqErr != nil {
+		// ZSET 모드는 pop 이 곧 ack 이라 미커밋으로 두어도 redeliver 가 없다 — 그대로 두면
+		// 소실이므로 DLQ 로 격리한 뒤 commit 한다 (CodeRabbit 피드백, validate / enrich 와 동일 정책).
+		log.WithError(enqErr).WithField("offset", msg.Offset).
+			Warn("gate skip: retry enqueue failed, sending to dlq as fallback")
+
+		if dlqErr := w.sendToDLQ(ctx, msg, fmt.Errorf("gate skip requeue failed: %w", enqErr)); dlqErr != nil {
+			// DLQ 발행까지 실패 — commit 하지 않는다. Kafka 모드면 redeliver 로 복구되고,
+			// ZSET 모드면 이미 pop 된 상태라 복구 불가이므로 ERROR 로 드러낸다.
+			log.WithError(dlqErr).WithField("offset", msg.Offset).
+				Error("gate skip: dlq fallback failed, message may be lost in zset mode")
+			return false
+		}
+		if commitErr := w.commitMessage(ctx, msg); commitErr != nil && ctx.Err() == nil {
+			log.WithError(commitErr).Warn("commit after gate skip dlq fallback failed")
+		}
+		return true
+	}
+
+	log.WithFields(map[string]interface{}{
+		"offset":   msg.Offset,
+		"delay_ms": locks.GateSkipRetryDelay.Milliseconds(),
+	}).Debug("gate skip requeued with delay")
+
+	if commitErr := w.commitMessage(ctx, msg); commitErr != nil && ctx.Err() == nil {
+		log.WithError(commitErr).Warn("commit after gate skip requeue failed")
+	}
+	return true
+}
+
+// commitMessage 는 pool 유무와 무관하게 commit 합니다.
+//
+// pool 은 Start 에서 생성되므로 단위 테스트가 Handle 만 격리 호출하면 nil 입니다.
+// validate / enrich worker 의 commit 헬퍼와 동일한 fallback 패턴.
+func (w *Worker) commitMessage(ctx context.Context, msg *queue.Message) error {
+	if w.pool == nil {
+		return workerpool.CommitWithDrain(ctx, w.consumer, msg, workerpool.DefaultDrainTimeout)
+	}
+	return w.pool.Commit(ctx, msg)
+}
+
+// SetGateSkipScheduler 는 StageGate 선점 재큐 전용 RetryScheduler 를 주입합니다 (이슈 #540).
+//
+// **SetRetryScheduler 와 분리한 이유**: 후자는 우선순위 ZSET 모드에서만 주입됩니다 —
+// 일반 Kafka 모드에서는 "commit 안 함 → redeliver" 가 성립하므로 일반 실패 경로에 스케줄러가
+// 필요 없기 때문입니다 (이슈 #522 / #523 의 결정).
+//
+// 그러나 gate-skip 은 **두 모드 모두에서** redeliver 가 성립하지 않습니다. 락을 쥔 worker 는
+// 자기 offset 만 커밋하므로 이 offset 은 아무도 커밋하지 않고, 같은 파티션의 뒤 메시지가
+// 커밋되면 함께 소비 처리됩니다. 따라서 모드와 무관하게 재큐 수단이 필요합니다.
+func (w *Worker) SetGateSkipScheduler(rs bus.RetryScheduler) {
+	w.gateSkipScheduler = rs
+}
+
+// parseGateSkipCount 는 헤더에서 gate-skip 재큐 누적 횟수를 읽습니다 (이슈 #540).
+// 미설정 / 파싱 불가 / 음수는 0 — 상한 검사가 보수적으로(=재큐 허용) 동작합니다.
+func parseGateSkipCount(headers map[string]string) int {
+	raw := headers[core.HeaderGateSkipCount]
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// carryGateSkipCount 는 증가된 재큐 횟수를 job 에 실어 다음 사이클로 전달합니다 (이슈 #540).
+//
+// RetryScheduler 는 job 을 재직렬화해 발행하므로 msg.Headers 는 보존되지 않는다.
+// Target.Metadata 는 CrawlJob 과 함께 직렬화되고, bus 의 applyRetryHeaders 가 이를 다시
+// 헤더로 복원한다.
+func carryGateSkipCount(job *core.CrawlJob, next int) {
+	if job.Target.Metadata == nil {
+		job.Target.Metadata = map[string]interface{}{}
+	}
+	job.Target.Metadata[core.HeaderGateSkipCount] = strconv.Itoa(next)
+}
+
+// gateSkipLimitExceeded 는 재큐 상한 도달 시 DLQ 로 격리하고 commit 합니다 (이슈 #540).
+//
+// 상한에 닿았다는 것은 락이 계속 정상 점유되고 있다는 뜻이므로, 조용히 버리는 대신 운영자가
+// 볼 수 있는 곳으로 옮긴다.
+func (w *Worker) gateSkipLimitExceeded(ctx context.Context, msg *queue.Message) bool {
+	log := logger.FromContext(ctx)
+	if dlqErr := w.sendToDLQ(ctx, msg, locks.ErrStageGateHeld); dlqErr != nil {
+		log.WithError(dlqErr).WithField("offset", msg.Offset).
+			Error("gate skip limit dlq failed, leaving message uncommitted")
+		return false
+	}
+	if commitErr := w.commitMessage(ctx, msg); commitErr != nil && ctx.Err() == nil {
+		log.WithError(commitErr).Warn("commit after gate skip limit dlq failed")
+	}
+	return true
+}
+
+// sendToDLQ 는 처리 불가 메시지를 DLQ 로 격리합니다 (이슈 #540, CodeRabbit 피드백).
+//
+// parser 에는 그동안 DLQ 발행 경로가 없어, ZSET 모드(pop=ack)에서 재큐가 실패하면 메시지가
+// 그대로 사라졌습니다. validate / enrich 의 sendToDLQ 와 동일한 구현입니다.
+//
+// 반환 에러는 호출자가 commit 여부를 정하는 데 씁니다 — 발행 실패 상태로 commit 하면
+// 메시지가 유실됩니다.
+func (w *Worker) sendToDLQ(ctx context.Context, msg *queue.Message, reason error) error {
+	log := logger.FromContext(ctx)
+
+	if w.pub == nil {
+		return errors.New("parser: publisher not wired, cannot send to dlq")
+	}
+
+	headers := make(map[string]string, len(msg.Headers)+2)
+	for k, v := range msg.Headers {
+		headers[k] = v
+	}
+	headers["original-topic"] = msg.Topic
+	headers["error"] = reason.Error()
+
+	dlqMsg := queue.Message{
+		Topic:   queue.TopicDLQ,
+		Key:     msg.Key,
+		Value:   msg.Value,
+		Headers: headers,
+	}
+
+	err := w.pub.Forward(ctx, dlqMsg)
+	if err != nil && errors.Is(err, context.Canceled) {
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workerpool.DefaultDrainTimeout)
+		defer cancel()
+		err = w.pub.Forward(drainCtx, dlqMsg)
+	}
+	if err != nil {
+		log.WithError(err).Error("failed to send message to dlq")
+		return err
+	}
+	return nil
 }
