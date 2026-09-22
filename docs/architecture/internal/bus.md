@@ -33,7 +33,7 @@ seed / upgrade / retry / DLQ 발행 경로도 함께 소유한다.
 - URL 정규화 ([`pkg/links.Normalizer`](../pkg/links.md))
 - 파이프라인 진입 marker atomic dedup ([`locks.IngestionMarker`](locks/README.md))
 - URL Guard 검사 ([`pkg/urlguard.Gate`](../pkg/urlguard.md))
-- Priority 결정 ([`processor/fetcher/worker.PriorityResolver`](processor/fetcher/worker.md))
+- Priority 결정 (`PriorityResolver` — 본 패키지 [`resolver.go`](../../../internal/bus/resolver.go))
 - 토픽 라우팅 (Priority → TopicCrawlHigh/Normal/Low)
 - DLQ 발행 및 계측
 
@@ -71,9 +71,14 @@ func New(producer queue.Producer, resolver PriorityResolver, log *logger.Logger)
 for each job in batch:
    1. Normalizer.Normalize(job.Target.URL)            ← Set 됐으면
    2. Gate.Allow(url) → 차단 시 silent drop + WARN    ← Set 됐으면
-   3. IngestionMarker.Acquire(url)                    ← Set 됐으면
-        ├ already_marked → skip
-        └ acquired → continue
+   3. 진입 marker 획득 — 아래 둘 중 하나 (PipelineGuard 우선)
+        ├ PipelineGuard 주입됨 → guard.CheckAndAcquire(url, targetType)
+        │    target type 별 TTL 정책 (Article 24h / Category 단명).
+        │    Category 도 대상에 포함된다.
+        └ guard 미주입 + targetType != Category → IngestionMarker.Acquire(url)
+             backward compat fallback. **Category 는 이 경로를 우회** 해
+             marker 없이 통과한다.
+        결과: already_marked → skip / acquired → continue
    4. PriorityResolver.Resolve(job) → priority
    5. queue.Producer.Publish(topic[priority], jobMsg)
 ```
@@ -93,7 +98,6 @@ for each job in batch:
 ## 의존
 
 - [`internal/processor/fetcher/core`](processor/fetcher/core.md) — `CrawlJob`
-- [`internal/processor/fetcher/worker`](processor/fetcher/worker.md) — `PriorityResolver`
 - [`internal/locks`](locks/README.md) — `IngestionMarker`
 - [`pkg/queue`](../pkg/queue.md), [`pkg/links`](../pkg/links.md), [`pkg/urlguard`](../pkg/urlguard.md), [`pkg/logger`](../pkg/logger.md)
 

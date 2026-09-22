@@ -11,11 +11,33 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 GREEN=$'\e[32m'; RED=$'\e[31m'; RESET=$'\e[0m'
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d)
 pass=0; fail=0
 
-backup() { cp "$1" "$TMP/$(echo "$1" | tr / _)"; }
-restore() { cp "$TMP/$(echo "$1" | tr / _)" "$1"; }
+# 주입한 드리프트는 무슨 일이 있어도 되돌린다.
+# rm -rf "$TMP" 만 하면, 중간에 죽었을 때 변조된 문서가 작업 트리에 남고 백업은 사라진다 —
+# 커밋 전 미저장 변경이 있었다면 복구할 수단이 없다 (CodeRabbit 피드백).
+MUTATED=()
+cleanup() {
+  local f
+  for f in "${MUTATED[@]-}"; do
+    [ -n "$f" ] && [ -f "$TMP/$(echo "$f" | tr / _)" ] && cp "$TMP/$(echo "$f" | tr / _)" "$f"
+  done
+  rm -rf "$TMP"
+}
+trap cleanup EXIT INT TERM
+
+backup() {
+  cp "$1" "$TMP/$(echo "$1" | tr / _)"
+  MUTATED+=("$1")
+}
+restore() {
+  cp "$TMP/$(echo "$1" | tr / _)" "$1"
+  # 복원된 파일은 추적 목록에서 뺀다 — cleanup 이 중복 복사하지 않도록.
+  local i out=()
+  for i in "${MUTATED[@]-}"; do [ "$i" = "$1" ] || out+=("$i"); done
+  MUTATED=("${out[@]-}")
+}
 
 # expect_detect <설명> <주입 후 경고에 나타나야 할 문자열> <파일> <sed 표현식>
 expect_detect() {

@@ -204,7 +204,7 @@ issuetracker/
 ├── test/                           # 소스 트리 미러링
 └── docs/
     ├── architecture/               # canonical architecture 문서
-    ├── en/  └── ko/                # README 번역
+    └── ko/                         # 한국어 문서 (docs/en/ 은 미존재 — 목표 구조)
 ```
 
 ### 주요 설계 결정

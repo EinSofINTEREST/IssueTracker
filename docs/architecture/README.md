@@ -163,7 +163,7 @@ docs/architecture/
 |----------------------------|------------------------------------------------------------|-----------------------------------------------|
 | Kafka                      | [pkg/queue/](../../pkg/queue/)                              | 모든 stage 간 메시지 버스                      |
 | PostgreSQL                 | [internal/storage/postgres/](../../internal/storage/postgres/) | contents / content_bodies / content_meta / raw_contents / parsing_rules / sample_urls / schema_migrations |
-| Redis                      | [pkg/redis/](../../pkg/redis/), [internal/locks/](../../internal/locks/), [internal/processor/fetcher/worker/](../../internal/processor/fetcher/worker/) | ProcessingLock + IngestionMarker (locks) / RetryQueue ZSET (processor/fetcher/worker) |
+| Redis                      | [pkg/redis/](../../pkg/redis/), [internal/locks/](../../internal/locks/), [internal/bus/](../../internal/bus/) | ProcessingLock + IngestionMarker (locks) / RetryQueue ZSET (bus/retry.go) |
 | LLM (Gemini/OpenAI/Claude) | [pkg/llm/](../../pkg/llm/)                                  | parser rule 자동 생성 / path_pattern refinement |
 | Chrome (CDP)               | [internal/processor/fetcher/implementation/chromedp/](../../internal/processor/fetcher/implementation/chromedp/) | 동적 페이지 헤드리스 렌더                      |
 | ELArchive Classifier       | [internal/classifier/](../../internal/classifier/) + [proto/classifier/](../../proto/classifier/) | 카테고리 분류 (gRPC primary, HTTP fallback)    |

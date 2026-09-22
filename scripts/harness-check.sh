@@ -63,7 +63,9 @@ is_placeholder() {
 # 이걸 인정하지 않으면 개명을 문서에 남길 때마다 경고가 뜬다 (이슈 #565).
 # 부재를 밝히는 문구. "없음" 처럼 짧고 흔한 토큰은 넣지 않는다 —
 # "release 없음" 같은 무관한 설명까지 부재 선언으로 오인해 실제 드리프트를 덮는다 (이슈 #565).
-ABSENT_RE='미구현|존재하지 않|없습니다|아직 없|은 없다|는 없다|부재|planned|목표|제안|예시|이전에|이전됨|로 이전|통합됐|통합되|개명|renamed|moved to|구 이름'
+# "부재" 는 뺀다 — "Redis 부재 시 in-memory fallback" 같은 운영 문맥이 흔해,
+# 경로 부재 선언과 구분되지 않는다 (Copilot 피드백).
+ABSENT_RE='미구현|존재하지 않|없습니다|아직 없|은 없다|는 없다|planned|목표|제안|예시|이전에|이전됨|로 이전|통합됐|통합되|개명|renamed|moved to|구 이름'
 
 declared_absent() {
   # 경로가 적힌 줄 자체에 부재 표기가 있으면 인정한다.
@@ -84,8 +86,10 @@ declared_absent() {
   #
   # 조상까지 거슬러 올라가지 않는다 — "internal/" 한 줄에 붙은 "미구현" 이 그 아래 모든
   # 경로를 면제시켜, 트리 안의 실제 드리프트를 통째로 덮어 버린다 (이슈 #565).
+  # 디렉토리는 "── name/", 파일은 "── name" 으로 적힌다 — 둘 다 매치해야
+  # 트리의 파일 항목에 붙인 "# 미구현 / 목표" 표기가 인정된다 (Copilot 피드백).
   local leaf="${2##*/}"
-  grep -F -A2 -- "── ${leaf}/" "$1" | grep -qE "$ABSENT_RE" && return 0
+  grep -E -A2 -- "── ${leaf}/?([[:space:]]|$)" "$1" | grep -qE "$ABSENT_RE" && return 0
   return 1
 }
 
@@ -130,8 +134,15 @@ expand_tree_paths() {
     # 블록 안에 "목표 구조" 표시가 있으면 그 트리는 아직 만들지 않은 구조다 — 통째로 건너뛴다.
     # 표시는 블록 첫 줄 주석에 둔다 (예: "# ↓ 목표 구조 — docs/en/ 은 현재 존재하지 않습니다").
     /목표 구조|목표 상태|planned structure/ { if (infence) skip = 1; next }
-    /^[[:space:]]*```[[:alnum:]]/ { skip = 1; next }          # 태그 블록은 통째로 건너뛴다
-    /^[[:space:]]*```/ { infence = !infence; if (!infence) skip = 0; delete parent; root = ""; next }
+    # fence 토글 — 여는 줄에서 태그 유무로 skip 을 정하고, 닫는 줄에서 상태를 모두 초기화한다.
+    # 태그 블록에서 infence 를 세우지 않으면 닫는 fence 가 "새 여는 fence" 로 처리돼
+    # 이후 문서의 트리가 통째로 skip 된다 (Copilot 피드백).
+    /^[[:space:]]*```/ {
+      if (infence) { infence = 0; skip = 0 }
+      else { infence = 1; skip = ($0 ~ /^[[:space:]]*```[[:alnum:]]/) }
+      delete parent; root = ""
+      next
+    }
     !infence { next }
     skip { next }
 

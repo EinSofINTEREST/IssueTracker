@@ -68,10 +68,10 @@ type RetryScheduler interface {
 score 로 사용하거나 즉시 발행하거나의 차이만 흡수.
 
 구현:
-- [`NewRedisDelayedRetryScheduler`](../../../../internal/processor/fetcher/worker/retry_scheduler.go) — Redis ZSET
+- [`NewRedisDelayedRetryScheduler`](../../../../internal/bus/retry.go) — Redis ZSET
   (score=`ScheduledAt` unix timestamp) + 별도 goroutine (`Start(ctx)` / `Stop()`) 이 ready job 을
   Kafka 에 publish — worker slot 미점유 (이슈 #82)
-- [`KafkaImmediateRetryScheduler`](../../../../internal/processor/fetcher/worker/retry_scheduler.go) — Redis 부재 시
+- [`KafkaImmediateRetryScheduler`](../../../../internal/bus/retry.go) — Redis 부재 시
   fallback, 즉시 republish 후 worker 가 `ScheduledAt` 까지 sleep (worker slot 점유)
 
 <br>

@@ -338,28 +338,40 @@ type Crawler struct {
 
 As the project grows, maintain structure:
 
-### Adding New Features
+### Adding New Sources
+
+**사이트를 추가할 때 Go 패키지를 만들지 않는다.** 소스별 디렉토리를 두던 초기 설계
+(`crawler/news/us/cnn/` 등) 는 **DB-driven 방식으로 대체** 됐다
+([02-crawler-implementation.md](../../.claude/rules/02-crawler-implementation.md) 참조).
+
+- `fetcher_rules` / `parsing_rules` row 를 넣는다
+- selector 는 LLM 이 자동 생성한다 (`parser/rule/llmgen`)
+- 일반 경로로 처리되지 않는 사이트만 `internal/processor/fetcher/domain/` 아래에
+  전용 Go 핸들러를 추가한다
+
+### Adding New Stages
+
+파이프라인 단계를 늘릴 때만 새 패키지를 만든다 — 기존 stage 와 같은 층위에 둔다.
+
 ```
-internal/
-├── crawler/
-│   ├── core/          # Core interfaces
-│   ├── news/          # News crawlers
-│   │   ├── us/        # US sources
-│   │   │   ├── cnn/
-│   │   │   └── nytimes/
-│   │   └── kr/        # Korean sources
-│   │       ├── naver/
-│   │       └── daum/
-│   └── community/     # Community crawlers
+internal/processor/
+├── fetcher/           # 기존
+├── parser/            # 기존
+├── validate/          # 기존
+├── enrich/            # 기존
+└── embed/             # 신규 stage 예시 (미구현 — 이슈 #17 #18 #20)
 ```
 
 ### Adding New Services
+
+새 바이너리는 `cmd/` 아래에 두고, **`Makefile` 의 `build` 타겟과 `*_BINARY` 변수를
+함께 갱신** 한다 (누락 시 `make harness-check` 가 잡는다).
+
 ```
 cmd/
-├── crawler/       # Crawler service
-├── processor/     # Processing service
-├── api/           # API service
-└── scheduler/     # Job scheduler
+├── issuetracker/  # 통합 파이프라인 (기존)
+├── processor/     # validator-only (기존)
+└── api/           # API 서버 예시 (미구현 — 이슈 #21)
 ```
 
 ### Adding New Libraries

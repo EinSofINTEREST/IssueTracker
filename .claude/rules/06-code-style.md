@@ -382,7 +382,11 @@
    ```
 
 2. **Package Organization**: By functionality
+
+   아래는 패키지 구성 방식을 보이는 **예시** 이며 실재하는 경로가 아니다 —
+   본 저장소의 crawler 는 `internal/processor/fetcher/` 로 정렬돼 있다 (이슈 #198).
    ```
+   # ↓ 목표 구조 표기 — 구성 방식 예시이며 실재 경로가 아닙니다
    internal/
    └── crawler/
        ├── crawler.go      # Main interface
@@ -952,6 +956,7 @@ func process() {
 
 - **Directory structure** (목표):
   ```
+  # ↓ 목표 구조 — docs/en/ 은 현재 존재하지 않습니다
   docs/
   ├── en/           # English documentation (primary)
   │   ├── README.md

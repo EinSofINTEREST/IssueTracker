@@ -68,7 +68,7 @@
 | [`decorator/`](../../../../internal/storage/decorator/) | Cross-cutting (timeout / cache invalidate) | `WrapBlacklistWithTimeout`, `WrapBlacklistWithInvalidator`, `WrapWithInvalidator` (parser_rule), `WrapContentWithTimeout`, `WrapRawContentWithTimeout`, `WrapFetcherRuleWithTimeout` |
 | [`service/`](../../../../internal/storage/service/) | 비즈니스 로직 (boundary) — [service.md](service.md) 참조 | `ContentService`, `RawContentService`, `BlacklistService` (이슈 #431, #480), `ParserRuleService` (이슈 #431) |
 | [`postgres/`](../../../../internal/storage/postgres/) | PostgreSQL 구현 — [postgres.md](postgres.md) 참조 (query-level timeout 은 `decorator/timeout.go` 가 담당) | `NewBlacklistRepository`, `NewParserRuleRepository`, `NewContentRepository`, ... |
-| [`redis/`](../../../../internal/storage/redis/) | Redis 구현 (분산 lock, sliding window) | `NewInflightLocker`, `NewIngestionMarker`, `NewSlidingWindow` 등 |
+| [`redis/`](../../../../internal/storage/redis/) | Redis 구현 (inflight lock, 카운터, 큐) | `NewInflightLocker`, `NewPendingQueue`, `NewFailureCounter`, `NewStaleCounter`, `NewRawIDTracker` |
 
 <br>
 
