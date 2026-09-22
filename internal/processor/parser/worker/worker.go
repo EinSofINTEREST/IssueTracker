@@ -1292,14 +1292,22 @@ func (w *Worker) enqueueGateSkipRetry(ctx context.Context, msg *queue.Message) b
 	carryGateSkipCount(job, skipCount+1)
 
 	if enqErr := w.gateSkipScheduler.Enqueue(ctx, job, locks.ErrStageGateHeld); enqErr != nil {
-		// parser 에는 DLQ 발행 경로가 없다 — 일반 실패 경로(Handle)와 동일한 한계이며,
-		// ZSET 모드에서는 pop=ack 이라 여기서 메시지가 소실된다. 같은 문구로 남겨 운영자가
-		// 두 경로를 한 번에 grep 할 수 있게 한다.
-		if ctx.Err() == nil {
-			log.WithError(enqErr).WithField("offset", msg.Offset).
-				Warn("retry enqueue failed, message will be lost in zset mode")
+		// ZSET 모드는 pop 이 곧 ack 이라 미커밋으로 두어도 redeliver 가 없다 — 그대로 두면
+		// 소실이므로 DLQ 로 격리한 뒤 commit 한다 (CodeRabbit 피드백, validate / enrich 와 동일 정책).
+		log.WithError(enqErr).WithField("offset", msg.Offset).
+			Warn("gate skip: retry enqueue failed, sending to dlq as fallback")
+
+		if dlqErr := w.sendToDLQ(ctx, msg, fmt.Errorf("gate skip requeue failed: %w", enqErr)); dlqErr != nil {
+			// DLQ 발행까지 실패 — commit 하지 않는다. Kafka 모드면 redeliver 로 복구되고,
+			// ZSET 모드면 이미 pop 된 상태라 복구 불가이므로 ERROR 로 드러낸다.
+			log.WithError(dlqErr).WithField("offset", msg.Offset).
+				Error("gate skip: dlq fallback failed, message may be lost in zset mode")
+			return false
 		}
-		return false
+		if commitErr := w.commitMessage(ctx, msg); commitErr != nil && ctx.Err() == nil {
+			log.WithError(commitErr).Warn("commit after gate skip dlq fallback failed")
+		}
+		return true
 	}
 
 	log.WithFields(map[string]interface{}{
@@ -1363,16 +1371,60 @@ func carryGateSkipCount(job *core.CrawlJob, next int) {
 	job.Target.Metadata[core.HeaderGateSkipCount] = strconv.Itoa(next)
 }
 
-// gateSkipLimitExceeded 는 재큐 상한 도달 시 메시지를 명시적으로 버리고 commit 합니다 (이슈 #540).
+// gateSkipLimitExceeded 는 재큐 상한 도달 시 DLQ 로 격리하고 commit 합니다 (이슈 #540).
 //
-// parser 에는 DLQ 발행 경로가 없다 (일반 실패 경로도 동일). 조용히 무한 재큐하는 것보다
-// ERROR 로 드러내고 멈추는 편이 낫다 — parser DLQ 도입은 별도 사안.
+// 상한에 닿았다는 것은 락이 계속 정상 점유되고 있다는 뜻이므로, 조용히 버리는 대신 운영자가
+// 볼 수 있는 곳으로 옮긴다.
 func (w *Worker) gateSkipLimitExceeded(ctx context.Context, msg *queue.Message) bool {
 	log := logger.FromContext(ctx)
-	log.WithField("offset", msg.Offset).
-		Error("gate skip requeue limit exceeded, dropping message (parser has no dlq path)")
+	if dlqErr := w.sendToDLQ(ctx, msg, locks.ErrStageGateHeld); dlqErr != nil {
+		log.WithError(dlqErr).WithField("offset", msg.Offset).
+			Error("gate skip limit dlq failed, leaving message uncommitted")
+		return false
+	}
 	if commitErr := w.commitMessage(ctx, msg); commitErr != nil && ctx.Err() == nil {
-		log.WithError(commitErr).Warn("commit after gate skip limit failed")
+		log.WithError(commitErr).Warn("commit after gate skip limit dlq failed")
 	}
 	return true
+}
+
+// sendToDLQ 는 처리 불가 메시지를 DLQ 로 격리합니다 (이슈 #540, CodeRabbit 피드백).
+//
+// parser 에는 그동안 DLQ 발행 경로가 없어, ZSET 모드(pop=ack)에서 재큐가 실패하면 메시지가
+// 그대로 사라졌습니다. validate / enrich 의 sendToDLQ 와 동일한 구현입니다.
+//
+// 반환 에러는 호출자가 commit 여부를 정하는 데 씁니다 — 발행 실패 상태로 commit 하면
+// 메시지가 유실됩니다.
+func (w *Worker) sendToDLQ(ctx context.Context, msg *queue.Message, reason error) error {
+	log := logger.FromContext(ctx)
+
+	if w.pub == nil {
+		return errors.New("parser: publisher not wired, cannot send to dlq")
+	}
+
+	headers := make(map[string]string, len(msg.Headers)+2)
+	for k, v := range msg.Headers {
+		headers[k] = v
+	}
+	headers["original-topic"] = msg.Topic
+	headers["error"] = reason.Error()
+
+	dlqMsg := queue.Message{
+		Topic:   queue.TopicDLQ,
+		Key:     msg.Key,
+		Value:   msg.Value,
+		Headers: headers,
+	}
+
+	err := w.pub.Forward(ctx, dlqMsg)
+	if err != nil && errors.Is(err, context.Canceled) {
+		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workerpool.DefaultDrainTimeout)
+		defer cancel()
+		err = w.pub.Forward(drainCtx, dlqMsg)
+	}
+	if err != nil {
+		log.WithError(err).Error("failed to send message to dlq")
+		return err
+	}
+	return nil
 }
