@@ -120,7 +120,7 @@ git add <files>
 ```
 
 #### Write Commit Message
-Follow the format from `.cursor/git-conventions.md`:
+Follow the format from `.cursor/rules/git-conventions.md`:
 
 ```bash
 git commit -m "[FEAT]: 기능 설명
@@ -467,7 +467,7 @@ make build
 
 ### Resources
 - Project rules: `.claude/rules/`
-- Cursor rules: `.cursor/`
+- Cursor rules: `.cursor/rules/`
 - Go documentation: https://go.dev/doc/
 - Standard layout: https://github.com/golang-standards/project-layout
 
@@ -501,5 +501,5 @@ git branch -d feat/feature-name
 - Source code: `internal/`, `pkg/`
 - Tests: `test/`
 - Examples: `examples/`
-- Rules: `.claude/rules/`, `.cursor/`
+- Rules: `.claude/rules/`, `.cursor/rules/`
 - Build: `Makefile`
