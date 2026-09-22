@@ -3,7 +3,7 @@
 # pr-resolve-comments.sh
 #
 # 처리 완료한 PR review comment 들에 👀 reaction 일괄 추가 + 해당 thread resolve.
-# .claude/loop.md 의 "처리 방식" 절차를 단축하기 위한 helper (이슈 #152).
+# CLAUDE.md "PR 생성 후 피드백 대응" 절차를 단축하기 위한 helper (이슈 #152, #548).
 #
 # Usage:
 #   scripts/pr-resolve-comments.sh <PR번호> <comment_id1> [<comment_id2> ...]

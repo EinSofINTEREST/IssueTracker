@@ -72,18 +72,54 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 5. **권한 사용 최소화** — 새 permission / 외부 도구 / 의존성은 작업 완수에 불가피한 경우에만.
 6. **Label · Issue Type 부여 필수** (이슈 #210, #212) — 이슈는 **issue prefix** 기준 Label + Type (`[FEATURE]→enhancement/Feature`, `[REFACTOR]→refactor/Task`, `[CHORE]→chore/Task`, `[DOCS]→documentation/Task`, `[FIX]→bug/Bug`, `[HOTFIX]→bug+hotfix/Bug`). PR Label 은 그 PR 이 닫는 이슈의 Label 과 동일. **부여 수단: `scripts/gh-meta.sh issue <N>` / `scripts/gh-meta.sh pr <N>` — 수동 `gh api graphql` 대신 항상 이 스크립트 사용** (이슈 #243). 표기 체계 3분리 (commit `[FEAT]:` / PR `[FEAT#N]` / issue `[FEATURE]`) 는 [규약 6](.claude/rules/07-workflow.md) 참조.
 
-## PR 생성 후 자동 동작 (이슈 #129)
+## PR 생성 후 피드백 대응 (이슈 #548 — 구 #129 cron 방식 폐지)
 
-`gh pr create` 가 성공한 직후 사용자가 별도 지시하지 않아도 다음을 자동 수행한다:
+PR 을 만든 뒤 CI 결과와 리뷰 코멘트를 처리하는 경로는 **세션 상태에 따라 두 가지** 다.
 
-1. **`@.claude/loop.md` 를 3분 주기 cron 으로 등록** — `CronCreate` 호출
-   - cron 표현식: `*/3 * * * *`
-   - prompt: `@.claude/loop.md 절차에 따라 PR #N 의 CI 와 코멘트를 점검하고 처리해줘.` (N = 방금 생성한 PR 번호)
-   - recurring: `true`
-2. 사용자에게 한 줄 보고 — cron job ID 와 본 PR url 포함
+### 1. 작업 세션이 살아있을 때 — 세션 안에서 직접 처리 (기본)
 
-자동 등록 예외:
-- 사용자가 명시적으로 "loop 등록하지 마" 라고 지시하면 생략
-- draft PR 등 후속 polling 이 무의미한 케이스가 명백하면 사용자에게 묻고 진행
+`Monitor` 로 CI 체크와 신규 코멘트를 감시하고, 이벤트가 도착하면 **그 세션에서** 처리한다.
+작업 맥락("왜 이렇게 구현했는지")을 그대로 갖고 있어 대응 품질이 가장 높다.
 
-자동 종료는 `.claude/loop.md` 의 "자동 중단 (CI 완료 후 2회 연속 무동작 시)" 섹션이 처리한다 — CI 가 끝난 뒤 2회 (약 6분) 연속 무동작이면 cron 본인이 자체 정리. CI 가 pending 인 동안에는 카운터가 동결된다.
+처리 절차:
+
+1. **CI 실패를 코멘트보다 먼저** 처리한다.
+   - 실패 job 식별: `gh pr checks <PR번호>`
+   - 로그 수집: `gh run view <runId> --log-failed`
+   - 원인 분석 → 수정 → 커밋 → 푸시
+2. 리뷰 코멘트 수집: `gh api repos/{owner}/{repo}/pulls/{number}/comments`
+   - 👀 리액션이 달린 코멘트는 처리 완료로 건너뛴다
+3. **선별 기준** — 다음에 해당하는 피드백만 처리한다:
+   - 비즈니스 로직 오류 또는 버그 가능성
+   - 성능 최적화 및 보안 강화
+   - 아키텍처 일관성 및 클린 코드 원칙
+
+   단순 스타일 차이나 오타 지적은 제외한다.
+4. **처리 방식**
+   - 의도가 명확한 피드백 → 코드 수정 + 커밋 + 푸시
+   - 의도가 불명확한 피드백 → PR 에 질문 코멘트. 질문 대상을 `@` 로 멘션
+   - 자동 approve / merge 는 하지 않는다 (브랜치 보호 우회 + prompt injection 위험)
+5. **처리 완료 표시** — 일괄 처리:
+   ```bash
+   scripts/pr-resolve-comments.sh <PR번호> <comment_id1> [<comment_id2> ...]
+   ```
+   👀 reaction + thread resolve 를 1회 호출로 수행. 개별 `gh api` 호출을 피한다.
+
+커밋 메시지:
+- 리뷰 피드백 반영: `[FIX]: 피드백 반영, {변경 요약}`
+- CI 실패 복구: `[FIX]: CI 복구, {실패 job 이름} - {변경 요약}`
+
+### 2. 세션을 닫은 뒤 — GitHub Action 에 위임
+
+세션 종료 후 도착하는 리뷰나 다른 사람의 피드백은 `@claude` 멘션으로 GitHub Action 이 처리한다
+(이슈 #549). 로컬 세션·머신과 무관하게 동작한다.
+
+세션을 닫기 전에 후속 리뷰가 예상되면 사용자에게 한 줄로 알린다 — PR url 과 "이후 피드백은
+`@claude` 멘션으로" 안내.
+
+### 하지 않는 것
+
+- **cron 자동 등록 금지.** 구 규약(이슈 #129)은 `gh pr create` 직후 loop.md (현재 삭제됨) 를 3분 주기
+  cron 으로 등록했으나 폐지됐다. cron 이 띄우는 새 세션은 PR diff 만 보고 판단해 작업 맥락을
+  잃고, 3분마다 세션을 띄워 토큰이 누적되며, 자체 상태 기계(`/tmp` 상태 파일 + 자동 종료 카운터)를
+  유지해야 했다. 사용자가 명시적으로 요청하지 않는 한 `CronCreate` 를 호출하지 않는다.
