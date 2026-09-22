@@ -80,7 +80,7 @@ issuetracker/
 - Examples: `crawler`, `processor`, `api`
 
 ```go
-// cmd/crawler/main.go
+// cmd/issuetracker/main.go
 package main
 
 import (
@@ -332,7 +332,7 @@ type Crawler struct {
 ✓ crawler → models
 ✗ crawler → models → crawler
 
-✓ cmd/crawler → internal/processor/fetcher/core → pkg/logger
+✓ cmd/issuetracker → internal/processor/fetcher/core → pkg/logger
 ✗ pkg/logger → internal/processor/fetcher/core
 ```
 

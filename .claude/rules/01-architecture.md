@@ -111,7 +111,7 @@ issuetracker/
 │   ├── promptcontract/        # ✅ 전 stage prompt placeholder 계약 집계 (이슈 #539)
 │   ├── classifier/            # ⚠️ grpc/http client — 현재 파이프라인에 미연결 (이슈 #544)
 │   ├── locks/                 # ✅ 단계 무관 distributed lock — 4 stage 공유 (이슈 #197)
-│   │   ├── ingestion_lock.go  # IngestionLock — SET NX 진입 마커 (release 없음, 이슈 #541 에서 개명 예정)
+│   │   ├── ingestion_marker.go # IngestionMarker — SET NX 진입 마커 (release 없음, 이슈 #541)
 │   │   ├── processing_lock.go # ProcessingLock + ProcessingKey(stage, url)
 │   │   ├── semaphore.go       # in-process 동시 슬롯 cap (인스턴스 간 비공유 — 이슈 #545)
 │   │   └── stage_gate.go      # Semaphore + ProcessingLock 합성

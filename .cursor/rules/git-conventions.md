@@ -84,7 +84,7 @@
 [DOCS]: 크롤러 API 문서 및 사용 예제 작성
 
 - 크롤러 인터페이스 GoDoc 주석 추가
-- examples/basic_usage.go 작성
+- examples/basic_usage/ 작성
 - README.md에 Quick Start 섹션 추가
 ```
 

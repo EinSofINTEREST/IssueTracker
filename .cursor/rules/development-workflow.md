@@ -3,7 +3,7 @@
 ## Development Environment Setup
 
 ### Prerequisites
-- Go 1.22+
+- Go 1.24+
 - Git
 - Make
 - golangci-lint (for linting)
@@ -46,20 +46,20 @@ git checkout -b feat/your-feature-name
 #### Write Code
 ```bash
 # Create/modify files
-# Follow code style guide (.cursor/code-style.md)
+# Follow code style guide (.cursor/rules/code-style.md)
 ```
 
 #### Write Tests
 ```bash
 # Create test file in test/ directory
-# Minimum 70% coverage required
+# CI 게이트 40% 이상 (core 패키지 목표 70%)
 # Use table-driven tests where appropriate
 ```
 
 #### Example Development Cycle
 ```bash
 # 1. Write failing test
-# test/internal_crawler_core/feature_test.go
+# test/internal/processor/fetcher/core/feature_test.go
 
 # 2. Implement feature
 # internal/processor/fetcher/core/feature.go
@@ -84,7 +84,7 @@ make lint
 # 1. Run all tests
 make test
 
-# 2. Check coverage (minimum 70%)
+# 2. Check coverage (CI 게이트 40% 이상)
 make coverage
 
 # 3. Run linter
@@ -99,9 +99,9 @@ make build
 
 #### Pre-Commit Checklist
 - [ ] All tests pass
-- [ ] Coverage >= 70%
+- [ ] Coverage — CI 게이트 40% 이상
 - [ ] No linter errors
-- [ ] Code formatted (2-space indentation)
+- [ ] Code formatted (탭 인덴트 — `make fmt`)
 - [ ] No commented-out code
 - [ ] No magic numbers
 - [ ] Error handling complete
@@ -188,7 +188,7 @@ git push origin feat/your-feature-name
 ## Checklist
 - [ ] Code follows style guide
 - [ ] Tests pass (make test)
-- [ ] Coverage >= 70%
+- [ ] Coverage — CI 게이트 40% 이상
 - [ ] Linter passes (make lint)
 - [ ] Documentation updated
 ```

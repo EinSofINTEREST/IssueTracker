@@ -83,7 +83,7 @@ worker ──→ handler ──→ (domain/general → fetcher) ──→ implem
 8. RawContentRef 를 issuetracker.fetched 토픽에 발행
        │
        ▼
-   (parser stage 로 핸드오프 — internal/processor/parser/README.md)
+   (parser stage 로 핸드오프 — docs/architecture/internal/processor/parser/README.md)
 ```
 
 각 단계의 자세한 책임은 위 패키지별 문서 참조.
