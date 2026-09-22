@@ -187,7 +187,7 @@ fc95aec [FIX]: 피드백 반영, all-pass 모드 PathPrefixes 검증 + discovery
 - **세션을 닫은 뒤 / 타인 리뷰** 는 `@claude` 멘션 → GitHub Action (이슈 #549)
 - **cron 자동 등록 금지** — 사용자가 명시적으로 요청하지 않는 한 `CronCreate` 를 호출하지 않는다
 
-구 규약은 `gh pr create` 직후 `.claude/loop.md` 를 3분 cron 으로 자동 등록했다. cron 이 띄우는
+구 규약은 `gh pr create` 직후 loop.md (현재 삭제됨) 를 3분 cron 으로 자동 등록했다. cron 이 띄우는
 새 세션은 PR diff 만 보고 판단해 "왜 그렇게 구현했는지" 를 잃고, 토큰이 누적되며, 자체 상태
 기계를 유지해야 했다. 세션 내 처리와 GitHub Action 두 경로로 대체됐다.
 
