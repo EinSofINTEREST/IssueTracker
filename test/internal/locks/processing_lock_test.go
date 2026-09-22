@@ -17,13 +17,13 @@ import (
 
 type mockProcessingLock struct{ mock.Mock }
 
-func (m *mockProcessingLock) Acquire(ctx context.Context, key string) (bool, error) {
+func (m *mockProcessingLock) Acquire(ctx context.Context, key string) (string, bool, error) {
 	args := m.Called(ctx, key)
-	return args.Bool(0), args.Error(1)
+	return args.String(0), args.Bool(1), args.Error(2)
 }
 
-func (m *mockProcessingLock) Release(ctx context.Context, key string) error {
-	args := m.Called(ctx, key)
+func (m *mockProcessingLock) Release(ctx context.Context, key, token string) error {
+	args := m.Called(ctx, key, token)
 	return args.Error(0)
 }
 
@@ -34,16 +34,17 @@ var _ locks.ProcessingLock = (*mockProcessingLock)(nil)
 func TestNoopProcessingLock_AlwaysAcquires(t *testing.T) {
 	var locker locks.NoopProcessingLock
 
-	acquired, err := locker.Acquire(context.Background(), "any-key")
+	token, acquired, err := locker.Acquire(context.Background(), "any-key")
 	assert.NoError(t, err)
 	assert.True(t, acquired)
+	assert.Empty(t, token, "Noop 은 토큰을 발급하지 않음")
 }
 
 // TestNoopProcessingLock_ReleaseNoError 는 NoopProcessingLock 의 Release 가 항상 성공하는지 검증합니다.
 func TestNoopProcessingLock_ReleaseNoError(t *testing.T) {
 	var locker locks.NoopProcessingLock
 
-	err := locker.Release(context.Background(), "any-key")
+	err := locker.Release(context.Background(), "any-key", "")
 	assert.NoError(t, err)
 }
 

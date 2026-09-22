@@ -95,7 +95,7 @@ func (g *stageGate) Acquire(ctx context.Context, url string) (func(), bool, erro
 
 	// 2. ProcessingLock Acquire — 이미 처리 중이면 semaphore release 후 (nil, false, nil) 반환.
 	key := ProcessingKey(g.stage, url)
-	acquired, lockErr := g.lock.Acquire(ctx, key)
+	token, acquired, lockErr := g.lock.Acquire(ctx, key)
 	if lockErr != nil {
 		g.sem.Release()
 		return nil, false, lockErr
@@ -118,11 +118,19 @@ func (g *stageGate) Acquire(ctx context.Context, url string) (func(), bool, erro
 		// drainCtx — parent ctx 의 trace ID / logger fields 보존 + 부모 cancel 영향 없이 timeout cap (gemini 반영).
 		drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stageGateLockReleaseTimeout)
 		defer cancel()
-		if err := g.lock.Release(drainCtx, key); err != nil {
-			g.log.WithFields(map[string]interface{}{
+		if err := g.lock.Release(drainCtx, key, token); err != nil {
+			fields := map[string]interface{}{
 				"stage": g.stage,
 				"url":   url,
-			}).WithError(err).Warn("stage gate lock release failed")
+			}
+			// 소유권 상실은 인프라 실패가 아니라 "처리가 TTL 을 넘겼다" 는 신호다 (이슈 #63).
+			// 메시지를 구분해 운영자가 TTL 튜닝 대상인지 Redis 장애인지 즉시 판별하게 한다.
+			if errors.Is(err, ErrLockNotOwned) {
+				g.log.WithFields(fields).WithError(err).
+					Warn("stage gate lock expired before release; processing exceeded lock TTL")
+			} else {
+				g.log.WithFields(fields).WithError(err).Warn("stage gate lock release failed")
+			}
 		}
 	}
 	return release, true, nil

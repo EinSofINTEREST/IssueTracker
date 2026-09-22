@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -29,14 +30,21 @@ const (
 //
 // 구현체는 goroutine-safe 해야 합니다.
 type ProcessingLock interface {
-	// Acquire 는 key 에 대한 락을 획득합니다.
-	// 이미 다른 worker 가 처리 중이면 (false, nil).
-	// 오류 발생 시 (false, error) — 호출자는 graceful degrade 정책 적용.
-	Acquire(ctx context.Context, key string) (bool, error)
+	// Acquire 는 key 에 대한 락을 획득하고 **이번 획득의 소유권 토큰** 을 반환합니다.
+	//
+	// 이미 다른 worker 가 처리 중이면 ("", false, nil).
+	// 오류 발생 시 ("", false, error) — 호출자는 graceful degrade 정책 적용.
+	//
+	// 토큰을 구현체 내부 맵이 아니라 **반환값으로 넘기는 이유** (이슈 #63 리뷰):
+	// 하나의 ProcessingLock 인스턴스를 4개 stage 가 공유하므로, 같은 key 를 TTL 초과 후 다시
+	// 획득하면 맵 방식에서는 이전 토큰이 덮어써집니다. 그러면 먼저 시작한 쪽의 Release 가
+	// 나중 획득의 토큰으로 현재 락을 지워 — 본래 막으려던 오삭제가 한 프로세스 안에서
+	// 재현됩니다. 획득별 토큰을 호출자가 들고 있으면 이 aliasing 이 구조적으로 불가능합니다.
+	Acquire(ctx context.Context, key string) (token string, acquired bool, err error)
 
-	// Release 는 key 에 대한 락을 해제합니다.
+	// Release 는 Acquire 가 준 토큰이 일치할 때만 락을 해제합니다.
 	// 정상 종료 / 실패 모두 호출 (defer 패턴) — TTL 만료 대기 회피.
-	Release(ctx context.Context, key string) error
+	Release(ctx context.Context, key, token string) error
 }
 
 // ProcessingLock stage 표준 상수 — 호출자가 stage 를 직접 string literal 로 쓰지 않고
@@ -76,8 +84,11 @@ type RedisProcessingLock struct {
 // redisLocker 는 Redis 락 조작을 추상화하는 내부 인터페이스입니다.
 // pkg/redis.Client 의 메서드 집합과 일치하며 테스트에서 mock 으로 교체됩니다.
 type redisLocker interface {
-	AcquireLock(ctx context.Context, key string, ttl time.Duration) (bool, error)
-	ReleaseLock(ctx context.Context, key string) error
+	// AcquireLockWithToken 은 소유권 토큰과 함께 락을 획득합니다 (이슈 #63).
+	AcquireLockWithToken(ctx context.Context, key string, ttl time.Duration) (string, bool, error)
+	// ReleaseLockOwned 는 토큰이 일치할 때만 해제합니다. released=false 는 에러가 아니라
+	// "이미 만료됐거나 타 인스턴스가 재획득" 을 뜻합니다.
+	ReleaseLockOwned(ctx context.Context, key, token string) (bool, error)
 }
 
 // NewRedisProcessingLock 는 RedisProcessingLock 을 생성합니다.
@@ -92,20 +103,42 @@ func NewRedisProcessingLock(locker redisLocker, ttl time.Duration) *RedisProcess
 // Acquire 는 key 의 처리 marker 를 SET NX EX 로 atomic 시도합니다.
 //
 // nil receiver / nil locker 보호 — RedisIngestionLock 과 동일 패턴.
-func (l *RedisProcessingLock) Acquire(ctx context.Context, key string) (bool, error) {
+func (l *RedisProcessingLock) Acquire(ctx context.Context, key string) (string, bool, error) {
 	if l == nil || l.locker == nil {
-		return false, fmt.Errorf("processing lock locker is nil")
+		return "", false, fmt.Errorf("processing lock locker is nil")
 	}
-	return l.locker.AcquireLock(ctx, key, l.ttl)
+	return l.locker.AcquireLockWithToken(ctx, key, l.ttl)
 }
 
-// Release 는 key 의 marker 를 즉시 제거합니다.
-func (l *RedisProcessingLock) Release(ctx context.Context, key string) error {
+// Release 는 token 이 일치할 때만 key 의 marker 를 제거합니다 (이슈 #63).
+//
+// 빈 토큰은 no-op — Acquire 에 실패했거나 애초에 잡은 적 없는 키를 지우려는 호출입니다.
+// Redis 상의 값이 다르면 (TTL 만료 후 타 인스턴스가 재획득) 삭제하지 않고 ErrLockNotOwned 를
+// 반환합니다 — 호출자가 WARN 으로 남겨 TTL 초과 빈도를 관측할 수 있습니다.
+func (l *RedisProcessingLock) Release(ctx context.Context, key, token string) error {
 	if l == nil || l.locker == nil {
 		return fmt.Errorf("processing lock locker is nil")
 	}
-	return l.locker.ReleaseLock(ctx, key)
+	if token == "" {
+		return nil
+	}
+
+	released, err := l.locker.ReleaseLockOwned(ctx, key, token)
+	if err != nil {
+		return err
+	}
+	if !released {
+		return fmt.Errorf("%w: %s", ErrLockNotOwned, key)
+	}
+	return nil
 }
+
+// ErrLockNotOwned 는 Release 시점에 락이 더 이상 이 인스턴스 소유가 아님을 나타냅니다 (이슈 #63).
+//
+// 원인: 처리가 ProcessingLock TTL 을 초과하여 락이 만료되고, 그 사이 다른 인스턴스가 같은 키를
+// 재획득. **정상 동작이며 데이터 손상은 아닙니다** — 오히려 예전 구현이라면 이 시점에 남의 락을
+// 지웠을 상황입니다. 다만 TTL 이 실제 처리 시간보다 짧다는 신호이므로 호출자는 WARN 으로 남깁니다.
+var ErrLockNotOwned = errors.New("locks: processing lock no longer owned by this instance")
 
 // NoopProcessingLock 은 lock 을 사용하지 않는 no-op 구현체입니다.
 // Redis 부재 환경 (단일 인스턴스, 테스트) 에서 fallback 으로 사용 — 항상 acquired=true.
@@ -115,10 +148,12 @@ func (l *RedisProcessingLock) Release(ctx context.Context, key string) error {
 type NoopProcessingLock struct{}
 
 // Acquire always returns acquired=true (Noop).
-func (NoopProcessingLock) Acquire(_ context.Context, _ string) (bool, error) { return true, nil }
+func (NoopProcessingLock) Acquire(_ context.Context, _ string) (string, bool, error) {
+	return "", true, nil
+}
 
 // Release is a no-op.
-func (NoopProcessingLock) Release(_ context.Context, _ string) error { return nil }
+func (NoopProcessingLock) Release(_ context.Context, _, _ string) error { return nil }
 
 // 컴파일 타임 인터페이스 만족 검증.
 var (

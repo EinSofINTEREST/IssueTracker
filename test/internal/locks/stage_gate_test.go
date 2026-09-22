@@ -3,6 +3,7 @@ package locks_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,6 +26,8 @@ type stubLock struct {
 	acquireCalls  int
 	releaseCalls  int
 	heldKeys      map[string]struct{}
+	lastToken     string
+	releasedToken string
 }
 
 func newStubLock(acquireResult bool) *stubLock {
@@ -34,23 +37,27 @@ func newStubLock(acquireResult bool) *stubLock {
 	}
 }
 
-func (s *stubLock) Acquire(_ context.Context, key string) (bool, error) {
+func (s *stubLock) Acquire(_ context.Context, key string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.acquireCalls++
 	if s.acquireErr != nil {
-		return false, s.acquireErr
+		return "", false, s.acquireErr
 	}
-	if s.acquireResult {
-		s.heldKeys[key] = struct{}{}
+	if !s.acquireResult {
+		return "", false, nil
 	}
-	return s.acquireResult, nil
+	s.heldKeys[key] = struct{}{}
+	// 획득마다 다른 토큰 — StageGate 가 토큰을 release 까지 옮기는지 검증 가능하게.
+	s.lastToken = fmt.Sprintf("tok-%d", s.acquireCalls)
+	return s.lastToken, true, nil
 }
 
-func (s *stubLock) Release(_ context.Context, key string) error {
+func (s *stubLock) Release(_ context.Context, key, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.releaseCalls++
+	s.releasedToken = token
 	delete(s.heldKeys, key)
 	return s.releaseErr
 }
@@ -412,4 +419,23 @@ func TestBuildStageGate_CapacityFloor(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, acquired)
 	release()
+}
+
+// StageGate 가 Acquire 에서 받은 토큰을 release 까지 옮기는지 — 이 연결이 끊기면 소유권
+// 검증(이슈 #63)이 무력화된다.
+func TestStageGate_PassesAcquiredTokenToRelease(t *testing.T) {
+	t.Parallel()
+	lk := newStubLock(true)
+	gate := locks.NewStageGate(locks.StageParser, locks.NewSemaphore(1), lk, logger.New(logger.DefaultConfig()))
+
+	release, acquired, err := gate.Acquire(context.Background(), "https://example.com/token")
+	require.NoError(t, err)
+	require.True(t, acquired)
+	release()
+
+	lk.mu.Lock()
+	defer lk.mu.Unlock()
+	assert.Equal(t, lk.lastToken, lk.releasedToken,
+		"획득 시 받은 토큰이 그대로 release 로 전달되어야 함")
+	assert.NotEmpty(t, lk.releasedToken)
 }
