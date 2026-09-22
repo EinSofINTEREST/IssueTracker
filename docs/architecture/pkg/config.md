@@ -17,7 +17,7 @@
 | [`pkg/config/storage/`](../../../pkg/config/storage/) | PostgreSQL / Redis 접속 | `Load` (DB), `LoadRedis` |
 | [`pkg/config/fetcher/`](../../../pkg/config/fetcher/) | crawler / chromedp pool / 자동 transition | `LoadChromedpPool`, `LoadAutoUpgrade`, `LoadAutoDowngrade` |
 | [`pkg/config/processor/`](../../../pkg/config/processor/) | parser/validate/scheduler/blacklist | `LoadBlacklist`, `LoadScheduler`, `LoadStaleRelearn`, `LoadValidate` |
-| [`pkg/config/llm/`](../../../pkg/config/llm/) | LLM provider / prompt / classifier | `LoadLLM`, `LoadPrompt`, `LoadPathInfer`, `LoadClassifier`, `LoadGoogleCSE` |
+| [`pkg/config/llm/`](../../../pkg/config/llm/) | LLM provider / prompt / path infer | `LoadLLM`, `LoadPrompt`, `LoadPathInfer`, `LoadGoogleCSE` |
 | [`pkg/config/runtime/`](../../../pkg/config/runtime/) | worker count / stage toggle / retry scheduler / stage gate | `LoadStages`, `LoadWorkerCounts`, `LoadStageGate`, `LoadRetryScheduler` |
 | [`pkg/config/internal/parse/`](../../../pkg/config/internal/parse/) | env 값 파싱 helper (port / duration / int / bool / float / ratio 등) — sub-package 들이 의존 |
 
@@ -41,7 +41,6 @@
 | `llm.LoadLLM` | llm | `LLMConfig` | provider / API key / model / timeout / enabled (이슈 #149) |
 | `llm.LoadPathInfer` | llm | `PathInferConfig` | refiner enabled / interval / minSamples (이슈 #173) |
 | `llm.LoadPrompt` | llm | `PromptConfig` | prompt loader (file → embed chain) |
-| `llm.LoadClassifier` | llm | `ClassifierConfig` | classifier gRPC/HTTP endpoint / timeout |
 | `runtime.LoadStages` | runtime | `StagesConfig` | **stage toggle** — fetcher/parser/validate/enrich/scheduler 별 enable (이슈 #443) |
 | `runtime.LoadWorkerCounts` | runtime | `WorkerCountsConfig` | fetcher/parser/validate/enrich worker pool 크기 |
 | `runtime.LoadStageGate` | runtime | `StageGateConfig` | 단계별 ProcessingLock + Semaphore 임계값 |
@@ -130,7 +129,6 @@ if err := parse.Duration("POSTGRES_QUERY_TIMEOUT", &cfg.QueryTimeout); err != ni
 | `PATH_INFER_*`, `REFINEMENT_*` | [refiner](../internal/processor/parser/rule.md) |
 | `METRICS_ADDR` | [pkg/metrics](metrics.md) |
 | `LOG_*` | [pkg/logger](logger.md) |
-| `CLASSIFIER_*` | [classifier](../internal/classifier/README.md) |
 | `SHUTDOWN_TIMEOUT` | overall graceful shutdown |
 | `ENRICHER_DB_RO_*` | enrich MCP postgres (이슈 #472) |
 

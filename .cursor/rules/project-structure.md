@@ -19,7 +19,6 @@ issuetracker/
 │   ├── workerpool/            # stage 공용 consumer pool harness
 │   ├── scheduler/             # 시드 URL 주기 발행
 │   ├── promptcontract/        # prompt placeholder 계약 집계
-│   ├── classifier/            # grpc/http client (현재 파이프라인 미연결)
 │   ├── locks/                 # IngestionMarker / ProcessingLock / StageGate
 │   ├── processor/             # 파이프라인 단계
 │   │   ├── fetcher/           # Web fetch + parse 라우팅 + worker pool
@@ -130,7 +129,7 @@ func main() {
 
 **디렉토리 매핑 예시:**
 ```
-internal/classifier/handler.go     → test/internal/classifier/handler_test.go
+internal/processor/parser/rule/resolver.go → test/internal/processor/parser/rule/resolver_test.go
 internal/processor/fetcher/core/retry.go     → test/internal/processor/fetcher/core/retry_test.go
 pkg/logger/logger.go               → test/pkg/logger/logger_test.go
 ```

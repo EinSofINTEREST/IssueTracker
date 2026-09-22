@@ -695,10 +695,6 @@ go test -cover ./... | grep "coverage:" | awk '{if ($2 < 70.0) exit 1}'
 ```
 test/                               # 모든 테스트 파일의 루트
 ├── internal/                       # internal/ 패키지 테스트
-│   ├── classifier/                 # ← internal/classifier/
-│   │   ├── handler_test.go
-│   │   └── http/                  # ← internal/classifier/http/
-│   │       └── client_test.go
 │   ├── processor/fetcher/core/    # ← internal/processor/fetcher/core/
 │   │   ├── errors_test.go
 │   │   ├── http_client_test.go
@@ -728,10 +724,10 @@ Go 의 `internal/` 규칙상 `pkg/config/internal/parse` 같은 패키지는 **�
 - 패키지 선언은 `package <name>_test` 형식 사용 (외부 테스트 패키지)
 
 ```go
-// test/internal/classifier/handler_test.go
-package classifier_test
+// test/internal/processor/parser/rule/resolver_test.go
+package rule_test
 
-import "issuetracker/internal/classifier"
+import "issuetracker/internal/processor/parser/rule"
 ```
 
 ### Test Suites

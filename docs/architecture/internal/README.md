@@ -16,7 +16,6 @@ Go 의 `internal` 규칙에 의해 외부 모듈에서 import 할 수 없으므�
 | [`internal/processor/fetcher/`](../../../internal/processor/fetcher/) | 웹 크롤링 — fetch + DB-driven parse + rate limit + worker pool | [processor/fetcher/README.md](processor/fetcher/README.md)                    |
 | [`internal/processor/parser/`](../../../internal/processor/parser/)   | Claim Check 기반 ParserWorker (TopicFetched 소비)         | [parser/README.md](processor/parser/README.md)                      |
 | [`internal/processor/`](../../../internal/processor/) | 검증 stage (news/community Validator)                | [processor/README.md](processor/README.md)                |
-| [`internal/classifier/`](../../../internal/classifier/) | ELArchive Classifier client (gRPC + HTTP fallback)  | [classifier/README.md](classifier/README.md)              |
 | [`internal/bus/`](../../../internal/bus/) | chained CrawlJob 발행 + IngestionMarker + DLQ           | [bus.md](bus.md)                                          |
 | [`internal/scheduler/`](../../../internal/scheduler/) | 주기적 seed job 발행 + backlog throttle              | [scheduler.md](scheduler.md)                              |
 | [`internal/storage/`](../../../internal/storage/)     | Repository 인터페이스 + PostgreSQL 구현 + Service 계층 | [storage/README.md](storage/README.md)                    |

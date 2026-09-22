@@ -98,7 +98,6 @@ validate/worker.go → types  (RunValidation 이 types.Validator 인자)
 ## 향후 확장
 
 - `internal/processor/embed/` — vector embedding (**미구현** — 이슈 #17 #18 #20)
-- `internal/processor/classify/` — [internal/classifier](../classifier/README.md) 호출 stage (**미구현** — 이슈 #544)
 
 새 stage 추가 시:
 1. `internal/processor/<stage>/` 디렉토리 생성

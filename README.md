@@ -181,7 +181,6 @@ issuetracker/
 │   ├── bus/                        # Kafka producer/consumer with retry scheduler
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives
-│   └── classifier/                 # external classifier gRPC/HTTP client
 │
 ├── pkg/                            # Public, domain-neutral utilities
 │   ├── agent/                      # LLM agent adapters
