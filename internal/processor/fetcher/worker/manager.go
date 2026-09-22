@@ -54,6 +54,9 @@ type ManagerConfig struct {
 	ProcessingLock locks.ProcessingLock
 	RetryScheduler bus.RetryScheduler
 
+	// GateMetrics: StageGate 관측 collector (이슈 #543). nil 허용 — 모든 기록이 noop.
+	GateMetrics *locks.GateMetrics
+
 	// MaxConcurrentPerStage: fetcher stage 의 Semaphore capacity 설정값 (이슈 #356).
 	// 0 이하 → 각 pool 의 WorkerCount/2 (floor) 자동.
 	// 양수 → min(value, WorkerCount/2). pool 별 (high/normal/low/chromedp) 동일 cap 정책 적용.
@@ -115,7 +118,8 @@ func NewPoolManager(
 	// procLock nil 시 BuildStageGate 가 NoopStageGate 반환 → dedup+cap 자동 비활성.
 	buildGate := func(workerCount int) locks.StageGate {
 		capacity := buildStageCap(workerCount, cfg.MaxConcurrentPerStage)
-		return locks.BuildStageGate(locks.StageFetcher, capacity, procLock, log)
+		return locks.BuildStageGate(locks.StageFetcher, capacity, procLock, log,
+			locks.WithGateMetrics(cfg.GateMetrics))
 	}
 
 	newPool := func(pc PoolConfig, priorityName string) *KafkaConsumerPool {

@@ -82,6 +82,20 @@ type Publisher struct {
 	lock       atomic.Pointer[ingestionLockRef]
 	guard      atomic.Pointer[guardRef]
 	log        *logger.Logger
+
+	// dlqMetrics: DLQ 발행 관측 (이슈 #543). nil 허용 — Record 가 noop.
+	dlqMetrics atomic.Pointer[DLQMetrics]
+}
+
+// SetDLQMetrics 는 DLQ 발행 collector 를 주입합니다 (이슈 #543).
+//
+// 생성자 시그니처를 바꾸지 않으려 setter 로 둡니다 — 다른 선택적 의존(gate / normalizer /
+// lock) 과 동일 패턴입니다. nil 전달 시 계측 비활성.
+func (p *Publisher) SetDLQMetrics(m *DLQMetrics) {
+	if p == nil {
+		return
+	}
+	p.dlqMetrics.Store(m)
 }
 
 // New 는 새 Publisher 를 생성합니다.
@@ -115,7 +129,14 @@ func (p *Publisher) Forward(ctx context.Context, msg Message) error {
 	if p.producer == nil {
 		return errors.New("publisher: producer not wired")
 	}
-	return p.producer.Publish(ctx, msg)
+	if err := p.producer.Publish(ctx, msg); err != nil {
+		return err
+	}
+	// DLQ 는 소비자가 없어 적재량을 볼 수단이 없었다 — 발행 단일 지점에서 계측 (이슈 #543).
+	if msg.Topic == queue.TopicDLQ {
+		p.dlqMetrics.Load().RecordPublished(msg.Headers["original-topic"])
+	}
+	return nil
 }
 
 // PublishJob 은 CrawlJob 을 marshal 하여 우선순위 토픽으로 발행합니다 (이슈 #390 피드백 — gemini).

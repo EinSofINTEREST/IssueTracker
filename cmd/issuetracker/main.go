@@ -244,6 +244,9 @@ func main() {
 	defer pool.Close()
 
 	jobPublisher := bus.New(crawlerProducer, resolver, log)
+	// DLQ 발행 관측 (이슈 #543) — 세 publisher 가 같은 collector 를 공유하여 origin 라벨로 구분.
+	dlqMetrics := bus.NewDLQMetrics(metricsRegistry)
+	jobPublisher.SetDLQMetrics(dlqMetrics)
 
 	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.
@@ -447,6 +450,10 @@ func main() {
 	// 위쪽에서 이미 초기화됨 (이슈 #510 — JobBuffer 와 client 공유). 본 블록은 lock/retry 만 wire.
 	// 단일 인스턴스를 fetcher / parser / validator 가 공유 — 단계 구분은 ProcessingKey(stage, url)
 	// 의 stage prefix 로 처리. worker/manager 가 nil 을 NoopProcessingLock 로 fallback 처리.
+	// StageGate 관측 collector (이슈 #543) — release 실패 / gate skip 빈도.
+	// metricsRegistry 가 nil (METRICS 비활성) 이면 모든 기록이 noop.
+	gateMetrics := locks.NewGateMetrics(metricsRegistry)
+
 	var procLock locks.ProcessingLock
 	var ingestionLock locks.IngestionLock
 	var retryScheduler bus.RetryScheduler
@@ -517,6 +524,7 @@ func main() {
 		Normal:                crawlerWorker.PoolConfig{Consumer: normalConsumer, WorkerCount: workerCountsCfg.FetcherNormal},
 		Low:                   crawlerWorker.PoolConfig{Consumer: lowConsumer, WorkerCount: workerCountsCfg.FetcherLow},
 		ProcessingLock:        procLock,
+		GateMetrics:           gateMetrics,
 		RetryScheduler:        retryScheduler,
 		MaxConcurrentPerStage: stageGateCfg.FetcherMaxConcurrentPerStage,
 	}
@@ -754,7 +762,8 @@ func main() {
 	// Semaphore capacity 는 PARSER_MAX_CONCURRENT_PER_STAGE 와 worker_count/2 의 min.
 	// stageGateCfg 는 fetcher managerCfg 직전 (위쪽) 에서 이미 로드.
 	parserCap := runtimecfg.CapPerStage(workerCountsCfg.Parser, stageGateCfg.ParserMaxConcurrentPerStage)
-	parserGate := locks.BuildStageGate(locks.StageParser, parserCap, procLock, log)
+	parserGate := locks.BuildStageGate(locks.StageParser, parserCap, procLock, log,
+		locks.WithGateMetrics(gateMetrics))
 	if procLock != nil {
 		log.WithFields(map[string]interface{}{
 			"worker_count": workerCountsCfg.Parser,
@@ -1072,6 +1081,7 @@ func main() {
 	// 이슈 #393 — validate worker 가 publisher facade 의존. validate 전용 producer 를
 	// thin publisher 로 wrap (resolver/guard 불필요 — validate 는 Forward 만 사용).
 	validatePublisher := bus.New(validateProducer, nil, log)
+	validatePublisher.SetDLQMetrics(dlqMetrics)
 
 	// 이슈 #523 — ZSET 인입 모드 (VALIDATE_PRIORITY_QUEUE_ENABLED + redisClientShared) :
 	//   - Kafka consumer → ZSET intake goroutine 이 ZSET 으로 적재
@@ -1109,7 +1119,8 @@ func main() {
 
 	// Validate StageGate (이슈 #356) — ProcessingLock + per-stage Semaphore 합성.
 	validateCap := runtimecfg.CapPerStage(workerCountsCfg.Validate, stageGateCfg.ValidateMaxConcurrentPerStage)
-	validateGate := locks.BuildStageGate(locks.StageValidator, validateCap, procLock, log)
+	validateGate := locks.BuildStageGate(locks.StageValidator, validateCap, procLock, log,
+		locks.WithGateMetrics(gateMetrics))
 	if procLock != nil {
 		log.WithFields(map[string]interface{}{
 			"worker_count": workerCountsCfg.Validate,
@@ -1157,6 +1168,7 @@ func main() {
 
 	// publisher facade — enrich 는 Forward (validated → enriched) 만 사용.
 	enrichPublisher := bus.New(enrichProducer, nil, log)
+	enrichPublisher.SetDLQMetrics(dlqMetrics)
 
 	// 이슈 #524 — ZSET 인입 모드 (ENRICH_PRIORITY_QUEUE_ENABLED + redisClientShared + stage enabled):
 	//   - Kafka consumer → ZSET intake goroutine 이 ZSET 으로 적재
@@ -1190,7 +1202,8 @@ func main() {
 	}
 
 	enrichCap := runtimecfg.CapPerStage(workerCountsCfg.Enrich, stageGateCfg.EnrichMaxConcurrentPerStage)
-	enrichGate := locks.BuildStageGate(locks.StageEnricher, enrichCap, procLock, log)
+	enrichGate := locks.BuildStageGate(locks.StageEnricher, enrichCap, procLock, log,
+		locks.WithGateMetrics(gateMetrics))
 	if procLock != nil {
 		log.WithFields(map[string]interface{}{
 			"worker_count": workerCountsCfg.Enrich,
