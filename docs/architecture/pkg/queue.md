@@ -64,25 +64,34 @@ TopicCrawlLow    = "issuetracker.crawl.low"
 TopicFetched     = "issuetracker.fetched"      // ← fetcher → parser (이슈 #134)
 TopicNormalized  = "issuetracker.normalized"
 TopicValidated   = "issuetracker.validated"
-TopicEnriched    = "issuetracker.enriched"     // (계획)
-TopicEmbedded    = "issuetracker.embedded"     // (계획)
-TopicClusters    = "issuetracker.clusters"     // (계획)
+TopicEnriched    = "issuetracker.enriched"     // enrich worker 가 발행. 현재 파이프라인의 종단 (consumer 없음)
+TopicEmbedded    = "issuetracker.embedded"     // planned — 이슈 #17 / #20
+TopicClusters    = "issuetracker.clusters"     // planned — 이슈 #18
 
 // System
 TopicDLQ         = "issuetracker.dlq"
 
-// (legacy) country-별 raw — 현재는 TopicFetched 사용
+// Deprecated — 국가별 raw 는 초기 설계안. 현재는 TopicFetched 단일 토픽 사용.
+// 사용처 0 이지만 pkg/ 는 internal 경계 밖이라 외부 호환을 위해 alias 로 유지 (이슈 #544).
 TopicRawUS = "issuetracker.raw.us"
 TopicRawKR = "issuetracker.raw.kr"
 
 // Consumer groups
-GroupCrawlerWorkers = "issuetracker-crawler-workers"
-GroupParsers        = "issuetracker-parsers"   // 이슈 #134
-GroupNormalizers    = "issuetracker-normalizers"
-GroupValidators     = "issuetracker-validators"
-GroupEnrichers      = "issuetracker-enrichers"
-GroupEmbedders      = "issuetracker-embedders"
+GroupCrawlerWorkers   = "issuetracker-crawler-workers"
+GroupChromedpFetchers = "issuetracker-chromedp-fetchers"
+GroupParsers          = "issuetracker-parsers"   // 이슈 #134
+GroupValidators       = "issuetracker-validators"
+GroupEnrichers        = "issuetracker-enrichers"
+
+// planned — 해당 stage 미구현. GroupNormalizers 는 별도 normalize stage 가 없어 도입 계획도 없음.
+GroupNormalizers = "issuetracker-normalizers"
+GroupEmbedders   = "issuetracker-embedders"
+GroupClusterers  = "issuetracker-clusterers"
 ```
+
+> `TopicNormalized` 는 **이름과 실제 역할이 다릅니다** — 별도 normalize stage 는 없으며
+> parser 가 파싱을 마친 Content 를 발행하고 validate worker 가 consume 하는 구간입니다.
+> 운영 중 토픽이라 개명하지 않습니다 (이슈 #544).
 
 신규 토픽/그룹 추가 시 본 파일에만 추가하고 다른 곳에서 문자열 리터럴 직접 사용 금지.
 
