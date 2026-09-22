@@ -23,24 +23,24 @@ const DefaultCategoryTTL = 60 * time.Second
 //
 //	"Scheduler / Publisher / 그 외 publish 진입점이 일관된 시맨틱으로 pipeline 진입을 통제."
 //
-// IngestionLock 을 wrap 하여 target type 별 TTL 정책을 적용:
+// IngestionMarker 를 wrap 하여 target type 별 TTL 정책을 적용:
 //   - Category: 단명 TTL (default 60s) — cycle 완료 시 release 또는 TTL fallback
-//   - Article : 24h TTL (기존 IngestionLock 정책 유지)
+//   - Article : 24h TTL (기존 IngestionMarker 정책 유지)
 //
 // 향후 다른 target type 추가 시 본 wrapper 만 확장 — 호출자 측 코드 변경 없이.
 type PipelineGuard struct {
-	lock        IngestionLock
+	lock        IngestionMarker
 	categoryTTL time.Duration
 }
 
-// NewPipelineGuard 는 IngestionLock 위에 target type 별 TTL 정책을 부여하는 PipelineGuard 를
+// NewPipelineGuard 는 IngestionMarker 위에 target type 별 TTL 정책을 부여하는 PipelineGuard 를
 // 반환합니다.
 //
 // categoryTTL <= 0 이면 DefaultCategoryTTL 사용.
-// lock 이 nil 이면 NoopIngestionLock 으로 fallback — Redis 미설정 환경에서도 panic 없이 동작.
-func NewPipelineGuard(lock IngestionLock, categoryTTL time.Duration) *PipelineGuard {
+// lock 이 nil 이면 NoopIngestionMarker 으로 fallback — Redis 미설정 환경에서도 panic 없이 동작.
+func NewPipelineGuard(lock IngestionMarker, categoryTTL time.Duration) *PipelineGuard {
 	if lock == nil {
-		lock = NoopIngestionLock{}
+		lock = NoopIngestionMarker{}
 	}
 	if categoryTTL <= 0 {
 		categoryTTL = DefaultCategoryTTL
@@ -57,8 +57,8 @@ func NewPipelineGuard(lock IngestionLock, categoryTTL time.Duration) *PipelineGu
 //
 // targetType 별 TTL:
 //   - core.TargetTypeCategory : categoryTTL (단명, default 60s)
-//   - core.TargetTypeArticle  : IngestionLock 의 default TTL (24h)
-//   - 그 외 (Sitemap 등 미래 target type) : IngestionLock default TTL fallback
+//   - core.TargetTypeArticle  : IngestionMarker 의 default TTL (24h)
+//   - 그 외 (Sitemap 등 미래 target type) : IngestionMarker default TTL fallback
 //     — 새 target type 도입 시 본 switch 에 명시적 case 추가 권장.
 func (g *PipelineGuard) CheckAndAcquire(ctx context.Context, url string, targetType core.TargetType) (bool, error) {
 	if g == nil || g.lock == nil {

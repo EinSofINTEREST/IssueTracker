@@ -240,7 +240,8 @@ func unsetRedisEnvVars(t *testing.T) {
 		"REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD",
 		"REDIS_DB", "REDIS_DIAL_TIMEOUT", "REDIS_READ_TIMEOUT",
 		"REDIS_WRITE_TIMEOUT", "REDIS_POOL_SIZE",
-		"REDIS_INGESTION_LOCK_TTL", "PIPELINE_GUARD_CATEGORY_TTL",
+		"REDIS_INGESTION_MARK_TTL", "REDIS_INGESTION_LOCK_TTL",
+		"PIPELINE_GUARD_CATEGORY_TTL",
 		"REDIS_INFLIGHT_LOCK_TTL",
 	}
 	for _, v := range vars {
@@ -1137,6 +1138,65 @@ func TestLoadWorkerCounts_InvalidValues(t *testing.T) {
 
 			_, err := runtimecfg.LoadWorkerCounts("/tmp/nonexistent-env-file.env")
 			require.Error(t, err, "%s=%q 는 에러여야 함", tt.key, tt.val)
+		})
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 진입 마커 TTL 환경변수 — 신규 이름 + legacy alias (이슈 #541)
+//
+// 운영 배포의 환경 설정을 깨지 않으려 구 이름을 계속 인식한다. 그 호환 경로가 검증되지
+// 않으면 조용히 깨져도 알 수 없다 (Copilot 피드백).
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestLoadRedis_IngestionMarkTTL_NewKeyOnly(t *testing.T) {
+	unsetRedisEnvVars(t)
+	t.Setenv("REDIS_INGESTION_MARK_TTL", "3h")
+
+	cfg, err := storagecfg.LoadRedis()
+
+	require.NoError(t, err)
+	assert.Equal(t, 3*time.Hour, cfg.IngestionMarkTTL)
+}
+
+func TestLoadRedis_IngestionMarkTTL_LegacyKeyOnly(t *testing.T) {
+	unsetRedisEnvVars(t)
+	t.Setenv("REDIS_INGESTION_LOCK_TTL", "5h")
+
+	cfg, err := storagecfg.LoadRedis()
+
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Hour, cfg.IngestionMarkTTL, "구 이름도 계속 인식해야 함")
+}
+
+// 둘 다 설정되면 새 이름이 이긴다 — 마이그레이션 중 구 값이 남아 있어도 새 설정이 적용되도록.
+func TestLoadRedis_IngestionMarkTTL_NewKeyWins(t *testing.T) {
+	unsetRedisEnvVars(t)
+	t.Setenv("REDIS_INGESTION_LOCK_TTL", "5h")
+	t.Setenv("REDIS_INGESTION_MARK_TTL", "3h")
+
+	cfg, err := storagecfg.LoadRedis()
+
+	require.NoError(t, err)
+	assert.Equal(t, 3*time.Hour, cfg.IngestionMarkTTL)
+}
+
+// 에러 메시지는 **실제로 읽은 키** 를 가리켜야 운영자가 어느 변수를 고칠지 안다.
+func TestLoadRedis_IngestionMarkTTL_InvalidValue_NamesActualKey(t *testing.T) {
+	for _, tc := range []struct{ key, value, wantErr string }{
+		{"REDIS_INGESTION_MARK_TTL", "not-a-duration", "REDIS_INGESTION_MARK_TTL"},
+		{"REDIS_INGESTION_LOCK_TTL", "not-a-duration", "REDIS_INGESTION_LOCK_TTL"},
+		{"REDIS_INGESTION_MARK_TTL", "-1h", "REDIS_INGESTION_MARK_TTL"},
+		{"REDIS_INGESTION_LOCK_TTL", "0s", "REDIS_INGESTION_LOCK_TTL"},
+	} {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			unsetRedisEnvVars(t)
+			t.Setenv(tc.key, tc.value)
+
+			_, err := storagecfg.LoadRedis()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
 }

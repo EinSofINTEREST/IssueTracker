@@ -16,7 +16,7 @@ import (
 // 발행 흐름:
 //  1. URL 정규화 (Normalizer 주입 시)
 //  2. urlguard.Gate 사전 필터링 (Gate 주입 시)
-//  3. PipelineGuard / IngestionLock 으로 진입 marker 획득 (둘 중 하나 주입 시)
+//  3. PipelineGuard / IngestionMarker 으로 진입 marker 획득 (둘 중 하나 주입 시)
 //  4. PriorityResolver.Resolve 로 priority 결정
 //  5. queue.Message 빌드 + Producer.PublishBatch
 //
@@ -57,7 +57,7 @@ func (p *Publisher) PublishChained(
 
 	// Pipeline Guard / Ingestion Lock:
 	// - PipelineGuard 우선 — target type 별 TTL 정책 (Article 24h / Category 단명)
-	// - IngestionLock fallback — Article 만 적용 (Category 우회) — backward compat
+	// - IngestionMarker fallback — Article 만 적용 (Category 우회) — backward compat
 	// - 둘 다 미설정 시 dedup 비활성
 	// - 조회 실패는 fail-open — Redis 일시 장애가 publish 를 영구 차단하지 않도록
 	if gr := p.guard.Load(); gr != nil {
@@ -170,7 +170,7 @@ type acquireFunc func(ctx context.Context, url string) (acquired bool, err error
 //
 // 결과 슬라이스는 입력과 다른 underlying array 로 새 할당 (입력 mutate 없음).
 //
-// failOpenMsg / cancelledMsg 는 호출자가 acquire 의미에 맞게 지정 — "pipeline guard" / "ingestion lock" 구분.
+// failOpenMsg / cancelledMsg 는 호출자가 acquire 의미에 맞게 지정 — "pipeline guard" / "ingestion marker" 구분.
 // extraFields 는 acquireViaGuard 의 target_type 같은 추가 컨텍스트.
 func (p *Publisher) filterByAcquire(
 	ctx context.Context,
@@ -227,16 +227,16 @@ func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerN
 	)
 }
 
-// acquireIngestion 은 IngestionLock 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
+// acquireIngestion 은 IngestionMarker 으로 atomic SETNX 시도 후 marker 를 잡은 URL 만
 // 반환합니다.
 //
 // Deprecated: SetPipelineGuard 사용 시 acquireViaGuard 가 우선 — 본 메소드는
 // guard 미주입 환경의 backward compat fallback.
-func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionLock) []string {
+func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionMarker) []string {
 	return p.filterByAcquire(
 		ctx, urls, crawlerName, lock.Acquire,
-		"ingestion lock acquire failed, allowing publish",
-		"context cancelled during ingestion lock acquire, allowing remaining URLs",
+		"ingestion marker acquire failed, allowing publish",
+		"context cancelled during ingestion marker acquire, allowing remaining URLs",
 		nil,
 	)
 }
