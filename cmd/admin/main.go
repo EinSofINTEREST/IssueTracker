@@ -25,10 +25,41 @@
 //   - **DLQ replay**: DLQ 메시지를 원래 토픽으로 되돌리는 기능. 실패한 이유가 남아 있는 채로
 //     재주입하면 루프에 빠질 수 있고, 한 번에 다수를 밀어 넣으면 파이프라인에 부하를 줍니다.
 //     원인별 분기 정책을 먼저 정해야 하므로 별도 이슈로 다룹니다.
+//
 //   - **chromedp 강제 (force_fetcher)**: 해당 토큰은 process-local secret 이라
 //     (internal/processor/fetcher/rule/force_fetcher_token.go) 별도 프로세스인 본 도구가 유효한
-//     토큰을 만들 수 없습니다. 공유하려면 "외부 publisher 가 chromedp 를 강제하지 못하게 한다" 는
-//     기존 보안 전제를 바꿔야 하므로 여기서 결정하지 않습니다.
+//     토큰을 만들 수 없습니다. 공유하면 "외부 publisher 가 chromedp 를 강제하지 못하게 한다" 는
+//     보안 전제가 무너지므로 **제공하지 않는 것으로 확정** 했습니다 (이슈 #560).
+//
+//     대신 fetcher_rules 로 우회합니다 — 아래 "chromedp 로 다시 수집하기" 참조.
+//
+// # chromedp 로 다시 수집하기 (force_fetcher 우회)
+//
+// 특정 URL 을 chromedp 로 재수집해야 할 때 (lazy-load 페이지를 goquery 가 놓친 경우 등) 는
+// fetcher_rules 를 일시적으로 바꿉니다.
+//
+//	-- 1. 현재 규칙 확인 (host_pattern 은 UNIQUE)
+//	SELECT id, host_pattern, fetcher, reason FROM fetcher_rules WHERE host_pattern = 'example.com';
+//
+//	-- 2. chromedp 로 전환 (row 가 없으면 INSERT)
+//	UPDATE fetcher_rules SET fetcher = 'chromedp', reason = '일시 전환: <사유> <날짜>', updated_at = NOW()
+//	 WHERE host_pattern = 'example.com';
+//
+//	# 3. 재수집
+//	bin/admin recrawl https://example.com/article/123
+//
+//	-- 4. 원복 (반드시)
+//	UPDATE fetcher_rules SET fetcher = 'goquery', reason = '<원래 사유>', updated_at = NOW()
+//	 WHERE host_pattern = 'example.com';
+//
+// **주의**: fetcher_rules 는 host_pattern 단위라 2~4 사이에는 해당 호스트의 **모든** URL 이
+// chromedp 로 처리됩니다. chromedp 는 무겁고 worker slot 을 점유하므로, 전환 구간을 짧게
+// 유지하고 4 번 원복을 빠뜨리지 마세요. 상시 chromedp 가 맞는 호스트라면 원복 대신
+// reason 을 정리해 규칙으로 굳히는 편이 낫습니다.
+//
+// 이 우회는 force_fetcher 와 **범위가 다릅니다** — force_fetcher 는 job 단위 일회성이지만
+// 위 절차는 호스트 단위이며 되돌리기 전까지 지속됩니다. URL 단위 일회성 강제가 필요해지면
+// 이슈 #560 의 선택지 C (별도 승인 경로) 를 다시 검토하세요.
 package main
 
 import (
