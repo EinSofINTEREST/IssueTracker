@@ -22,7 +22,7 @@ GitHub Ruleset과 PR 템플릿은 모두 이 문서의 이름과 **토씨 단위
 | `Commit Lint` | `ci-convention.yml` / `commit-lint` | 커밋 메시지 `[카테고리]:` 포맷 강제 | Yes |
 | `PR Title Lint` | `ci-convention.yml` / `pr-title-lint` | PR 타이틀 `[카테고리#이슈번호] 제목` (또는 `[카테고리#이슈번호]: 제목`) 엄격 강제 (이슈 #121, PR only) | Yes |
 | `Linked Issue Check` | `ci-convention.yml` / `linked-issue` | PR 에 머지 시 close 될 이슈(closing reference) 가 최소 1개 연결되어 있는지 검증 (`closingIssuesReferences.totalCount ≥ 1`, PR only) | Yes |
-| `Harness Check` | `ci-convention.yml` / `harness-check` | 규약 문서가 저장소 실체와 맞는지 대조 + 검출력 셀프테스트 (이슈 #539, #565, #567) | **아직 미등록** |
+| `Harness Check` | `ci-convention.yml` / `harness-check` | 규약 문서가 저장소 실체와 맞는지 대조 + 검출력 셀프테스트 (이슈 #539, #565, #567) | No |
 
 > ⚠️ `Harness Check` 는 워크플로에는 추가됐지만 **Ruleset 의 required 목록에는 아직 등록되지
 > 않았습니다.** 등록 전까지는 실행은 되나 실패해도 머지를 막지 못합니다. 등록은 저장소 설정

@@ -234,6 +234,9 @@ jobs:
           scripts/harness-check.sh | tee harness-check.log
 
       - name: Verify the checker itself still detects drift
+        # always(): 앞 단계가 실패해도 돌린다. 실패 원인이 "실제 드리프트" 인지
+        # "검사기 자신의 무력화" 인지를 한 번의 run 으로 구분하기 위함 (Copilot 피드백).
+        if: always()
         run: |
           # harness-check 는 "경고 0건" 이 목표라, 억제 로직이 과해지면 드리프트를
           # 놓치면서도 0건을 유지한다 — 조용히 무력화된다. 알려진 드리프트를 심어
