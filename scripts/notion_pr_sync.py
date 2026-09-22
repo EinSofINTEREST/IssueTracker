@@ -97,6 +97,10 @@ def _retry_after_from_body(body_text: str) -> str | None:
         payload = json.loads(body_text)
     except json.JSONDecodeError:
         return None
+    # 파싱은 됐지만 객체가 아닌 경우 (배열 / null / 숫자) — .get 이 AttributeError 를 던져
+    # backoff fallback 대신 sync 자체가 죽는다.
+    if not isinstance(payload, dict):
+        return None
     additional = payload.get("additional_data")
     if not isinstance(additional, dict):
         return None

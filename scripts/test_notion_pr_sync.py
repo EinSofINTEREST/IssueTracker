@@ -284,6 +284,13 @@ def test_retry_delay_ignores_malformed_body():
     assert 4.0 <= delay <= 5.0
 
 
+@pytest.mark.parametrize("non_object_body", ["[1,2]", "null", "42", '"str"'])
+def test_retry_delay_ignores_non_object_body(non_object_body):
+    """파싱은 되지만 객체가 아닌 body — .get 이 AttributeError 를 던지면 sync 가 죽는다."""
+    delay = nps.retry_delay(None, non_object_body, 2)  # 2^2 = 4
+    assert 4.0 <= delay <= 5.0
+
+
 def test_retry_delay_applies_jitter():
     """동시에 실행된 run 들이 같은 시점에 재시도하면 429 가 반복된다."""
     values = {round(nps.retry_delay("3", "", 0), 4) for _ in range(50)}
