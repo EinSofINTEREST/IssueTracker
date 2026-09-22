@@ -328,7 +328,7 @@ log.Error().Err(err).Msg("failed to fetch")
 go install github.com/go-delve/delve/cmd/dlv@latest
 
 # Debug test
-dlv test ./test/internal_crawler_core -- -test.run TestName
+dlv test ./test/internal/processor/fetcher/core -- -test.run TestName
 
 # Debug binary
 dlv exec ./bin/crawler
@@ -348,7 +348,7 @@ go mod tidy
 #### Test Failures
 ```bash
 # Run specific test
-go test -v -run TestName ./test/internal_crawler_core
+go test -v -run TestName ./test/internal/processor/fetcher/core
 
 # Check test output
 make test-verbose
