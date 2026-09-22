@@ -170,7 +170,7 @@ type acquireFunc func(ctx context.Context, url string) (acquired bool, err error
 //
 // 결과 슬라이스는 입력과 다른 underlying array 로 새 할당 (입력 mutate 없음).
 //
-// failOpenMsg / cancelledMsg 는 호출자가 acquire 의미에 맞게 지정 — "pipeline guard" / "ingestion lock" 구분.
+// failOpenMsg / cancelledMsg 는 호출자가 acquire 의미에 맞게 지정 — "pipeline guard" / "ingestion marker" 구분.
 // extraFields 는 acquireViaGuard 의 target_type 같은 추가 컨텍스트.
 func (p *Publisher) filterByAcquire(
 	ctx context.Context,
@@ -235,8 +235,8 @@ func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerN
 func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionMarker) []string {
 	return p.filterByAcquire(
 		ctx, urls, crawlerName, lock.Acquire,
-		"ingestion lock acquire failed, allowing publish",
-		"context cancelled during ingestion lock acquire, allowing remaining URLs",
+		"ingestion marker acquire failed, allowing publish",
+		"context cancelled during ingestion marker acquire, allowing remaining URLs",
 		nil,
 	)
 }

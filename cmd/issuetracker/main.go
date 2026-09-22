@@ -455,12 +455,12 @@ func main() {
 	gateMetrics := locks.NewGateMetrics(metricsRegistry)
 
 	var procLock locks.ProcessingLock
-	var ingestionLock locks.IngestionMarker
+	var ingestionMarker locks.IngestionMarker
 	var retryScheduler bus.RetryScheduler
 	var retrySchedulerStop func()
 	if redisClientShared != nil {
 		procLock = locks.NewRedisProcessingLock(redisClientShared, locks.DefaultProcessingLockTTL)
-		ingestionLock = locks.NewRedisIngestionMarker(redisClientShared, redisCfg.IngestionMarkTTL)
+		ingestionMarker = locks.NewRedisIngestionMarker(redisClientShared, redisCfg.IngestionMarkTTL)
 
 		// Delayed retry queue: retry 를 Redis ZSET 에 보관하고 별도
 		// goroutine 이 ScheduledAt 도달 시 Kafka 에 발행 — worker 슬롯 점유 회피.
@@ -497,14 +497,14 @@ func main() {
 		defer retrySchedulerStop()
 	}
 
-	// URL dedup — Ingestion Lock → Pipeline Guard 통합:
+	// URL dedup — Ingestion Marker → Pipeline Guard 통합:
 	// Publisher / Scheduler / Worker 가 동일 guard 를 공유하여 target type 별 정책 적용:
 	//   - Article: 24h TTL (기존 IngestionMarker 정책 유지)
 	//   - Category: 단명 TTL (default 60s) — cycle 종료 시 명시적 release + TTL fallback
 	jobPublisher.SetNormalizer(links.NewNormalizer())
 	var pipelineGuard *locks.PipelineGuard
-	if ingestionLock != nil {
-		pipelineGuard = locks.NewPipelineGuard(ingestionLock, redisCfg.PipelineGuardCategoryTTL)
+	if ingestionMarker != nil {
+		pipelineGuard = locks.NewPipelineGuard(ingestionMarker, redisCfg.PipelineGuardCategoryTTL)
 		jobPublisher.SetPipelineGuard(pipelineGuard)
 		log.WithFields(map[string]interface{}{
 			"article_ttl":  redisCfg.IngestionMarkTTL.String(),
