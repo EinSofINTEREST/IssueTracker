@@ -2,6 +2,7 @@ package locks_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,12 @@ import (
 type fakeRedis struct {
 	mu   sync.Mutex
 	vals map[string]string
+	// seq 는 토큰 생성용 단조 증가 카운터입니다.
+	//
+	// 시계 기반 토큰은 해상도가 낮은 환경에서 두 획득이 같은 값을 받을 수 있고, 그러면 옛
+	// 토큰이 재획득한 락과 일치해 stale Release 가 그 락을 지웁니다 — 소유권 회귀 테스트가
+	// 검증하려는 바로 그 상황을 테스트 더블이 스스로 만들어 flaky 해집니다 (CodeRabbit 피드백).
+	seq int
 }
 
 func newFakeRedis() *fakeRedis { return &fakeRedis{vals: map[string]string{}} }
@@ -29,7 +36,8 @@ func (f *fakeRedis) AcquireLockWithToken(_ context.Context, key string, _ time.D
 	if _, exists := f.vals[key]; exists {
 		return "", false, nil
 	}
-	token := "tok-" + key + "-" + time.Now().Format("150405.000000000")
+	f.seq++
+	token := fmt.Sprintf("tok-%s-%d", key, f.seq)
 	f.vals[key] = token
 	return token, true, nil
 }
