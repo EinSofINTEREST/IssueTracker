@@ -51,7 +51,7 @@ docs/architecture/
 │   │   │   ├── README.md
 │   │   │   └── rule.md                    ← rule.Parser (DB-driven) + llmgen + pathinfer + refiner
 │   │   └── validate.md                    ← news/community Validator
-│   ├── publisher.md                       ← chained job 발행 + IngestionLock
+│   ├── bus.md                             ← chained job 발행 + IngestionMarker + DLQ
 │   ├── scheduler.md                       ← seed job 주기적 발행
 │   └── storage/
 │       ├── README.md

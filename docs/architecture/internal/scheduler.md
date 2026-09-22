@@ -3,7 +3,7 @@
 소스: [`internal/scheduler/`](../../../internal/scheduler/)
 
 등록된 카테고리 URL 목록 (CNN sections / Naver categories / …) 을 **주기적으로 Kafka crawl 토픽에
-시드 발행**합니다. 크롤 결과로부터 발견된 URL 의 chained 발행은 [publisher](publisher.md) 책임.
+시드 발행**합니다. 크롤 결과로부터 발견된 URL 의 chained 발행은 [bus](bus.md) 책임.
 
 <br>
 

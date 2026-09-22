@@ -55,7 +55,7 @@ if !acquired {
 
 ## 호출 측
 
-- [`internal/publisher`](../publisher.md) — `IngestionLock` (Kafka enqueue 직전 dedup)
+- [`internal/bus`](../bus.md) — `IngestionMarker` (Kafka enqueue 직전 dedup)
 - [`internal/processor/fetcher/worker`](../processor/fetcher/worker.md) — fetcher worker pool 의 `ProcessingLock(StageFetcher)`
 - [`internal/processor/parser/worker`](../processor/parser/README.md) — parser worker 의 `ProcessingLock(StageParser)`
 - [`internal/processor/validate`](../processor/validate.md) — validator 의 `ProcessingLock(StageValidator)`

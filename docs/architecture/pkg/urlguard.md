@@ -53,7 +53,7 @@ pool.SetGate(gate)
 ## 호출 측
 
 - [`internal/scheduler`](../internal/scheduler.md) — seed publish 직전
-- [`internal/publisher`](../internal/publisher.md) — chained job publish 직전
+- [`internal/bus`](../internal/bus.md) — chained job publish 직전
 - [`internal/processor/fetcher/worker`](../internal/processor/fetcher/worker.md) — 추가 가드 적용 가능
 
 <br>
