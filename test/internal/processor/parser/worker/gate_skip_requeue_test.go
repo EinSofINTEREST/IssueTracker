@@ -214,13 +214,17 @@ func TestHandle_GateSkip_CarriesIncrementedCount(t *testing.T) {
 	assert.Equal(t, "2", got, "다음 사이클로 +1 된 카운터가 전달되어야 함")
 }
 
-// 상한에 닿으면 재큐를 멈춰야 한다 — 멈추지 않으면 gate 가 계속 점유된 URL 이 무한 순환한다.
-func TestHandle_GateSkip_StopsAtLimit(t *testing.T) {
+// 상한에 닿으면 재큐를 멈추고 DLQ 로 보내야 한다.
+//
+// 멈추지 않으면 gate 가 계속 점유된 URL 이 무한 순환한다. 그렇다고 조용히 버리면 운영자가
+// 알 수 없으므로, 종단은 DLQ 격리 + commit 이다 (CodeRabbit 피드백으로 drop → DLQ 상향).
+func TestHandle_GateSkip_StopsAtLimit_SendsToDLQ(t *testing.T) {
 	gate := &fakeStageGate{acquired: false}
 	consumer := &countingConsumer{}
 	sched := &fakeRetryScheduler{}
+	producer := &capturingProducer{}
 
-	pw := newGatedWorkerWithConsumer(consumer, gate, &fakeRawSvc{}, logger.New(logger.DefaultConfig()))
+	pw := newGatedWorkerWithPublisher(consumer, producer, gate, &fakeRawSvc{}, logger.New(logger.DefaultConfig()))
 	pw.SetGateSkipScheduler(sched)
 
 	msg := newMsgForURL(t, "raw-limit", "https://example.com/limit")
@@ -229,6 +233,7 @@ func TestHandle_GateSkip_StopsAtLimit(t *testing.T) {
 	pw.Handle(context.Background(), msg)
 
 	assert.Equal(t, 0, sched.calls(), "상한 도달 시 재큐하면 안 됨")
+	require.Len(t, producer.messagesTo(queue.TopicDLQ), 1, "상한 도달 메시지는 DLQ 로 격리")
 	assert.Equal(t, 1, consumer.commitCount(), "종단 처리 후 commit 되어야 순환이 끊긴다")
 }
 
