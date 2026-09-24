@@ -95,6 +95,19 @@ func toSummary(c *core.Content) contentSummary {
 	return s
 }
 
+// writeRepoError 는 repository 에러를 상태 코드로 분류해 기록합니다.
+//
+// query timeout (이슈 #427 의 QueryTimeout decorator) 을 500 이 아닌 504 로 내보냅니다 —
+// 호출자에게는 재시도 가치가 있다는 신호이고, 운영자에게는 코드 결함이 아니라 DB 부하라는 신호입니다.
+func writeRepoError(w http.ResponseWriter, log *logger.Logger, message string, err error) {
+	if storage.IsQueryTimeout(err) {
+		WriteError(w, log, http.StatusGatewayTimeout, CodeTimeout, "storage timeout", err)
+		return
+	}
+
+	WriteError(w, log, http.StatusInternalServerError, CodeInternal, message, err)
+}
+
 // NewContentListHandler 는 GET /api/contents 핸들러를 반환합니다.
 func NewContentListHandler(repo repository.ContentRepository, log *logger.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +129,7 @@ func NewContentListHandler(repo repository.ContentRepository, log *logger.Logger
 
 		contents, err := repo.List(r.Context(), q.filter)
 		if err != nil {
-			WriteError(w, log, http.StatusInternalServerError, CodeInternal, "failed to list contents", err)
+			writeRepoError(w, log, "failed to list contents", err)
 			return
 		}
 
@@ -134,7 +147,7 @@ func NewContentListHandler(repo repository.ContentRepository, log *logger.Logger
 		if q.withTotal {
 			total, cerr := repo.Count(r.Context(), q.filter)
 			if cerr != nil {
-				WriteError(w, log, http.StatusInternalServerError, CodeInternal, "failed to count contents", cerr)
+				writeRepoError(w, log, "failed to count contents", cerr)
 				return
 			}
 			resp.Total = &total
@@ -164,7 +177,7 @@ func NewContentDetailHandler(repo repository.ContentRepository, log *logger.Logg
 				WriteError(w, log, http.StatusNotFound, CodeNotFound, "content not found", nil)
 				return
 			}
-			WriteError(w, log, http.StatusInternalServerError, CodeInternal, "failed to fetch content", err)
+			writeRepoError(w, log, "failed to fetch content", err)
 			return
 		}
 
