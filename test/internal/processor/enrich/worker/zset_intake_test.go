@@ -86,7 +86,7 @@ func (c *stubConsumer) Closed() bool { return atomic.LoadInt32(&c.closed) == 1 }
 
 func (c *stubConsumer) CommitCount() int32 { return atomic.LoadInt32(&c.commits) }
 
-func newIntake(t *testing.T, pusher queue.PriorityPusher) (*worker.ZSetIntake, *stubConsumer) {
+func newIntake(t *testing.T, pusher queue.PriorityHeaderPusher) (*worker.ZSetIntake, *stubConsumer) {
 	t.Helper()
 	log := logger.New(logger.Config{Level: "error"})
 	cons := &stubConsumer{}
