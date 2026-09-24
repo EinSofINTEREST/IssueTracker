@@ -21,6 +21,8 @@ Sub 4 테스트 (#535).
 | 항목 | claude | codex |
 |---|---|---|
 | CLI 호출 | `claude ... -p <prompt>` (플래그) | `codex exec ... <prompt>` — **프롬프트가 마지막 위치 인자** |
+| git repo 검사 | 없음 | **`--skip-git-repo-check` 필수** (아래 참조) |
+| parser prompt asset | `parser/claude/*` (실재) | `parser/codex/*` **부재 — 이슈 #594** |
 | MCP (DB 도구) | `.mcp.json` mount 지원 (이슈 #472) | **미지원 — 명시적 거부** (아래 참조) |
 | 고아 workspace 정리 | `CleanupOrphanedWorkspaces` (이슈 #539) | **없음** (아래 참조) |
 | 베이스 이미지 | `node:20-slim` | `node:22-bookworm-slim` |
@@ -64,6 +66,25 @@ codex 의 `exec` 하위명령에는 `--mcp-config` 옵션이 **없다.** claude 
 올바른 경로는 codex `config.toml` 의 `[mcp_servers.<name>]` 또는 지원되는 `-c key=value`
 override 로 추정되나, 정확한 키 구조가 CLI 버전에 묶여 있어 검증 없이 추측하지 않았다.
 지원은 이슈 #585 에서 다룬다.
+
+<br>
+
+## `--skip-git-repo-check` 가 필요한 이유 (이슈 #591)
+
+codex 는 기본적으로 **git 작업 트리 안에서만** 실행을 허용한다. 컨테이너 `WORKDIR` 인
+`/workspace` 는 git repo 가 아니고 이미지에 `git` 도 설치돼 있지 않으므로, 이 플래그가
+없으면 프롬프트가 모델에 전달되기 전에 거부된다:
+
+```
+Not inside a trusted directory and --skip-git-repo-check was not specified.
+```
+
+세션 디렉토리는 우리가 만든 임시 workspace 라 git 과 무관하므로 이 검사는 의미가 없다.
+`worker.go` / `session.go` 두 호출 지점 모두 플래그를 포함한다.
+
+> 이 결함은 mock `ContainerRunner` 기반 테스트로는 잡히지 않았다. 인자 배열의 *형태* 는
+> 검증하지만 CLI 가 그 인자를 *받아들이는지* 는 검증 범위 밖이기 때문이다. codex 관련
+> 인자를 바꿀 때는 컨테이너에서 직접 호출해 확인할 것.
 
 <br>
 
@@ -150,7 +171,11 @@ fallback 으로 처리한다.
 
 - [`pkg/agent`](../../../../pkg/agent/) — `Agent` interface + `StageEnv` + `Backend`
 - [`pkg/llm/prompt`](../../../../pkg/llm/prompt/) — prompt loader
-  (`parser/codex/page.user`, `parser/codex/list.user`)
+
+  > ⚠️ **현재 parser 경로의 prompt 이름이 실재하지 않는다** (이슈 #594).
+  > `prompt.go` 가 `parser/codex/{page,list}.user` 를 요구하지만
+  > `pkg/llm/prompt/assets/` 에는 `parser/claude/*` 만 있다. enrich 경로는 두 backend 가
+  > `enrich/claude/*` 를 공용하므로 영향 없다.
 - [`pkg/logger`](../logger.md)
 - 외부: `docker` CLI (PATH 에 있어야 함), `node:22-bookworm-slim` base image
 
@@ -179,5 +204,7 @@ fallback 으로 처리한다.
 - **이슈 #534 — Sub 3 main wiring + backend 선택 정책** ([README.md](README.md) 참조)
 - 이슈 #535 — Sub 4 단위 테스트
 - 이슈 #537 — 생성자의 authDir 즉시 검증 제거 (claude 와 공통 적용)
+- **이슈 #591 — `--skip-git-repo-check` 누락** (해결)
+- **이슈 #594 — parser prompt asset 부재** (미해결 — parser 경로 동작 불가)
 - **이슈 #585 — MCP 지원** (현재 미지원, 명시적 거부)
 - 이슈 #539 — 고아 workspace 정리 (claude 전용)
