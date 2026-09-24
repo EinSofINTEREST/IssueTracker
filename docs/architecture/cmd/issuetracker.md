@@ -59,13 +59,16 @@
 
 <br>
 
-## Build helpers (main.go 내부)
+## Build helpers
+
+구성 요소 조립은 **wiring 패키지** 로 분리돼 있다 (`main.go` 내부 함수가 아니다).
+아래 표의 링크가 실제 위치다.
 
 | 함수 | 책임 | 실패 동작 |
 |---|---|---|
-| `buildLLMProvider()` | `LLM_ENABLED` + API key 검증 → [`pkg/llm`](../../../pkg/llm/) chain provider 구성 | nil 반환 (LLM 비활성) |
-| `buildLLMGenerator()` | provider nil 이면 nil — 아니면 [`llmgen.New`](../../../internal/processor/parser/rule/llmgen/) | nil 허용 |
-| `buildRefiner()` | `REFINEMENT_ENABLED` + provider 옵션 결합 → [`refiner.New`](../../../internal/processor/parser/rule/refiner/) | nil 반환 (정밀화 비활성) |
+| [`llmwiring.BuildProviderWithOptions()`](../../../pkg/llm/wiring/) | `LLM_ENABLED` + API key 검증 → [`pkg/llm`](../../../pkg/llm/) chain provider 구성 | nil 반환 (LLM 비활성) |
+| [`llmgenwiring.Build()`](../../../internal/processor/parser/rule/llmgen/wiring/) | provider nil 이면 nil — 아니면 [`llmgen.New`](../../../internal/processor/parser/rule/llmgen/) | nil 허용 |
+| [`refinerwiring.Build()`](../../../internal/processor/parser/rule/refiner/wiring/) | `REFINEMENT_ENABLED` + provider 옵션 결합 → [`refiner.New`](../../../internal/processor/parser/rule/refiner/) | nil 반환 (정밀화 비활성) |
 | `startClaudegenPool()` | stage 별 claude pool 생성 + Start (이슈 #530). `LLM_EXTRACTOR=claude-code` + stage 가드 하에서만 호출 | nil 반환 → 해당 backend 사용 불가 |
 | `startCodexPool()` | stage 별 codex pool 생성 + Start (이슈 #534). `CODEX_AGENT_ENABLED=true` + stage 가드 하에서만 호출. **MCP 파라미터 없음** — codex 미지원 (이슈 #585) | nil 반환 → 해당 backend 사용 불가 |
 | `selectAgentPool()` | stage 의 `*_AGENT_BACKEND` 로 사용할 풀 결정 (이슈 #534). 선택한 backend 의 풀이 없어도 **다른 backend 로 대체하지 않음** | nil 반환 → 해당 stage 는 agent 경로 없이 동작 |
