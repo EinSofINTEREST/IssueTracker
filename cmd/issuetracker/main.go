@@ -1081,6 +1081,13 @@ func main() {
 		log.WithField("removed", removed).Info("cleaned up orphaned claudegen workspaces")
 	}
 
+	// codex 쪽도 동일하게 정리 (이슈 #656). codex workspace 에는 자격증명이 없지만
+	// (MCP 를 `-c` override 로 넘긴다 — 이슈 #585) 세션별 페이지 파일이 /tmp 에 쌓인다.
+	// CODEX_AGENT_ENABLED 와 무관하게 호출한다 — 과거에 켜 두었다가 끈 환경에도 잔재가 남는다.
+	if removed := codex.CleanupOrphanedWorkspaces(log); removed > 0 {
+		log.WithField("removed", removed).Info("cleaned up orphaned codex workspaces")
+	}
+
 	var parserClaudegenPool, enrichClaudegenPool *claude.Pool
 	llmExtractor := os.Getenv("LLM_EXTRACTOR")
 	switch {
