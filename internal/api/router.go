@@ -4,15 +4,17 @@ import (
 	"net/http"
 	"time"
 
+	"issuetracker/internal/storage/repository"
 	"issuetracker/pkg/logger"
 )
 
 // Deps 는 라우터가 핸들러에 주입하는 의존성입니다.
 //
-// 엔드포인트가 늘어나면 repository 를 필드로 추가합니다 (이슈 #636 의 ContentRepository 등).
+// 엔드포인트가 늘어나면 repository 를 필드로 추가합니다.
 type Deps struct {
-	DB  Pinger
-	Log *logger.Logger
+	DB       Pinger
+	Contents repository.ContentRepository
+	Log      *logger.Logger
 }
 
 // NewRouter 는 API 라우터를 구성합니다.
@@ -23,6 +25,8 @@ func NewRouter(deps Deps) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", NewHealthHandler(deps.DB, deps.Log))
+	mux.HandleFunc("GET /api/contents", NewContentListHandler(deps.Contents, deps.Log))
+	mux.HandleFunc("GET /api/contents/{id}", NewContentDetailHandler(deps.Contents, deps.Log))
 
 	// catch-all — 미등록 경로를 표준 평문 404 대신 통일된 에러 body 로 응답.
 	//
