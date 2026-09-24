@@ -101,9 +101,12 @@ type Worker struct {
 	// 발생합니다. admit() 이 같은 mutex 아래에서 이 플래그를 확인하고 Add 까지 마칩니다.
 	stopping bool
 
-	// mcpConfig 가 non-nil 이면 RunSession 이 세션 디렉토리에 .mcp.json 을 작성하고
-	// codex 를 --mcp-config 플래그와 함께 호출합니다 (이슈 #472). nil 이면 비활성.
-	// ExtractEnriched (parser selector 추출) 에는 영향 없음 — enrich 경로 전용.
+	// mcpConfig 가 non-nil 이면 RunSession 이 `-c mcp_servers.<name>...` override 로
+	// 전달합니다 (이슈 #585). claude 와 달리 .mcp.json 파일을 쓰지 않는다 — codex 의 exec
+	// 파서에 파일 주입 옵션이 없기 때문이며, 근거는 mcp.go 참조. nil 이면 비활성.
+	//
+	// ExtractEnriched (parser selector 추출) 에는 영향 없음 — enrich 경로 전용이며,
+	// parser 는 DB 접근이 필요 없어 least-privilege 로 MCP 를 붙이지 않는다.
 	mcpConfig *agentdb.MCPConfig
 }
 
