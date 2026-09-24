@@ -19,6 +19,10 @@ Go 의 `internal` 규칙에 의해 외부 모듈에서 import 할 수 없으므�
 | [`internal/bus/`](../../../internal/bus/) | chained CrawlJob 발행 + IngestionMarker + DLQ           | [bus.md](bus.md)                                          |
 | [`internal/scheduler/`](../../../internal/scheduler/) | 주기적 seed job 발행 + backlog throttle              | [scheduler.md](scheduler.md)                              |
 | [`internal/storage/`](../../../internal/storage/)     | Repository 인터페이스 + PostgreSQL 구현 + Service 계층 | [storage/README.md](storage/README.md)                    |
+| [`internal/locks/`](../../../internal/locks/) | 단계 무관 distributed lock — IngestionMarker / ProcessingLock / StageGate | [locks/README.md](locks/README.md) |
+| [`internal/scoring/`](../../../internal/scoring/) | host 단위 priority score 계산 + 주기 scorer (이슈 #382) | [scoring.md](scoring.md) |
+| [`internal/workerpool/`](../../../internal/workerpool/) | stage 공용 consumer pool harness — poll → dispatch → commit (이슈 #403) | (전용 문서 없음) |
+| [`internal/promptcontract/`](../../../internal/promptcontract/) | 전 stage prompt placeholder 계약 집계 (이슈 #539) | (전용 문서 없음) |
 
 <br>
 
