@@ -284,24 +284,48 @@ func TestClaudeWorker_ModelName(t *testing.T) {
 // 인증 디렉토리 검증 테스트 (이슈 #266)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestNewFromEnv_MissingAuthDir 는 CLAUDE_CODE_AUTH_DIR 미존재 경로 지정 시 에러를 반환하는지 검증합니다.
+// TestNewFromEnv_MissingAuthDir 는 미존재 authDir 이 **생성자를 막지 않고** Start 에서
+// 에러가 되는지 검증합니다 (이슈 #537 — 생성자의 파일시스템 부작용 제거).
+//
+// Start 는 runner (docker) 에 닿기 전에 authDir 검증에서 멈추므로 실제 컨테이너 기동은 없습니다.
 func TestNewFromEnv_MissingAuthDir(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_AUTH_DIR", "/nonexistent/path/to/claude/auth")
 	log := logger.New(logger.DefaultConfig())
-	_, err := claude.NewFromEnv(claudegenLoader, log)
+	w, err := claude.NewFromEnv(claudegenLoader, log)
+	require.NoError(t, err, "생성자는 파일시스템을 보지 않는다")
+	require.NotNil(t, w)
+
+	err = w.Start(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auth dir")
 }
 
-// TestNewFromEnv_AuthDirIsFile 는 CLAUDE_CODE_AUTH_DIR 가 디렉토리가 아닌 파일을 가리킬 때 에러를 반환하는지 검증합니다.
+// TestNewFromEnv_AuthDirIsFile 는 authDir 이 디렉토리가 아닌 파일일 때 Start 가 거부하는지 검증합니다.
 func TestNewFromEnv_AuthDirIsFile(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "not-a-dir")
 	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o644))
 	t.Setenv("CLAUDE_CODE_AUTH_DIR", tmpFile)
 	log := logger.New(logger.DefaultConfig())
-	_, err := claude.NewFromEnv(claudegenLoader, log)
+	w, err := claude.NewFromEnv(claudegenLoader, log)
+	require.NoError(t, err)
+
+	err = w.Start(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a directory")
+}
+
+// TestStart_InvalidAuthDir_RunnerUntouched 는 authDir 검증 실패 시 runner 가 호출되지
+// 않는지 검증합니다 (이슈 #537) — 검증이 컨테이너 기동보다 앞선다는 순서 보장.
+func TestStart_InvalidAuthDir_RunnerUntouched(t *testing.T) {
+	log := logger.New(logger.DefaultConfig())
+	runner := &mockContainerRunner{}
+	w, err := claude.NewWithRunner(
+		"image", "model", filepath.Join(t.TempDir(), "absent"),
+		"/home/node/.claude", 10*time.Second, runner, claudegenLoader, log)
+	require.NoError(t, err, "존재하지 않는 authDir 로도 생성 가능해야 DI 가 성립한다")
+
+	require.Error(t, w.Start(t.Context()))
+	assert.Empty(t, runner.startedWith.image, "검증 실패 시 컨테이너를 기동하지 않는다")
 }
 
 // TestNewFromEnv_ValidAuthDir 는 유효한 인증 디렉토리로 NewFromEnv 가 성공하는지 검증합니다.
