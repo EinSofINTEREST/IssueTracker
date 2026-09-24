@@ -31,6 +31,18 @@ type FetcherRuleRecord struct {
 	BaseURL         string
 	RequestsPerHour int
 
+	// PriorityConfig 는 host 단위 priority override + weight 입니다 (이슈 #383).
+	// nil 이면 override 없음 — chain 이 기존 경로 (RuleBased → Scoring) 로 흐릅니다.
+	PriorityConfig *PriorityConfig
+
+	// PriorityConfigError 는 priority_config 파싱이 실패한 경우의 사유입니다.
+	//
+	// 목록 조회에서 한 host 의 잘못된 설정이 전체를 실패시키면 운영 도구가 통째로 멈추므로
+	// 그 host 만 override 없이 둔다. 그런데 **nil 인 이유가 "설정 없음" 인지 "설정 오류" 인지
+	// 구별되지 않으면 조용히 무시되는 설정** 이 된다 — 운영자는 적용된 줄 알지만 동작은
+	// 그대로다. 사유를 함께 실어 로드하는 쪽이 경고할 수 있게 한다.
+	PriorityConfigError string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

@@ -30,6 +30,13 @@ import (
 type DynamicScorePriorityResolver struct {
 	scores    atomic.Pointer[map[string]float64]
 	threshold float64
+
+	// hostThresholds 는 host 별 임계값입니다 (이슈 #383). 없으면 threshold 기본값.
+	//
+	// scores 와 별도 스냅샷으로 둔 이유: 두 값의 갱신 주기가 다르다. 점수는 scorer 가
+	// 집계 주기마다, 임계값은 운영자 설정이라 refresher 주기마다 바뀐다. 한 맵에 묶으면
+	// 한쪽 갱신이 다른 쪽을 덮어쓴다.
+	hostThresholds atomic.Pointer[map[string]float64]
 }
 
 // NewDynamicScorePriorityResolver 는 threshold 를 지정해 생성합니다.
@@ -58,13 +65,40 @@ func (r *DynamicScorePriorityResolver) SetScores(scores map[string]float64) {
 	r.scores.Store(&cp)
 }
 
-// Resolve 는 host 점수가 threshold 이상이면 High, 그 외에는 Normal 을 반환합니다.
+// SetHostThresholds 는 host 별 임계값 스냅샷을 atomic 으로 교체합니다 (이슈 #383).
+//
+// 빈 맵 / nil 이면 모든 host 가 생성 시 지정한 기본 임계값을 씁니다.
+func (r *DynamicScorePriorityResolver) SetHostThresholds(thresholds map[string]float64) {
+	if len(thresholds) == 0 {
+		r.hostThresholds.Store(nil)
+		return
+	}
+	cp := make(map[string]float64, len(thresholds))
+	for k, v := range thresholds {
+		cp[k] = v
+	}
+	r.hostThresholds.Store(&cp)
+}
+
+// thresholdFor 는 host 의 임계값을 반환합니다 — 설정이 없으면 기본값.
+func (r *DynamicScorePriorityResolver) thresholdFor(host string) float64 {
+	m := r.hostThresholds.Load()
+	if m == nil {
+		return r.threshold
+	}
+	if t, ok := (*m)[host]; ok {
+		return t
+	}
+	return r.threshold
+}
+
+// Resolve 는 host 점수가 임계값 이상이면 High, 그 외에는 Normal 을 반환합니다.
 func (r *DynamicScorePriorityResolver) Resolve(job *core.CrawlJob) core.Priority {
 	score, ok := r.lookup(job)
 	if !ok {
 		return core.PriorityNormal
 	}
-	if score >= r.threshold {
+	if score >= r.thresholdFor(hostOf(job.Target.URL)) {
 		return core.PriorityHigh
 	}
 	return core.PriorityNormal

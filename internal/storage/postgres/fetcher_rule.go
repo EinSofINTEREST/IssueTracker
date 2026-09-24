@@ -74,6 +74,7 @@ SELECT id, host_pattern, fetcher, COALESCE(reason, ''),
        COALESCE(source_name, ''), COALESCE(source_type, ''),
        COALESCE(country, ''), COALESCE(language, ''),
        COALESCE(base_url, ''), COALESCE(requests_per_hour, 0),
+       priority_config,
        created_at, updated_at
 FROM fetcher_rules
 WHERE host_pattern = $1
@@ -88,10 +89,12 @@ func (r *pgFetcherRuleRepository) GetByHost(ctx context.Context, host string) (*
 	host = canonicalizeHost(host)
 	rec := &model.FetcherRuleRecord{}
 	var fetcher string
+	var priorityRaw []byte
 	err := r.pool.QueryRow(ctx, sqlGetFetcherRuleByHost, host).Scan(
 		&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason,
 		&rec.SourceName, &rec.SourceType, &rec.Country, &rec.Language,
 		&rec.BaseURL, &rec.RequestsPerHour,
+		&priorityRaw,
 		&rec.CreatedAt, &rec.UpdatedAt,
 	)
 	if err != nil {
@@ -101,6 +104,13 @@ func (r *pgFetcherRuleRepository) GetByHost(ctx context.Context, host string) (*
 		return nil, fmt.Errorf("get fetcher rule by host %s: %w", host, err)
 	}
 	rec.Fetcher = model.FetcherKind(fetcher)
+	// 잘못된 priority_config 가 host 조회 전체를 실패시키지 않도록 에러를 전파한다 —
+	// 호출자가 진단 가능한 메시지를 받는다 (이슈 #383).
+	cfg, perr := model.ParsePriorityConfig(priorityRaw)
+	if perr != nil {
+		return nil, fmt.Errorf("fetcher rule %s: %w", host, perr)
+	}
+	rec.PriorityConfig = cfg
 	return rec, nil
 }
 
@@ -109,6 +119,7 @@ SELECT id, host_pattern, fetcher, COALESCE(reason, ''),
        COALESCE(source_name, ''), COALESCE(source_type, ''),
        COALESCE(country, ''), COALESCE(language, ''),
        COALESCE(base_url, ''), COALESCE(requests_per_hour, 0),
+       priority_config,
        created_at, updated_at
 FROM fetcher_rules
 ORDER BY host_pattern ASC
@@ -126,15 +137,26 @@ func (r *pgFetcherRuleRepository) List(ctx context.Context) ([]*model.FetcherRul
 	for rows.Next() {
 		rec := &model.FetcherRuleRecord{}
 		var fetcher string
+		var priorityRaw []byte
 		if err := rows.Scan(
 			&rec.ID, &rec.HostPattern, &fetcher, &rec.Reason,
 			&rec.SourceName, &rec.SourceType, &rec.Country, &rec.Language,
 			&rec.BaseURL, &rec.RequestsPerHour,
+			&priorityRaw,
 			&rec.CreatedAt, &rec.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan fetcher rule: %w", err)
 		}
 		rec.Fetcher = model.FetcherKind(fetcher)
+		// 한 host 의 잘못된 설정이 전체 목록을 실패시키면 운영 도구가 통째로 멈춘다.
+		// 해당 host 만 override 없이 두되, **사유를 기록** 한다 — 사유가 없으면 nil 인 이유가
+		// "설정 없음" 인지 "설정 오류" 인지 구별되지 않아 조용히 무시되는 설정이 된다.
+		cfg, perr := model.ParsePriorityConfig(priorityRaw)
+		if perr != nil {
+			rec.PriorityConfigError = perr.Error()
+		} else {
+			rec.PriorityConfig = cfg
+		}
 		out = append(out, rec)
 	}
 	if err := rows.Err(); err != nil {

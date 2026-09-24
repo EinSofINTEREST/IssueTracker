@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -238,6 +240,18 @@ func main() {
 	// PriorityRulesRefresher 가 hydrate 가능 (pool 생성 이후).
 	resolver := bus.NewCompositeResolver(core.PriorityNormal)
 	resolver.Add(&bus.ExplicitPriorityResolver{})
+
+	// 이슈 #383 — 운영자가 host 단위로 명시한 priority override.
+	// Explicit 뒤인 이유: 발행 시점의 명시 (scheduler / retry 등) 가 더 구체적인 의도다.
+	// RuleBased 앞인 이유: 둘 다 운영자 설정이지만 override 는 override_until 을 가진
+	// **시한부 의도** 이고, 상시 정책 (crawl_priority) 을 일시적으로 덮는 것이 목적이다.
+	overrideResolver := bus.NewOverridePriorityResolver()
+	resolver.Add(overrideResolver)
+
+	// host 별 scoring 조정값 보관소. refresher 가 채우고 scorer 가 읽는다 — 두 시점이
+	// 떨어져 있어 (chain 구성 ↔ pool 생성 이후) 여기서 먼저 만든다.
+	hostTuningStore := newHostTuningStore()
+
 	resolver.Add(bus.NewSourcePriorityResolver(core.PriorityNormal))
 	ruleBasedResolver := bus.NewRuleBasedPriorityResolver(core.PriorityNormal)
 	resolver.Add(ruleBasedResolver)
@@ -429,6 +443,7 @@ func main() {
 			},
 			log,
 		)
+		hostScorer.SetTuningLookup(hostTuningStore.lookup)
 		hostScorer.Start(ctx)
 		defer hostScorer.Stop()
 		log.WithFields(map[string]interface{}{
@@ -451,6 +466,33 @@ func main() {
 		log.WithError(err).Fatal("failed to construct fetcher rule repository")
 	}
 	fetcherRuleRepo := decorator.WrapFetcherRuleWithTimeout(fetcherRuleRepoBase, dbCfg.QueryTimeout)
+	// 이슈 #383 — host 단위 priority override + per-host scoring 조정.
+	//
+	// fetcher_rules.priority_config 한 컬럼에서 세 가지를 공급한다:
+	//   1. base_priority  → overrideResolver (시한부 override)
+	//   2. signal_weights → scorer (host 별 weight)
+	//   3. score_threshold → scoreResolver (host 별 임계값)
+	//
+	// 한 번의 List 로 세 스냅샷을 만든다 — 같은 컬럼을 세 번 읽을 이유가 없다.
+	overrideRefresher := bus.NewHostOverridesRefresher(
+		overrideResolver,
+		func(rctx context.Context) (map[string]bus.HostOverride, error) {
+			records, lerr := fetcherRuleRepo.List(rctx)
+			if lerr != nil {
+				return nil, lerr
+			}
+			overrides, tunings, thresholds := splitPriorityConfigs(records, log)
+			hostTuningStore.set(tunings)
+			if scoreResolver != nil {
+				scoreResolver.SetHostThresholds(thresholds)
+			}
+			return overrides, nil
+		},
+		priorityRefreshInterval,
+		log,
+	)
+	overrideRefresher.Start(ctx)
+
 	fetcherResolver, err := fetcherRule.NewResolver(fetcherRuleRepo, log, 0)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct fetcher rule resolver")
@@ -1775,6 +1817,113 @@ func selectAgentPool(
 		"worker_count": selected.WorkerCount(),
 	}).Info("agent backend selected")
 	return selected, backend
+}
+
+// hostTuningStore 는 host 별 scoring 조정값 스냅샷을 보관합니다 (이슈 #383).
+//
+// refresher goroutine 이 쓰고 scorer goroutine 이 읽으므로 atomic 교체로 race-safe 하게 둔다.
+type hostTuningStore struct {
+	v atomic.Pointer[map[string]*scoring.HostTuning]
+}
+
+func newHostTuningStore() *hostTuningStore { return &hostTuningStore{} }
+
+func (s *hostTuningStore) set(m map[string]*scoring.HostTuning) {
+	if len(m) == 0 {
+		s.v.Store(nil)
+		return
+	}
+	s.v.Store(&m)
+}
+
+// lookup 은 scoring.TuningLookup 시그니처를 만족합니다. 설정이 없으면 nil.
+func (s *hostTuningStore) lookup(host string) *scoring.HostTuning {
+	m := s.v.Load()
+	if m == nil {
+		return nil
+	}
+	return (*m)[host]
+}
+
+// splitPriorityConfigs 는 fetcher_rules 레코드에서 세 스냅샷을 분리합니다 (이슈 #383).
+//
+// 한 컬럼 (priority_config) 이 세 가지 용도를 담으므로 한 번의 List 로 모두 만든다.
+//
+// 파싱 실패한 설정은 **경고를 남긴다.** 조용히 넘기면 운영자는 설정이 적용된 줄 알지만
+// 동작은 그대로이고, 그 사실이 어디에도 드러나지 않는다.
+func splitPriorityConfigs(
+	records []*model.FetcherRuleRecord,
+	log *logger.Logger,
+) (map[string]bus.HostOverride, map[string]*scoring.HostTuning, map[string]float64) {
+	overrides := make(map[string]bus.HostOverride)
+	tunings := make(map[string]*scoring.HostTuning)
+	thresholds := make(map[string]float64)
+
+	for _, rec := range records {
+		if rec.PriorityConfigError != "" {
+			log.WithFields(map[string]interface{}{
+				"host":   rec.HostPattern,
+				"reason": rec.PriorityConfigError,
+			}).Warn("invalid priority_config ignored — host runs with default priority policy")
+			continue
+		}
+		cfg := rec.PriorityConfig
+		if cfg == nil {
+			continue
+		}
+		host := rec.HostPattern
+
+		// 만료 판정은 resolver 가 조회 시점에 한다 — 여기서 거르면 refresh 주기 동안
+		// 이미 만료된 override 가 계속 적용된다.
+		if cfg.BasePriority != "" {
+			o := bus.HostOverride{Priority: priorityFromString(cfg.BasePriority)}
+			if cfg.OverrideUntil != nil {
+				o.Until = *cfg.OverrideUntil
+			}
+			overrides[host] = o
+		}
+		if cfg.ScoreThreshold != nil {
+			thresholds[host] = *cfg.ScoreThreshold
+		}
+		if w := mergeWeights(cfg.SignalWeights); w != nil {
+			tunings[host] = &scoring.HostTuning{Weights: w}
+		}
+	}
+	return overrides, tunings, thresholds
+}
+
+// mergeWeights 는 부분 지정된 weight 를 cluster-wide 기본값 위에 덮습니다.
+//
+// 부분 override 가 성립해야 운영자가 weight 하나만 조정할 수 있다. 미지정 키를 0 으로
+// 두면 지정하지 않은 signal 이 통째로 무시된다.
+func mergeWeights(w *model.SignalWeights) *scoring.Weights {
+	if w == nil || (w.Freshness == nil && w.Impact == nil && w.HostTrust == nil) {
+		return nil
+	}
+	out := scoring.DefaultWeights
+	if w.Freshness != nil {
+		out.Freshness = *w.Freshness
+	}
+	if w.Impact != nil {
+		out.Impact = *w.Impact
+	}
+	if w.HostTrust != nil {
+		out.HostTrust = *w.HostTrust
+	}
+	return &out
+}
+
+// priorityFromString 은 설정 문자열을 core.Priority 로 변환합니다.
+// 값 검증은 model.PriorityConfig.Validate 가 이미 수행했으므로 여기선 매핑만 한다.
+func priorityFromString(v string) core.Priority {
+	switch strings.ToLower(v) {
+	case "high":
+		return core.PriorityHigh
+	case "low":
+		return core.PriorityLow
+	default:
+		return core.PriorityNormal
+	}
 }
 
 // startCodexPool 은 PoolConfig 로 codex pool 을 생성 / start 하고 실패 시 nil 반환합니다 (이슈 #534).
