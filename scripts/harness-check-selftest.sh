@@ -28,6 +28,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 backup() {
+  # 대상이 없으면 즉시 중단한다 — 주입이 일어나지 않은 채 케이스가 "통과" 하면
+  # selftest 가 검출력을 증명하는 것이 아니라 거짓 안심을 준다.
+  if [ ! -f "$1" ]; then
+    printf "%sFAIL%s selftest 대상 파일이 없음: %s\n" "$RED" "$RESET" "$1" >&2
+    exit 1
+  fi
   cp "$1" "$TMP/$(echo "$1" | tr / _)"
   MUTATED+=("$1")
 }
@@ -78,6 +84,23 @@ expect_detect "4단계 깊이 상대링크 드리프트" "ingestion_marker_v2.go
 
 expect_detect ".cursor 룰셋의 Go 버전 드리프트" "Go 1.21" \
   .cursor/rules/development-workflow.md 's|- Go 1.24+|- Go 1.21+|'
+
+expect_detect "코드가 참조하는 prompt 이름의 asset 부재" "parser/claude/ghost.user" \
+  pkg/agent/claude/contracts.go 's|parser/claude/page.user|parser/claude/ghost.user|'
+
+# 오탐 회귀 — 주석 안의 옛 prompt 이름은 경고를 만들면 안 된다.
+# 이력 설명으로 옛 이름을 남기는 일이 흔하다 (실제로 codex/contracts.go 가 그렇다 — 이슈 #594).
+printf "     "
+backup pkg/agent/claude/contracts.go
+printf '\n// 과거 이름: "parser/nonexistent/page.user" — 주석이므로 경고 대상이 아니다.\n' \
+  >> pkg/agent/claude/contracts.go
+comment_out=$(bash scripts/harness-check.sh 2>&1 || true)
+if printf '%s' "$comment_out" | sed 's/\x1b\[[0-9;]*m//g' | grep -q -- "parser/nonexistent/page.user"; then
+  printf "%sFAIL%s 주석 안의 prompt 이름이 오탐을 만든다\n" "$RED" "$RESET"; fail=$((fail + 1))
+else
+  printf "%s ok %s 주석 안의 prompt 이름은 오탐 없음\n" "$GREEN" "$RESET"; pass=$((pass + 1))
+fi
+restore pkg/agent/claude/contracts.go
 
 # 오탐 회귀 — "목표 구조" 로 표시된 트리는 경고를 만들면 안 된다.
 printf "     "
