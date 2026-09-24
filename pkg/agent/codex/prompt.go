@@ -69,7 +69,7 @@ article body or published_at metadata), return validity="blacklist".`, reason)
 
 func promptNameFor(targetType model.TargetType) string {
 	if targetType == model.TargetTypeList {
-		return "parser/codex/list.user"
+		return PromptNameParserList
 	}
-	return "parser/codex/page.user"
+	return PromptNameParserPage
 }

@@ -20,11 +20,17 @@ import (
 	"issuetracker/pkg/logger"
 )
 
-// codexLoader 는 codex worker 가 요구하는 prompt asset 을 in-memory 로 제공합니다.
-// 운영의 pkg/llm/prompt/assets/parser/codex/{page,list}.user.txt 와 동일한 placeholder 사용.
+// codexLoader 는 codex worker 가 요구하는 prompt 를 in-memory 로 제공합니다.
+//
+// 키는 codex 가 실제로 요청하는 이름 (= claude 와 공용하는 asset) 이어야 한다 — 상수를
+// 직접 쓰는 이유다. 리터럴로 적으면 이름이 바뀌었을 때 이 mock 만 조용히 어긋나
+// 테스트가 실패 원인을 잘못 가리킨다 (이슈 #594).
+//
+// **이 loader 로는 이름이 실재하는 asset 을 가리키는지 검증되지 않는다** —
+// 그 검증은 prompt_test.go 가 EmbedLoader 로 수행한다.
 var codexLoader = prompt.MapLoader{
-	"parser/codex/page.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.{{VALIDATION_REJECT_REASON_CONTEXT}}",
-	"parser/codex/list.user": "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.{{VALIDATION_REJECT_REASON_CONTEXT}}",
+	codex.PromptNameParserPage: "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return JSON.{{VALIDATION_REJECT_REASON_CONTEXT}}",
+	codex.PromptNameParserList: "Read {{SESSION_PATH}}/page.html from {{HOST}} ({{TARGET_TYPE}}). Return list JSON.{{VALIDATION_REJECT_REASON_CONTEXT}}",
 }
 
 // mockRunner 는 docker 를 실행하지 않는 테스트용 ContainerRunner 입니다.
