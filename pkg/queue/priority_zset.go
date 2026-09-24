@@ -18,9 +18,13 @@ package queue
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -63,7 +67,19 @@ type PriorityZSetConfig struct {
 
 	// EntryTTL 은 entry STRING 의 TTL 입니다. 0 또는 음수면 PriorityZSetEntryTTL.
 	EntryTTL time.Duration
+
+	// HeaderKeyPrefix 는 보존된 Kafka 헤더 (STRING) 의 키 접두사입니다 (이슈 #561).
+	//
+	// 비우면 headerPrefixMarker + EntryKeyPrefix 로 도출합니다. EntryKeyPrefix 의 하위로
+	// 두지 않는 이유는 키 충돌 때문입니다 — 자세한 내용은 NewPriorityZSetQueue 참조.
+	HeaderKeyPrefix string
 }
+
+// headerPrefixMarker 는 HeaderKeyPrefix 기본값의 접두사입니다 (이슈 #561).
+//
+// entry 키 공간 **밖** 에 두려고 뒤가 아니라 앞에 붙입니다. 뒤에 붙이면
+// (EntryKeyPrefix + "hdr:") entry 키 공간의 부분집합이 되어 id 조작으로 충돌이 가능합니다.
+const headerPrefixMarker = "hdr:"
 
 // PriorityPusher 는 PriorityZSetQueue 의 Push 책임만 추상화한 인터페이스입니다 (이슈 #522).
 //
@@ -75,15 +91,55 @@ type PriorityPusher interface {
 	Push(ctx context.Context, priority int, id string, payload []byte) error
 }
 
+// PriorityHeaderPusher 는 payload 와 함께 **Kafka 헤더까지 보존** 하는 push 를 제공합니다 (이슈 #561).
+//
+// PriorityPusher 를 embed 해 기존 호출자는 그대로 두고, 헤더 보존이 필요한 인입 단계만 본
+// 인터페이스에 의존합니다. PriorityPusher 의 시그니처를 바꾸지 않는 이유는 pkg/ 가 공개
+// 라이브러리이기 때문입니다 — 외부 구현체를 깨지 않고 기능을 넓힙니다.
+type PriorityHeaderPusher interface {
+	PriorityPusher
+	PushWithHeaders(ctx context.Context, priority int, id string, payload []byte, headers map[string]string) error
+}
+
 // PriorityZSetQueue 는 Redis ZSET 기반 priority queue 입니다.
 //
 // 모든 메소드는 goroutine-safe — 내부적으로 go-redis 의 thread-safe client 사용.
 type PriorityZSetQueue struct {
-	rdb      *goredis.Client
-	zsetKey  string
-	entryKey string
-	maxSize  int64
-	entryTTL time.Duration
+	rdb       *goredis.Client
+	zsetKey   string
+	entryKey  string
+	headerKey string
+	maxSize   int64
+	entryTTL  time.Duration
+}
+
+// headerEnvelope 는 :hdr 키에 저장되는 값입니다 (이슈 #561).
+//
+// PayloadSHA 를 함께 두는 이유 — 롤링 업그레이드 중 **구 버전의 Push 는 :hdr 를 건드리지
+// 않습니다.** 같은 id 를 구 버전이 재push 해 payload 만 덮어쓰면, 신 버전이 pop 할 때 이전
+// 사이클의 헤더가 새 payload 에 결합되어 target_type / gate_skip_count 가 잘못 복원됩니다
+// (Copilot 피드백). payload 다이제스트를 함께 저장해 두면 그 불일치를 pop 시점에 스스로
+// 발견해 헤더를 버릴 수 있습니다 — 구/신 버전 어느 쪽이 payload 를 썼든 동작합니다.
+type headerEnvelope struct {
+	PayloadSHA string            `json:"payload_sha"`
+	Headers    map[string]string `json:"headers"`
+}
+
+// payloadDigest 는 payload 의 SHA-256 앞 16바이트를 hex 로 반환합니다.
+//
+// 충돌 방지가 아니라 "같은 사이클의 payload 인가" 만 구분하면 되므로 전체 해시를 쓰지 않습니다.
+func payloadDigest(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:16])
+}
+
+// headerKeyFor 는 entry 의 헤더 저장 키를 만듭니다 (이슈 #561).
+//
+// payload 와 **별도 STRING 키** 로 둡니다. entry 키에 envelope 을 씌우면 업그레이드 시점에
+// Redis 에 남아 있는 기존 entry (raw payload) 가 파싱에 실패하므로, 키를 나눠 헤더 부재를
+// 자연스러운 하위 호환 경로로 만듭니다 — 헤더 키가 없으면 그냥 헤더 없는 메시지입니다.
+func (q *PriorityZSetQueue) headerKeyFor(id string) string {
+	return q.headerKey + id
 }
 
 // NewPriorityZSetQueue 는 PriorityZSetQueue 를 생성합니다.
@@ -105,12 +161,27 @@ func NewPriorityZSetQueue(rdb *goredis.Client, cfg PriorityZSetConfig) (*Priorit
 	if entryTTL <= 0 {
 		entryTTL = PriorityZSetEntryTTL
 	}
+
+	headerKey := cfg.HeaderKeyPrefix
+	if headerKey == "" {
+		headerKey = headerPrefixMarker + cfg.EntryKeyPrefix
+	}
+	// 두 키 공간이 겹치면 id 를 고르는 것만으로 서로의 데이터를 덮어쓸 수 있다 (CodeRabbit 피드백).
+	// 예: entry="e:" 에 id="hdr:x" 를 push 하면 entry 키가 "e:hdr:x" 가 되어, header 가
+	// "e:hdr:" + "x" 를 쓸 때와 충돌한다. 한쪽이 다른 쪽의 접두사이면 그런 id 가 항상 존재하므로
+	// 생성 시점에 거부한다.
+	if strings.HasPrefix(headerKey, cfg.EntryKeyPrefix) || strings.HasPrefix(cfg.EntryKeyPrefix, headerKey) {
+		return nil, fmt.Errorf("%w: entry/header key prefixes overlap (entry=%q header=%q)",
+			ErrPriorityZSetInvalidConfig, cfg.EntryKeyPrefix, headerKey)
+	}
+
 	return &PriorityZSetQueue{
-		rdb:      rdb,
-		zsetKey:  cfg.ZSetKey,
-		entryKey: cfg.EntryKeyPrefix,
-		maxSize:  maxSize,
-		entryTTL: entryTTL,
+		rdb:       rdb,
+		zsetKey:   cfg.ZSetKey,
+		entryKey:  cfg.EntryKeyPrefix,
+		headerKey: headerKey,
+		maxSize:   maxSize,
+		entryTTL:  entryTTL,
 	}, nil
 }
 
@@ -127,6 +198,18 @@ var ErrPriorityZSetInvalidConfig = errors.New("priority zset queue: ZSetKey and 
 // priority 는 core.Priority 와 동일 매핑 (1=high / 2=normal / 3=low). 1~3 범위 밖이면
 // PriorityNormal (2) 로 보정.
 func (q *PriorityZSetQueue) Push(ctx context.Context, priority int, id string, payload []byte) error {
+	return q.PushWithHeaders(ctx, priority, id, payload, nil)
+}
+
+// PushWithHeaders 는 Push 와 동일하되 Kafka 헤더를 함께 보존합니다 (이슈 #561).
+//
+// 헤더를 버리면 pop 시 재구성되는 메시지가 priority 하나만 갖게 되어, 재시도 경로에서
+// target_type / crawler / timeout_ms / gate_skip_count 가 모두 사라집니다. 특히
+// target_type 부재는 category job 을 article 로 떨어뜨리고, gate_skip_count 부재는
+// 재큐 예산 (이슈 #540) 을 무력화해 무한 재큐를 허용합니다.
+//
+// headers 가 비어 있으면 헤더 키를 쓰지 않습니다 — Push 와 동일한 저장 형태.
+func (q *PriorityZSetQueue) PushWithHeaders(ctx context.Context, priority int, id string, payload []byte, headers map[string]string) error {
 	if id == "" {
 		return errors.New("priority zset push: id required")
 	}
@@ -135,9 +218,35 @@ func (q *PriorityZSetQueue) Push(ctx context.Context, priority int, id string, p
 	}
 	score := priorityScore(priority, time.Now())
 
+	// 명령 순서가 곧 가시성 순서다 (CodeRabbit 피드백).
+	//
+	// 평범한 pipeline 은 원자적이지 않아 다른 클라이언트의 명령이 사이에 끼어들 수 있다.
+	// ZAdd 를 먼저 보내면 payload / header 가 쓰이기 전에 consumer 가 BZPOPMIN 으로 멤버를
+	// 가져가 헤더 없는 (또는 payload 없는) 메시지를 받고 entry 를 지워 버린다.
+	// 따라서 **payload → header → ZAdd** 순으로 보낸다. 멤버는 두 값이 모두 자리잡은 뒤에야
+	// pop 가능해지므로 MULTI/EXEC 없이도 torn read 가 생기지 않는다.
 	pipe := q.rdb.Pipeline()
-	pipe.ZAdd(ctx, q.zsetKey, goredis.Z{Score: score, Member: id})
 	pipe.Set(ctx, q.entryKey+id, payload, q.entryTTL)
+	if len(headers) > 0 {
+		// payload 다이제스트를 함께 저장 — pop 시 다른 사이클의 헤더인지 검증한다.
+		encoded, err := json.Marshal(headerEnvelope{
+			PayloadSHA: payloadDigest(payload),
+			Headers:    headers,
+		})
+		if err != nil {
+			// 헤더 직렬화 실패로 메시지 자체를 버리지 않는다 — payload 는 정상이므로
+			// 헤더 없이 진행한다. 남아 있을 수 있는 이전 헤더는 지운다.
+			// (map[string]string 이라 실제로는 발생하지 않는 경로)
+			pipe.Del(ctx, q.headerKeyFor(id))
+		} else {
+			pipe.Set(ctx, q.headerKeyFor(id), encoded, q.entryTTL)
+		}
+	} else {
+		// 같은 id 로 재push 될 때 이전 사이클의 헤더가 남아 되살아나는 것을 막는다.
+		pipe.Del(ctx, q.headerKeyFor(id))
+	}
+	// 마지막에 멤버를 노출한다 — 위 주석 참조.
+	pipe.ZAdd(ctx, q.zsetKey, goredis.Z{Score: score, Member: id})
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("priority zset push (id=%s): %w", id, err)
 	}
@@ -155,6 +264,10 @@ type PopResult struct {
 	Score    float64
 	Priority int
 	Payload  []byte
+
+	// Headers 는 push 시 보존된 Kafka 헤더입니다 (이슈 #561).
+	// 헤더 없이 push 된 entry 나 업그레이드 이전에 쌓인 entry 는 nil.
+	Headers map[string]string
 }
 
 // Pop 은 ZSET 의 가장 낮은 score (high priority + oldest) 1건을 atomic 으로 pop 합니다.
@@ -196,15 +309,60 @@ func (q *PriorityZSetQueue) Pop(ctx context.Context, timeout time.Duration) (*Po
 		}
 		return nil, fmt.Errorf("priority zset entry get (id=%s, restored to zset): %w", id, err)
 	}
+	// 보존된 헤더 복원 (이슈 #561).
+	//
+	// **전송 오류와 데이터 오류를 다르게 다룬다** (CodeRabbit 피드백).
+	//
+	//   - Redis 읽기 실패 (일시적): BZPOPMIN 이 이미 member 를 제거했으므로 그대로 진행하면
+	//     target_type / gate_skip_count 를 영구 유실한다. member 를 되돌리고 에러를 올려
+	//     호출자가 재시도하게 한다. 다음 시도에서 Redis 가 회복되면 성공한다.
+	//   - 헤더 디코드 실패 (결정적): 재시도해도 같은 바이트를 다시 읽으므로 영원히 실패한다.
+	//     되돌리면 그 member 가 가장 낮은 score 라 다음 BZPOPMIN 이 같은 항목을 집어
+	//     **큐 머리가 entry TTL (기본 24h) 까지 막힌다.** 따라서 되돌리지 않고 헤더만
+	//     버린 뒤 payload 를 전달한다 — 다이제스트 불일치와 동일한 degrade 경로다.
+	var headers map[string]string
+	raw, herr := q.rdb.Get(ctx, q.headerKeyFor(id)).Bytes()
+	switch {
+	case herr == nil && len(raw) > 0:
+		var env headerEnvelope
+		if uerr := json.Unmarshal(raw, &env); uerr != nil {
+			// 헤더를 잃지만 메시지는 흘려보낸다 — 큐를 막는 것보다 낫다.
+			headers = nil
+			break
+		}
+		// 다른 사이클의 payload 에 붙은 헤더면 버린다 — 롤링 업그레이드 중 구 버전이
+		// payload 만 덮어쓴 경우를 자가 검출한다.
+		if env.PayloadSHA != "" && env.PayloadSHA != payloadDigest(payload) {
+			headers = nil
+		} else {
+			headers = env.Headers
+		}
+	case herr != nil && !errors.Is(herr, goredis.Nil):
+		return nil, q.restoreOnPopFailure(ctx, id, res.Score,
+			fmt.Errorf("priority zset header get (id=%s): %w", id, herr))
+	}
+
 	// pop 된 후 entry 도 cleanup — TTL 로도 자연 만료되지만 명시적 삭제로 메모리 즉시 회수.
-	q.rdb.Del(ctx, q.entryKey+id)
+	q.rdb.Del(ctx, q.entryKey+id, q.headerKeyFor(id))
 
 	return &PopResult{
 		ID:       id,
 		Score:    res.Score,
 		Priority: priority,
 		Payload:  payload,
+		Headers:  headers,
 	}, nil
+}
+
+// restoreOnPopFailure 는 pop 중 실패한 항목을 원래 score 로 ZSET 에 되돌립니다 (이슈 #561).
+//
+// BZPOPMIN 이 이미 member 를 제거한 뒤라, 복구하지 않으면 메시지가 영구 손실된다.
+// 복구까지 실패하면 두 에러를 합쳐 반환해 호출자가 진짜 손실을 구분할 수 있게 한다.
+func (q *PriorityZSetQueue) restoreOnPopFailure(ctx context.Context, id string, score float64, cause error) error {
+	if zaddErr := q.rdb.ZAdd(ctx, q.zsetKey, goredis.Z{Score: score, Member: id}).Err(); zaddErr != nil {
+		return fmt.Errorf("%w; zset restore failed: %v", cause, zaddErr)
+	}
+	return fmt.Errorf("%w (restored to zset)", cause)
 }
 
 // Len 은 ZSET 의 현재 항목 수를 반환합니다 (메트릭 / overflow 감지용).
@@ -279,14 +437,21 @@ func (c *PriorityZSetConsumer) FetchMessage(ctx context.Context) (*Message, erro
 			// entry TTL 만료 — payload 손실. 다음 항목으로 진행.
 			continue
 		}
+		// 보존된 헤더를 복원한 뒤 priority 를 덮어쓴다 (이슈 #561).
+		// priority 는 ZSET score 가 단일 출처 — push 당시 헤더 값보다 score 가 정확하다
+		// (재push 시 score 만 갱신되는 경로가 있으므로).
+		headers := make(map[string]string, len(res.Headers)+1)
+		for k, v := range res.Headers {
+			headers[k] = v
+		}
+		headers["priority"] = strconv.Itoa(res.Priority)
+
 		return &Message{
-			Topic: c.topicLabel,
-			Key:   []byte(res.ID),
-			Value: res.Payload,
-			Headers: map[string]string{
-				"priority": strconv.Itoa(res.Priority),
-			},
-			Time: time.Now(),
+			Topic:   c.topicLabel,
+			Key:     []byte(res.ID),
+			Value:   res.Payload,
+			Headers: headers,
+			Time:    time.Now(),
 		}, nil
 	}
 }

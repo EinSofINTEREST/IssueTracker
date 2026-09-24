@@ -21,7 +21,7 @@ import (
 	"issuetracker/pkg/queue"
 )
 
-// stubPusher 는 in-memory PriorityPusher mock. Push 호출 인자를 캡쳐 + failErr 로 실패 시뮬레이션.
+// stubPusher 는 in-memory PriorityHeaderPusher mock. Push 호출 인자를 캡쳐 + failErr 로 실패 시뮬레이션.
 type stubPusher struct {
 	mu       sync.Mutex
 	calls    []stubPushCall
@@ -33,9 +33,14 @@ type stubPushCall struct {
 	Priority int
 	ID       string
 	Payload  []byte
+	Headers  map[string]string
 }
 
-func (s *stubPusher) Push(_ context.Context, priority int, id string, payload []byte) error {
+func (s *stubPusher) Push(ctx context.Context, priority int, id string, payload []byte) error {
+	return s.PushWithHeaders(ctx, priority, id, payload, nil)
+}
+
+func (s *stubPusher) PushWithHeaders(_ context.Context, priority int, id string, payload []byte, headers map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failErr != nil {
@@ -45,10 +50,18 @@ func (s *stubPusher) Push(_ context.Context, priority int, id string, payload []
 		}
 		return err
 	}
+	var hdr map[string]string
+	if headers != nil {
+		hdr = make(map[string]string, len(headers))
+		for k, v := range headers {
+			hdr[k] = v
+		}
+	}
 	s.calls = append(s.calls, stubPushCall{
 		Priority: priority,
 		ID:       id,
 		Payload:  append([]byte(nil), payload...),
+		Headers:  hdr,
 	})
 	return nil
 }
@@ -95,7 +108,7 @@ func (c *stubConsumer) Closed() bool {
 	return c.closed
 }
 
-func newIntake(t *testing.T, pusher queue.PriorityPusher) (*worker.ZSetIntake, *stubConsumer) {
+func newIntake(t *testing.T, pusher queue.PriorityHeaderPusher) (*worker.ZSetIntake, *stubConsumer) {
 	t.Helper()
 	log := logger.New(logger.Config{Level: "error"})
 	cons := &stubConsumer{}
@@ -230,4 +243,32 @@ func TestZSetIntake_Stop_WithoutStart_ReturnsImmediately(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	assert.NoError(t, intake.Stop(ctx), "Start 하지 않았으면 Stop 은 즉시 nil")
+}
+
+// TestZSetIntake_HandleOne_ForwardsAllHeaders 는 인입 단계가 Kafka 헤더를 그대로
+// ZSET 에 넘기는지 검증합니다 (이슈 #561).
+//
+// priority 만 넘기면 pop 시 재구성된 메시지가 target_type 을 잃어 BuildRetryJob 이
+// category 를 article 로 떨어뜨리고, gate_skip_count 부재로 이슈 #540 의 재큐 예산이
+// 무력화된다.
+func TestZSetIntake_HandleOne_ForwardsAllHeaders(t *testing.T) {
+	pusher := &stubPusher{}
+	intake, _ := newIntake(t, pusher)
+
+	headers := map[string]string{
+		"priority":        "1",
+		"target_type":     "category",
+		"crawler":         "yna",
+		"timeout_ms":      "30000",
+		"gate_skip_count": "2",
+	}
+	msg := makeIntakeMsg(t,
+		core.RawContentRef{ID: "raw-cat", URL: "https://example.com/list", SourceInfo: core.SourceInfo{Name: "src"}},
+		headers,
+	)
+	intake.HandleOneForTest(context.Background(), msg)
+
+	calls := pusher.Calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, headers, calls[0].Headers, "모든 헤더가 ZSET 으로 전달되어야 한다")
 }

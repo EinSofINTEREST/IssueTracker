@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,6 +18,44 @@ import (
 	"issuetracker/pkg/queue"
 	pkgredis "issuetracker/pkg/redis"
 )
+
+// newPriorityZSetTestQueueWithPrefix 는 newPriorityZSetTestQueue 와 같되 EntryKeyPrefix 를
+// 함께 반환합니다 — 테스트가 내부 키(예: 헤더 키)를 직접 조작해야 할 때 씁니다 (이슈 #561).
+func newPriorityZSetTestQueueWithPrefix(t *testing.T, suffix string) (*queue.PriorityZSetQueue, *pkgredis.Client, string) {
+	t.Helper()
+	cfg, err := storagecfg.LoadRedis()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := pkgredis.New(ctx, cfg)
+	if err != nil {
+		t.Skipf("Redis not available (%v) — skipping integration test", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	prefix := fmt.Sprintf("test:priority-zset:%s:%d:", suffix, time.Now().UnixNano())
+	entryPrefix := prefix + "entry:"
+	q, err := queue.NewPriorityZSetQueue(client.Raw(), queue.PriorityZSetConfig{
+		ZSetKey:        prefix + "queue",
+		EntryKeyPrefix: entryPrefix,
+		MaxSize:        100,
+		EntryTTL:       1 * time.Minute,
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		client.Raw().Del(ctx, prefix+"queue")
+		for _, pat := range []string{entryPrefix + "*", "hdr:" + entryPrefix + "*"} {
+			if keys, err := client.Raw().Keys(ctx, pat).Result(); err == nil && len(keys) > 0 {
+				client.Raw().Del(ctx, keys...)
+			}
+		}
+	})
+	return q, client, entryPrefix
+}
 
 // newPriorityZSetTestQueue 는 격리된 ZSetKey 로 PriorityZSetQueue 를 생성합니다.
 // Redis 미가용 시 t.Skip — 통합 테스트.
@@ -326,4 +365,205 @@ func TestPriorityZSetConsumer_FetchMessage_CtxCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("FetchMessage did not return after ctx cancel")
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 헤더 보존 (이슈 #561)
+//
+// ZSET 경유 메시지가 priority 하나만 갖게 되면 BuildRetryJob 이 target_type 부재로
+// category 를 article 로 떨어뜨리고, parseGateSkipCount 가 0 을 반환해 이슈 #540 의
+// 재큐 예산이 무력화된다. 아래 테스트가 그 회귀를 막는다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestPushWithHeaders_HeadersSurvivePop(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-pop")
+	ctx := context.Background()
+
+	headers := map[string]string{
+		"target_type":     "category",
+		"crawler":         "yna",
+		"timeout_ms":      "30000",
+		"gate_skip_count": "2",
+	}
+	require.NoError(t, q.PushWithHeaders(ctx, 1, "cat-1", []byte(`{"id":"cat-1"}`), headers))
+
+	res, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	assert.Equal(t, "cat-1", res.ID)
+	assert.Equal(t, headers, res.Headers, "push 한 헤더가 그대로 복원되어야 한다")
+}
+
+func TestPop_WithoutHeaders_ReturnsNilHeaders(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-absent")
+	ctx := context.Background()
+
+	// 구 버전이 남긴 entry 와 동일한 형태 — 헤더 키가 아예 없다.
+	require.NoError(t, q.Push(ctx, 2, "legacy-1", []byte("payload")))
+
+	res, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Nil(t, res.Headers, "헤더 부재는 정상 경로 — 에러가 아니라 nil")
+}
+
+func TestPushWithHeaders_RepushWithoutHeaders_ClearsStale(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-stale")
+	ctx := context.Background()
+
+	require.NoError(t, q.PushWithHeaders(ctx, 2, "same", []byte("first"),
+		map[string]string{"target_type": "category"}))
+	// 같은 id 로 헤더 없이 재push — 이전 사이클 헤더가 되살아나면 안 된다.
+	require.NoError(t, q.Push(ctx, 2, "same", []byte("second")))
+
+	res, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, []byte("second"), res.Payload)
+	assert.Nil(t, res.Headers, "헤더 없이 재push 하면 이전 헤더가 남아서는 안 된다")
+}
+
+func TestFetchMessage_RestoresHeaders_PriorityFromScore(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-fetch")
+	ctx := context.Background()
+
+	// push 헤더의 priority 는 일부러 틀린 값 — score 가 단일 출처여야 한다.
+	require.NoError(t, q.PushWithHeaders(ctx, 1, "c-1", []byte(`{"id":"c-1"}`),
+		map[string]string{"target_type": "category", "priority": "3"}))
+
+	c := queue.NewPriorityZSetConsumer(q, "parser.zset", 2*time.Second)
+	msg, err := c.FetchMessage(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+
+	assert.Equal(t, "category", msg.Headers["target_type"], "target_type 이 복원되어야 한다")
+	assert.Equal(t, "1", msg.Headers["priority"], "priority 는 ZSET score 기준으로 덮어써야 한다")
+}
+
+// TestPop_StaleHeaderFromOtherCycle_Discarded 는 payload 와 짝이 맞지 않는 헤더를
+// pop 이 버리는지 검증합니다 (이슈 #561, Copilot 피드백).
+//
+// 롤링 업그레이드 중 구 버전의 Push 는 :hdr 를 건드리지 않으므로, 같은 id 를 구 버전이
+// 재push 하면 payload 만 갱신되고 이전 사이클 헤더가 남는다. 그 상태로 헤더를 복원하면
+// target_type / gate_skip_count 가 잘못 붙는다.
+func TestPop_StaleHeaderFromOtherCycle_Discarded(t *testing.T) {
+	q, client := newPriorityZSetTestQueue(t, "hdr-stale-cycle")
+	ctx := context.Background()
+
+	// 신 버전이 헤더와 함께 push.
+	require.NoError(t, q.PushWithHeaders(ctx, 2, "dup", []byte(`{"cycle":1}`),
+		map[string]string{"target_type": "category"}))
+
+	// 구 버전의 Push 를 흉내낸다 — payload 만 덮어쓰고 :hdr 는 그대로 둔다.
+	// prefix 가 시각 기반이라 SCAN 으로 entry 키를 찾는다 (기존 테스트와 동일 방식).
+	var entryKey string
+	iter := client.Raw().Scan(ctx, 0, "test:priority-zset:hdr-stale-cycle:*:entry:dup", 0).Iterator()
+	for iter.Next(ctx) {
+		entryKey = iter.Val()
+	}
+	require.NoError(t, iter.Err())
+	require.NotEmpty(t, entryKey, "entry 키를 찾지 못했다")
+	require.NoError(t, client.Raw().Set(ctx, entryKey, []byte(`{"cycle":2}`), time.Minute).Err())
+
+	res, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	assert.Equal(t, []byte(`{"cycle":2}`), res.Payload)
+	assert.Nil(t, res.Headers,
+		"다른 사이클 payload 에 붙은 헤더는 버려야 한다 — 롤링 업그레이드 자가 검출")
+}
+
+// TestNewPriorityZSetQueue_OverlappingKeyPrefixes_Rejected 는 entry/header 키 공간이
+// 겹치는 설정을 생성 시점에 거부하는지 검증합니다 (이슈 #561, CodeRabbit 피드백).
+//
+// 겹치면 id 를 고르는 것만으로 서로의 데이터를 덮어쓸 수 있다 — 예를 들어 header 접두사가
+// entry 접두사의 하위라면 그 차이를 그대로 id 로 넘기는 payload push 가 header 키를 친다.
+func TestNewPriorityZSetQueue_OverlappingKeyPrefixes_Rejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		entry  string
+		header string
+	}{
+		{name: "header 가 entry 의 하위", entry: "e:", header: "e:hdr:"},
+		{name: "entry 가 header 의 하위", entry: "h:x:", header: "h:"},
+		{name: "동일", entry: "same:", header: "same:"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := queue.NewPriorityZSetQueue(&goredis.Client{}, queue.PriorityZSetConfig{
+				ZSetKey:         "z",
+				EntryKeyPrefix:  tt.entry,
+				HeaderKeyPrefix: tt.header,
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, queue.ErrPriorityZSetInvalidConfig)
+		})
+	}
+}
+
+// TestPushWithHeaders_HeaderKeyDoesNotCollideWithPayload 는 헤더 키가 entry 키 공간 밖에
+// 있는지 확인합니다 (이슈 #561).
+//
+// 기본 도출이 entry 접두사 뒤가 아니라 앞에 marker 를 붙이므로, 헤더 키로 쓰이는 문자열을
+// 그대로 id 로 넘겨 payload 를 push 해도 서로를 덮어쓰지 않는다.
+func TestPushWithHeaders_HeaderKeyDoesNotCollideWithPayload(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-collide")
+	ctx := context.Background()
+
+	// "a" 의 헤더와, id 가 "a:hdr" 인 payload 를 함께 넣는다.
+	// 구 구현 (entry+id+":hdr") 에서는 두 키가 같은 문자열이었다.
+	require.NoError(t, q.PushWithHeaders(ctx, 1, "a", []byte(`{"n":"a"}`),
+		map[string]string{"target_type": "category"}))
+	require.NoError(t, q.Push(ctx, 1, "a:hdr", []byte(`{"n":"a-hdr"}`)))
+
+	got := map[string]*queue.PopResult{}
+	for i := 0; i < 2; i++ {
+		res, err := q.Pop(ctx, 2*time.Second)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		got[res.ID] = res
+	}
+
+	require.Contains(t, got, "a")
+	require.Contains(t, got, "a:hdr")
+	assert.Equal(t, []byte(`{"n":"a"}`), got["a"].Payload)
+	assert.Equal(t, "category", got["a"].Headers["target_type"])
+	assert.Equal(t, []byte(`{"n":"a-hdr"}`), got["a:hdr"].Payload,
+		"다른 항목의 헤더가 payload 를 덮어써서는 안 된다")
+}
+
+// TestPop_CorruptHeader_DeliversPayloadWithoutBlocking 는 헤더가 디코드 불가일 때
+// 큐가 막히지 않는지 검증합니다 (이슈 #561, CodeRabbit 피드백).
+//
+// 디코드 실패는 결정적이라 member 를 ZSET 으로 되돌리면 다음 BZPOPMIN 이 같은 항목을
+// 다시 집는다. 그 member 가 가장 낮은 score 이므로 큐 머리가 entry TTL (기본 24h) 까지
+// 막힌다. 따라서 헤더만 버리고 payload 는 전달해야 한다.
+func TestPop_CorruptHeader_DeliversPayloadWithoutBlocking(t *testing.T) {
+	q, client, entryPrefix := newPriorityZSetTestQueueWithPrefix(t, "hdr-corrupt")
+	ctx := context.Background()
+
+	require.NoError(t, q.PushWithHeaders(ctx, 1, "broken", []byte(`{"n":"broken"}`),
+		map[string]string{"target_type": "category"}))
+
+	// 헤더 값을 JSON 이 아닌 바이트로 덮어써 디코드가 반드시 실패하게 만든다.
+	// 헤더 키는 기본 도출 규칙 ("hdr:" + EntryKeyPrefix + id) 을 그대로 따른다.
+	hdrKey := "hdr:" + entryPrefix + "broken"
+	require.NoError(t, client.Raw().Set(ctx, hdrKey, []byte("{not-json"), time.Minute).Err())
+
+	// 뒤따르는 정상 항목 — 앞의 손상 항목이 큐를 막으면 이 항목에 도달하지 못한다.
+	require.NoError(t, q.Push(ctx, 2, "healthy", []byte(`{"n":"healthy"}`)))
+
+	first, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err, "디코드 실패가 Pop 을 에러로 만들면 안 된다")
+	require.NotNil(t, first)
+	assert.Equal(t, "broken", first.ID)
+	assert.Equal(t, []byte(`{"n":"broken"}`), first.Payload, "payload 는 그대로 전달")
+	assert.Nil(t, first.Headers, "디코드 불가 헤더는 버린다")
+
+	second, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	assert.Equal(t, "healthy", second.ID, "손상 항목이 큐 머리를 막지 않아야 한다")
 }

@@ -31,15 +31,27 @@ type stubPushCall struct {
 	Priority int
 	ID       string
 	Payload  []byte
+	Headers  map[string]string
 }
 
-func (s *stubPusher) Push(_ context.Context, priority int, id string, payload []byte) error {
+func (s *stubPusher) Push(ctx context.Context, priority int, id string, payload []byte) error {
+	return s.PushWithHeaders(ctx, priority, id, payload, nil)
+}
+
+func (s *stubPusher) PushWithHeaders(_ context.Context, priority int, id string, payload []byte, headers map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failErr != nil {
 		return s.failErr
 	}
-	s.calls = append(s.calls, stubPushCall{Priority: priority, ID: id, Payload: append([]byte(nil), payload...)})
+	var hdr map[string]string
+	if headers != nil {
+		hdr = make(map[string]string, len(headers))
+		for k, v := range headers {
+			hdr[k] = v
+		}
+	}
+	s.calls = append(s.calls, stubPushCall{Priority: priority, ID: id, Payload: append([]byte(nil), payload...), Headers: hdr})
 	return nil
 }
 
@@ -74,7 +86,7 @@ func (c *stubConsumer) Closed() bool { return atomic.LoadInt32(&c.closed) == 1 }
 
 func (c *stubConsumer) CommitCount() int32 { return atomic.LoadInt32(&c.commits) }
 
-func newIntake(t *testing.T, pusher queue.PriorityPusher) (*worker.ZSetIntake, *stubConsumer) {
+func newIntake(t *testing.T, pusher queue.PriorityHeaderPusher) (*worker.ZSetIntake, *stubConsumer) {
 	t.Helper()
 	log := logger.New(logger.Config{Level: "error"})
 	cons := &stubConsumer{}
