@@ -89,8 +89,8 @@ us.Register(registry, core.DefaultConfig(), rawSvc, crawlerProducer, log)
 - [`internal/processor/fetcher/handler`](handler.md) — Registry 등록 대상
 - [`internal/processor/fetcher/implementation/{goquery,chromedp}`](implementation.md) — 실제 fetcher
 - [`internal/storage/service`](../../storage/service.md) — `RawContentService` (Claim Check 저장)
-- [`pkg/queue`](../../pkg/queue.md) — Kafka producer
-- [`pkg/links`](../../pkg/links.md) — URL normalize / link extract
+- [`pkg/queue`](../../../pkg/queue.md) — Kafka producer
+- [`pkg/links`](../../../pkg/links.md) — URL normalize / link extract
 
 <br>
 
