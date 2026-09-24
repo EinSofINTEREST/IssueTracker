@@ -54,6 +54,8 @@
 - [internal/processor/precheck.md](../internal/processor/precheck.md) — URL 처리 가부 게이트 (이슈 #425)
 - [internal/scheduler.md](../internal/scheduler.md) — seed job 발행
 - [pkg/agent/claude.md](../pkg/agent/claude.md) — claudegen 컨테이너 (parser_llmgen + enrich LLM 백엔드)
+- [pkg/agent/codex.md](../pkg/agent/codex.md) — codex 컨테이너 (두 번째 backend, 기본 비활성)
+- [pkg/agent/README.md](../pkg/agent/README.md) — **backend 선택 정책** (`PARSER/ENRICH_AGENT_BACKEND`)
 
 <br>
 
@@ -64,7 +66,9 @@
 | `buildLLMProvider()` | `LLM_ENABLED` + API key 검증 → [`pkg/llm`](../../../pkg/llm/) chain provider 구성 | nil 반환 (LLM 비활성) |
 | `buildLLMGenerator()` | provider nil 이면 nil — 아니면 [`llmgen.New`](../../../internal/processor/parser/rule/llmgen/) | nil 허용 |
 | `buildRefiner()` | `REFINEMENT_ENABLED` + provider 옵션 결합 → [`refiner.New`](../../../internal/processor/parser/rule/refiner/) | nil 반환 (정밀화 비활성) |
-| `buildClaudegenPool()` | claudegen worker pool (parser llmgen + enrich 공용 백엔드, 이슈 #458/#460) | nil 반환 (LLM 비활성 시) |
+| `startClaudegenPool()` | stage 별 claude pool 생성 + Start (이슈 #530). `LLM_EXTRACTOR=claude-code` + stage 가드 하에서만 호출 | nil 반환 → 해당 backend 사용 불가 |
+| `startCodexPool()` | stage 별 codex pool 생성 + Start (이슈 #534). `CODEX_AGENT_ENABLED=true` + stage 가드 하에서만 호출. **MCP 파라미터 없음** — codex 미지원 (이슈 #585) | nil 반환 → 해당 backend 사용 불가 |
+| `selectAgentPool()` | stage 의 `*_AGENT_BACKEND` 로 사용할 풀 결정 (이슈 #534). 선택한 backend 의 풀이 없어도 **다른 backend 로 대체하지 않음** | nil 반환 → 해당 stage 는 agent 경로 없이 동작 |
 | `buildEnricherROMCPConfig()` | `ENRICHER_DB_RO_*` env → MCP postgres tool 구성 (이슈 #472) | nil 허용 (env 미설정 시 MCP 비활성) |
 
 이슈 #482 (PR #483) 머지 후 부팅 시 `parser_rules` 시드 검증 (`verifyParsingRulesSeeded` / `rule.VerifySeeded`) 은 **제거됨** — DB-driven 메타데이터 관리 신뢰. parser_rules row 부재는 호출별 `ErrNoRule` 진단으로 위임.
@@ -148,8 +152,10 @@ SIGINT/SIGTERM 수신 시:
    - `llmGen.Stop(shutdownCtx)` — in-flight LLM call drain (이슈 #149)
    - `pathRefiner.Stop(shutdownCtx)` — refiner cycle drain (PR #191)
    - `cleaner.Stop()` — cleanup cron
-4. cleanupCtx (`CLAUDE_CODE_SHUTDOWN_TIMEOUT`, default 10s) 로 claudegen 정리 — shutdownCtx 와 분리하여 stages.Stop 이 timeout 으로 cancel 되더라도 `docker rm -f` 가 반드시 시도되도록 보장:
-   - `claudegenPool.Stop(cleanupCtx)` — claudegen 컨테이너 정리 (이슈 #458)
+4. cleanupCtx (`CLAUDE_CODE_SHUTDOWN_TIMEOUT`, default 10s) 로 agent pool 정리 — shutdownCtx 와 분리하여 stages.Stop 이 timeout 으로 cancel 되더라도 `docker rm -f` 가 반드시 시도되도록 보장:
+   - **생성된 모든 풀** 을 정리한다 (이슈 #534) — backend 선택에서 탈락한 풀도 컨테이너는 떠 있다.
+     두 backend 가 stage 이름 (`parser` / `enrich`) 을 공유하므로 로그의 `agent_backend` 필드로 구별한다
+   - 풀마다 독립 cleanupCtx — 앞 풀의 timeout 이 뒤 풀의 정리를 소진하지 않도록
 5. `defer` 체인이 Kafka producer/consumer, redis, pgpool 닫음
 
 <br>
@@ -173,4 +179,5 @@ SIGINT/SIGTERM 수신 시:
 - 이슈 #474 — claudegen 컨테이너 user non-root
 - 이슈 #477 — ParsePage 결과 index-only 자동 강등 wiring
 - 이슈 #480 — LLM auto-blacklist mode 분기
+- **이슈 #462 / #534 — codex backend 도입 + stage 별 agent backend 선택 정책**
 - 이슈 #482 — `verifyParsingRulesSeeded` 폐기 (부팅 시 DB seed 검증 제거)
