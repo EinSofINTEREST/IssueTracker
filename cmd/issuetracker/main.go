@@ -103,6 +103,11 @@ func main() {
 		log.WithError(err).Fatal("failed to load enrich cost config")
 	}
 
+	publisherCacheCfg, err := runtimecfg.LoadPublisherCache()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load publisher cache config")
+	}
+
 	stagesCfg, err := runtimecfg.LoadStages()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load stages config")
@@ -252,6 +257,16 @@ func main() {
 	// DLQ 발행 관측 (이슈 #543) — 세 publisher 가 같은 collector 를 공유하여 origin 라벨로 구분.
 	dlqMetrics := bus.NewDLQMetrics(metricsRegistry)
 	jobPublisher.SetDLQMetrics(dlqMetrics)
+
+	// 이슈 #507 — 중복 publish 검사 캐시. category 재수집마다 같은 article 링크에 대해
+	// Redis SETNX 를 반복하는 낭비를 줄인다. TTL 0 이면 비활성 (기존 동작).
+	jobPublisher.SetSeenCache(publisherCacheCfg.SeenCacheSize, publisherCacheCfg.SeenCacheTTL)
+	if publisherCacheCfg.SeenCacheTTL > 0 {
+		log.WithFields(map[string]interface{}{
+			"size": publisherCacheCfg.SeenCacheSize,
+			"ttl":  publisherCacheCfg.SeenCacheTTL.String(),
+		}).Info("publisher seen-cache enabled")
+	}
 
 	// rule.Parser: parser_rules 테이블 기반 단일 파서 엔진.
 	// 사이트별 NaverParser/CNNParser/... 를 대체 — 모든 사이트가 본 단일 인스턴스를 공유.

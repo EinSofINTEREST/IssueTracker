@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"issuetracker/internal/processor/fetcher/core"
 	"issuetracker/pkg/links"
@@ -85,6 +86,21 @@ type Publisher struct {
 
 	// dlqMetrics: DLQ 발행 관측 (이슈 #543). nil 허용 — Record 가 noop.
 	dlqMetrics atomic.Pointer[DLQMetrics]
+
+	// seenCache: 직전에 이미 파이프라인에 있던 URL 의 단기 기억 (이슈 #507).
+	// nil 허용 — nil 이면 모든 URL 이 Redis 왕복을 거친다 (기존 동작).
+	seenCache *seenCache
+}
+
+// SetSeenCache 는 중복 publish 검사용 단기 캐시를 설정합니다 (이슈 #507).
+//
+// ttl 이 0 이하면 캐시가 비활성 — 기존 동작(매 URL Redis 왕복)을 그대로 유지합니다.
+// size 가 0 이하면 DefaultSeenCacheSize.
+func (p *Publisher) SetSeenCache(size int, ttl time.Duration) {
+	if p == nil {
+		return
+	}
+	p.seenCache = newSeenCache(size, ttl)
 }
 
 // SetDLQMetrics 는 DLQ 발행 collector 를 주입합니다 (이슈 #543).
