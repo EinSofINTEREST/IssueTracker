@@ -30,10 +30,20 @@ func TestRunSession_WritesFilesAndReturnsStdout(t *testing.T) {
 		// exec 시점에는 세션 디렉토리가 아직 살아 있다 (RunSession 이 defer 로 지우기 전).
 		_, workDir, _, _ := runner.started()
 		entries, err := os.ReadDir(workDir)
-		if err != nil || len(entries) != 1 {
+		if err != nil {
 			return
 		}
-		sessionDir = filepath.Join(workDir, entries[0].Name())
+		// workDir 에는 세션 디렉토리 외에 .owner 파일도 있다 (이슈 #656) —
+		// 개수로 고르지 않고 디렉토리만 집는다.
+		for _, e := range entries {
+			if e.IsDir() {
+				sessionDir = filepath.Join(workDir, e.Name())
+				break
+			}
+		}
+		if sessionDir == "" {
+			return
+		}
 		files, err := os.ReadDir(sessionDir)
 		if err != nil {
 			return
@@ -52,11 +62,12 @@ func TestRunSession_WritesFilesAndReturnsStdout(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "raw output, not JSON", out, "stdout 은 가공 없이 그대로 반환된다")
 
+	// sessionDir 을 먼저 확인한다 — 콜백이 조용히 early return 하면 seen 도 비므로,
+	// 이걸 나중에 보면 "파일 목록이 다르다" 는 엉뚱한 메시지가 먼저 뜬다.
+	require.NotEmpty(t, sessionDir, "exec 시점에 workDir 안에서 세션 디렉토리를 찾지 못했다")
+
 	sort.Strings(seen)
 	assert.Equal(t, []string{"article.txt", "context.json"}, seen)
-
-	// 종료 후 세션 디렉토리는 정리된다.
-	require.NotEmpty(t, sessionDir)
 	_, statErr := os.Stat(sessionDir)
 	assert.True(t, os.IsNotExist(statErr), "세션 디렉토리는 호출 종료 시 삭제된다")
 }
