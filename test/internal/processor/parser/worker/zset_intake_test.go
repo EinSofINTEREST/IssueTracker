@@ -21,7 +21,7 @@ import (
 	"issuetracker/pkg/queue"
 )
 
-// stubPusher 는 in-memory PriorityPusher mock. Push 호출 인자를 캡쳐 + failErr 로 실패 시뮬레이션.
+// stubPusher 는 in-memory PriorityHeaderPusher mock. Push 호출 인자를 캡쳐 + failErr 로 실패 시뮬레이션.
 type stubPusher struct {
 	mu       sync.Mutex
 	calls    []stubPushCall
@@ -33,9 +33,14 @@ type stubPushCall struct {
 	Priority int
 	ID       string
 	Payload  []byte
+	Headers  map[string]string
 }
 
-func (s *stubPusher) Push(_ context.Context, priority int, id string, payload []byte) error {
+func (s *stubPusher) Push(ctx context.Context, priority int, id string, payload []byte) error {
+	return s.PushWithHeaders(ctx, priority, id, payload, nil)
+}
+
+func (s *stubPusher) PushWithHeaders(_ context.Context, priority int, id string, payload []byte, headers map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failErr != nil {
@@ -45,10 +50,18 @@ func (s *stubPusher) Push(_ context.Context, priority int, id string, payload []
 		}
 		return err
 	}
+	var hdr map[string]string
+	if headers != nil {
+		hdr = make(map[string]string, len(headers))
+		for k, v := range headers {
+			hdr[k] = v
+		}
+	}
 	s.calls = append(s.calls, stubPushCall{
 		Priority: priority,
 		ID:       id,
 		Payload:  append([]byte(nil), payload...),
+		Headers:  hdr,
 	})
 	return nil
 }

@@ -8,7 +8,7 @@
 //  1. consumer.FetchMessage — Kafka 에서 1건 fetch
 //  2. ProcessingMessage / ContentRef.ID 추출 (ZSET member key)
 //  3. priority header 추출 (1/2/3, 잘못된 값은 normal)
-//  4. zsetQueue.Push(priority, id, payload)
+//  4. zsetQueue.PushWithHeaders(priority, id, payload, headers)
 //  5. consumer.CommitMessages — Kafka commit
 //
 // 실패 정책 (Parser ZSetIntake 와 동일):
@@ -32,11 +32,11 @@ import (
 
 // ZSetIntake 는 Kafka → ZSET 인입 단계의 컴포넌트입니다.
 //
-// zsetQueue 는 queue.PriorityPusher 인터페이스 — *queue.PriorityZSetQueue 가 자동 만족하며,
+// zsetQueue 는 queue.PriorityHeaderPusher 인터페이스 — *queue.PriorityZSetQueue 가 자동 만족하며,
 // 단위 테스트에서는 in-memory stub 으로 교체 가능.
 type ZSetIntake struct {
 	consumer  bus.Consumer
-	zsetQueue queue.PriorityPusher
+	zsetQueue queue.PriorityHeaderPusher
 	log       *logger.Logger
 
 	// wg 는 Run goroutine 의 종료를 Stop 이 기다리기 위한 것입니다 (이슈 #529).
@@ -47,7 +47,7 @@ type ZSetIntake struct {
 // NewZSetIntake 는 ZSetIntake 인스턴스를 생성합니다.
 //
 // 모든 인자 nil 불허 — wiring 단계에서 사전 검증. nil 시 nil 반환.
-func NewZSetIntake(consumer bus.Consumer, zsetQueue queue.PriorityPusher, log *logger.Logger) *ZSetIntake {
+func NewZSetIntake(consumer bus.Consumer, zsetQueue queue.PriorityHeaderPusher, log *logger.Logger) *ZSetIntake {
 	if consumer == nil || zsetQueue == nil || log == nil {
 		return nil
 	}
@@ -174,7 +174,7 @@ func (i *ZSetIntake) handleOne(ctx context.Context, msg *queue.Message) {
 
 	priority := queue.PriorityFromHeader(msg.Headers)
 
-	if err := i.zsetQueue.Push(ctx, priority, ref.ID, msg.Value); err != nil {
+	if err := i.zsetQueue.PushWithHeaders(ctx, priority, ref.ID, msg.Value, msg.Headers); err != nil {
 		log.WithError(err).WithField("ref_id", ref.ID).Warn("intake zset push failed, skipping commit for redeliver")
 		return
 	}
