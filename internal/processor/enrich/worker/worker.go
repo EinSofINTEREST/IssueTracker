@@ -72,6 +72,10 @@ type Worker struct {
 	retryScheduler bus.RetryScheduler
 	// gateSkipScheduler: gate-skip 재큐 전용 (이슈 #540). 모드 무관하게 주입된다.
 	gateSkipScheduler bus.RetryScheduler
+
+	// costGuard 는 enrichment 호출 비용 안전장치입니다 (이슈 #456).
+	// nil 허용 — nil 이면 항상 허용 (기존 동작).
+	costGuard *CostGuard
 }
 
 // NewWorker 는 새로운 Worker 를 생성합니다.
@@ -132,6 +136,16 @@ func NewWorker(
 // 곧 ack 이라 commit skip 으로는 redeliver 불가 — 본 setter 로 RetryScheduler 를 반드시 주입.
 //
 // Start 호출 전 wiring 단계에서 1회 설정.
+// SetCostGuard 는 enrichment 비용 가드를 주입합니다 (이슈 #456).
+//
+// 미주입 시 nil — 모든 메시지가 enrichment 를 수행합니다 (기존 동작).
+func (w *Worker) SetCostGuard(g *CostGuard) {
+	if w == nil {
+		return
+	}
+	w.costGuard = g
+}
+
 func (w *Worker) SetRetryScheduler(rs bus.RetryScheduler) {
 	w.retryScheduler = rs
 }
@@ -349,15 +363,31 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 		defer release()
 	}
 
-	// 이슈 #447 / #448 / #449 / #450 — Content 조회 + extractor + cross-verify + context + score + DB upsert + facts 첨부.
-	// 본 단계 어떤 실패도 forward 를 막지 않음 — pipeline 진행이 enrichment 보다 우선.
-	content, facts := w.runExtraction(ctx, &pm, &ref)
-	if facts != nil {
-		w.runVerification(ctx, &pm, &ref, content, facts)
-		w.runContextEnrichment(ctx, &pm, &ref, content, facts)
-		w.runScoring(ctx, &pm, &ref, content, facts)
-		w.persistEnriched(ctx, &pm, &ref, facts)
-		w.attachFacts(&pm, facts)
+	// 이슈 #456 — 비용 가드. 일일 한도 초과 또는 backlog 임계 초과면 enrichment 만 건너뛴다.
+	//
+	// **forward 는 그대로 진행한다** — 가드가 파이프라인을 막으면 비용을 아끼려다 데이터가
+	// 멈춘다. facts 없이 발행되고, 다음 회차에 다시 enrich 될 기회는 없지만 메시지는 흐른다.
+	allowed, skipReason := w.costGuard.Allow(ctx)
+	if !allowed {
+		// per-message 는 Debug — 한도 초과 후 입력 1건당 1줄이 쏟아진다.
+		// 운영자가 알아야 할 "차단 시작/해제" 는 CostGuard 가 상태 전이 시 1회만
+		// WARN/INFO 로 남긴다 (CodeRabbit 피드백). 건수는 metric 이 센다.
+		log.WithFields(map[string]interface{}{
+			"job_id": pm.ID,
+			"ref_id": ref.ID,
+			"reason": string(skipReason),
+		}).Debug("enrichment skipped by cost guard, forwarding without facts")
+	} else {
+		// 이슈 #447 / #448 / #449 / #450 — Content 조회 + extractor + cross-verify + context + score + DB upsert + facts 첨부.
+		// 본 단계 어떤 실패도 forward 를 막지 않음 — pipeline 진행이 enrichment 보다 우선.
+		content, facts := w.runExtraction(ctx, &pm, &ref)
+		if facts != nil {
+			w.runVerification(ctx, &pm, &ref, content, facts)
+			w.runContextEnrichment(ctx, &pm, &ref, content, facts)
+			w.runScoring(ctx, &pm, &ref, content, facts)
+			w.persistEnriched(ctx, &pm, &ref, facts)
+			w.attachFacts(&pm, facts)
+		}
 	}
 
 	if err := w.publishEnriched(ctx, &ref, &pm, msg); err != nil {

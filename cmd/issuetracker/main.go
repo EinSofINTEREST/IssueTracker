@@ -98,6 +98,11 @@ func main() {
 	// Stage toggle (이슈 #443) — env 로 stage 별 활성/비활성 제어. 모두 true 가 default
 	// 이므로 env 미설정 시 동작 100% 보존. fetcher-only / parser-only / validate-only
 	// 노드를 같은 바이너리로 띄울 수 있도록 stage Start 호출만 gating.
+	enrichCostCfg, err := runtimecfg.LoadEnrichCost()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load enrich cost config")
+	}
+
 	stagesCfg, err := runtimecfg.LoadStages()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load stages config")
@@ -1189,6 +1194,9 @@ func main() {
 		redisClientShared != nil
 	var enrichConsumer bus.Consumer = enrichKafkaConsumer
 	var enrichZSetIntake *enrichWorkerPkg.ZSetIntake
+	// 이슈 #456 — 비용 가드의 backlog 체커가 ZSET 길이를 읽어야 해 블록 밖으로 뺀다.
+	// ZSET 모드에서는 intake 가 Kafka 를 즉시 commit 하므로 Kafka lag 이 0 에 가깝다.
+	var enrichZSetQueue *queue.PriorityZSetQueue
 	if enrichPriorityQueueEnabled {
 		zsetCfg := queue.PriorityZSetConfig{
 			ZSetKey:        envOrDefault("ENRICH_ZSET_QUEUE_KEY", "enrich:zset:queue"),
@@ -1196,10 +1204,11 @@ func main() {
 			MaxSize:        int64(envIntOrDefault("ENRICH_ZSET_MAX_SIZE", int(queue.PriorityZSetMaxSize))),
 			EntryTTL:       envDurationOrDefault("ENRICH_ZSET_ENTRY_TTL", queue.PriorityZSetEntryTTL),
 		}
-		enrichZSetQueue, qerr := queue.NewPriorityZSetQueue(redisClientShared.Raw(), zsetCfg)
+		q, qerr := queue.NewPriorityZSetQueue(redisClientShared.Raw(), zsetCfg)
 		if qerr != nil {
 			log.WithError(qerr).Fatal("failed to construct enrich priority zset queue")
 		}
+		enrichZSetQueue = q
 		zsetConsumer := queue.NewPriorityZSetConsumer(enrichZSetQueue, "enrich:zset", envDurationOrDefault("ENRICH_ZSET_POP_TIMEOUT", time.Second))
 		enrichConsumer = zsetConsumer
 		enrichZSetIntake = enrichWorkerPkg.NewZSetIntake(enrichKafkaConsumer, enrichZSetQueue, log)
@@ -1289,12 +1298,67 @@ func main() {
 		log.Info("enrich scorer: noop (claudegen pool or prompt loader unavailable)")
 	}
 
+	// 이슈 #456 — 단계별 토글. 비용 spike 시 운영자가 특정 단계만 즉시 끌 수 있게 한다.
+	// 전체 stage 토글 (STAGES_ENRICH_ENABLED) 보다 세밀한 제어이며, 끈 단계는 Noop 으로
+	// 교체되므로 worker 의 호출 흐름은 그대로 유지된다.
+	if !enrichCostCfg.ExtractEnabled {
+		enrichExtractor = enrichcore.NewNoopExtractor()
+		log.Warn("enrich extract stage disabled by ENRICH_EXTRACT_ENABLED=false")
+	}
+	if !enrichCostCfg.VerifyEnabled {
+		enrichVerifier = enrichcore.NewNoopVerifier()
+		log.Warn("enrich verify stage disabled by ENRICH_VERIFY_ENABLED=false")
+	}
+	if !enrichCostCfg.ContextEnabled {
+		enrichContextualizer = enrichcore.NewNoopContextualizer()
+		log.Warn("enrich context stage disabled by ENRICH_CONTEXT_ENABLED=false")
+	}
+	if !enrichCostCfg.ScoreEnabled {
+		enrichScorer = enrichcore.NewNoopScorer()
+		log.Warn("enrich score stage disabled by ENRICH_SCORE_ENABLED=false")
+	}
+
 	// enriched_contents repository — pgxpool 사용. nil 허용 (Worker 가 nil 시 DB write skip).
 	enrichedRepo := decorator.WrapEnrichedContentWithTimeout(
 		pgstore.NewEnrichedContentRepository(pool, log), dbCfg.QueryTimeout,
 	)
 
 	enrichW := enrichWorkerPkg.NewWorker(enrichConsumer, enrichPublisher, contentSvc, enrichExtractor, enrichVerifier, enrichContextualizer, enrichScorer, enrichedRepo, enrichGate, workerCountsCfg.Enrich)
+
+	// 이슈 #456 — 비용 가드. 일일 한도 / backlog 임계 초과 시 enrichment 만 건너뛰고
+	// forward 는 그대로 진행한다 (forward-first 정책 유지).
+	if enrichCostCfg.DailyCallLimit > 0 || enrichCostCfg.MaxBacklog > 0 {
+		// backlog 측정 대상은 인입 모드에 따라 다르다 (CodeRabbit 피드백).
+		//
+		// ZSET 모드에서는 intake 가 Kafka 메시지를 ZSET 으로 옮기고 즉시 commit 하므로
+		// 처리 대기 물량이 ZSET 에 쌓여도 Kafka lag 은 0 에 가깝다. Kafka 기준으로 재면
+		// ENRICH_MAX_BACKLOG 가 영영 발동하지 않는다.
+		var enrichBacklogChecker enrichWorkerPkg.BacklogChecker
+		if enrichCostCfg.MaxBacklog > 0 {
+			if enrichZSetQueue != nil {
+				enrichBacklogChecker = enrichWorkerPkg.NewZSetBacklogChecker(enrichZSetQueue)
+				log.Info("enrich backlog source: priority zset (ZCARD)")
+			} else {
+				enrichBacklogChecker = queue.NewBacklogChecker(crawlerKafkaCfg.Brokers, schedulerCfg.BacklogCheckTimeout)
+				log.Info("enrich backlog source: kafka consumer lag")
+			}
+		}
+		enrichW.SetCostGuard(enrichWorkerPkg.NewCostGuard(
+			enrichWorkerPkg.CostGuardConfig{
+				DailyCallLimit: enrichCostCfg.DailyCallLimit,
+				MaxBacklog:     enrichCostCfg.MaxBacklog,
+				BacklogTopic:   queue.TopicValidated,
+				BacklogGroup:   queue.GroupEnrichers,
+			},
+			enrichBacklogChecker,
+			enrichWorkerPkg.NewCostMetrics(metricsRegistry),
+			log,
+		))
+		log.WithFields(map[string]interface{}{
+			"daily_call_limit": enrichCostCfg.DailyCallLimit,
+			"max_backlog":      enrichCostCfg.MaxBacklog,
+		}).Info("enrich cost guard enabled")
+	}
 
 	// 이슈 #524 — ZSET 모드 활성 시 RetryScheduler 필수 (메시지 손실 방지 가드).
 	// gate-skip 재큐는 ZSET / Kafka 두 모드 모두에서 필요하다 (이슈 #540) — 조건 밖에서 주입.
