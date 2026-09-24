@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,7 +51,8 @@ func (s *stubPusher) Calls() []stubPushCall {
 
 type stubConsumer struct {
 	commits int32
-	closed  bool
+	// closed 는 Run goroutine 이 쓰고 테스트 goroutine 이 읽으므로 atomic (이슈 #529, -race).
+	closed int32
 }
 
 func (c *stubConsumer) FetchMessage(_ context.Context) (*queue.Message, error) {
@@ -63,9 +65,12 @@ func (c *stubConsumer) CommitMessages(_ context.Context, _ ...*queue.Message) er
 }
 
 func (c *stubConsumer) Close() error {
-	c.closed = true
+	atomic.StoreInt32(&c.closed, 1)
 	return nil
 }
+
+// Closed 는 Close 호출 여부를 반환합니다 (이슈 #529).
+func (c *stubConsumer) Closed() bool { return atomic.LoadInt32(&c.closed) == 1 }
 
 func (c *stubConsumer) CommitCount() int32 { return atomic.LoadInt32(&c.commits) }
 
@@ -158,4 +163,49 @@ func TestZSetIntake_HandleOne_HeaderMissing_DefaultsNormalPriority(t *testing.T)
 	calls := pusher.Calls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, 2, calls[0].Priority)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// lifecycle (이슈 #529)
+//
+// 세 stage 의 ZSetIntake 는 각 패키지에 독립 구현되어 있어 parser 테스트로는 본
+// 패키지의 회귀를 잡지 못한다 (Copilot 피드백). 동일 시나리오를 여기에도 둔다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestZSetIntake_Stop_WaitsForRunToExit(t *testing.T) {
+	intake, cons := newIntake(t, &stubPusher{})
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	intake.Start(runCtx)
+	cancelRun()
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	require.NoError(t, intake.Stop(stopCtx))
+
+	assert.True(t, cons.Closed(), "Stop 반환 시점에는 consumer.Close 가 이미 실행돼 있어야 한다")
+}
+
+func TestZSetIntake_Stop_ContextExpiredWhileRunning_ReturnsCtxErr(t *testing.T) {
+	intake, _ := newIntake(t, &stubPusher{})
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	intake.Start(runCtx)
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelStop()
+
+	err := intake.Stop(stopCtx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"shutdown timeout 을 호출자가 인지할 수 있도록 에러를 삼키지 않아야 한다")
+}
+
+func TestZSetIntake_Stop_WithoutStart_ReturnsImmediately(t *testing.T) {
+	intake, _ := newIntake(t, &stubPusher{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	assert.NoError(t, intake.Stop(ctx), "Start 하지 않았으면 Stop 은 즉시 nil")
 }

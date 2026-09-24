@@ -110,16 +110,17 @@ func (s *Stage) Start(ctx context.Context) {
 // Stop 은 parser 단계의 graceful shutdown 을 수행합니다.
 //
 // 처리 순서가 중요:
-//  1. Worker 먼저 — llmGen 의 유일 Enqueue source 차단
-//  2. llmGen — in-flight LLM 호출 완료 대기
-//  3. refiner — in-flight polling cycle 완료 대기
-//  4. RawContentCleaner — janitor 마지막
+//  1. intake — Kafka 인입 차단 (ZSET 모드일 때만, 이슈 #529)
+//  2. Worker — llmGen 의 유일 Enqueue source 차단
+//  3. llmGen — in-flight LLM 호출 완료 대기
+//  4. refiner — in-flight polling cycle 완료 대기
+//  5. RawContentCleaner — janitor 마지막
 //
 // 첫 번째 발생한 에러를 반환 (나머지는 log 에 남김). 호출자가 ctx.WithTimeout 으로 강제 종료 시간 제어.
 func (s *Stage) Stop(ctx context.Context) error {
 	var firstErr error
 
-	// 0. intake — Kafka 인입을 먼저 끊어 ZSET 으로 새 항목이 들어오지 않게 한다 (이슈 #529).
+	// 1. intake — Kafka 인입을 먼저 끊어 ZSET 으로 새 항목이 들어오지 않게 한다 (이슈 #529).
 	// ZSET 에 남은 항목은 Redis 에 durable 하므로 다음 기동에서 이어 처리된다.
 	if s.intake != nil {
 		if err := s.intake.Stop(ctx); err != nil {
@@ -127,23 +128,23 @@ func (s *Stage) Stop(ctx context.Context) error {
 		}
 	}
 
-	// 1. Worker — Enqueue source 차단. 에러는 호출자 (main) 에서 stage 별로 일괄 로깅하므로
+	// 2. Worker — Enqueue source 차단. 에러는 호출자 (main) 에서 stage 별로 일괄 로깅하므로
 	// 본 위치에서는 중복 로그 회피 — 단순 first-error 보존만.
 	if err := s.worker.Stop(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 
-	// 2. llmGen — 새 Enqueue 차단된 시점 이후 in-flight 완료 대기
+	// 3. llmGen — 새 Enqueue 차단된 시점 이후 in-flight 완료 대기
 	if s.llmGen != nil {
 		s.llmGen.Stop(ctx)
 	}
 
-	// 3. refiner — in-flight polling cycle 완료 대기
+	// 4. refiner — in-flight polling cycle 완료 대기
 	if s.refiner != nil {
 		s.refiner.Stop(ctx)
 	}
 
-	// 4. RawContentCleaner — 시그니처가 ctx 를 받지 않아 별도 goroutine + select 로 caller 의
+	// 5. RawContentCleaner — 시그니처가 ctx 를 받지 않아 별도 goroutine + select 로 caller 의
 	// timeout 을 honor. janitor 라 ctx cancel 시 firstErr 만 기록하고
 	// 강제 반환 — 본 stop 은 best-effort.
 	cleanerStopped := make(chan struct{})
