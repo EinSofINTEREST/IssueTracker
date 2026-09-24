@@ -29,6 +29,7 @@
 |---|---|---|---|
 | `app.LoadLog` | app | `LogConfig` | log level, pretty |
 | `app.LoadMetrics` | app | `MetricsConfig` | `METRICS_ADDR` (default `:9090`) |
+| `app.LoadAPI` | app | `APIConfig` | `API_ADDR` (default `127.0.0.1:8080`), `API_AUTH_TOKEN` (빈 값 = 인증 비활성) |
 | `app.LoadShutdown` | app | `ShutdownConfig` | overall + claudegen shutdown timeout |
 | `storage.Load` | storage | `DBConfig` | PostgreSQL host/port/user/password/database/MaxConns/MinConns/QueryTimeout |
 | `storage.LoadRedis` | storage | `RedisConfig` | host/port/password/DB/IngestionMarkTTL/poolSize |
@@ -128,6 +129,7 @@ if err := parse.Duration("POSTGRES_QUERY_TIMEOUT", &cfg.QueryTimeout); err != ni
 | `SCHEDULER_*` | [scheduler.md](../internal/scheduler.md) |
 | `PATH_INFER_*`, `REFINEMENT_*` | [refiner](../internal/processor/parser/rule.md) |
 | `METRICS_ADDR` | [pkg/metrics](metrics.md) |
+| `API_*` | REST API 서버 (`cmd/api`, 이슈 #21 / #650) |
 | `LOG_*` | [pkg/logger](logger.md) |
 | `SHUTDOWN_TIMEOUT` | overall graceful shutdown |
 | `ENRICHER_DB_RO_*` | enrich MCP postgres (이슈 #472) |
