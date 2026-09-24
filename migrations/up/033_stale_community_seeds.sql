@@ -1,9 +1,13 @@
 -- 033_stale_community_seeds: 반복 실패하던 커뮤니티 시드 정리 (이슈 #504)
 --
 -- 배경:
---   scheduler_entries 의 'https://www.pgr21.com/freedom' 이 30분 주기로 계속 실패하며
+--   scheduler_entries 의 'https://www.pgr21.com/freedom' 이 10분 주기로 계속 실패하며
 --   무의미한 트래픽과 노이즈 로그를 만들고 있었다 (이슈 #504). 원인 조사 과정에서 같은
 --   성격의 시드를 함께 점검했고 (이슈의 "동일 패턴 sweep" 조건), inven 2건도 죽어 있었다.
+--
+--   주기 주의: 이슈 #504 본문은 "30분 interval" 로 적었으나 실제 시드는
+--   interval_seconds = 600 (10분) 이다 (migrations/up/022 의 "interval 10m").
+--   이후 community 주기를 바꾸는 마이그레이션도 없다 — 020 은 news 전용.
 --
 -- 실측 (2026-09-24, 직접 요청 확인):
 --
