@@ -314,6 +314,11 @@ type Target struct {
 > **API 가 실제와 다릅니다** — 개념 설명으로만 읽고, 코드를 쓸 때는 `pkg/queue` 의
 > `Producer` / `Consumer` 인터페이스와 `internal/bus` 의 `Publisher` 를 보세요.
 > consumer pool lifecycle 은 `internal/workerpool` harness 가 담당합니다.
+>
+> **토픽 이름도 실제와 다릅니다 (이슈 #652).** `issuetracker.raw.{country}` 는 초기 설계안이며
+> 쓰이지 않습니다 — 실제 파이프라인은 `crawl.{priority}` → `fetched` → `normalized` →
+> `validated` → `enriched` 이고, `embedded` / `clusters` 는 미구현입니다 (이슈 #17 / #18 / #20).
+> 토픽의 단일 출처는 [`pkg/queue/config.go`](../../pkg/queue/config.go) 입니다.
 
 
 1. **Topic Naming Convention**
