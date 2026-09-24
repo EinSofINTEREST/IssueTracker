@@ -182,10 +182,13 @@ issuetracker/
 │   ├── bus/                        # Kafka producer/consumer with retry scheduler
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives
+│   ├── scoring/                    # host-level priority score (High ↔ Normal auto-routing)
+│   ├── promptcontract/             # prompt placeholder contract aggregation
 │
 ├── pkg/                            # Public, domain-neutral utilities
 │   ├── agent/                      # LLM agent adapters
-│   │   └── claude/                 # claudegen container pool (parser llmgen + enrich backend)
+│   │   ├── claude/                 # claudegen container pool (parser llmgen + enrich backend)
+│   │   └── codex/                  # codex CLI container pool (second agent backend)
 │   ├── config/                     # 6 sub-packages (app / storage / fetcher / processor / llm / runtime)
 │   ├── llm/                        # multi-provider LLM abstraction + prompt loader
 │   ├── logger/                     # zerolog-based structured logger
@@ -193,6 +196,7 @@ issuetracker/
 │   ├── queue/                      # Kafka abstraction (producer / consumer / topics)
 │   ├── redis/                      # Redis client wrapper
 │   ├── links/                      # URL normalization + extraction
+│   ├── resilience/                 # domain-neutral resilience patterns (circuit breaker)
 │   └── urlguard/                   # URL allow/deny predicates
 │
 ├── deployments/
@@ -201,7 +205,7 @@ issuetracker/
 │       ├── claudegen/Dockerfile    # node:20-slim + claude-code + mcp-postgres (non-root)
 │       └── codex/Dockerfile        # node:22-slim + codex CLI (non-root)
 │
-├── migrations/                     # 031 SQL migrations (up + down)
+├── migrations/                     # 35 SQL migrations (up + down)
 ├── test/                           # mirrors source tree
 └── docs/
     ├── architecture/               # canonical architecture docs

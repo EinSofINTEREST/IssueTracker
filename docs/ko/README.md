@@ -182,10 +182,13 @@ issuetracker/
 │   ├── bus/                        # Kafka producer/consumer + retry scheduler
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives
+│   ├── scoring/                    # host 단위 priority score (High ↔ Normal 자동 분기)
+│   ├── promptcontract/             # prompt placeholder 계약 집계
 │
 ├── pkg/                            # 도메인 중립 공개 utility
 │   ├── agent/                      # LLM agent adapter
-│   │   └── claude/                 # claudegen 컨테이너 pool (parser llmgen + enrich 백엔드)
+│   │   ├── claude/                 # claudegen 컨테이너 pool (parser llmgen + enrich 백엔드)
+│   │   └── codex/                  # codex CLI 컨테이너 풀 (두 번째 agent backend)
 │   ├── config/                     # 6 sub-package (app / storage / fetcher / processor / llm / runtime)
 │   ├── llm/                        # 다중 provider LLM 추상 + prompt loader
 │   ├── logger/                     # zerolog 기반 구조화 logger
@@ -193,6 +196,7 @@ issuetracker/
 │   ├── queue/                      # Kafka 추상 (producer / consumer / topic)
 │   ├── redis/                      # Redis 클라이언트 wrapper
 │   ├── links/                      # URL 정규화 + 추출
+│   ├── resilience/                 # 도메인 무관 resilience 패턴 (circuit breaker)
 │   └── urlguard/                   # URL 허용/차단 술어
 │
 ├── deployments/
@@ -201,7 +205,7 @@ issuetracker/
 │       ├── claudegen/Dockerfile    # node:20-slim + claude-code + mcp-postgres (non-root)
 │       └── codex/Dockerfile        # node:22-slim + codex CLI (non-root)
 │
-├── migrations/                     # 031 SQL 마이그레이션 (up + down)
+├── migrations/                     # 35 SQL 마이그레이션 (up + down)
 ├── test/                           # 소스 트리 미러링
 └── docs/
     ├── architecture/               # canonical architecture 문서

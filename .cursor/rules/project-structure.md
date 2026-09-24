@@ -19,6 +19,7 @@ issuetracker/
 │   ├── workerpool/            # stage 공용 consumer pool harness
 │   ├── scheduler/             # 시드 URL 주기 발행
 │   ├── promptcontract/        # prompt placeholder 계약 집계
+│   ├── scoring/               # host 단위 priority score (High ↔ Normal 자동 분기)
 │   ├── locks/                 # IngestionMarker / ProcessingLock / StageGate
 │   ├── processor/             # 파이프라인 단계
 │   │   ├── fetcher/           # Web fetch + parse 라우팅 + worker pool
