@@ -25,6 +25,21 @@ type HostAggregate struct {
 	Signals model.HostSignals
 }
 
+// HostTuning 은 host 별 scoring 조정값입니다 (이슈 #383).
+//
+// 미지정 필드는 cluster-wide 기본값을 씁니다 — 부분 override 가 성립해야 운영자가
+// threshold 만 바꾸거나 weight 하나만 조정할 수 있습니다.
+type HostTuning struct {
+	Weights   *Weights
+	Threshold *float64
+}
+
+// TuningLookup 은 host 별 조정값 조회 콜백입니다. nil 반환은 "조정 없음".
+//
+// scorer 가 storage 를 직접 알지 않도록 콜백으로 받습니다 — 조정값의 출처
+// (현재는 fetcher_rules.priority_config) 가 바뀌어도 scorer 를 고치지 않습니다.
+type TuningLookup func(host string) *HostTuning
+
 // ScoreSink 는 계산된 점수 스냅샷을 받는 쪽입니다 (resolver).
 type ScoreSink interface {
 	SetScores(scores map[string]float64)
@@ -59,10 +74,19 @@ type Scorer struct {
 	cfg  Config
 	log  *logger.Logger
 
+	// tuning 은 host 별 조정값 조회입니다 (이슈 #383). nil 이면 cluster-wide 값만 씁니다.
+	tuning TuningLookup
+
 	stopOnce sync.Once
 	stopped  chan struct{}
 	wg       sync.WaitGroup
 }
+
+// SetTuningLookup 은 host 별 조정값 조회를 주입합니다 (이슈 #383).
+//
+// 생성자 시그니처를 바꾸지 않으려 setter 로 둡니다 — Sub B 시점의 호출자가 그대로 동작합니다.
+// nil 전달 시 비활성 (cluster-wide 값만 사용).
+func (s *Scorer) SetTuningLookup(fn TuningLookup) { s.tuning = fn }
 
 // NewScorer 는 Scorer 를 생성합니다.
 func NewScorer(
@@ -137,7 +161,16 @@ func (s *Scorer) runOnce(ctx context.Context) {
 	var coldStart int
 
 	for _, a := range aggregates {
-		score, ok := Score(a.Signals, s.cfg.Weights)
+		// host 별 weight 가 있으면 그것을 쓴다 (이슈 #383). threshold 는 resolver 가 아니라
+		// 점수 비교 시점에 쓰이므로 여기서는 weight 만 반영한다.
+		weights := s.cfg.Weights
+		if s.tuning != nil {
+			if t := s.tuning(a.Host); t != nil && t.Weights != nil {
+				weights = *t.Weights
+			}
+		}
+
+		score, ok := Score(a.Signals, weights)
 		if !ok {
 			// 표본 부족 — 점수를 내지 않고 chain 의 기존 경로에 위임한다.
 			coldStart++

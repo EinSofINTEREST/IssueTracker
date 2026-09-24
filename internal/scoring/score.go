@@ -84,3 +84,28 @@ func clamp01(v float64) float64 {
 	}
 	return math.Max(0, math.Min(1, v))
 }
+
+// MergeWeights 는 부분 지정된 host weight 를 **base (운영 중인 cluster-wide 값) 위에**
+// 덮습니다 (이슈 #383).
+//
+// 세 값이 모두 nil 이면 nil 을 반환합니다 — 조정 없음.
+//
+// base 를 인자로 받는 것이 핵심이다. DefaultWeights 를 쓰면 운영자가 cluster weight 를
+// 바꿔 놨어도 **부분 지정한 host 만 그 설정을 잃고** 하드코딩 기본값으로 떨어진다 —
+// 설정이 조용히 무시되는 종류다.
+func MergeWeights(base Weights, freshness, impact, hostTrust *float64) *Weights {
+	if freshness == nil && impact == nil && hostTrust == nil {
+		return nil
+	}
+	out := base
+	if freshness != nil {
+		out.Freshness = *freshness
+	}
+	if impact != nil {
+		out.Impact = *impact
+	}
+	if hostTrust != nil {
+		out.HostTrust = *hostTrust
+	}
+	return &out
+}
