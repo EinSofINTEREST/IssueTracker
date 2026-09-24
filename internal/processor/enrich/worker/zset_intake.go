@@ -21,6 +21,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"issuetracker/internal/bus"
@@ -37,6 +38,10 @@ type ZSetIntake struct {
 	consumer  bus.Consumer
 	zsetQueue queue.PriorityPusher
 	log       *logger.Logger
+
+	// wg 는 Run goroutine 의 종료를 Stop 이 기다리기 위한 것입니다 (이슈 #529).
+	// Start 에서 동기적으로 Add(1) 하므로 Start 직후 Stop 이 호출돼도 경쟁하지 않습니다.
+	wg sync.WaitGroup
 }
 
 // NewZSetIntake 는 ZSetIntake 인스턴스를 생성합니다.
@@ -50,6 +55,45 @@ func NewZSetIntake(consumer bus.Consumer, zsetQueue queue.PriorityPusher, log *l
 		consumer:  consumer,
 		zsetQueue: zsetQueue,
 		log:       log,
+	}
+}
+
+// Start 는 Run 을 goroutine 으로 띄우고 그 종료를 Stop 이 기다릴 수 있게 등록합니다 (이슈 #529).
+//
+// wg.Add(1) 을 **동기적으로** 수행한 뒤 goroutine 을 분기하므로, Start 직후 Stop 이 호출돼도
+// 아직 스케줄되지 않은 goroutine 을 놓치지 않습니다. Start 를 호출하지 않았다면 Stop 은
+// 즉시 nil 을 반환합니다 (wg 가 비어 있음).
+func (i *ZSetIntake) Start(ctx context.Context) {
+	if i == nil {
+		return
+	}
+	i.wg.Add(1)
+	go func() {
+		defer i.wg.Done()
+		i.Run(ctx)
+	}()
+}
+
+// Stop 은 Run goroutine 이 끝날 때까지 기다립니다 (이슈 #529).
+//
+// Run 은 ctx cancel 로만 종료되므로, 호출자는 Stage 의 run ctx 를 먼저 cancel 한 뒤
+// shutdown 용 ctx 로 본 메소드를 호출합니다. ctx 가 먼저 만료되면 ctx.Err() 를 반환하고
+// goroutine 은 leak 상태로 남습니다 — 호출자가 timeout 을 로그로 인지할 수 있게
+// 에러를 삼키지 않습니다.
+func (i *ZSetIntake) Stop(ctx context.Context) error {
+	if i == nil {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		i.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

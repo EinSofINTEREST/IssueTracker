@@ -41,17 +41,31 @@ func (s *Stage) Name() string { return worker.StageName }
 // Start 는 enrich worker pool 을 기동합니다.
 //
 // 이슈 #524 — ZSET 인입 모드 활성 시 별도 goroutine 에서 Kafka → ZSET intake 동시 운용.
-// ctx cancel 시 자연 종료 (별도 Stop 메소드 불필요).
+// intake.Start 가 goroutine 을 wg 에 등록하므로 Stop 이 그 종료를 기다린다 (이슈 #529).
 func (s *Stage) Start(ctx context.Context) {
 	s.worker.Start(ctx)
 	if s.intake != nil {
-		go s.intake.Run(ctx)
+		s.intake.Start(ctx)
 	}
 }
 
 // Stop 은 enrich worker 의 graceful shutdown 을 수행합니다.
 func (s *Stage) Stop(ctx context.Context) error {
-	return s.worker.Stop(ctx)
+	var firstErr error
+
+	// 1. intake — Kafka 인입을 먼저 끊어 ZSET 으로 새 항목이 들어오지 않게 한다 (이슈 #529).
+	// ZSET 에 남은 항목은 Redis 에 durable 하므로 다음 기동에서 이어 처리된다.
+	if s.intake != nil {
+		if err := s.intake.Stop(ctx); err != nil {
+			firstErr = err
+		}
+	}
+
+	// 2. worker — in-flight 처리 완료 대기.
+	if err := s.worker.Stop(ctx); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
 }
 
 // 컴파일 타임 인터페이스 만족 검증.
