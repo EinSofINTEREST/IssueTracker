@@ -128,6 +128,9 @@ type Worker struct {
 	retryScheduler bus.RetryScheduler
 	// gateSkipScheduler: gate-skip 재큐 전용 (이슈 #540). 모드 무관하게 주입된다.
 	gateSkipScheduler bus.RetryScheduler
+
+	// resolveMetrics 는 처리 페이지 수 계측용입니다 (이슈 #558). nil 허용 — Record* 가 noop.
+	resolveMetrics *rule.ResolveMetrics
 }
 
 // PipelineGuard 는 Category cycle 종료 시 marker 를 release 하기 위한 최소 인터페이스입니다.
@@ -209,6 +212,16 @@ func NewWorker(
 
 // SetPipelineGuard 는 Category cycle 완료 시 marker release 용 PipelineGuard 를 주입합니다.
 // nil 주입 시 release 비활성 (TTL fallback). Start 호출 전 wiring 단계에서 1회 설정.
+// SetResolveMetrics 는 처리 페이지 수 collector 를 주입합니다 (이슈 #558).
+//
+// 미주입 시 nil 이라 계측이 noop — METRICS 비활성 환경에서 추가 비용이 없습니다.
+func (w *Worker) SetResolveMetrics(m *rule.ResolveMetrics) {
+	if w == nil {
+		return
+	}
+	w.resolveMetrics = m
+}
+
 func (w *Worker) SetPipelineGuard(g PipelineGuard) {
 	w.guard = g
 }
@@ -530,6 +543,11 @@ func (w *Worker) ProcessMessage(ctx context.Context, msg *queue.Message) error {
 	}
 	targetType := core.TargetType(msg.Headers["target_type"])
 	jobTimeout := parseTimeoutHeader(msg.Headers["timeout_ms"])
+
+	// "LLM 호출 비율" 의 분모 — parser stage 가 실제로 받은 페이지 수 (이슈 #558).
+	// raw 조회 성공 직후, 파싱 분기 전에 센다. 여기서 세야 rule resolve 가 일어나는
+	// 페이지 집합과 1:1 로 대응한다.
+	w.resolveMetrics.RecordPageProcessed(string(targetType))
 
 	// 카테고리 페이지 — ParseLinks 후 chained article jobs 발행
 	if targetType == core.TargetTypeCategory {

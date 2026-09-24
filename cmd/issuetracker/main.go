@@ -255,7 +255,12 @@ func main() {
 	// resolver / invalidator wiring 은 service 내부에서 처리.
 	parserRuleRepoRaw := pgstore.NewParserRuleRepository(pool, log)
 	// resolver 는 timeout decorator 만 적용된 repo 로 lookup (cache invalidate 는 service 가 처리).
-	ruleResolver, err := rule.NewResolver(decorator.WrapParserRuleWithTimeout(parserRuleRepoRaw, dbCfg.QueryTimeout))
+	// 룰 resolve 결과 + 처리 페이지 수 collector (이슈 #558) — "LLM 호출 비율" 의 분자·분모.
+	resolveMetrics := rule.NewResolveMetrics(metricsRegistry)
+	ruleResolver, err := rule.NewResolver(
+		decorator.WrapParserRuleWithTimeout(parserRuleRepoRaw, dbCfg.QueryTimeout),
+		rule.WithResolveMetrics(resolveMetrics),
+	)
 	if err != nil {
 		log.WithError(err).Fatal("failed to construct rule resolver")
 	}
@@ -861,11 +866,16 @@ func main() {
 		log.Info("llmgen disabled — stale rule relearn skipped (no enqueue target)")
 	}
 
+	// 처리 페이지 수 계측 (이슈 #558) — 분모.
+	w.SetResolveMetrics(resolveMetrics)
+
 	// ── LLM validate 실패 재큐 ───────────────────────────────────
 	// selector 검증 실패 시 raw 를 issuetracker.fetched 에 재발행 — 룰 생성 성공 후 재파싱 기회 부여.
 	// llmGen 이 nil(LLM 비활성) 이면 wiring 불필요.
 	if llmGen != nil {
 		llmGen.SetValidateFailureHandler(w.RequeueForLLMRetry)
+		// llm_generated 계측 (이슈 #558) — 룰이 실제로 생성/저장된 지점만 센다.
+		llmGen.SetResolveMetrics(resolveMetrics)
 	}
 
 	// ── Pending URL 큐 ────────────────────────────────────────────

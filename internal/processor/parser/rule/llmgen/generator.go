@@ -142,6 +142,10 @@ type Generator struct {
 	breaker      *HostBreaker             // nil 이면 breaker 비활성 (이슈 #215)
 	wg           sync.WaitGroup
 	stopped      atomic.Bool
+
+	// resolveMetrics 는 llm_generated 계측용입니다 (이슈 #558).
+	// nil 허용 — Record* 가 noop.
+	resolveMetrics *rule.ResolveMetrics
 }
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다.
@@ -212,6 +216,16 @@ func (g *Generator) SetBlacklistService(svc BlacklistAutoRegister) {
 //
 // nil 이면 breaker 비활성 — 기존 동작 유지 (모든 호출 그대로).
 // Stop 전에 설정해야 하며, goroutine-safe 하지 않으므로 초기화 시 1회만 호출합니다.
+// SetResolveMetrics 는 llm_generated 계측 collector 를 주입합니다 (이슈 #558).
+//
+// 미주입 시 nil 이라 계측이 noop — METRICS 비활성 환경에서 추가 비용이 없습니다.
+func (g *Generator) SetResolveMetrics(m *rule.ResolveMetrics) {
+	if g == nil {
+		return
+	}
+	g.resolveMetrics = m
+}
+
 func (g *Generator) SetBreaker(b *HostBreaker) {
 	g.breaker = b
 }
@@ -706,6 +720,11 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType model.T
 	}
 
 	// cache invalidate 는 invalidatingRepo decorator 가 자동 호출.
+
+	// LLM 호출로 새 룰이 만들어진 지점 — 이 카운터가 "LLM 호출 비율" 의 분자다 (이슈 #558).
+	// ErrDuplicate 흡수 경로는 세지 않는다. 그쪽은 이미 존재하던 룰을 재확인한 것이라
+	// 절감 효과를 계산할 때 LLM 생성으로 잡으면 분자가 부풀려진다.
+	g.resolveMetrics.RecordResolve(string(targetType), rule.ResolveResultLLMGenerated)
 
 	g.log.WithFields(map[string]interface{}{
 		"host":        host,
