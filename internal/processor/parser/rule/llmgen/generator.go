@@ -109,6 +109,11 @@ func (e *selectorValidationError) Unwrap() error { return e.cause }
 // 호출자는 errors.Is 로 식별 — 다른 에러 (LLM API 실패, JSON 파싱 등) 와 분리.
 var errBlacklistedNoRule = errors.New("llmgen: page blacklisted, no rule generated")
 
+// errCallBudgetExceeded 는 LLM 호출 상한에 걸려 생성을 건너뛴 경우의 sentinel 입니다 (이슈 #169).
+//
+// 실패가 아니라 **정책상 skip** 이므로 호출자가 재시도 / blacklist 분기와 구분할 수 있어야 합니다.
+var errCallBudgetExceeded = errors.New("llmgen: call budget exceeded, generation skipped")
+
 // Generator 는 host 별 parsing rule 을 LLM 으로 자동 생성합니다.
 //
 // goroutine-safe — provider / repo / resolver 가 자체 thread-safety 를 가짐.
@@ -146,6 +151,12 @@ type Generator struct {
 	// resolveMetrics 는 llm_generated 계측용입니다 (이슈 #558).
 	// nil 허용 — Record* 가 noop.
 	resolveMetrics *rule.ResolveMetrics
+
+	// budget 은 LLM 호출 상한 가드입니다 (이슈 #169). nil 허용 — nil 이면 무제한.
+	budget *CallBudget
+
+	// genMetrics 는 rule generator 운영 지표입니다 (이슈 #169). nil 허용 — Record* 가 noop.
+	genMetrics *GeneratorMetrics
 }
 
 // SetValidateFailureHandler 는 selector 검증 실패 시 호출할 콜백을 등록합니다.
@@ -224,6 +235,24 @@ func (g *Generator) SetResolveMetrics(m *rule.ResolveMetrics) {
 		return
 	}
 	g.resolveMetrics = m
+}
+
+// SetCallBudget 는 LLM 호출 상한 가드를 주입합니다 (이슈 #169).
+//
+// 미주입 시 nil — 상한 없이 기존 동작을 유지합니다.
+func (g *Generator) SetCallBudget(b *CallBudget) {
+	if g == nil {
+		return
+	}
+	g.budget = b
+}
+
+// SetGeneratorMetrics 는 rule generator 지표 collector 를 주입합니다 (이슈 #169).
+func (g *Generator) SetGeneratorMetrics(m *GeneratorMetrics) {
+	if g == nil {
+		return
+	}
+	g.genMetrics = m
 }
 
 func (g *Generator) SetBreaker(b *HostBreaker) {
@@ -414,6 +443,12 @@ func (g *Generator) enqueueImpl(ctx context.Context, host string, targetType mod
 		}
 
 		if err != nil {
+			// 예산 초과는 실패가 아니라 정책상 skip — WARN 으로 올리면 상한 도달 후
+			// 입력 1건당 1줄이 쏟아진다. 상태 전이 로그와 metric 이 이미 가시성을 준다 (이슈 #169).
+			if errors.Is(err, errCallBudgetExceeded) {
+				return
+			}
+
 			// blacklist sentinel 은 normal completion — pending flush skip 만 하고 logging 도 별도.
 			if errors.Is(err, errBlacklistedNoRule) {
 				logger.FromContext(bgCtx).WithFields(map[string]interface{}{
@@ -572,6 +607,22 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType model.T
 		// best-effort 정책 유지 (DB 일시 장애가 rule 학습 파이프라인을 영구 차단하지 않도록).
 	}
 
+	// 이슈 #169 — 호출 상한. 사전 lookup 을 통과해 **실제로 LLM 을 부르기 직전** 에만 센다.
+	// pre-check 에서 걸러진 건은 LLM 을 쓰지 않으므로 예산을 소모하지 않아야 한다.
+	if allowed, window := g.budget.Allow(ctx); !allowed {
+		g.genMetrics.RecordCall(GenStatusCapExceeded, 0)
+		g.log.WithFields(map[string]interface{}{
+			"host":        host,
+			"target_type": string(targetType),
+			"window":      window,
+		}).Debug("llmgen skipped — call budget exceeded")
+		return errCallBudgetExceeded
+	}
+
+	genStart := time.Now()
+	g.genMetrics.IncInflight()
+	defer g.genMetrics.DecInflight()
+
 	var (
 		selectors model.SelectorMap
 		modelName string
@@ -725,6 +776,8 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType model.T
 	// ErrDuplicate 흡수 경로는 세지 않는다. 그쪽은 이미 존재하던 룰을 재확인한 것이라
 	// 절감 효과를 계산할 때 LLM 생성으로 잡으면 분자가 부풀려진다.
 	g.resolveMetrics.RecordResolve(string(targetType), rule.ResolveResultLLMGenerated)
+	g.genMetrics.RecordCall(GenStatusSuccess, time.Since(genStart).Seconds())
+	g.genMetrics.RecordInserted(string(targetType))
 
 	g.log.WithFields(map[string]interface{}{
 		"host":        host,

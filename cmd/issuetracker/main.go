@@ -29,6 +29,7 @@ import (
 	crawlerWorker "issuetracker/internal/processor/fetcher/worker"
 	"issuetracker/internal/processor/parser"
 	"issuetracker/internal/processor/parser/rule"
+	"issuetracker/internal/processor/parser/rule/llmgen"
 	llmgenwiring "issuetracker/internal/processor/parser/rule/llmgen/wiring"
 	refinerwiring "issuetracker/internal/processor/parser/rule/refiner/wiring"
 	"issuetracker/internal/processor/parser/rule/validator"
@@ -106,6 +107,11 @@ func main() {
 	publisherCacheCfg, err := runtimecfg.LoadPublisherCache()
 	if err != nil {
 		log.WithError(err).Fatal("failed to load publisher cache config")
+	}
+
+	llmBudgetCfg, err := llmcfg.LoadCallBudget()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load llm call budget config")
 	}
 
 	stagesCfg, err := runtimecfg.LoadStages()
@@ -653,6 +659,35 @@ func main() {
 	llmGen, err := llmgenwiring.Build(llmProvider, parserRuleSvc, ruleResolver, promptLoader, redisClientShared, redisCfg.InflightLockTTL, log)
 	if err != nil {
 		log.WithError(err).Fatal("failed to build llmgen generator")
+	}
+
+	// 이슈 #169 — LLM 호출 상한 + rule generator 지표.
+	if llmGen != nil {
+		genMetrics := llmgen.NewGeneratorMetrics(metricsRegistry)
+		llmGen.SetGeneratorMetrics(genMetrics)
+
+		if llmBudgetCfg.DailyCap > 0 || llmBudgetCfg.HourlyCap > 0 {
+			// Redis counter 를 주입하면 인스턴스들이 한도를 공유한다. 부재 시 프로세스 로컬로
+			// degrade 하며, 그때는 인스턴스 수만큼 한도가 늘어난다 (로그로 명시).
+			var budgetCounter llmgen.BudgetCounter
+			if redisClientShared != nil {
+				if bc, bErr := redisstore.NewCallBudget(redisClientShared.Raw(), "llmgen:budget", log); bErr != nil {
+					log.WithError(bErr).Warn("llm call budget: redis counter unavailable, falling back to in-process counter")
+				} else {
+					budgetCounter = bc
+				}
+			}
+			llmGen.SetCallBudget(llmgen.NewCallBudget(llmgen.BudgetConfig{
+				DailyCap:  llmBudgetCfg.DailyCap,
+				HourlyCap: llmBudgetCfg.HourlyCap,
+			}, budgetCounter, genMetrics, log))
+
+			log.WithFields(map[string]interface{}{
+				"daily_cap":   llmBudgetCfg.DailyCap,
+				"hourly_cap":  llmBudgetCfg.HourlyCap,
+				"distributed": budgetCounter != nil,
+			}).Info("llm call budget enabled")
+		}
 	}
 
 	// ── Fetcher 실패 카운터 ────────────────────────────────────────
