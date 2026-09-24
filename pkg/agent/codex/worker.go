@@ -176,7 +176,7 @@ func newWorkerFromStageEnv(envR agent.StageEnv, loader prompt.Loader, log *logge
 //
 // authDir 은 호스트의 Codex 인증 디렉토리, containerAuthPath 는 컨테이너 내 마운트 대상 경로.
 // containerAuthPath 가 빈 문자열이면 defaultContainerAuthPath 사용.
-// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증.
+// authDir 은 절대 경로로 정규화만 하며, 존재/권한 검증은 Start 시점입니다 (이슈 #537).
 func New(image, model, authDir, containerAuthPath string, timeout time.Duration, loader prompt.Loader, log *logger.Logger) (*Worker, error) {
 	if log == nil {
 		return nil, errors.New("codex: New requires non-nil logger")
@@ -184,7 +184,7 @@ func New(image, model, authDir, containerAuthPath string, timeout time.Duration,
 	if loader == nil {
 		return nil, errors.New("codex: New requires non-nil prompt loader")
 	}
-	resolved, err := validateAuthDir(authDir)
+	resolved, err := resolveAuthPath(authDir)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func New(image, model, authDir, containerAuthPath string, timeout time.Duration,
 }
 
 // NewWithRunner 는 ContainerRunner 를 주입하는 생성자입니다 (테스트/DI 용).
-// authDir 은 validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증.
+// authDir 은 절대 경로로 정규화만 하며, 존재/권한 검증은 Start 시점입니다 (이슈 #537).
 func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time.Duration, runner ContainerRunner, loader prompt.Loader, log *logger.Logger) (*Worker, error) {
 	if log == nil {
 		return nil, errors.New("codex: NewWithRunner requires non-nil logger")
@@ -210,7 +210,7 @@ func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time
 	if loader == nil {
 		return nil, errors.New("codex: NewWithRunner requires non-nil prompt loader")
 	}
-	resolved, err := validateAuthDir(authDir)
+	resolved, err := resolveAuthPath(authDir)
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +224,8 @@ func NewWithRunner(image, model, authDir, containerAuthPath string, timeout time
 	}, nil
 }
 
-// resolveAuthDir 은 환경변수 또는 $HOME 기반으로 인증 디렉토리를 결정하고 접근성을 검증합니다.
-// validateAuthDir 로 절대 경로 정규화 + 존재/디렉토리/읽기 권한 검증을 위임합니다.
+// resolveAuthDir 은 환경변수 또는 $HOME 기반으로 인증 디렉토리 경로를 결정합니다.
+// 절대 경로 정규화까지만 수행하며, 접근성 검증은 Start 가 담당합니다 (이슈 #537).
 func resolveAuthDir(envValue string) (string, error) {
 	authDir := envValue
 	if authDir == "" {
@@ -235,16 +235,17 @@ func resolveAuthDir(envValue string) (string, error) {
 		}
 		authDir = filepath.Join(home, ".codex")
 	}
-	return validateAuthDir(authDir)
+	return resolveAuthPath(authDir)
 }
 
-// validateAuthDir 은 인증 디렉토리의 절대 경로를 산출하고 접근성을 검증합니다.
+// resolveAuthPath 는 인증 디렉토리의 절대 경로를 산출합니다 (이슈 #537).
 //
 //   - 빈 문자열 거부 (호출자가 빈 값 처리 후 호출)
 //   - filepath.Abs 로 절대 경로 변환 — Docker 마운트 시 상대 경로 모호성 제거
-//   - os.Stat: 존재 + 디렉토리 검증
-//   - os.ReadDir: 읽기 권한 검증 (mode 만 보지 않고 실제로 읽어봄)
-func validateAuthDir(authDir string) (string, error) {
+//
+// **대상 디렉토리를 읽지 않습니다.** 존재 / 권한 검증은 Start 시점의 verifyAuthDir 담당 —
+// 생성자가 파일시스템 부작용을 갖지 않도록 경로 계산과 접근성 검증을 분리했습니다.
+func resolveAuthPath(authDir string) (string, error) {
 	if authDir == "" {
 		return "", errors.New("codex: authDir must not be empty")
 	}
@@ -252,17 +253,30 @@ func validateAuthDir(authDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("codex: failed to resolve absolute path for %q: %w", authDir, err)
 	}
+	return absPath, nil
+}
+
+// verifyAuthDir 은 인증 디렉토리의 접근성을 검증합니다 — Start 에서만 호출 (이슈 #537).
+//
+//   - os.Stat: 존재 + 디렉토리 검증
+//   - os.ReadDir: 읽기 권한 검증 (mode 만 보지 않고 실제로 읽어봄)
+//
+// 생성자가 아닌 Start 에 둔 이유: 생성자가 순수 데이터 조립이어야 테스트가 실제 디렉토리
+// 없이 Worker 를 만들 수 있고, 특히 NewWithRunner 의 DI 의도와 모순되지 않습니다. 운영
+// 동작은 그대로다 — 호출처 (main.go startClaudegenPool) 가 생성 실패와 Start 실패를 같은
+// graceful fallback 으로 처리하므로, 잘못된 authDir 의 결과는 이전과 동일합니다.
+func verifyAuthDir(absPath string) error {
 	info, err := os.Stat(absPath)
 	if err != nil {
-		return "", fmt.Errorf("codex: auth dir %q not accessible: %w (run `codex` CLI on host to login first)", absPath, err)
+		return fmt.Errorf("codex: auth dir %q not accessible: %w (run `codex` CLI on host to login first)", absPath, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("codex: auth dir %q is not a directory", absPath)
+		return fmt.Errorf("codex: auth dir %q is not a directory", absPath)
 	}
 	if _, err := os.ReadDir(absPath); err != nil {
-		return "", fmt.Errorf("codex: auth dir %q is not readable: %w", absPath, err)
+		return fmt.Errorf("codex: auth dir %q is not readable: %w", absPath, err)
 	}
-	return absPath, nil
+	return nil
 }
 
 // Start 는 Codex 컨테이너를 기동하고 workspace 를 준비합니다.
@@ -273,6 +287,12 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	if w.containerID != "" {
 		return errors.New("codex: worker already started")
+	}
+
+	// 인증 디렉토리 접근성은 생성자가 아니라 여기서 검증한다 (이슈 #537) — 생성자는 순수
+	// 데이터 조립으로 두고, 파일시스템 부작용은 lifecycle 시작점인 Start 로 모은다.
+	if err := verifyAuthDir(w.authDir); err != nil {
+		return err
 	}
 
 	workDir, err := os.MkdirTemp("", "codex-workspace-*")
