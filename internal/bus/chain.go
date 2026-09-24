@@ -172,6 +172,11 @@ type acquireFunc func(ctx context.Context, url string) (acquired bool, err error
 //
 // failOpenMsg / cancelledMsg 는 호출자가 acquire 의미에 맞게 지정 — "pipeline guard" / "ingestion marker" 구분.
 // extraFields 는 acquireViaGuard 의 target_type 같은 추가 컨텍스트.
+// filterByAcquire 는 marker 획득에 성공한 URL 만 남깁니다.
+//
+// cache 가 nil 이 아니면 "직전에 이미 잡혀 있던" URL 을 기억해 Redis 왕복을 생략합니다
+// (이슈 #507). **획득 성공은 캐시하지 않습니다** — 성공을 기억하면 marker 만료 후에도
+// 발행이 막힙니다. 자세한 근거는 seen_cache.go 참조.
 func (p *Publisher) filterByAcquire(
 	ctx context.Context,
 	urls []string,
@@ -179,6 +184,7 @@ func (p *Publisher) filterByAcquire(
 	op acquireFunc,
 	failOpenMsg, cancelledMsg string,
 	extraFields map[string]interface{},
+	cache *seenCache,
 ) []string {
 	out := make([]string, 0, len(urls))
 	fields := map[string]interface{}{
@@ -196,6 +202,11 @@ func (p *Publisher) filterByAcquire(
 			return append(out, urls[i:]...)
 		}
 
+		// 직전 cycle 에 이미 잡혀 있던 URL — Redis 왕복과 로그를 모두 생략한다.
+		if cache.Has(url) {
+			continue
+		}
+
 		acquired, err := op(ctx, url)
 		if err != nil {
 			l.WithField("url", url).WithError(err).Warn(failOpenMsg)
@@ -204,6 +215,7 @@ func (p *Publisher) filterByAcquire(
 		}
 		if !acquired {
 			l.WithField("url", url).Debug("url already in pipeline, skipping publish")
+			cache.Add(url)
 			continue
 		}
 		out = append(out, url)
@@ -219,11 +231,19 @@ func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerN
 	op := func(ctx context.Context, url string) (bool, error) {
 		return guard.CheckAndAcquire(ctx, url, targetType)
 	}
+	// Category 는 캐시하지 않는다 — marker TTL 이 60s 로 단명하고 정상 흐름은 cycle 종료 시
+	// 명시적 release 라, 캐시 수명(기본 10m)이 marker 보다 오래 살아 다음 주기를 막는다.
+	// Article 만 캐시한다 (이슈 #507 의 중복 10,940건 중 10,694건이 article).
+	var cache *seenCache
+	if targetType != core.TargetTypeCategory {
+		cache = p.seenCache
+	}
 	return p.filterByAcquire(
 		ctx, urls, crawlerName, op,
 		"pipeline guard check failed, allowing publish",
 		"context cancelled during pipeline guard acquire, allowing remaining URLs",
 		map[string]interface{}{"target_type": string(targetType)},
+		cache,
 	)
 }
 
@@ -233,10 +253,12 @@ func (p *Publisher) acquireViaGuard(ctx context.Context, urls []string, crawlerN
 // Deprecated: SetPipelineGuard 사용 시 acquireViaGuard 가 우선 — 본 메소드는
 // guard 미주입 환경의 backward compat fallback.
 func (p *Publisher) acquireIngestion(ctx context.Context, urls []string, crawlerName string, lock IngestionMarker) []string {
+	// acquireIngestion 은 Category 를 애초에 우회하므로 (guard.go 참조) 캐시를 그대로 쓴다.
 	return p.filterByAcquire(
 		ctx, urls, crawlerName, lock.Acquire,
 		"ingestion marker acquire failed, allowing publish",
 		"context cancelled during ingestion marker acquire, allowing remaining URLs",
 		nil,
+		p.seenCache,
 	)
 }
