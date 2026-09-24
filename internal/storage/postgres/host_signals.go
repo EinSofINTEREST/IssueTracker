@@ -50,12 +50,16 @@ func NewHostSignalAggregator(pool *pgxpool.Pool, log *logger.Logger) *HostSignal
 // 따로 두지 않았으므로 질의에서 파생한다 — 컬럼 추가는 전량 backfill 이 필요해
 // 본 기능의 범위를 넘는다.
 //
+// scheme 매칭에 'i' 플래그가 필요하다. 없으면 `HTTPS://...` 가 그대로 남아 host 가
+// "https" 로 잡히는데, 조회하는 Go 쪽은 url.Parse 라 올바른 host 를 쓴다 — 저장과 조회가
+// 어긋나 점수가 영영 매칭되지 않는다. 조용히 빗나가는 종류라 에러로 드러나지도 않는다.
+//
 // created_at 기준으로 구간을 자른다 (published_at 이 아니라) — 집계 대상은 "언제 수집했나"
 // 이고, published_at 은 과거 기사가 섞여 구간이 불안정해진다.
 const sqlAggregateHostSignals = `
 WITH windowed AS (
   SELECT
-    lower(split_part(split_part(regexp_replace(url, '^https?://', ''), '/', 1), ':', 1)) AS host,
+    lower(split_part(split_part(regexp_replace(url, '^https?://', '', 'i'), '/', 1), ':', 1)) AS host,
     published_at,
     created_at,
     validation_status,
