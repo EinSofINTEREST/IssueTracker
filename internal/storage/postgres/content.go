@@ -440,8 +440,11 @@ func buildContentListQuery(filter model.ContentFilter) (string, []any) {
 		offset = 0
 	}
 
+	// c.id 는 tiebreaker 다 — published_at 은 유일하지 않고 NULL 도 허용되므로
+	// (NULL 인 행 전부가 하나의 동률 그룹) 이것 없이는 동률 행들의 순서가 보장되지 않는다.
+	// offset 페이지네이션에서 순서가 흔들리면 행이 건너뛰어지거나 중복된다 (이슈 #654).
 	query := listSelectQuery + where +
-		fmt.Sprintf(" ORDER BY c.published_at DESC NULLS LAST LIMIT %d OFFSET %d", limit, offset)
+		fmt.Sprintf(" ORDER BY c.published_at DESC NULLS LAST, c.id DESC LIMIT %d OFFSET %d", limit, offset)
 
 	return query, args
 }
