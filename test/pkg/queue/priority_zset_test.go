@@ -401,3 +401,37 @@ func TestFetchMessage_RestoresHeaders_PriorityFromScore(t *testing.T) {
 	assert.Equal(t, "category", msg.Headers["target_type"], "target_type 이 복원되어야 한다")
 	assert.Equal(t, "1", msg.Headers["priority"], "priority 는 ZSET score 기준으로 덮어써야 한다")
 }
+
+// TestPop_StaleHeaderFromOtherCycle_Discarded 는 payload 와 짝이 맞지 않는 헤더를
+// pop 이 버리는지 검증합니다 (이슈 #561, Copilot 피드백).
+//
+// 롤링 업그레이드 중 구 버전의 Push 는 :hdr 를 건드리지 않으므로, 같은 id 를 구 버전이
+// 재push 하면 payload 만 갱신되고 이전 사이클 헤더가 남는다. 그 상태로 헤더를 복원하면
+// target_type / gate_skip_count 가 잘못 붙는다.
+func TestPop_StaleHeaderFromOtherCycle_Discarded(t *testing.T) {
+	q, client := newPriorityZSetTestQueue(t, "hdr-stale-cycle")
+	ctx := context.Background()
+
+	// 신 버전이 헤더와 함께 push.
+	require.NoError(t, q.PushWithHeaders(ctx, 2, "dup", []byte(`{"cycle":1}`),
+		map[string]string{"target_type": "category"}))
+
+	// 구 버전의 Push 를 흉내낸다 — payload 만 덮어쓰고 :hdr 는 그대로 둔다.
+	// prefix 가 시각 기반이라 SCAN 으로 entry 키를 찾는다 (기존 테스트와 동일 방식).
+	var entryKey string
+	iter := client.Raw().Scan(ctx, 0, "test:priority-zset:hdr-stale-cycle:*:entry:dup", 0).Iterator()
+	for iter.Next(ctx) {
+		entryKey = iter.Val()
+	}
+	require.NoError(t, iter.Err())
+	require.NotEmpty(t, entryKey, "entry 키를 찾지 못했다")
+	require.NoError(t, client.Raw().Set(ctx, entryKey, []byte(`{"cycle":2}`), time.Minute).Err())
+
+	res, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	assert.Equal(t, []byte(`{"cycle":2}`), res.Payload)
+	assert.Nil(t, res.Headers,
+		"다른 사이클 payload 에 붙은 헤더는 버려야 한다 — 롤링 업그레이드 자가 검출")
+}

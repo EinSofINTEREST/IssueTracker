@@ -18,6 +18,8 @@ package queue
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,6 +99,26 @@ type PriorityZSetQueue struct {
 	entryTTL time.Duration
 }
 
+// headerEnvelope 는 :hdr 키에 저장되는 값입니다 (이슈 #561).
+//
+// PayloadSHA 를 함께 두는 이유 — 롤링 업그레이드 중 **구 버전의 Push 는 :hdr 를 건드리지
+// 않습니다.** 같은 id 를 구 버전이 재push 해 payload 만 덮어쓰면, 신 버전이 pop 할 때 이전
+// 사이클의 헤더가 새 payload 에 결합되어 target_type / gate_skip_count 가 잘못 복원됩니다
+// (Copilot 피드백). payload 다이제스트를 함께 저장해 두면 그 불일치를 pop 시점에 스스로
+// 발견해 헤더를 버릴 수 있습니다 — 구/신 버전 어느 쪽이 payload 를 썼든 동작합니다.
+type headerEnvelope struct {
+	PayloadSHA string            `json:"payload_sha"`
+	Headers    map[string]string `json:"headers"`
+}
+
+// payloadDigest 는 payload 의 SHA-256 앞 16바이트를 hex 로 반환합니다.
+//
+// 충돌 방지가 아니라 "같은 사이클의 payload 인가" 만 구분하면 되므로 전체 해시를 쓰지 않습니다.
+func payloadDigest(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:16])
+}
+
 // headerKeyFor 는 entry 의 헤더 저장 키를 만듭니다 (이슈 #561).
 //
 // payload 와 **별도 STRING 키** 로 둡니다. entry 키에 envelope 을 씌우면 업그레이드 시점에
@@ -171,14 +193,17 @@ func (q *PriorityZSetQueue) PushWithHeaders(ctx context.Context, priority int, i
 	pipe.ZAdd(ctx, q.zsetKey, goredis.Z{Score: score, Member: id})
 	pipe.Set(ctx, q.entryKey+id, payload, q.entryTTL)
 	if len(headers) > 0 {
-		encoded, err := json.Marshal(headers)
+		// payload 다이제스트를 함께 저장 — pop 시 다른 사이클의 헤더인지 검증한다.
+		encoded, err := json.Marshal(headerEnvelope{
+			PayloadSHA: payloadDigest(payload),
+			Headers:    headers,
+		})
 		if err != nil {
 			// 헤더 직렬화 실패로 메시지 자체를 버리지 않는다 — payload 는 정상이므로
-			// 헤더 없이 진행하고, 호출자가 로그로 인지할 수 있도록 error 는 반환하지 않는다.
+			// 헤더 없이 진행한다. 남아 있을 수 있는 이전 헤더는 지운다.
 			// (map[string]string 이라 실제로는 발생하지 않는 경로)
-			encoded = nil
-		}
-		if encoded != nil {
+			pipe.Del(ctx, q.headerKeyFor(id))
+		} else {
 			pipe.Set(ctx, q.headerKeyFor(id), encoded, q.entryTTL)
 		}
 	} else {
@@ -247,13 +272,31 @@ func (q *PriorityZSetQueue) Pop(ctx context.Context, timeout time.Duration) (*Po
 		}
 		return nil, fmt.Errorf("priority zset entry get (id=%s, restored to zset): %w", id, err)
 	}
-	// 보존된 헤더 복원 (이슈 #561). 키가 없으면 (구 entry / 헤더 없는 push) nil 로 둔다 —
-	// 부재는 정상 경로이므로 에러로 다루지 않는다.
+	// 보존된 헤더 복원 (이슈 #561).
+	//
+	// 에러 처리는 payload GET 과 동일하게 간다 — BZPOPMIN 이 이미 member 를 제거했으므로,
+	// Redis 일시 장애로 :hdr 를 읽지 못한 채 진행하면 target_type / gate_skip_count 를
+	// **영구 유실** 한다 (Copilot 피드백). 키 부재(Nil) 만 정상 경로로 인정하고, 그 외
+	// 오류는 member 를 되돌린 뒤 에러를 올려 호출자가 재시도하게 한다.
 	var headers map[string]string
-	if raw, herr := q.rdb.Get(ctx, q.headerKeyFor(id)).Bytes(); herr == nil && len(raw) > 0 {
-		if uerr := json.Unmarshal(raw, &headers); uerr != nil {
-			headers = nil
+	raw, herr := q.rdb.Get(ctx, q.headerKeyFor(id)).Bytes()
+	switch {
+	case herr == nil && len(raw) > 0:
+		var env headerEnvelope
+		if uerr := json.Unmarshal(raw, &env); uerr != nil {
+			return nil, q.restoreOnPopFailure(ctx, id, res.Score,
+				fmt.Errorf("priority zset header decode (id=%s): %w", id, uerr))
 		}
+		// 다른 사이클의 payload 에 붙은 헤더면 버린다 — 롤링 업그레이드 중 구 버전이
+		// payload 만 덮어쓴 경우를 자가 검출한다.
+		if env.PayloadSHA != "" && env.PayloadSHA != payloadDigest(payload) {
+			headers = nil
+		} else {
+			headers = env.Headers
+		}
+	case herr != nil && !errors.Is(herr, goredis.Nil):
+		return nil, q.restoreOnPopFailure(ctx, id, res.Score,
+			fmt.Errorf("priority zset header get (id=%s): %w", id, herr))
 	}
 
 	// pop 된 후 entry 도 cleanup — TTL 로도 자연 만료되지만 명시적 삭제로 메모리 즉시 회수.
@@ -266,6 +309,17 @@ func (q *PriorityZSetQueue) Pop(ctx context.Context, timeout time.Duration) (*Po
 		Payload:  payload,
 		Headers:  headers,
 	}, nil
+}
+
+// restoreOnPopFailure 는 pop 중 실패한 항목을 원래 score 로 ZSET 에 되돌립니다 (이슈 #561).
+//
+// BZPOPMIN 이 이미 member 를 제거한 뒤라, 복구하지 않으면 메시지가 영구 손실된다.
+// 복구까지 실패하면 두 에러를 합쳐 반환해 호출자가 진짜 손실을 구분할 수 있게 한다.
+func (q *PriorityZSetQueue) restoreOnPopFailure(ctx context.Context, id string, score float64, cause error) error {
+	if zaddErr := q.rdb.ZAdd(ctx, q.zsetKey, goredis.Z{Score: score, Member: id}).Err(); zaddErr != nil {
+		return fmt.Errorf("%w; zset restore failed: %v", cause, zaddErr)
+	}
+	return fmt.Errorf("%w (restored to zset)", cause)
 }
 
 // Len 은 ZSET 의 현재 항목 수를 반환합니다 (메트릭 / overflow 감지용).
