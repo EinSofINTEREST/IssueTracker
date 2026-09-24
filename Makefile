@@ -18,6 +18,7 @@ MIGRATE_BINARY=$(BINARY_DIR)/migrate
 MIGRATE_DOWN_BINARY=$(BINARY_DIR)/migrate-down
 RULE_VALIDATOR_BINARY=$(BINARY_DIR)/rule-validator
 ADMIN_BINARY=$(BINARY_DIR)/admin
+API_BINARY=$(BINARY_DIR)/api
 CLAUDEGEN_IMAGE_TAG ?= issuetracker-claudegen:local
 CODEX_IMAGE_TAG ?= issuetracker-codex:local
 EXAMPLE_BINARY=$(BINARY_DIR)/basic_usage
@@ -68,7 +69,8 @@ build: ## 모든 바이너리 빌드
 	$(GO) build $(GOFLAGS) -o $(MIGRATE_DOWN_BINARY) ./cmd/migrate-down
 	$(GO) build $(GOFLAGS) -o $(ADMIN_BINARY) ./cmd/admin
 	$(GO) build $(GOFLAGS) -o $(RULE_VALIDATOR_BINARY) ./cmd/rule-validator
-	@echo "Build complete: $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY), $(MIGRATE_BINARY), $(MIGRATE_DOWN_BINARY), $(RULE_VALIDATOR_BINARY)"
+	$(GO) build $(GOFLAGS) -o $(API_BINARY) ./cmd/api
+	@echo "Build complete: $(PROCESSOR_BINARY), $(ISSUETRACKER_BINARY), $(MIGRATE_BINARY), $(MIGRATE_DOWN_BINARY), $(RULE_VALIDATOR_BINARY), $(ADMIN_BINARY), $(API_BINARY)"
 
 build-all: build ## 모든 실행 파일 빌드 (build와 동일)
 
