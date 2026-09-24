@@ -204,19 +204,27 @@ func TestPriorityZSetQueue_Pop_CtxCancel_ReturnsErr(t *testing.T) {
 		res *queue.PopResult
 		err error
 	}
+	// 블로킹 시간을 1s 로 둔다 — Redis 의 blocking timeout 최소 단위이자,
+	// 취소가 관측되기까지의 상한이다 (이슈 #579).
+	const blockTimeout = 1 * time.Second
+
 	ch := make(chan popResult, 1)
 	go func() {
-		res, err := q.Pop(ctx, 5*time.Second)
+		res, err := q.Pop(ctx, blockTimeout)
 		ch <- popResult{res, err}
 	}()
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 
+	// go-redis 는 진행 중인 blocking read 를 ctx 취소로 끊지 않는다. 따라서 Pop 은
+	// **즉시** 가 아니라 blockTimeout 이 끝난 뒤 ctx.Err() 를 반환한다 (이슈 #579).
+	// 여유를 둬 느린 CI 에서도 흔들리지 않게 한다.
 	select {
 	case r := <-ch:
-		assert.Error(t, r.err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("Pop did not return after ctx cancel")
+		require.Error(t, r.err, "취소된 ctx 는 (nil, nil) 이 아니라 에러로 구분돼야 한다")
+		assert.ErrorIs(t, r.err, context.Canceled)
+	case <-time.After(blockTimeout + 4*time.Second):
+		t.Fatal("Pop did not return within blockTimeout after ctx cancel")
 	}
 }
 

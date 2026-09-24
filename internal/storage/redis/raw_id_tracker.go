@@ -118,15 +118,25 @@ func (r *rawIDTracker) PeekByHost(ctx context.Context, host string, limit int) (
 		args.Stop = int64(limit - 1)
 	} else {
 		// freshness>0 → score 필터 (이슈 #299).
-		// Rev=true 이면 Start/Stop 의미가 뒤집힘 (Start=max, Stop=min).
 		// score (unix-nano) 가 (now - freshness) 이상인 member 만 반환.
+		//
+		// Start/Stop 은 **자연 순서 (min, max)** 로 넣는다 — Rev 라고 해서 직접 뒤집으면
+		// 안 된다 (이슈 #578). go-redis 의 ZRangeArgs.appendArgs 가 Rev+ByScore 일 때
+		// 이미 두 값의 위치를 바꿔 보내기 때문이다:
+		//
+		//	if z.Rev && (z.ByScore || z.ByLex) {
+		//		args = append(args, z.Key, z.Stop, z.Start)
+		//	}
+		//
+		// 여기서 한 번 더 뒤집으면 ZRANGE key <minScore> +inf 가 되어 max<min 이 되고,
+		// 결과가 **항상 빈 배열** 이 된다 — freshness 필터가 기능 자체를 무력화한다.
 		now := time.Now()
 		if r.now != nil {
 			now = r.now()
 		}
 		minScore := now.Add(-r.freshness).UnixNano()
-		args.Start = "+inf"
-		args.Stop = strconv.FormatInt(minScore, 10)
+		args.Start = strconv.FormatInt(minScore, 10)
+		args.Stop = "+inf"
 		args.ByScore = true
 		args.Count = int64(limit)
 		op = "ZRANGE BYSCORE"
