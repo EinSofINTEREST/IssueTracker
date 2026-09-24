@@ -272,8 +272,15 @@ type PopResult struct {
 
 // Pop 은 ZSET 의 가장 낮은 score (high priority + oldest) 1건을 atomic 으로 pop 합니다.
 //
-// timeout 은 BZPOPMIN 의 Redis-side blocking 시간입니다. 0 이면 unlimited (ctx cancel 까지).
-// ctx cancel 시 즉시 ctx.Err() 반환.
+// timeout 은 BZPOPMIN 의 Redis-side blocking 시간입니다. 0 이면 unlimited.
+//
+// **ctx 취소는 최대 timeout 만큼 지연되어 관측됩니다** (이슈 #579). go-redis 는 진행 중인
+// blocking read 를 ctx 취소로 끊지 않습니다 (baseClient.withConn 에 ctx 감시 goroutine 이
+// 없음). 따라서 취소 직후 즉시 반환하지 않고, 서버 타임아웃으로 명령이 끝난 뒤에야
+// ctx.Err() 를 반환합니다. worker 루프는 설정된 popTimeout (기본 1s) 을 넘기므로 shutdown
+// 지연은 그 범위로 제한됩니다.
+//
+// timeout=0 (unlimited) 은 취소를 영영 관측하지 못하므로 shutdown 경로에서 쓰지 마세요.
 //
 // 빈 큐에서 timeout 만료 시 (nil, nil) — 호출자가 polling loop 에서 재시도.
 //
@@ -287,6 +294,12 @@ func (q *PriorityZSetQueue) Pop(ctx context.Context, timeout time.Duration) (*Po
 	res, err := q.rdb.BZPopMin(ctx, timeout, q.zsetKey).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
+			// 블로킹 타임아웃 — 다만 그 사이에 ctx 가 취소됐다면 호출자에게 알린다.
+			// 구분하지 않으면 "빈 큐" 와 "취소" 가 똑같이 (nil, nil) 이라 루프가
+			// 취소를 놓친다 (이슈 #579).
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, cerr
+			}
 			return nil, nil
 		}
 		return nil, fmt.Errorf("priority zset bzpop: %w", err)
