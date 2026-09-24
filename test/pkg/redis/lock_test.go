@@ -257,12 +257,18 @@ func TestReleaseLockOwned_EmptyToken_ReturnsError(t *testing.T) {
 	assert.False(t, released)
 }
 
+// TestReleaseLockOwned_MissingKey_ReturnsFalse 는 이미 만료된 락의 해제가 에러가 아님을
+// 검증합니다.
+//
+// 참고: 이 경로는 goredis.Nil 분기를 타지 않습니다 (Copilot 피드백). luaReleaseOwned 는
+// GET 결과가 무엇이든 정수를 반환하므로 (일치 시 DEL 결과, 아니면 0) Eval 은
+// (int64(0), nil) 을 돌려줍니다. ReleaseLockOwned 의 goredis.Nil 처리는 스크립트가 nil 을
+// 반환하는 경우에 대한 방어이며, 현재 스크립트로는 도달하지 않습니다.
 func TestReleaseLockOwned_MissingKey_ReturnsFalse(t *testing.T) {
 	client := newTestClient(t)
 	ctx := context.Background()
 	key := uniqueLockKey(t, client, "missing")
 
-	// 키가 없으면 Lua 의 GET 이 false 를 반환 — Eval 이 goredis.Nil 을 낼 수 있는 경로.
 	released, err := client.ReleaseLockOwned(ctx, key, "any-token")
 	require.NoError(t, err, "키 부재는 정상 경로 (이미 만료)")
 	assert.False(t, released)
@@ -279,6 +285,9 @@ func TestAcquireLockWithToken_Concurrent_OnlyOneWins(t *testing.T) {
 	var wg sync.WaitGroup
 	var winners int32
 	tokens := make(chan string, goroutines)
+	// 에러를 삼키면 19개가 Redis 오류로 죽어도 winners==1 이라 테스트가 통과한다 —
+	// NX 경쟁이 아니라 장애를 검증하게 된다 (Copilot 피드백).
+	errs := make(chan error, goroutines)
 	start := make(chan struct{})
 
 	for i := 0; i < goroutines; i++ {
@@ -287,7 +296,11 @@ func TestAcquireLockWithToken_Concurrent_OnlyOneWins(t *testing.T) {
 			defer wg.Done()
 			<-start
 			token, acquired, err := client.AcquireLockWithToken(ctx, key, time.Minute)
-			if err == nil && acquired {
+			if err != nil {
+				errs <- err
+				return
+			}
+			if acquired {
 				atomic.AddInt32(&winners, 1)
 				tokens <- token
 			}
@@ -296,7 +309,11 @@ func TestAcquireLockWithToken_Concurrent_OnlyOneWins(t *testing.T) {
 	close(start)
 	wg.Wait()
 	close(tokens)
+	close(errs)
 
+	for err := range errs {
+		require.NoError(t, err, "경쟁 참가자 중 누구도 Redis 오류를 만나면 안 된다")
+	}
 	assert.Equal(t, int32(1), atomic.LoadInt32(&winners), "동시 획득에서 정확히 1회만 성공")
 
 	winner := <-tokens
