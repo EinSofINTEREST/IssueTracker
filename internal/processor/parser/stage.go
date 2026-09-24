@@ -101,9 +101,9 @@ func (s *Stage) Start(ctx context.Context) {
 		s.refiner.Start(ctx)
 	}
 	// 이슈 #522 — ZSET 인입 모드. Worker 가 ZSET consumer 로 동작하므로 별도 goroutine 에서
-	// Kafka → ZSET intake 를 동시 운용. ctx cancel 시 자연 종료 (별도 Stop 메소드 불필요).
+	// Kafka → ZSET intake 를 동시 운용. Start 가 wg 등록까지 하므로 Stop 이 종료를 기다린다 (이슈 #529).
 	if s.intake != nil {
-		go s.intake.Run(ctx)
+		s.intake.Start(ctx)
 	}
 }
 
@@ -119,9 +119,17 @@ func (s *Stage) Start(ctx context.Context) {
 func (s *Stage) Stop(ctx context.Context) error {
 	var firstErr error
 
+	// 0. intake — Kafka 인입을 먼저 끊어 ZSET 으로 새 항목이 들어오지 않게 한다 (이슈 #529).
+	// ZSET 에 남은 항목은 Redis 에 durable 하므로 다음 기동에서 이어 처리된다.
+	if s.intake != nil {
+		if err := s.intake.Stop(ctx); err != nil {
+			firstErr = err
+		}
+	}
+
 	// 1. Worker — Enqueue source 차단. 에러는 호출자 (main) 에서 stage 별로 일괄 로깅하므로
 	// 본 위치에서는 중복 로그 회피 — 단순 first-error 보존만.
-	if err := s.worker.Stop(ctx); err != nil {
+	if err := s.worker.Stop(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
 
