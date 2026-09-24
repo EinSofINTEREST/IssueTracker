@@ -39,6 +39,7 @@ import (
 	validateWorkerPkg "issuetracker/internal/processor/validate/worker"
 	"issuetracker/internal/promptcontract"
 	"issuetracker/internal/scheduler"
+	"issuetracker/internal/scoring"
 	"issuetracker/internal/storage/decorator"
 	"issuetracker/internal/storage/model"
 	pgstore "issuetracker/internal/storage/postgres"
@@ -241,6 +242,23 @@ func main() {
 	ruleBasedResolver := bus.NewRuleBasedPriorityResolver(core.PriorityNormal)
 	resolver.Add(ruleBasedResolver)
 
+	// 이슈 #382 — host 점수 기반 High ↔ Normal 분기. RuleBased **뒤** 에 둔다:
+	// 운영자가 DB crawl_priority 로 명시한 host 는 그쪽에서 확정되고, 본 resolver 는
+	// 명시가 없어 Normal 로 흐르던 host 만 다룬다. 앞에 두면 관찰 신호가 운영자의 명시를
+	// 뒤집는다.
+	//
+	// 스냅샷이 비어 있는 동안 CanResolve 가 false 라, scorer 가 첫 주기를 돌기 전까지는
+	// 기존 chain 동작이 그대로 유지된다.
+	hostScoringCfg, err := processorcfg.LoadHostScoring()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load host scoring config")
+	}
+	var scoreResolver *bus.DynamicScorePriorityResolver
+	if hostScoringCfg.Enabled {
+		scoreResolver = bus.NewDynamicScorePriorityResolver(hostScoringCfg.Threshold)
+		resolver.Add(scoreResolver)
+	}
+
 	highConsumer := queue.NewConsumer(crawlerKafkaCfg, queue.TopicCrawlHigh)
 	defer highConsumer.Close()
 	normalConsumer := queue.NewConsumer(crawlerKafkaCfg, queue.TopicCrawlNormal)
@@ -388,6 +406,38 @@ func main() {
 	}
 
 	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제.
+	// 이슈 #382 — host signal scorer. resolver 는 위에서 이미 chain 에 등록됐고, 여기서
+	// 주기 집계를 붙인다. 비활성이면 goroutine 자체를 띄우지 않는다.
+	var hostScorer *scoring.Scorer
+	if scoreResolver != nil {
+		hostScorer = scoring.NewScorer(
+			scoring.NewPostgresAggregator(pgstore.NewHostSignalAggregator(pool, log)),
+			decorator.WrapHostScoringWithTimeout(
+				pgstore.NewHostScoringRepository(pool, log), dbCfg.QueryTimeout),
+			scoreResolver,
+			scoring.Config{
+				Interval:      hostScoringCfg.Interval,
+				WindowMinutes: hostScoringCfg.WindowMinutes,
+				// 집계 상한은 주기보다 짧아야 한다 — 길면 다음 주기가 도래해도 이전
+				// 질의가 아직 돌고 있다. 주기의 절반을 넘지 않게 잡는다.
+				AggregateTimeout: hostScoringCfg.Interval / 2,
+				Weights: scoring.Weights{
+					Freshness: hostScoringCfg.WeightFreshness,
+					Impact:    hostScoringCfg.WeightImpact,
+					HostTrust: hostScoringCfg.WeightTrust,
+				},
+			},
+			log,
+		)
+		hostScorer.Start(ctx)
+		defer hostScorer.Stop()
+		log.WithFields(map[string]interface{}{
+			"interval":       hostScoringCfg.Interval.String(),
+			"window_minutes": hostScoringCfg.WindowMinutes,
+			"threshold":      hostScoringCfg.Threshold,
+		}).Info("host signal scoring enabled (issue #382)")
+	}
+
 	rawRepo := decorator.WrapRawContentWithTimeout(pgstore.NewRawContentRepository(pool, log), dbCfg.QueryTimeout)
 	rawSvc := service.NewRawContentService(rawRepo, log)
 
