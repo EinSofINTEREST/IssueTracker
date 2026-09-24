@@ -4,7 +4,7 @@
         run-kafka-pipeline \
         kafka-start kafka-stop kafka-clean kafka-status kafka-logs kafka-topics kafka-init \
         pg-start pg-stop pg-clean pg-migrate pg-status pg-psql \
-        claudegen-build harness-check harness-selftest
+        claudegen-build codex-build harness-check harness-selftest
 
 # 기본 변수
 BINARY_DIR=bin
@@ -19,6 +19,7 @@ MIGRATE_DOWN_BINARY=$(BINARY_DIR)/migrate-down
 RULE_VALIDATOR_BINARY=$(BINARY_DIR)/rule-validator
 ADMIN_BINARY=$(BINARY_DIR)/admin
 CLAUDEGEN_IMAGE_TAG ?= issuetracker-claudegen:local
+CODEX_IMAGE_TAG ?= issuetracker-codex:local
 EXAMPLE_BINARY=$(BINARY_DIR)/basic_usage
 COMPARISON_BINARY=$(BINARY_DIR)/crawler_comparison
 KAFKA_PIPELINE_BINARY=$(BINARY_DIR)/kafka_pipeline
@@ -75,6 +76,11 @@ claudegen-build: ## claudegen 자체 Claude Code 이미지 빌드 (이슈 #269 �
 	@echo "Building claudegen image: $(CLAUDEGEN_IMAGE_TAG)"
 	docker build -t $(CLAUDEGEN_IMAGE_TAG) deployments/docker/claudegen/
 	@echo "Build complete: $(CLAUDEGEN_IMAGE_TAG)"
+
+codex-build: ## codex CLI 이미지 빌드 (이슈 #533 — 메타 #462 Sub 2)
+	@echo "Building codex image: $(CODEX_IMAGE_TAG)"
+	docker build -t $(CODEX_IMAGE_TAG) deployments/docker/codex/
+	@echo "Build complete: $(CODEX_IMAGE_TAG)"
 
 start: ## Crawler + Processor 통합 실행 (의존: chrome, kafka 자동 기동, 직렬 실행)
 	@$(MAKE) chrome-ensure

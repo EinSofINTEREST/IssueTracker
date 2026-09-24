@@ -90,6 +90,7 @@ cd IssueTracker
 cp .env.example .env  # DB / API 키 / stage toggle 입력
 make build            # 모든 binary 를 bin/ 에 빌드
 make claudegen-build  # claudegen 컨테이너 이미지 (issuetracker-claudegen:local)
+make codex-build      # codex 컨테이너 이미지 (issuetracker-codex:local)
 ```
 
 ### 바이너리
@@ -197,7 +198,8 @@ issuetracker/
 ├── deployments/
 │   └── docker/
 │       ├── docker-compose.yml      # Kafka (KRaft) + chrome pool
-│       └── claudegen/Dockerfile    # node:20-slim + claude-code + mcp-postgres (non-root)
+│       ├── claudegen/Dockerfile    # node:20-slim + claude-code + mcp-postgres (non-root)
+│       └── codex/Dockerfile        # node:22-slim + codex CLI (non-root)
 │
 ├── migrations/                     # 031 SQL 마이그레이션 (up + down)
 ├── test/                           # 소스 트리 미러링
@@ -221,8 +223,9 @@ issuetracker/
 ### 빌드 & 테스트
 
 ```bash
-make build               # 5 binary 전체
+make build               # 6 binary 전체
 make claudegen-build     # claudegen 컨테이너 이미지
+make codex-build         # codex 컨테이너 이미지
 
 make test                # 모든 단위 테스트
 make coverage            # 커버리지 리포트

@@ -90,6 +90,7 @@ cd IssueTracker
 cp .env.example .env  # then fill in DB / API keys / stage toggles
 make build            # builds all binaries to bin/
 make claudegen-build  # builds the claudegen container image (issuetracker-claudegen:local)
+make codex-build      # builds the codex container image (issuetracker-codex:local)
 ```
 
 ### Binaries
@@ -197,7 +198,8 @@ issuetracker/
 ├── deployments/
 │   └── docker/
 │       ├── docker-compose.yml      # Kafka (KRaft) + chrome pool
-│       └── claudegen/Dockerfile    # node:20-slim + claude-code + mcp-postgres (non-root)
+│       ├── claudegen/Dockerfile    # node:20-slim + claude-code + mcp-postgres (non-root)
+│       └── codex/Dockerfile        # node:22-slim + codex CLI (non-root)
 │
 ├── migrations/                     # 031 SQL migrations (up + down)
 ├── test/                           # mirrors source tree
@@ -221,8 +223,9 @@ issuetracker/
 ### Build & Test
 
 ```bash
-make build               # all 5 binaries
+make build               # all 6 binaries
 make claudegen-build     # claudegen container image
+make codex-build         # codex container image
 
 make test                # all unit tests
 make coverage            # coverage report
