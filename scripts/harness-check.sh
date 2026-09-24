@@ -324,6 +324,49 @@ else
   ok "cron loop 자산 부재 + 규약이 cron 등록을 지시하지 않음"
 fi
 
+# ── 8. 문서 상대 링크 ─────────────────────────────────────────────────────
+# 섹션 1 은 문서가 언급한 internal/ pkg/ cmd/ **저장소 경로** 만 본다. 문서 → 문서 링크는
+# 범위 밖이라, 디렉토리가 한 겹 깊어졌을 때 상대 경로가 조용히 깨진 채 남았다 (이슈 #646 —
+# PR 템플릿의 CI 규약 링크 2건 포함 11건).
+#
+# 반드시 걸러야 하는 두 가지:
+#   - 코드 펜스(```) 안 — 06-code-style.md 가 README 템플릿 예시로 존재하지 않는
+#     docs/en/... 링크를 의도적으로 담는다 ("목표 구조" 라고 명시돼 있다).
+#   - 인라인 코드 스팬(`...`) — 같은 파일이 language selector 문법을
+#     `**[한국어](../ko/same-file.md)** | English` 로 보여준다. same-file.md 는 플레이스홀더다.
+# 이 둘을 거르지 않으면 오탐이 16건 나고, 게이트는 그 순간부터 무시된다.
+echo "── 8. 문서 상대 링크"
+link_broken=0
+while IFS= read -r md; do
+  md_dir=$(dirname "$md")
+  while IFS=$'\t' read -r lineno link; do
+    [ -z "$link" ] && continue
+    case "$link" in
+      /*) target=".$link" ;;
+      *)  target="$md_dir/$link" ;;
+    esac
+    if [ ! -f "$target" ]; then
+      fail "문서 링크 대상 부재: ${md}:${lineno} → ${link} (이슈 #646)"
+      link_broken=$((link_broken + 1))
+    fi
+  done < <(awk '
+    /^[[:space:]]*```/ { fence = !fence; next }
+    fence { next }
+    {
+      line = $0
+      gsub(/`[^`]*`/, "", line)
+      while (match(line, /\]\([^)#: ]+\.md(#[^)]*)?\)/)) {
+        link = substr(line, RSTART + 2, RLENGTH - 3)
+        sub(/#.*$/, "", link)
+        print NR "\t" link
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }' "$md")
+done < <(find . -name '*.md' -not -path './.git/*' -not -path './node_modules/*' | sort)
+if [ "$link_broken" -eq 0 ]; then
+  ok "문서 상대 링크 전부 실재 (코드 펜스·인라인 코드 제외)"
+fi
+
 echo
 echo "─────────────────────────────────────"
 if [ "$fail_count" -gt 0 ]; then
