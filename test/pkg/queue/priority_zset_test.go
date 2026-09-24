@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -434,4 +435,63 @@ func TestPop_StaleHeaderFromOtherCycle_Discarded(t *testing.T) {
 	assert.Equal(t, []byte(`{"cycle":2}`), res.Payload)
 	assert.Nil(t, res.Headers,
 		"다른 사이클 payload 에 붙은 헤더는 버려야 한다 — 롤링 업그레이드 자가 검출")
+}
+
+// TestNewPriorityZSetQueue_OverlappingKeyPrefixes_Rejected 는 entry/header 키 공간이
+// 겹치는 설정을 생성 시점에 거부하는지 검증합니다 (이슈 #561, CodeRabbit 피드백).
+//
+// 겹치면 id 를 고르는 것만으로 서로의 데이터를 덮어쓸 수 있다 — 예를 들어 header 접두사가
+// entry 접두사의 하위라면 그 차이를 그대로 id 로 넘기는 payload push 가 header 키를 친다.
+func TestNewPriorityZSetQueue_OverlappingKeyPrefixes_Rejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		entry  string
+		header string
+	}{
+		{name: "header 가 entry 의 하위", entry: "e:", header: "e:hdr:"},
+		{name: "entry 가 header 의 하위", entry: "h:x:", header: "h:"},
+		{name: "동일", entry: "same:", header: "same:"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := queue.NewPriorityZSetQueue(&goredis.Client{}, queue.PriorityZSetConfig{
+				ZSetKey:         "z",
+				EntryKeyPrefix:  tt.entry,
+				HeaderKeyPrefix: tt.header,
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, queue.ErrPriorityZSetInvalidConfig)
+		})
+	}
+}
+
+// TestPushWithHeaders_HeaderKeyDoesNotCollideWithPayload 는 헤더 키가 entry 키 공간 밖에
+// 있는지 확인합니다 (이슈 #561).
+//
+// 기본 도출이 entry 접두사 뒤가 아니라 앞에 marker 를 붙이므로, 헤더 키로 쓰이는 문자열을
+// 그대로 id 로 넘겨 payload 를 push 해도 서로를 덮어쓰지 않는다.
+func TestPushWithHeaders_HeaderKeyDoesNotCollideWithPayload(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-collide")
+	ctx := context.Background()
+
+	// "a" 의 헤더와, id 가 "a:hdr" 인 payload 를 함께 넣는다.
+	// 구 구현 (entry+id+":hdr") 에서는 두 키가 같은 문자열이었다.
+	require.NoError(t, q.PushWithHeaders(ctx, 1, "a", []byte(`{"n":"a"}`),
+		map[string]string{"target_type": "category"}))
+	require.NoError(t, q.Push(ctx, 1, "a:hdr", []byte(`{"n":"a-hdr"}`)))
+
+	got := map[string]*queue.PopResult{}
+	for i := 0; i < 2; i++ {
+		res, err := q.Pop(ctx, 2*time.Second)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		got[res.ID] = res
+	}
+
+	require.Contains(t, got, "a")
+	require.Contains(t, got, "a:hdr")
+	assert.Equal(t, []byte(`{"n":"a"}`), got["a"].Payload)
+	assert.Equal(t, "category", got["a"].Headers["target_type"])
+	assert.Equal(t, []byte(`{"n":"a-hdr"}`), got["a:hdr"].Payload,
+		"다른 항목의 헤더가 payload 를 덮어써서는 안 된다")
 }

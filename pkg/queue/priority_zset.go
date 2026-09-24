@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -66,7 +67,19 @@ type PriorityZSetConfig struct {
 
 	// EntryTTL 은 entry STRING 의 TTL 입니다. 0 또는 음수면 PriorityZSetEntryTTL.
 	EntryTTL time.Duration
+
+	// HeaderKeyPrefix 는 보존된 Kafka 헤더 (STRING) 의 키 접두사입니다 (이슈 #561).
+	//
+	// 비우면 headerPrefixMarker + EntryKeyPrefix 로 도출합니다. EntryKeyPrefix 의 하위로
+	// 두지 않는 이유는 키 충돌 때문입니다 — 자세한 내용은 NewPriorityZSetQueue 참조.
+	HeaderKeyPrefix string
 }
+
+// headerPrefixMarker 는 HeaderKeyPrefix 기본값의 접두사입니다 (이슈 #561).
+//
+// entry 키 공간 **밖** 에 두려고 뒤가 아니라 앞에 붙입니다. 뒤에 붙이면
+// (EntryKeyPrefix + "hdr:") entry 키 공간의 부분집합이 되어 id 조작으로 충돌이 가능합니다.
+const headerPrefixMarker = "hdr:"
 
 // PriorityPusher 는 PriorityZSetQueue 의 Push 책임만 추상화한 인터페이스입니다 (이슈 #522).
 //
@@ -92,11 +105,12 @@ type PriorityHeaderPusher interface {
 //
 // 모든 메소드는 goroutine-safe — 내부적으로 go-redis 의 thread-safe client 사용.
 type PriorityZSetQueue struct {
-	rdb      *goredis.Client
-	zsetKey  string
-	entryKey string
-	maxSize  int64
-	entryTTL time.Duration
+	rdb       *goredis.Client
+	zsetKey   string
+	entryKey  string
+	headerKey string
+	maxSize   int64
+	entryTTL  time.Duration
 }
 
 // headerEnvelope 는 :hdr 키에 저장되는 값입니다 (이슈 #561).
@@ -125,7 +139,7 @@ func payloadDigest(payload []byte) string {
 // Redis 에 남아 있는 기존 entry (raw payload) 가 파싱에 실패하므로, 키를 나눠 헤더 부재를
 // 자연스러운 하위 호환 경로로 만듭니다 — 헤더 키가 없으면 그냥 헤더 없는 메시지입니다.
 func (q *PriorityZSetQueue) headerKeyFor(id string) string {
-	return q.entryKey + id + ":hdr"
+	return q.headerKey + id
 }
 
 // NewPriorityZSetQueue 는 PriorityZSetQueue 를 생성합니다.
@@ -147,12 +161,27 @@ func NewPriorityZSetQueue(rdb *goredis.Client, cfg PriorityZSetConfig) (*Priorit
 	if entryTTL <= 0 {
 		entryTTL = PriorityZSetEntryTTL
 	}
+
+	headerKey := cfg.HeaderKeyPrefix
+	if headerKey == "" {
+		headerKey = headerPrefixMarker + cfg.EntryKeyPrefix
+	}
+	// 두 키 공간이 겹치면 id 를 고르는 것만으로 서로의 데이터를 덮어쓸 수 있다 (CodeRabbit 피드백).
+	// 예: entry="e:" 에 id="hdr:x" 를 push 하면 entry 키가 "e:hdr:x" 가 되어, header 가
+	// "e:hdr:" + "x" 를 쓸 때와 충돌한다. 한쪽이 다른 쪽의 접두사이면 그런 id 가 항상 존재하므로
+	// 생성 시점에 거부한다.
+	if strings.HasPrefix(headerKey, cfg.EntryKeyPrefix) || strings.HasPrefix(cfg.EntryKeyPrefix, headerKey) {
+		return nil, fmt.Errorf("%w: entry/header key prefixes overlap (entry=%q header=%q)",
+			ErrPriorityZSetInvalidConfig, cfg.EntryKeyPrefix, headerKey)
+	}
+
 	return &PriorityZSetQueue{
-		rdb:      rdb,
-		zsetKey:  cfg.ZSetKey,
-		entryKey: cfg.EntryKeyPrefix,
-		maxSize:  maxSize,
-		entryTTL: entryTTL,
+		rdb:       rdb,
+		zsetKey:   cfg.ZSetKey,
+		entryKey:  cfg.EntryKeyPrefix,
+		headerKey: headerKey,
+		maxSize:   maxSize,
+		entryTTL:  entryTTL,
 	}, nil
 }
 
@@ -189,8 +218,14 @@ func (q *PriorityZSetQueue) PushWithHeaders(ctx context.Context, priority int, i
 	}
 	score := priorityScore(priority, time.Now())
 
+	// 명령 순서가 곧 가시성 순서다 (CodeRabbit 피드백).
+	//
+	// 평범한 pipeline 은 원자적이지 않아 다른 클라이언트의 명령이 사이에 끼어들 수 있다.
+	// ZAdd 를 먼저 보내면 payload / header 가 쓰이기 전에 consumer 가 BZPOPMIN 으로 멤버를
+	// 가져가 헤더 없는 (또는 payload 없는) 메시지를 받고 entry 를 지워 버린다.
+	// 따라서 **payload → header → ZAdd** 순으로 보낸다. 멤버는 두 값이 모두 자리잡은 뒤에야
+	// pop 가능해지므로 MULTI/EXEC 없이도 torn read 가 생기지 않는다.
 	pipe := q.rdb.Pipeline()
-	pipe.ZAdd(ctx, q.zsetKey, goredis.Z{Score: score, Member: id})
 	pipe.Set(ctx, q.entryKey+id, payload, q.entryTTL)
 	if len(headers) > 0 {
 		// payload 다이제스트를 함께 저장 — pop 시 다른 사이클의 헤더인지 검증한다.
@@ -210,6 +245,8 @@ func (q *PriorityZSetQueue) PushWithHeaders(ctx context.Context, priority int, i
 		// 같은 id 로 재push 될 때 이전 사이클의 헤더가 남아 되살아나는 것을 막는다.
 		pipe.Del(ctx, q.headerKeyFor(id))
 	}
+	// 마지막에 멤버를 노출한다 — 위 주석 참조.
+	pipe.ZAdd(ctx, q.zsetKey, goredis.Z{Score: score, Member: id})
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("priority zset push (id=%s): %w", id, err)
 	}
