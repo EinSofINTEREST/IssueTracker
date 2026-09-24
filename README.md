@@ -196,6 +196,7 @@ issuetracker/
 │   ├── queue/                      # Kafka abstraction (producer / consumer / topics)
 │   ├── redis/                      # Redis client wrapper
 │   ├── links/                      # URL normalization + extraction
+│   ├── resilience/                 # domain-neutral resilience patterns (circuit breaker)
 │   └── urlguard/                   # URL allow/deny predicates
 │
 ├── deployments/

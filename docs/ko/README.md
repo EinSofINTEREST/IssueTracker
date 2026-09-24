@@ -196,6 +196,7 @@ issuetracker/
 │   ├── queue/                      # Kafka 추상 (producer / consumer / topic)
 │   ├── redis/                      # Redis 클라이언트 wrapper
 │   ├── links/                      # URL 정규화 + 추출
+│   ├── resilience/                 # 도메인 무관 resilience 패턴 (circuit breaker)
 │   └── urlguard/                   # URL 허용/차단 술어
 │
 ├── deployments/
