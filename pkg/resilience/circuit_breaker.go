@@ -3,7 +3,7 @@
 //
 // 이슈 #402 — 구 internal/processor/fetcher/worker/circuit_breaker.go 위치에서 이동.
 // 도입 시점에는 fetcher 단일 사용처였으나, state machine 자체는 generic 한 resilience
-// 패턴이므로 pkg 으로 추출하여 classifier (LLM API) / parser LLM 호출 / 향후 외부
+// 패턴이므로 pkg 으로 추출하여 parser LLM 호출 / 향후 외부
 // 의존성 보호 모두에 재사용 가능. fetcher worker 의 호출 site 는 import 경로만 변경.
 //
 // 네이밍 — `Source` 필드명 유지 (이슈 #402 옵션 a). 운영 dashboard / alert 가 참조하는

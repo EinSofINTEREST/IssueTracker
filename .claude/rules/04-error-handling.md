@@ -49,8 +49,8 @@
 - **`internal/` 의 helper / 내부 함수**
   - 패키지 외부로 노출되지 않는 helper 는 fmt.Errorf 로 충분.
   - 외부 노출 함수에서 최종 boundary 변환만 보장하면 됩니다.
-- **`internal/classifier`, `internal/bus` (Publisher / Consumer / RetryScheduler) 의 비-boundary 경로**
-  - 외부 시스템(grpc/http) 호출 자체에서 발생한 에러는 호출처에서 카테고리화.
+- **`internal/bus` (Publisher / Consumer / RetryScheduler) 의 비-boundary 경로**
+  - 외부 시스템(HTTP) 호출 자체에서 발생한 에러는 호출처에서 카테고리화.
 
 ### 예시 — boundary 변환 패턴
 
@@ -370,7 +370,7 @@ log.WithFields(map[string]interface{}{"deleted_count": n, "cutoff": t}).Info("ra
 
 // WARN — 예상 외 상황이지만 처리됨
 log.WithFields(map[string]interface{}{"attempt": a, "max_attempts": m, "delay_ms": d}).Warn("retrying after error")
-log.WithError(err).Warn("primary classifier failed, falling back to secondary protocol")
+log.WithError(err).Warn("primary llm provider failed, falling back to secondary")
 
 // ERROR — 작업 실패
 log.WithFields(map[string]interface{}{"job_id": id, "crawler": name}).WithError(err).Error("job processing failed")
@@ -439,9 +439,6 @@ log.WithError(err).Error("failed to send message to dlq")
 
 **Database** (`internal/storage/postgres/`):
 - 연결 성공: `host`, `port`, `database`, `max_conns`
-
-**Classifier** (`internal/classifier/`):
-- fallback 전환 시: `.WithError(err)` 체이닝
 
 ### Log Context
 

@@ -13,7 +13,7 @@ pkg/config/
 ├── runtime/     (package runtimecfg)    → worker_counts / stage_gate / retry_scheduler
 ├── fetcher/     (package fetchercfg)    → chromedp_pool / auto_downgrade / auto_upgrade
 ├── processor/   (package processorcfg)  → validate / scheduler / blacklist / stale_relearn
-└── llm/         (package llmcfg)        → llm / prompt / classifier / path_infer / google_cse / refinement
+└── llm/         (package llmcfg)        → llm / prompt / path_infer / google_cse / refinement
 ```
 
 ## 패키지 매트릭스
@@ -25,7 +25,7 @@ pkg/config/
 | `runtimecfg` | WorkerCountsConfig, StageGateConfig (+ `CapPerStage`), RetrySchedulerConfig | 워커 동시성 / lock / 재시도 정책 |
 | `fetchercfg` | FetcherChromedpPoolConfig, FetcherAutoDowngradeConfig, FetcherAutoUpgradeConfig | fetcher 워커 풀 / 자동 전환 |
 | `processorcfg` | ValidateConfig, SchedulerConfig, BlacklistConfig, StaleRelearnConfig | parser / validator / scheduler / 블랙리스트 / stale 재학습 |
-| `llmcfg` | LLMConfig (+ `lookupLLMAPIKey`), PromptConfig, ClassifierConfig, PathInferConfig, GoogleCSEConfig (+ `IsConfigured`), RefinementConfig | LLM 호출 / 프롬프트 / Google CSE / refinement |
+| `llmcfg` | LLMConfig (+ `lookupLLMAPIKey`), PromptConfig, PathInferConfig, GoogleCSEConfig (+ `IsConfigured`), RefinementConfig | LLM 호출 / 프롬프트 / Google CSE / refinement |
 
 ## 패키지 네이밍 (Xxxcfg)
 

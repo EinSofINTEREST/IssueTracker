@@ -50,7 +50,7 @@ is_placeholder() {
   esac
   # "core.CrawlerError" 처럼 경로가 아니라 Go 심볼을 가리키는 표기
   [[ "$1" =~ \.[A-Z] ]] && return 0
-  # "pkg/agent/Agent", "internal/classifier/Handler" — 마지막 세그먼트가 대문자로 시작하고
+  # "pkg/agent/Agent", "internal/bus/Publisher" — 마지막 세그먼트가 대문자로 시작하고
   # 확장자가 없으면 파일이 아니라 타입/인터페이스 이름이다.
   [[ "${1##*/}" =~ ^[A-Z][A-Za-z0-9]*$ ]] && return 0
   return 1

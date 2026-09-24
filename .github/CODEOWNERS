@@ -21,9 +21,8 @@
 # 크롤러 코어
 /internal/processor/fetcher/core/         @juhy0987
 
-# 처리 파이프라인 / 분류기 / 스토리지
+# 처리 파이프라인 / 스토리지
 /internal/processor/            @juhy0987
-/internal/classifier/           @juhy0987
 /internal/storage/              @juhy0987
 
 # 빌드/배포 산출물

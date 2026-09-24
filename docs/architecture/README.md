@@ -29,10 +29,6 @@ docs/architecture/
 │   └── migrate-down.md
 ├── internal/                              ← 비공개 비즈니스 로직
 │   ├── README.md
-│   ├── classifier/                        ← ELArchive Classifier client (gRPC + HTTP fallback)
-│   │   ├── README.md
-│   │   ├── grpc.md
-│   │   └── http.md
 │   ├── locks/                             ← 단계 무관 distributed lock (이슈 #197)
 │   │   └── README.md                      ← ProcessingLock + IngestionMarker (Redis SETNX)
 │   ├── processor/                         ← 파이프라인 단계별 정렬 (이슈 #195)
@@ -65,8 +61,6 @@ docs/architecture/
 │   ├── queue.md                           ← Kafka 토픽/그룹 상수
 │   ├── redis.md
 │   └── urlguard.md
-└── proto/
-    └── classifier.md                      ← classifier.proto 서비스 정의
 ```
 
 <br>
@@ -130,8 +124,6 @@ docs/architecture/
 부수 흐름:
   • Refiner (internal/processor/parser/rule/refiner) — 주기적 polling 으로 llm-auto 규칙의
     path_pattern 을 sample_urls 기반으로 정밀화 (이슈 #173).
-  • Classifier (internal/classifier) — gRPC 기본 + HTTP fallback 으로 ELArchive Classifier
-    호출 — 향후 enrich 단계에서 사용.
 ```
 
 <br>
@@ -166,7 +158,6 @@ docs/architecture/
 | Redis                      | [pkg/redis/](../../pkg/redis/), [internal/locks/](../../internal/locks/), [internal/bus/](../../internal/bus/) | ProcessingLock + IngestionMarker (locks) / RetryQueue ZSET (bus/retry.go) |
 | LLM (Gemini/OpenAI/Claude) | [pkg/llm/](../../pkg/llm/)                                  | parser rule 자동 생성 / path_pattern refinement |
 | Chrome (CDP)               | [internal/processor/fetcher/implementation/chromedp/](../../internal/processor/fetcher/implementation/chromedp/) | 동적 페이지 헤드리스 렌더                      |
-| ELArchive Classifier       | [internal/classifier/](../../internal/classifier/) + [proto/classifier/](../../proto/classifier/) | 카테고리 분류 (gRPC primary, HTTP fallback)    |
 | Prometheus                 | [pkg/metrics/](../../pkg/metrics/)                          | `/metrics` 엔드포인트                          |
 
 <br>
@@ -180,7 +171,7 @@ docs/architecture/
 |--------------------|------------------------------------------------------------------|------------------------------------------------------|
 | `contents`         | [ContentRepository](../../internal/storage/repository/content.go)           | 정규화된 Content 메타 (id, url, title, source 등)   |
 | `content_bodies`   | (same)                                                           | 본문 분리 저장 (큰 텍스트)                            |
-| `content_meta`     | (same)                                                           | validation_status, classifier 결과 등 메타           |
+| `content_meta`     | (same)                                                           | image_urls + extra (JSONB) 부가 메타                 |
 | `raw_contents`     | [RawContentRepository](../../internal/storage/repository/raw_content.go)    | Claim Check — 임시 HTML 저장 후 parser 가 정리       |
 | `parsing_rules`    | [ParsingRuleRepository](../../internal/storage/repository/parser_rule.go)  | host_pattern + path_pattern → SelectorMap (이슈 #100) |
 | `sample_urls`      | [SampleURLRepository](../../internal/storage/repository/sample_url.go)      | refiner 가 path_pattern 정밀화에 사용 (이슈 #173)    |
