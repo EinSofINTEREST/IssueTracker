@@ -22,8 +22,8 @@ Sub 4 테스트 (#535).
 |---|---|---|
 | CLI 호출 | `claude ... -p <prompt>` (플래그) | `codex exec ... <prompt>` — **프롬프트가 마지막 위치 인자** |
 | git repo 검사 | 없음 | **`--skip-git-repo-check` 필수** (아래 참조) |
-| parser prompt asset | `parser/claude/*` (실재) | `parser/codex/*` **부재 — 이슈 #594** |
-| MCP (DB 도구) | `.mcp.json` mount 지원 (이슈 #472) | **미지원 — 명시적 거부** (아래 참조) |
+| parser prompt asset | `parser/claude/*` | **claude 와 공용** — 전용 asset 없음 (이슈 #594) |
+| MCP (DB 도구) | `.mcp.json` 파일 mount (이슈 #472) | `-c mcp_servers.<name>` override — **호출 단위, 비영구** (아래 참조) |
 | 고아 workspace 정리 | `CleanupOrphanedWorkspaces` (이슈 #539) | **없음** (아래 참조) |
 | 베이스 이미지 | `node:20-slim` | `node:22-bookworm-slim` |
 | 인증 디렉토리 | `~/.claude` + `~/.claude.json` | `~/.codex` |
@@ -46,45 +46,35 @@ graceful shutdown, 응답 JSON schema — 는 claude 와 동일하다. [claude.m
 
 <br>
 
-## MCP 미지원 (이슈 #585)
+## MCP 전달 방식 (이슈 #585)
 
-codex 의 `exec` 하위명령에는 `--mcp-config` 옵션이 **없다.** claude 의 플래그를 그대로
-옮겨 쓰면, 프롬프트 실행 전 **인자 파싱 단계에서 세션이 통째로 실패** 한다.
+codex 의 `exec` 하위명령에는 `--mcp-config` 같은 **파일 주입 옵션이 없다.** claude 의
+`.mcp.json` mount 를 그대로 옮겨 쓸 수 없고, 설정을 넣는 경로는 두 가지뿐이다.
 
-조용히 무시하면 원인을 알기 어려운 런타임 실패가 되므로,
-[`session.go`](../../../../pkg/agent/codex/session.go) 가 MCP 설정이 붙은 호출을 **에러로
-거부** 한다.
+| 경로 | 지속성 | 채택 |
+|---|---|---|
+| `codex mcp add` → `$CODEX_HOME/config.toml` | **영구** | ❌ |
+| `-c mcp_servers.<name>.<field>=<TOML>` | 호출 단위 | ✅ |
 
-운영상 의미:
+**파일 경로를 쓰지 않는 이유가 결정적이다.** `$CODEX_HOME` 은 호스트 `~/.codex` 가 RW 로
+마운트된 곳이다. 컨테이너 안에서 등록하면 호스트 설정 파일에 DSN 이 평문으로 **영구
+기록** 되고, 세션이 끝나도 남으며 다른 용도의 codex 사용에도 적용된다.
 
-- `ENRICH_AGENT_BACKEND=codex` 로 두면 enrich 의 cross-verification 이 **enricher_ro DB
-  도구 없이** 수행된다. main wiring 이 이 사실을 WARN 으로 남긴다
-- DB 참조가 필요하면 `ENRICH_AGENT_BACKEND=claude` 를 유지할 것
-- `startCodexPool` 은 시그니처에 MCP 파라미터를 두지 않는다 — 두면 호출자가 붙일 수 있다고
-  오해한다
+변환은 [`mcp.go`](../../../../pkg/agent/codex/mcp.go) 의 `mcpOverrideArgs` 가 담당한다.
+값을 직접 TOML 로 인용하는데, codex 가 파싱 실패 시 **raw 문자열로 취급** 해 배열 등이
+에러 없이 조용히 격하되기 때문이다. 서버 이름과 env 키는 정렬해 같은 설정이 항상 같은
+인자를 만들도록 고정한다.
 
-올바른 경로는 codex `config.toml` 의 `[mcp_servers.<name>]` 또는 지원되는 `-c key=value`
-override 로 추정되나, 정확한 키 구조가 CLI 버전에 묶여 있어 검증 없이 추측하지 않았다.
-지원은 이슈 #585 에서 다룬다.
+### 노출 면 — 알고 채택한 대가
 
-<br>
+`-c` 값은 **argv 에 실린다.** 컨테이너 내 `ps` 에서 보이므로 claude 의 파일 mount 보다
+노출 면이 넓다.
 
-## `--skip-git-repo-check` 가 필요한 이유 (이슈 #591)
+- 완화: DSN 류는 `args` 가 아니라 `env` 로 넘기는 구성을 권장한다 (변환기가 `env` 하위
+  키를 지원한다)
+- 근본: `enricher_ro` 가 SELECT-only role (migration 031) 이라는 점이 보안 layer 다
 
-codex 는 기본적으로 **git 작업 트리 안에서만** 실행을 허용한다. 컨테이너 `WORKDIR` 인
-`/workspace` 는 git repo 가 아니고 이미지에 `git` 도 설치돼 있지 않으므로, 이 플래그가
-없으면 프롬프트가 모델에 전달되기 전에 거부된다:
-
-```
-Not inside a trusted directory and --skip-git-repo-check was not specified.
-```
-
-세션 디렉토리는 우리가 만든 임시 workspace 라 git 과 무관하므로 이 검사는 의미가 없다.
-`worker.go` / `session.go` 두 호출 지점 모두 플래그를 포함한다.
-
-> 이 결함은 mock `ContainerRunner` 기반 테스트로는 잡히지 않았다. 인자 배열의 *형태* 는
-> 검증하지만 CLI 가 그 인자를 *받아들이는지* 는 검증 범위 밖이기 때문이다. codex 관련
-> 인자를 바꿀 때는 컨테이너에서 직접 호출해 확인할 것.
+대안인 파일 경로는 위에서 본 대로 호스트 영구 기록이라 더 나쁘다.
 
 <br>
 
@@ -170,12 +160,10 @@ fallback 으로 처리한다.
 ## 의존
 
 - [`pkg/agent`](../../../../pkg/agent/) — `Agent` interface + `StageEnv` + `Backend`
-- [`pkg/llm/prompt`](../../../../pkg/llm/prompt/) — prompt loader
-
-  > ⚠️ **현재 parser 경로의 prompt 이름이 실재하지 않는다** (이슈 #594).
-  > `prompt.go` 가 `parser/codex/{page,list}.user` 를 요구하지만
-  > `pkg/llm/prompt/assets/` 에는 `parser/claude/*` 만 있다. enrich 경로는 두 backend 가
-  > `enrich/claude/*` 를 공용하므로 영향 없다.
+- [`pkg/llm/prompt`](../../../../pkg/llm/prompt/) — prompt loader.
+  parser 경로는 claude 와 **같은 asset** 을 쓴다 (`parser/claude/{page,list}.user`) —
+  backend 중립이고 placeholder 가 동일하기 때문이며, enrich 도 `enrich/claude/*` 를
+  공용한다. 이름 상수는 [`contracts.go`](../../../../pkg/agent/codex/contracts.go) 참조.
 - [`pkg/logger`](../logger.md)
 - 외부: `docker` CLI (PATH 에 있어야 함), `node:22-bookworm-slim` base image
 
@@ -205,6 +193,6 @@ fallback 으로 처리한다.
 - 이슈 #535 — Sub 4 단위 테스트
 - 이슈 #537 — 생성자의 authDir 즉시 검증 제거 (claude 와 공통 적용)
 - **이슈 #591 — `--skip-git-repo-check` 누락** (해결)
-- **이슈 #594 — parser prompt asset 부재** (미해결 — parser 경로 동작 불가)
-- **이슈 #585 — MCP 지원** (현재 미지원, 명시적 거부)
+- **이슈 #594 — parser prompt asset 부재** (해결 — claude asset 공용)
+- **이슈 #585 — MCP 지원** (해결 — `-c` override 전달)
 - 이슈 #539 — 고아 workspace 정리 (claude 전용)
