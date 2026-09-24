@@ -477,8 +477,14 @@ var ErrStageGateNotAcquired = errors.New("parser stage gate not acquired by this
 func (w *Worker) ProcessMessage(ctx context.Context, msg *queue.Message) error {
 	var ref core.RawContentRef
 	if err := json.Unmarshal(msg.Value, &ref); err != nil {
-		w.log.WithError(err).Error("malformed RawContentRef payload, dropping")
-		// commit 을 호출자가 하도록 nil 반환 — payload 손상은 재시도 의미 없음
+		w.log.WithError(err).Error("malformed RawContentRef payload, sending to dlq")
+		// 재시도는 의미 없다. 그러나 버려서도 안 된다 — 재시도 불가 메시지의 목적지는
+		// /dev/null 이 아니라 DLQ 다 (이슈 #640). validate / enrich 와 동일한 형태.
+		if dlqErr := w.sendToDLQ(ctx, msg, err); dlqErr != nil {
+			// DLQ 발행 실패 상태로 commit 하면 메시지가 유실된다 → 에러 반환으로 재소비 보장.
+			return fmt.Errorf("send to dlq (unmarshal): %w", dlqErr)
+		}
+		// commit 은 호출자가 한다.
 		return nil
 	}
 
@@ -565,9 +571,13 @@ func (w *Worker) processCategoryPage(ctx context.Context, raw *core.RawContent, 
 	defer w.releaseCategoryMarker(ctx, raw.URL, mlog)
 
 	if w.parser == nil || w.pub == nil {
-		mlog.Debug("parser or publisher not configured, skipping category job")
-		w.deleteRaw(ctx, rawID, mlog)
-		return nil
+		// 이슈 #640 — 예전에는 Debug 로그 + deleteRaw + commit 이라, 배선 실수 하나로 토픽을
+		// 소비하면서 크롤링한 원본을 삭제했다. 운영 로그 레벨(INFO)에서는 흔적조차 없었다.
+		//
+		// 배선 실수는 파괴적이 아니라 시끄러워야 한다 — raw 를 남기고, Error 로 알리고,
+		// commit 하지 않는다. 배선이 고쳐지면 그대로 처리가 이어진다.
+		mlog.Error("parser or publisher not configured, refusing to process category job")
+		return errors.New("parser: parser or publisher not configured")
 	}
 
 	// Precheck 진입 게이트 (이슈 #425): blacklist 등 이미 차단된 URL 이 파서에 도달했을 때
@@ -679,9 +689,9 @@ func (w *Worker) releaseCategoryMarker(ctx context.Context, url string, mlog *lo
 
 func (w *Worker) processArticlePage(ctx context.Context, raw *core.RawContent, rawID, crawlerName string, llmRetryCount int, mlog *logger.Logger) error {
 	if w.parser == nil {
-		mlog.Debug("parser not configured, skipping article")
-		w.deleteRaw(ctx, rawID, mlog)
-		return nil
+		// 이슈 #640 — processCategoryPage 와 같은 이유. raw 를 삭제하지 않는다.
+		mlog.Error("parser not configured, refusing to process article")
+		return errors.New("parser: parser not configured")
 	}
 
 	// Precheck 진입 게이트 (이슈 #425): blacklist 등 이미 차단된 URL 이 파서에 도달했을 때
