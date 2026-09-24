@@ -18,9 +18,13 @@
 | [`cmd/migrate-down/`](../../../cmd/migrate-down/) | `bin/migrate-down`  | DB 마이그레이션 롤백 (배포 환경 전용)         | [migrate-down.md](migrate-down.md)          |
 | [`cmd/rule-validator/`](../../../cmd/rule-validator/) | `bin/rule-validator` | parsing rule 검증 도구                   | (문서 미작성)                                 |
 | [`cmd/admin/`](../../../cmd/admin/)               | `bin/admin`         | 운영자 도구 — 진입 마커 무효화 / 강제 재크롤 / DLQ 확인 (이슈 #542) | (문서 미작성)          |
+| [`cmd/api/`](../../../cmd/api/)                   | `bin/api`           | **REST API 서버** — 읽기 전용 콘텐츠 조회 (이슈 #21 / #635) | (문서 미작성)          |
 
-> REST/GraphQL API 서버(이슈 #21)는 **미구현** 이며 `cmd/api` 디렉토리도 없습니다.
-> Rate limiter 디버깅 도구(`cmd/rldebug`) 역시 **존재하지 않습니다**.
+> `cmd/api` 는 읽기 전용입니다 — 파이프라인 stage 나 Kafka consumer 를 기동하지 않고
+> PostgreSQL 만 의존합니다. `/api/issues` 엔드포인트(이슈 #637)는 클러스터링
+> (#17 / #18 / #20) 이 선행돼야 하므로 아직 없습니다. 인증은 범위 밖이며 기본 bind 주소가
+> loopback(`127.0.0.1:8080`)인 이유가 이것입니다.
+> Rate limiter 디버깅 도구(`cmd/rldebug`)는 **존재하지 않습니다**.
 
 새 바이너리 추가 시 [`Makefile`](../../../Makefile) 의 `build` 타겟과 `*_BINARY` 변수를 동시 갱신
 ([01-architecture.md](../../../.claude/rules/01-architecture.md) 의 cmd/ 규칙).
@@ -47,5 +51,6 @@ cmd/processor     ──→ internal/{processor/validate, storage/*, locks(NoopP
 cmd/migrate       ──→ internal/storage/postgres + migrations
 cmd/migrate-down  ──→ internal/storage/postgres + migrations
 cmd/rule-validator──→ internal/processor/parser/rule + internal/storage/* + pkg/llm
+cmd/api───────────→ internal/api + internal/storage/postgres + pkg/metrics
 cmd/admin         ──→ internal/locks + internal/storage/* + pkg/{queue,redis}
 ```

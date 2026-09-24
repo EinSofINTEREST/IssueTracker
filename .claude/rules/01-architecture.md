@@ -100,9 +100,11 @@ issuetracker/
 │   │   └── main.go
 │   ├── rule-validator/        # ✅ parsing rule 검증 도구 → bin/rule-validator
 │   │   └── main.go
-│   └── admin/                 # ✅ 운영자 도구 — 진입 마커 무효화 / 강제 재크롤 / DLQ 확인 (이슈 #542)
+│   ├── admin/                 # ✅ 운영자 도구 — 진입 마커 무효화 / 강제 재크롤 / DLQ 확인 (이슈 #542)
+│   │   └── main.go
+│   └── api/                   # ✅ REST API 서버 → bin/api (이슈 #21 / #635)
 │       └── main.go
-│   # HTTP API server (이슈 #21) 는 미구현 — cmd/api 없음
+│   # /api/issues 엔드포인트 (이슈 #637) 는 클러스터링 (#17 / #18 / #20) 선행 대기
 │
 ├── internal/                   # Private application code
 │   ├── bus/                   # ✅ Publisher / Consumer / RetryScheduler — Kafka I/O 단일 출처 (이슈 #385)
