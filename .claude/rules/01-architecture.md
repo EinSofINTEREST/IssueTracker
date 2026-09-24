@@ -109,6 +109,7 @@ issuetracker/
 │   ├── workerpool/            # ✅ stage 공용 consumer pool harness (poll → dispatch → commit, 이슈 #403)
 │   ├── scheduler/             # ✅ 시드 URL 주기 발행 (scheduler_entries 기반)
 │   ├── promptcontract/        # ✅ 전 stage prompt placeholder 계약 집계 (이슈 #539)
+│   ├── scoring/               # ✅ host 단위 priority score — High ↔ Normal 자동 분기 (이슈 #382)
 │   ├── locks/                 # ✅ 단계 무관 distributed lock — 4 stage 공유 (이슈 #197)
 │   │   ├── ingestion_marker.go # IngestionMarker — SET NX 진입 마커 (release 없음, 이슈 #541)
 │   │   ├── processing_lock.go # ProcessingLock + ProcessingKey(stage, url)
@@ -150,6 +151,7 @@ issuetracker/
 ├── test/                       # Test files (mirrors service architecture)
 │   ├── internal/              # ✅ internal/ 패키지 테스트
 │   │   ├── locks/             # ← internal/locks/
+│   │   ├── scoring/           # ← internal/scoring/
 │   │   ├── processor/         # ← internal/processor/ (fetcher/{core,worker,...} + parser/{rule,worker} + validate)
 │   │   └── storage/           # ← internal/storage/
 │   └── pkg/                   # ✅ pkg/ 패키지 테스트
