@@ -4,7 +4,7 @@
 # 대상:
 #   1. 개발 규약 (CLAUDE.md / .claude/rules / .claude/loop.md) 이 언급한 저장소 경로의 실재 여부
 #   2. cmd/ 목록 · Go 버전 · 커버리지 임계값이 문서와 일치하는지
-#   3. prompt asset 이름·placeholder 계약 (Go 테스트에 위임 — 여기선 asset 개수만 sanity)
+#   3. prompt asset 개수 sanity + 코드가 참조하는 prompt 이름의 asset 실재 (placeholder 계약은 Go 테스트)
 #
 # 사용법:
 #   scripts/harness-check.sh          # 검사만 (실패 시 exit 1)
@@ -279,6 +279,34 @@ if [ "$asset_count" -lt 1 ]; then
   fail "prompt asset 이 하나도 없음 — embed 빌드가 깨짐"
 else
   ok "prompt asset ${asset_count}개 (계약 검증은 test/internal/promptcontract)"
+fi
+
+# 코드가 참조하는 prompt 이름이 실재하는 asset 을 가리키는지 (이슈 #596).
+#
+# 기존 장치들은 모두 반대 방향만 본다 — asset → contract (커버리지 테스트),
+# contract → asset (prompt.Verify). **코드 참조 → asset** 방향은 아무도 보지 않아,
+# 존재한 적 없는 이름을 참조하는 코드가 머지됐다 (이슈 #594: codex parser 경로가
+# prompt 로드에서 항상 실패).
+#
+# 한계 — 다음은 잡지 못한다. 잡히리라 기대하지 말 것:
+#   - fmt.Sprintf 등으로 동적 조립되는 이름 (현재 저장소에는 없음)
+#   - LLM_PROMPT_DIR override 로 외부 파일을 쓰는 경우 (기동 시 prompt.Verify 담당)
+# 주석 안의 문자열은 제외한다 — 이력 설명으로 옛 이름을 남기는 일이 흔하다.
+ref_tmp=$(mktemp); asset_tmp=$(mktemp)
+trap 'rm -f "$ref_tmp" "$asset_tmp"' EXIT
+grep -rh --include='*.go' -e '"\(parser\|enrich\)/' pkg/ internal/ cmd/ 2>/dev/null \
+  | sed 's|//.*$||' \
+  | grep -o '"\(parser\|enrich\)/[A-Za-z0-9_./-]*"' \
+  | tr -d '"' | sort -u > "$ref_tmp"
+find pkg/llm/prompt/assets -name '*.txt' \
+  | sed 's|pkg/llm/prompt/assets/||; s|\.txt$||' | sort > "$asset_tmp"
+missing=$(comm -23 "$ref_tmp" "$asset_tmp")
+if [ -n "$missing" ]; then
+  while IFS= read -r name; do
+    warn "코드가 참조하는 prompt 이름에 asset 이 없음: ${name} (이슈 #596)"
+  done <<< "$missing"
+else
+  ok "코드 참조 prompt 이름 $(wc -l < "$ref_tmp")개 모두 asset 실재"
 fi
 
 # ── 7. 폐지된 cron loop 자산이 되살아나지 않았는지 ────────────────────────
