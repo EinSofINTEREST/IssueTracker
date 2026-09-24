@@ -80,6 +80,28 @@ jobs:
           --health-timeout 3s
           --health-retries 10
 
+      # Postgres service — internal/storage/postgres 가 전부 미검증이던 문제 해소 (이슈 #612).
+      #
+      # 이슈 #382 가 host 별 signal 집계 SQL (CTE + DISTINCT ON + FILTER + regexp host 파생) 을
+      # 추가했으나 실행해 본 적이 없다. 실제로 그 SQL 에서 대소문자 버그를 하나 찾았는데
+      # 코드를 읽어서 찾은 것이고, 돌려봤다면 즉시 드러났을 종류다.
+      #
+      # redis 와 같은 이유다 (이슈 #562): DB 가 없으면 통합 테스트가 t.Skip 으로 빠져나가
+      # SQL 이 깨져도 CI 가 통과한다.
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: issuetracker
+          POSTGRES_PASSWORD: issuetracker
+          POSTGRES_DB: issuetracker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -90,7 +112,33 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # 스키마 적용 — 통합 테스트가 실제 테이블을 필요로 한다 (이슈 #612).
+      # cmd/migrate 를 쓰는 이유: 테스트가 자체 DDL 을 들고 있으면 migrations/ 와 갈라져,
+      # 마이그레이션이 깨져도 테스트는 통과하는 상태가 된다.
+      - name: Apply migrations
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: issuetracker
+          POSTGRES_PASSWORD: issuetracker
+          POSTGRES_DB: issuetracker_test
+          POSTGRES_SSLMODE: disable
+        run: go run ./cmd/migrate
+
       - name: Run tests
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: issuetracker
+          POSTGRES_PASSWORD: issuetracker
+          POSTGRES_DB: issuetracker_test
+          POSTGRES_SSLMODE: disable
+          # 통합 테스트가 CI 에서 조용히 skip 되지 않도록 강제한다 (이슈 #612).
+          #
+          # 가용성 기반 skip 은 로컬 편의를 위한 것이다. CI 에서까지 허용하면 서비스 연결
+          # 설정이 어긋났을 때 전부 skip 되고 CI 는 초록색이 된다 — 게이트가 꺼진 것과
+          # 구별되지 않는다.
+          REQUIRE_INTEGRATION_DEPS: "true"
         run: go test -race -coverprofile=coverage.out -coverpkg=./internal/...,./pkg/... -count=1 ./...
 
       # ── 1. 가시성: 커버리지 결과를 PR Summary에 직접 표시 ────────
