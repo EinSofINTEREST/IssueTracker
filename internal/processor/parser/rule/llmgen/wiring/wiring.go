@@ -46,14 +46,14 @@ func Build(provider llm.Provider, repo repository.ParserRuleRepository, resolver
 			return nil, fmt.Errorf("construct redis inflight locker: %w", lockerErr)
 		}
 		gen.SetLocker(locker)
-		log.WithField("ttl", appliedTTL.String()).Info("llmgen: Redis 분산 inflight lock 활성화")
+		log.WithField("ttl", appliedTTL.String()).Info("llmgen: redis distributed inflight lock enabled")
 	}
 
 	// Host breaker (#215) — 동일 host 의 LLM 호출이 N회 연속 rate_limit hit 시 cooldown.
 	// in-process state — multi-instance 환경에서는 인스턴스별 독립이지만, rate_limit 은 provider quota
 	// 자체가 글로벌이므로 모든 인스턴스가 동시에 차단 진입하는 자연 동기화.
 	gen.SetBreaker(llmgen.NewHostBreaker(llmgen.DefaultHostBreakerConfig()))
-	log.Info("llmgen: host breaker 활성화 (default 3-strike / 10min cooldown)")
+	log.Info("llmgen: host breaker enabled (default 3-strike / 10min cooldown)")
 
 	return gen, nil
 }

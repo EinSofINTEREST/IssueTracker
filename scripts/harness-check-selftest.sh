@@ -88,6 +88,23 @@ expect_detect ".cursor 룰셋의 Go 버전 드리프트" "Go 1.21" \
 expect_detect "코드가 참조하는 prompt 이름의 asset 부재" "parser/claude/ghost.user" \
   pkg/agent/claude/contracts.go 's|parser/claude/page.user|parser/claude/ghost.user|'
 
+expect_detect "로그 메시지의 한국어" "로그 메시지가 한국어" \
+  internal/processor/parser/rule/llmgen/wiring/wiring.go \
+  's|llmgen: host breaker enabled|llmgen: host breaker 활성화|'
+
+# 오탐 회귀 — 주석 안의 한국어 로그 예시는 잡으면 안 된다.
+# 규칙 문서와 코드 주석이 "// Bad" 예시로 한국어 로그를 적어둔다 (04-error-handling.md).
+printf "     "
+backup pkg/agent/claude/contracts.go
+printf '\n// 규칙 예시: log.Info("한글 메시지") — 주석이므로 게이트 대상이 아니다.\n' \
+  >> pkg/agent/claude/contracts.go
+log_comment_out=$(bash scripts/harness-check.sh 2>&1 || true)
+if printf '%s' "$log_comment_out" | sed 's/\x1b\[[0-9;]*m//g' | grep -q -- "로그 메시지가 한국어"; then
+  printf "%sFAIL%s 주석 안의 한국어 로그 예시가 오탐을 만든다\n" "$RED" "$RESET"; fail=$((fail + 1))
+else
+  printf "%s ok %s 주석 안의 한국어 로그 예시는 오탐 없음\n" "$GREEN" "$RESET"; pass=$((pass + 1))
+fi
+restore pkg/agent/claude/contracts.go
 expect_detect "문서 상대 링크 깨짐" "issuetracker-gone.md" \
   docs/architecture/cmd/README.md 's|(issuetracker.md)|(issuetracker-gone.md)|'
 
