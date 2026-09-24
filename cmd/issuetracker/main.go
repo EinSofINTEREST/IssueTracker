@@ -419,40 +419,6 @@ func main() {
 		log.WithError(err).Fatal("failed to construct rule parser")
 	}
 
-	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제.
-	// 이슈 #382 — host signal scorer. resolver 는 위에서 이미 chain 에 등록됐고, 여기서
-	// 주기 집계를 붙인다. 비활성이면 goroutine 자체를 띄우지 않는다.
-	var hostScorer *scoring.Scorer
-	if scoreResolver != nil {
-		hostScorer = scoring.NewScorer(
-			scoring.NewPostgresAggregator(pgstore.NewHostSignalAggregator(pool, log)),
-			decorator.WrapHostScoringWithTimeout(
-				pgstore.NewHostScoringRepository(pool, log), dbCfg.QueryTimeout),
-			scoreResolver,
-			scoring.Config{
-				Interval:      hostScoringCfg.Interval,
-				WindowMinutes: hostScoringCfg.WindowMinutes,
-				// 집계 상한은 주기보다 짧아야 한다 — 길면 다음 주기가 도래해도 이전
-				// 질의가 아직 돌고 있다. 주기의 절반을 넘지 않게 잡는다.
-				AggregateTimeout: hostScoringCfg.Interval / 2,
-				Weights: scoring.Weights{
-					Freshness: hostScoringCfg.WeightFreshness,
-					Impact:    hostScoringCfg.WeightImpact,
-					HostTrust: hostScoringCfg.WeightTrust,
-				},
-			},
-			log,
-		)
-		hostScorer.SetTuningLookup(hostTuningStore.lookup)
-		hostScorer.Start(ctx)
-		defer hostScorer.Stop()
-		log.WithFields(map[string]interface{}{
-			"interval":       hostScoringCfg.Interval.String(),
-			"window_minutes": hostScoringCfg.WindowMinutes,
-			"threshold":      hostScoringCfg.Threshold,
-		}).Info("host signal scoring enabled (issue #382)")
-	}
-
 	rawRepo := decorator.WrapRawContentWithTimeout(pgstore.NewRawContentRepository(pool, log), dbCfg.QueryTimeout)
 	rawSvc := service.NewRawContentService(rawRepo, log)
 
@@ -492,6 +458,43 @@ func main() {
 		log,
 	)
 	overrideRefresher.Start(ctx)
+
+	// scorer 는 override refresher **뒤에** 기동한다 (이슈 #383). 앞서 띄우면 Start 가
+	// 수행하는 첫 집계가 host 별 weight 가 아직 비어 있는 상태로 돌아, 부팅 후 한 주기
+	// (기본 5분) 동안 cluster-wide weight 로 계산된 점수가 쓰인다.
+	// raw_contents 서비스 — fetcher 측 Claim Check 저장 + parser 측 로드/삭제.
+	// 이슈 #382 — host signal scorer. resolver 는 위에서 이미 chain 에 등록됐고, 여기서
+	// 주기 집계를 붙인다. 비활성이면 goroutine 자체를 띄우지 않는다.
+	var hostScorer *scoring.Scorer
+	if scoreResolver != nil {
+		hostScorer = scoring.NewScorer(
+			scoring.NewPostgresAggregator(pgstore.NewHostSignalAggregator(pool, log)),
+			decorator.WrapHostScoringWithTimeout(
+				pgstore.NewHostScoringRepository(pool, log), dbCfg.QueryTimeout),
+			scoreResolver,
+			scoring.Config{
+				Interval:      hostScoringCfg.Interval,
+				WindowMinutes: hostScoringCfg.WindowMinutes,
+				// 집계 상한은 주기보다 짧아야 한다 — 길면 다음 주기가 도래해도 이전
+				// 질의가 아직 돌고 있다. 주기의 절반을 넘지 않게 잡는다.
+				AggregateTimeout: hostScoringCfg.Interval / 2,
+				Weights: scoring.Weights{
+					Freshness: hostScoringCfg.WeightFreshness,
+					Impact:    hostScoringCfg.WeightImpact,
+					HostTrust: hostScoringCfg.WeightTrust,
+				},
+			},
+			log,
+		)
+		hostScorer.SetTuningLookup(hostTuningStore.lookup)
+		hostScorer.Start(ctx)
+		defer hostScorer.Stop()
+		log.WithFields(map[string]interface{}{
+			"interval":       hostScoringCfg.Interval.String(),
+			"window_minutes": hostScoringCfg.WindowMinutes,
+			"threshold":      hostScoringCfg.Threshold,
+		}).Info("host signal scoring enabled (issue #382)")
+	}
 
 	fetcherResolver, err := fetcherRule.NewResolver(fetcherRuleRepo, log, 0)
 	if err != nil {
