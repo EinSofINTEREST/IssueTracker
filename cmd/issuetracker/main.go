@@ -267,6 +267,14 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("failed to load host scoring config")
 	}
+	// host 별 weight 의 base. 운영자가 HOST_SCORING_W_* 로 조정한 값이며, 부분 지정된
+	// host weight 가 이 위에 덮인다.
+	clusterWeights := scoring.Weights{
+		Freshness: hostScoringCfg.WeightFreshness,
+		Impact:    hostScoringCfg.WeightImpact,
+		HostTrust: hostScoringCfg.WeightTrust,
+	}
+
 	var scoreResolver *bus.DynamicScorePriorityResolver
 	if hostScoringCfg.Enabled {
 		scoreResolver = bus.NewDynamicScorePriorityResolver(hostScoringCfg.Threshold)
@@ -447,7 +455,7 @@ func main() {
 			if lerr != nil {
 				return nil, lerr
 			}
-			overrides, tunings, thresholds := splitPriorityConfigs(records, log)
+			overrides, tunings, thresholds := splitPriorityConfigs(records, clusterWeights, log)
 			hostTuningStore.set(tunings)
 			if scoreResolver != nil {
 				scoreResolver.SetHostThresholds(thresholds)
@@ -478,11 +486,7 @@ func main() {
 				// 집계 상한은 주기보다 짧아야 한다 — 길면 다음 주기가 도래해도 이전
 				// 질의가 아직 돌고 있다. 주기의 절반을 넘지 않게 잡는다.
 				AggregateTimeout: hostScoringCfg.Interval / 2,
-				Weights: scoring.Weights{
-					Freshness: hostScoringCfg.WeightFreshness,
-					Impact:    hostScoringCfg.WeightImpact,
-					HostTrust: hostScoringCfg.WeightTrust,
-				},
+				Weights:          clusterWeights,
 			},
 			log,
 		)
@@ -1856,6 +1860,7 @@ func (s *hostTuningStore) lookup(host string) *scoring.HostTuning {
 // 동작은 그대로이고, 그 사실이 어디에도 드러나지 않는다.
 func splitPriorityConfigs(
 	records []*model.FetcherRuleRecord,
+	baseWeights scoring.Weights,
 	log *logger.Logger,
 ) (map[string]bus.HostOverride, map[string]*scoring.HostTuning, map[string]float64) {
 	overrides := make(map[string]bus.HostOverride)
@@ -1888,32 +1893,16 @@ func splitPriorityConfigs(
 		if cfg.ScoreThreshold != nil {
 			thresholds[host] = *cfg.ScoreThreshold
 		}
-		if w := mergeWeights(cfg.SignalWeights); w != nil {
+		sw := cfg.SignalWeights
+		var wf, wi, wt *float64
+		if sw != nil {
+			wf, wi, wt = sw.Freshness, sw.Impact, sw.HostTrust
+		}
+		if w := scoring.MergeWeights(baseWeights, wf, wi, wt); w != nil {
 			tunings[host] = &scoring.HostTuning{Weights: w}
 		}
 	}
 	return overrides, tunings, thresholds
-}
-
-// mergeWeights 는 부분 지정된 weight 를 cluster-wide 기본값 위에 덮습니다.
-//
-// 부분 override 가 성립해야 운영자가 weight 하나만 조정할 수 있다. 미지정 키를 0 으로
-// 두면 지정하지 않은 signal 이 통째로 무시된다.
-func mergeWeights(w *model.SignalWeights) *scoring.Weights {
-	if w == nil || (w.Freshness == nil && w.Impact == nil && w.HostTrust == nil) {
-		return nil
-	}
-	out := scoring.DefaultWeights
-	if w.Freshness != nil {
-		out.Freshness = *w.Freshness
-	}
-	if w.Impact != nil {
-		out.Impact = *w.Impact
-	}
-	if w.HostTrust != nil {
-		out.HostTrust = *w.HostTrust
-	}
-	return &out
 }
 
 // priorityFromString 은 설정 문자열을 core.Priority 로 변환합니다.

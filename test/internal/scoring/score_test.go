@@ -310,3 +310,50 @@ func TestScorer_ZeroAggregateTimeout_UsesDefault(t *testing.T) {
 	scores, _ := sink.snapshot()
 	assert.Contains(t, scores, "a.example.com", "상한 미설정이 주기를 실패시키면 안 된다")
 }
+
+// ── MergeWeights (이슈 #383) ────────────────────────────────────────────────
+
+func ptr(v float64) *float64 { return &v }
+
+// TestMergeWeights_NoOverride_ReturnsNil 은 지정이 없으면 nil 인지 검증합니다.
+func TestMergeWeights_NoOverride_ReturnsNil(t *testing.T) {
+	assert.Nil(t, scoring.MergeWeights(scoring.DefaultWeights, nil, nil, nil))
+}
+
+// TestMergeWeights_UsesProvidedBase 는 **운영 중인 cluster weight** 위에 덮는지
+// 검증합니다.
+//
+// base 를 무시하고 DefaultWeights 를 쓰면, 운영자가 cluster weight 를 조정해 놨어도
+// 부분 지정한 host 만 그 설정을 잃고 하드코딩 기본값으로 떨어진다 — 설정이 조용히
+// 무시되는 종류다.
+func TestMergeWeights_UsesProvidedBase(t *testing.T) {
+	base := scoring.Weights{Freshness: 9, Impact: 8, HostTrust: 7}
+
+	got := scoring.MergeWeights(base, nil, nil, ptr(1))
+	require.NotNil(t, got)
+
+	assert.InDelta(t, 9.0, got.Freshness, 0.0001, "미지정 키는 base 를 유지해야 한다")
+	assert.InDelta(t, 8.0, got.Impact, 0.0001)
+	assert.InDelta(t, 1.0, got.HostTrust, 0.0001, "지정한 키만 덮인다")
+
+	assert.NotEqual(t, scoring.DefaultWeights.Freshness, got.Freshness,
+		"DefaultWeights 로 떨어지면 안 된다")
+}
+
+// TestMergeWeights_AllSpecified 는 전체 지정이 그대로 반영되는지 검증합니다.
+func TestMergeWeights_AllSpecified(t *testing.T) {
+	got := scoring.MergeWeights(scoring.DefaultWeights, ptr(1), ptr(2), ptr(3))
+	require.NotNil(t, got)
+	assert.InDelta(t, 1.0, got.Freshness, 0.0001)
+	assert.InDelta(t, 2.0, got.Impact, 0.0001)
+	assert.InDelta(t, 3.0, got.HostTrust, 0.0001)
+}
+
+// TestMergeWeights_DoesNotMutateBase 는 base 가 변형되지 않는지 검증합니다.
+func TestMergeWeights_DoesNotMutateBase(t *testing.T) {
+	base := scoring.Weights{Freshness: 1, Impact: 2, HostTrust: 3}
+	_ = scoring.MergeWeights(base, ptr(9), ptr(9), ptr(9))
+	assert.InDelta(t, 1.0, base.Freshness, 0.0001)
+	assert.InDelta(t, 2.0, base.Impact, 0.0001)
+	assert.InDelta(t, 3.0, base.HostTrust, 0.0001)
+}
