@@ -23,6 +23,7 @@
 | [`pkg/queue/`](../../../pkg/queue/) | Kafka producer/consumer + 토픽/그룹 상수 + BacklogChecker | [queue.md](queue.md) |
 | [`pkg/redis/`](../../../pkg/redis/) | Redis 클라이언트 wrapper + 분산 락 + ZSET retry queue | [redis.md](redis.md) |
 | [`pkg/urlguard/`](../../../pkg/urlguard/) | URL 허용/차단 술어 (Guard) + 적용 dispatcher (Gate) | [urlguard.md](urlguard.md) |
+| [`pkg/resilience/`](../../../pkg/resilience/) | 도메인 무관 resilience 패턴 — circuit breaker state machine (이슈 #402) | (전용 문서 없음) |
 
 <br>
 
