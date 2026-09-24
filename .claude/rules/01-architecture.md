@@ -228,10 +228,15 @@ issuetracker/
 - **Cache**: Redis 7+ (rate limiting, deduplication)
 - **Object Storage**: S3-compatible (raw HTML, media)
 
-### Message Queue (Planned)
-- **Queue**: Apache Kafka 3.5+
+### Message Queue (✅ Implemented)
+- **Queue**: Apache Kafka (client: `segmentio/kafka-go`, 직접 쓰지 않고 `pkg/queue` 래퍼 경유)
 - **Use Cases**: Async processing, job distribution
-- **Topics**: `issuetracker.raw.{country}`, `issuetracker.normalized`, etc.
+- **Topics**: 단일 출처는 [`pkg/queue/config.go`](../../pkg/queue/config.go) 의 상수다.
+  실제 사용: `issuetracker.crawl.{high,normal,low}` · `issuetracker.crawl.chromedp` ·
+  `issuetracker.fetched` · `issuetracker.normalized` · `issuetracker.validated` ·
+  `issuetracker.enriched` · `issuetracker.dlq`
+- ⚠️ `issuetracker.raw.{country}` 는 **초기 설계안이며 쓰이지 않는다** (이슈 #544 — 외부
+  호환을 위해 상수만 deprecated alias 로 유지)
 
 ### Observability (Planned)
 - **Metrics**: Prometheus
@@ -249,28 +254,31 @@ require (
 ## Data Flow
 
 ```
-Source → Fetch → [Kafka: raw] → Normalize → [Kafka: normalized] → Validate → [Kafka: validated]
-                                                                                        ↓
-[Kafka: clusters] ← Cluster ← [Kafka: embedded] ← Embed ← [Kafka: enriched] ← Enrich ←┘
-         ↓
-    Store Processed
+Scheduler → [crawl.{priority}] → Fetch → [fetched] → Parse → [normalized]
+                                                                  ↓
+                          (종단) [enriched] ← Enrich ← [validated] ← Validate
 ```
+
+`[enriched]` 는 **현재 파이프라인의 종단** 이다 — 발행은 하지만 consumer 가 없다.
+임베딩 / 클러스터링이 들어오면 소비처가 생긴다 (이슈 #17 / #18 / #20).
 
 ### Stage Definitions
 
-1. **Fetch**: Retrieve content from source
-2. **Kafka (raw)**: Publish raw content to country-specific topic (`issuetracker.raw.{country}`)
-3. **Normalize**: Convert to common schema, clean text
-4. **Kafka (normalized)**: Publish normalized articles (`issuetracker.normalized`)
-5. **Validate**: Check data integrity and quality
-6. **Kafka (validated)**: Publish validated articles (`issuetracker.validated`)
-7. **Enrich**: Extract entities, sentiment, topics
-8. **Kafka (enriched)**: Publish enriched articles (`issuetracker.enriched`)
-9. **Embed**: Generate vector representations
-10. **Kafka (embedded)**: Publish embedded articles (`issuetracker.embedded`)
-11. **Cluster**: Group similar issues using streaming/batch processing
-12. **Kafka (clusters)**: Publish identified issue clusters (`issuetracker.clusters`)
-13. **Store Processed**: Persist analysis results to databases
+1. **Scheduler**: `scheduler_entries` 기준으로 시드 URL 을 주기 발행 → `crawl.{priority}`
+2. **Fetch**: 콘텐츠 수집 후 **본문은 `raw_contents` 테이블에 저장** 하고, 토픽에는
+   `RawContentRef` (raw_id + url + source_info, < 1KB) 만 발행 — Claim Check 패턴 (이슈 #134)
+3. **Kafka (fetched)**: `issuetracker.fetched`
+4. **Parse**: `raw_contents` 에서 본문을 로드해 DB-driven 룰로 파싱 → `Content` 생성
+5. **Kafka (normalized)**: `issuetracker.normalized` — **이름과 역할이 다르다.** 별도의
+   normalize stage 는 없으며 parser 산출물이 여기로 간다. 운영 중 토픽이라 개명하지 않는다
+6. **Validate**: 품질 점수 기반 검증. 실패 시 재학습 cycle (이슈 #363~#366) 또는 DLQ
+7. **Kafka (validated)**: `issuetracker.validated`
+8. **Enrich**: extract / cross-verify / context / score (이슈 #445)
+9. **Kafka (enriched)**: `issuetracker.enriched` — **종단**
+10. **DLQ**: 처리 불가 메시지는 `issuetracker.dlq` 로 격리 (이슈 #542 / #559)
+
+**미구현 (계획):** Embed (#17) → `embedded` · Cluster (#18) → `clusters` · Vector DB (#20).
+해당 토픽 상수는 이름 규약 고정용으로만 존재하며 발행·소비 코드가 없다.
 
 ### Kafka-Based Processing Benefits
 
@@ -288,6 +296,12 @@ Source → Fetch → [Kafka: raw] → Normalize → [Kafka: normalized] → Vali
 - Secrets management (Vault or similar)
 
 ### Source Configuration
+
+> ⚠️ **아래 블록은 목표 형태의 예시이며 실재하지 않습니다.** 현재 소스는 YAML 이 아니라
+> **DB row** 로 관리합니다 (`fetcher_rules` / `parsing_rules` / `scheduler_entries` —
+> 이슈 #198). 새 사이트 추가는 Go 코드도 YAML 도 아닌 DB row + (필요 시) LLM 룰 생성입니다.
+> 또한 소스별 토픽 매핑은 없습니다 — 모든 fetch 결과가 `issuetracker.fetched` 하나로 갑니다.
+
 ```yaml
 sources:
   us:
@@ -328,8 +342,8 @@ kafka:
     crawl_low: "issuetracker.crawl.low"
 
     # Processing pipeline topics
-    raw_us: "issuetracker.raw.us"
-    raw_kr: "issuetracker.raw.kr"
+    # (raw_us / raw_kr 은 초기 설계안 — 실제로는 fetched 단일 토픽. 이슈 #544)
+    fetched: "issuetracker.fetched"
     normalized: "issuetracker.normalized"
     validated: "issuetracker.validated"
     enriched: "issuetracker.enriched"
@@ -421,8 +435,10 @@ kafka:
 
 ### Kafka Partition Strategy
 
-- **Raw topics** (`issuetracker.raw.*`): 16 partitions per country
-- **Processing topics**: 32 partitions for high throughput
+- **Crawl job topics** (`issuetracker.crawl.*`): 우선순위별 분리. 파티션 수는
+  `KAFKA_PARTITIONS_{HIGH,NORMAL,LOW,CHROMEDP}` 로 설정 (`.env.example` 참조)
+- **Processing topics** (`fetched` / `normalized` / `validated` / `enriched`): 처리량에 맞춰 확장
+- ~~**Raw topics** (`issuetracker.raw.*`)~~ — 쓰이지 않음 (이슈 #544)
 - **DLQ topic**: 8 partitions (low volume expected)
 - **Partition key**: Use domain/source for ordering within same source
 - **Rebalancing**: Minimal impact with proper consumer group size
