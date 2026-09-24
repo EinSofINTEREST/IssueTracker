@@ -355,6 +355,21 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 			}).Info("content already processed (duplicate delivery), skipping")
 			return w.commit(ctx, msg)
 		}
+		// query timeout 은 일시적이다 — DLQ 로 보내면 DB 가 잠깐 흔들린 사이 토픽이 통째로
+		// DLQ 에 쌓이고, 전부 정상 commit 이라 lag 도 알람도 뜨지 않는다. 게다가 DLQ replay 는
+		// 아직 없다 (이슈 #559). 에러를 반환해 Handle 의 재시도 경로에 맡긴다 — parser 가
+		// 같은 상황 (`get raw by id`) 을 이미 그렇게 다룬다 (이슈 #648).
+		//
+		// timeout 외의 DB 에러는 기존대로 DLQ 다. 일시성 판단이 서지 않는 것을 무한정 되돌리면
+		// 영구 실패 row 가 루프에 갇힌다 — 재시도 상한 문제는 이슈 #603 과 함께 결정해야 한다.
+		if storage.IsQueryTimeout(err) {
+			log.WithFields(map[string]interface{}{
+				"job_id": pm.ID,
+				"ref_id": ref.ID,
+			}).WithError(err).Warn("db query timed out fetching content, retrying")
+			return fmt.Errorf("fetch content (timeout): %w", err)
+		}
+
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
 			"ref_id": ref.ID,
