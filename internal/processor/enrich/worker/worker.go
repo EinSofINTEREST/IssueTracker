@@ -369,11 +369,14 @@ func (w *Worker) process(ctx context.Context, msg *queue.Message) error {
 	// 멈춘다. facts 없이 발행되고, 다음 회차에 다시 enrich 될 기회는 없지만 메시지는 흐른다.
 	allowed, skipReason := w.costGuard.Allow(ctx)
 	if !allowed {
+		// per-message 는 Debug — 한도 초과 후 입력 1건당 1줄이 쏟아진다.
+		// 운영자가 알아야 할 "차단 시작/해제" 는 CostGuard 가 상태 전이 시 1회만
+		// WARN/INFO 로 남긴다 (CodeRabbit 피드백). 건수는 metric 이 센다.
 		log.WithFields(map[string]interface{}{
 			"job_id": pm.ID,
 			"ref_id": ref.ID,
 			"reason": string(skipReason),
-		}).Warn("enrichment skipped by cost guard, forwarding without facts")
+		}).Debug("enrichment skipped by cost guard, forwarding without facts")
 	} else {
 		// 이슈 #447 / #448 / #449 / #450 — Content 조회 + extractor + cross-verify + context + score + DB upsert + facts 첨부.
 		// 본 단계 어떤 실패도 forward 를 막지 않음 — pipeline 진행이 enrichment 보다 우선.

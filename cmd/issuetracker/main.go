@@ -1194,6 +1194,9 @@ func main() {
 		redisClientShared != nil
 	var enrichConsumer bus.Consumer = enrichKafkaConsumer
 	var enrichZSetIntake *enrichWorkerPkg.ZSetIntake
+	// 이슈 #456 — 비용 가드의 backlog 체커가 ZSET 길이를 읽어야 해 블록 밖으로 뺀다.
+	// ZSET 모드에서는 intake 가 Kafka 를 즉시 commit 하므로 Kafka lag 이 0 에 가깝다.
+	var enrichZSetQueue *queue.PriorityZSetQueue
 	if enrichPriorityQueueEnabled {
 		zsetCfg := queue.PriorityZSetConfig{
 			ZSetKey:        envOrDefault("ENRICH_ZSET_QUEUE_KEY", "enrich:zset:queue"),
@@ -1201,10 +1204,11 @@ func main() {
 			MaxSize:        int64(envIntOrDefault("ENRICH_ZSET_MAX_SIZE", int(queue.PriorityZSetMaxSize))),
 			EntryTTL:       envDurationOrDefault("ENRICH_ZSET_ENTRY_TTL", queue.PriorityZSetEntryTTL),
 		}
-		enrichZSetQueue, qerr := queue.NewPriorityZSetQueue(redisClientShared.Raw(), zsetCfg)
+		q, qerr := queue.NewPriorityZSetQueue(redisClientShared.Raw(), zsetCfg)
 		if qerr != nil {
 			log.WithError(qerr).Fatal("failed to construct enrich priority zset queue")
 		}
+		enrichZSetQueue = q
 		zsetConsumer := queue.NewPriorityZSetConsumer(enrichZSetQueue, "enrich:zset", envDurationOrDefault("ENRICH_ZSET_POP_TIMEOUT", time.Second))
 		enrichConsumer = zsetConsumer
 		enrichZSetIntake = enrichWorkerPkg.NewZSetIntake(enrichKafkaConsumer, enrichZSetQueue, log)
@@ -1324,9 +1328,20 @@ func main() {
 	// 이슈 #456 — 비용 가드. 일일 한도 / backlog 임계 초과 시 enrichment 만 건너뛰고
 	// forward 는 그대로 진행한다 (forward-first 정책 유지).
 	if enrichCostCfg.DailyCallLimit > 0 || enrichCostCfg.MaxBacklog > 0 {
+		// backlog 측정 대상은 인입 모드에 따라 다르다 (CodeRabbit 피드백).
+		//
+		// ZSET 모드에서는 intake 가 Kafka 메시지를 ZSET 으로 옮기고 즉시 commit 하므로
+		// 처리 대기 물량이 ZSET 에 쌓여도 Kafka lag 은 0 에 가깝다. Kafka 기준으로 재면
+		// ENRICH_MAX_BACKLOG 가 영영 발동하지 않는다.
 		var enrichBacklogChecker enrichWorkerPkg.BacklogChecker
 		if enrichCostCfg.MaxBacklog > 0 {
-			enrichBacklogChecker = queue.NewBacklogChecker(crawlerKafkaCfg.Brokers, schedulerCfg.BacklogCheckTimeout)
+			if enrichZSetQueue != nil {
+				enrichBacklogChecker = enrichWorkerPkg.NewZSetBacklogChecker(enrichZSetQueue)
+				log.Info("enrich backlog source: priority zset (ZCARD)")
+			} else {
+				enrichBacklogChecker = queue.NewBacklogChecker(crawlerKafkaCfg.Brokers, schedulerCfg.BacklogCheckTimeout)
+				log.Info("enrich backlog source: kafka consumer lag")
+			}
 		}
 		enrichW.SetCostGuard(enrichWorkerPkg.NewCostGuard(
 			enrichWorkerPkg.CostGuardConfig{

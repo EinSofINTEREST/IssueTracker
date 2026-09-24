@@ -190,3 +190,65 @@ func TestCostGuard_BacklogBlock_DoesNotConsumeDailyBudget(t *testing.T) {
 	assert.False(t, ok)
 	assert.Equal(t, worker.SkipReasonDailyBudget, reason)
 }
+
+// stubZSetLen 은 고정 길이를 반환하는 ZSetLen 입니다.
+type stubZSetLen struct {
+	n   int64
+	err error
+}
+
+func (s *stubZSetLen) Len(_ context.Context) (int64, error) { return s.n, s.err }
+
+// TestZSetBacklogChecker_ReportsQueueLength 는 ZSET 모드에서 backlog 가 ZCARD 로
+// 측정되는지 확인합니다 (이슈 #456).
+//
+// ZSET 모드는 intake 가 Kafka 를 즉시 commit 하므로 Kafka lag 이 0 에 가깝다.
+// Kafka 기준으로 재면 ENRICH_MAX_BACKLOG 가 영영 발동하지 않는다.
+func TestZSetBacklogChecker_ReportsQueueLength(t *testing.T) {
+	c := worker.NewZSetBacklogChecker(&stubZSetLen{n: 4200})
+	require.NotNil(t, c)
+
+	lag, err := c.Backlog(context.Background(), "ignored-topic", "ignored-group")
+	require.NoError(t, err)
+	assert.Equal(t, int64(4200), lag)
+}
+
+func TestNewZSetBacklogChecker_NilQueue_ReturnsNil(t *testing.T) {
+	assert.Nil(t, worker.NewZSetBacklogChecker(nil),
+		"nil 큐면 호출자가 Kafka checker 로 fallback 할 수 있게 nil 을 반환")
+}
+
+// TestCostGuard_WithZSetChecker_BlocksOverThreshold 는 ZSET 길이로 차단이 동작하는지
+// 확인합니다 — 체커 교체가 실제로 가드에 반영되는지.
+func TestCostGuard_WithZSetChecker_BlocksOverThreshold(t *testing.T) {
+	g := worker.NewCostGuard(worker.CostGuardConfig{
+		MaxBacklog:           100,
+		BacklogCheckInterval: time.Hour,
+	}, worker.NewZSetBacklogChecker(&stubZSetLen{n: 500}), nil, nil)
+
+	ok, reason := g.Allow(context.Background())
+	assert.False(t, ok)
+	assert.Equal(t, worker.SkipReasonBacklog, reason)
+}
+
+// TestCostGuard_BacklogCheckerError_IsCached 는 조회 실패도 캐시되는지 확인합니다
+// (CodeRabbit 피드백).
+//
+// 실패를 캐시하지 않으면 Kafka 장애 동안 **모든 메시지** 가 새 RPC 를 띄우고 각자
+// 타임아웃을 기다리며 WARN 을 남긴다 — 장애를 견디려는 가드가 파이프라인을 느리게 만든다.
+func TestCostGuard_BacklogCheckerError_IsCached(t *testing.T) {
+	checker := &stubBacklog{err: errors.New("kafka down")}
+	g := worker.NewCostGuard(worker.CostGuardConfig{
+		MaxBacklog:           10,
+		BacklogTopic:         "t",
+		BacklogGroup:         "g",
+		BacklogCheckInterval: time.Hour,
+	}, checker, nil, nil)
+
+	for i := 0; i < 15; i++ {
+		ok, _ := g.Allow(context.Background())
+		require.True(t, ok, "조회 실패 중에도 통과해야 한다")
+	}
+	assert.Equal(t, int32(1), checker.Calls(),
+		"실패도 캐시해야 장애 중 RPC 폭주를 막는다")
+}

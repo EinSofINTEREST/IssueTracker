@@ -88,6 +88,11 @@ type CostGuard struct {
 	// backlog 캐시 — checkedAt 이 interval 이내면 lastBacklog 를 재사용합니다.
 	checkedAt   time.Time
 	lastBacklog int64
+
+	// blockedBy 는 현재 차단 중인 사유입니다 (SkipReasonNone 이면 통과 상태).
+	// 메시지마다 로그를 남기면 한도 초과 후 입력 1건당 1줄이 쏟아지므로,
+	// **상태가 바뀌는 순간에만** 로그합니다 (CodeRabbit 피드백).
+	blockedBy SkipReason
 }
 
 // NewCostGuard 는 CostGuard 를 생성합니다.
@@ -127,29 +132,46 @@ func (g *CostGuard) Allow(ctx context.Context) (bool, SkipReason) {
 	// 모든 worker goroutine 이 직렬화됩니다.
 	if reason := g.checkBacklog(ctx); reason != SkipReasonNone {
 		g.metrics.RecordDropped(string(reason))
+		g.noteState(reason)
 		return false, reason
 	}
 
+	// 판단은 lock 안에서 끝내고, 부수효과(metric / 로그)는 밖에서 합니다.
+	// lock 을 쥔 채 로깅하면 worker 들이 직렬화되고, 중간에 풀었다 다시 잡으면
+	// 교착과 상태 꼬임의 원인이 됩니다.
+	allowed := g.consumeDailyBudget()
+
+	if !allowed {
+		g.metrics.RecordDropped(string(SkipReasonDailyBudget))
+		g.noteState(SkipReasonDailyBudget)
+		return false, SkipReasonDailyBudget
+	}
+	g.metrics.RecordCall()
+	g.noteState(SkipReasonNone)
+	return true, SkipReasonNone
+}
+
+// consumeDailyBudget 는 날짜 경계를 처리하고 한도 안이면 카운터를 증가시킵니다.
+//
+// **판단과 증가가 한 임계구역 안에서 일어납니다** — 나누면 동시 호출이 한도를 넘겨
+// 통과합니다. 한도가 0 이하면 항상 true (무제한).
+func (g *CostGuard) consumeDailyBudget() bool {
 	if g.cfg.DailyCallLimit <= 0 {
-		g.metrics.RecordCall()
-		return true, SkipReasonNone
+		return true
 	}
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	today := g.currentDay()
-	if today != g.day {
+	if today := g.currentDay(); today != g.day {
 		g.day = today
 		g.count = 0
 	}
 	if g.count >= g.cfg.DailyCallLimit {
-		g.metrics.RecordDropped(string(SkipReasonDailyBudget))
-		return false, SkipReasonDailyBudget
+		return false
 	}
 	g.count++
-	g.metrics.RecordCall()
-	return true, SkipReasonNone
+	return true
 }
 
 // checkBacklog 는 캐시된 lag 으로 임계 초과 여부를 판단합니다.
@@ -175,10 +197,20 @@ func (g *CostGuard) checkBacklog(ctx context.Context) SkipReason {
 
 	lag, err := g.checker.Backlog(ctx, g.cfg.BacklogTopic, g.cfg.BacklogGroup)
 	if err != nil {
+		// **실패도 캐시한다** (CodeRabbit 피드백). checkedAt 을 갱신하지 않으면 Kafka 장애
+		// 동안 모든 메시지가 새 RPC 를 띄우고 각자 타임아웃을 기다리며 WARN 을 남긴다 —
+		// 장애를 견디려는 가드가 오히려 파이프라인을 느리게 만든다.
+		// lag 0 으로 기록해 interval 동안 통과시킨다.
+		g.mu.Lock()
+		g.lastBacklog = 0
+		g.checkedAt = g.nowFn()
+		g.mu.Unlock()
+
 		if g.log != nil && ctx.Err() == nil {
 			g.log.WithFields(map[string]interface{}{
-				"topic": g.cfg.BacklogTopic,
-			}).WithError(err).Warn("enrich backlog check failed, allowing enrichment")
+				"topic":          g.cfg.BacklogTopic,
+				"retry_after_ms": g.cfg.BacklogCheckInterval.Milliseconds(),
+			}).WithError(err).Warn("enrich backlog check failed, allowing enrichment until next check")
 		}
 		return SkipReasonNone
 	}
@@ -194,6 +226,31 @@ func (g *CostGuard) checkBacklog(ctx context.Context) SkipReason {
 	return SkipReasonNone
 }
 
+// noteState 는 차단 상태가 바뀔 때만 로그를 남깁니다.
+//
+// 반환값은 "이번 호출이 전이였는지" — 호출자가 per-message 로그를 Debug 로 낮출지
+// 판단하는 데 씁니다.
+func (g *CostGuard) noteState(reason SkipReason) {
+	g.mu.Lock()
+	prev := g.blockedBy
+	g.blockedBy = reason
+	g.mu.Unlock()
+
+	if prev == reason || g.log == nil {
+		return
+	}
+	if reason == SkipReasonNone {
+		g.log.WithField("previous_reason", string(prev)).
+			Info("enrich cost guard released, enrichment resumed")
+		return
+	}
+	g.log.WithFields(map[string]interface{}{
+		"reason":           string(reason),
+		"daily_call_limit": g.cfg.DailyCallLimit,
+		"max_backlog":      g.cfg.MaxBacklog,
+	}).Warn("enrich cost guard engaged, skipping enrichment until it clears")
+}
+
 func (g *CostGuard) nowFn() time.Time {
 	if g.now != nil {
 		return g.now()
@@ -205,4 +262,37 @@ func (g *CostGuard) nowFn() time.Time {
 func (g *CostGuard) currentDay() int {
 	t := g.nowFn().UTC()
 	return t.Year()*10000 + int(t.Month())*100 + t.Day()
+}
+
+// ZSetLen 은 우선순위 ZSET 의 대기 항목 수 조회를 추상화합니다 (이슈 #456).
+//
+// *queue.PriorityZSetQueue 의 Len 이 그대로 만족합니다.
+type ZSetLen interface {
+	Len(ctx context.Context) (int64, error)
+}
+
+// zsetBacklogChecker 는 ZSET 길이를 backlog 로 보고하는 BacklogChecker 입니다.
+//
+// # 왜 필요한가
+//
+// ZSET 인입 모드에서는 intake 가 Kafka 메시지를 ZSET 으로 옮기고 **곧바로 commit** 합니다.
+// 따라서 처리 대기 물량이 ZSET 에 쌓여 있어도 Kafka lag 은 0 에 가깝습니다. Kafka 기준
+// 체커를 그대로 쓰면 ENRICH_MAX_BACKLOG 가 영영 발동하지 않습니다 (CodeRabbit 피드백).
+//
+// topic / group 인자는 무시합니다 — ZSET 은 단일 키라 구분이 필요 없습니다.
+type zsetBacklogChecker struct {
+	q ZSetLen
+}
+
+// NewZSetBacklogChecker 는 ZSET 길이를 backlog 로 보고하는 checker 를 만듭니다.
+// q 가 nil 이면 nil 을 반환 — 호출자가 Kafka checker 로 fallback 하면 됩니다.
+func NewZSetBacklogChecker(q ZSetLen) BacklogChecker {
+	if q == nil {
+		return nil
+	}
+	return &zsetBacklogChecker{q: q}
+}
+
+func (c *zsetBacklogChecker) Backlog(ctx context.Context, _ string, _ string) (int64, error) {
+	return c.q.Len(ctx)
 }
