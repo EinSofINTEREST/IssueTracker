@@ -45,7 +45,9 @@ import (
 	"issuetracker/internal/storage/primitive"
 	redisstore "issuetracker/internal/storage/redis"
 	"issuetracker/internal/storage/service"
+	"issuetracker/pkg/agent"
 	"issuetracker/pkg/agent/claude"
+	"issuetracker/pkg/agent/codex"
 	agentdb "issuetracker/pkg/agent/dependency/db"
 	"issuetracker/pkg/links"
 	"issuetracker/pkg/llm/prompt"
@@ -995,12 +997,13 @@ func main() {
 		if !stagesCfg.ParserEnabled {
 			log.Info("parser stage disabled, skipping parser claudegen pool")
 		} else if p := startClaudegenPool(ctx, claude.PoolConfig{Name: "parser"}, promptLoader, nil, log); p != nil {
-			llmGen.SetExtractor(p)
+			// SetExtractor 는 여기서 하지 않는다 — 어느 backend 를 쓸지는 아래
+			// PARSER_AGENT_BACKEND 선택 단계에서 결정된다 (이슈 #534).
 			parserClaudegenPool = p
 			log.WithFields(map[string]interface{}{
 				"worker_count": p.WorkerCount(),
 				"agent_pool":   "parser",
-			}).Info("llmgen: Claude Code parser pool 활성화")
+			}).Info("claudegen parser pool 기동")
 		}
 		// Enrich pool — enricher_ro MCP postgres 도구 mount (이슈 #472).
 		// STAGES_ENRICH_ENABLED=false 시 동일하게 skip.
@@ -1019,8 +1022,82 @@ func main() {
 				log.WithFields(map[string]interface{}{
 					"worker_count": p.WorkerCount(),
 					"agent_pool":   "enrich",
-				}).Info("enrich: Claude Code enrich pool 활성화")
+				}).Info("claudegen enrich pool 기동")
 			}
+		}
+	}
+
+	// ── Codex 추출기 (이슈 #534 — 메타 #462) ────────────────────────────────
+	// CODEX_AGENT_ENABLED=true 일 때만 풀을 만든다 (기본 false). claude 와 동일하게 stage
+	// 가드를 적용해 비활성 stage 의 idle 컨테이너 비용을 피한다.
+	//
+	// **MCP 를 붙이지 않는다.** codex 의 `exec` 하위명령에는 --mcp-config 옵션이 없어,
+	// 설정하는 순간 프롬프트 실행 전 인자 파싱 단계에서 세션이 통째로 실패한다 (이슈 #585).
+	// 따라서 enrich 를 codex 로 돌리면 enricher_ro DB 도구 없이 동작한다 — 아래 backend
+	// 선택에서 그 사실을 WARN 으로 알린다.
+	var parserCodexPool, enrichCodexPool *codex.Pool
+	switch {
+	case !envBoolOrDefault("CODEX_AGENT_ENABLED", false):
+		// 기본 경로 — 분기 미발생.
+	case promptLoader == nil:
+		log.Warn("CODEX_AGENT_ENABLED=true but prompt loader is disabled; codex pools not created")
+	default:
+		// parser 풀은 llmGen 을 통해서만 쓰인다 — llmGen 이 없으면 절대 호출되지 않을
+		// 컨테이너를 띄우게 되므로 생성 자체를 건너뛴다.
+		switch {
+		case !stagesCfg.ParserEnabled:
+			log.Info("parser stage disabled, skipping parser codex pool")
+		case llmGen == nil:
+			log.Warn("LLM generator is disabled (check LLM_ENABLED / API key); skipping parser codex pool")
+		default:
+			if p := startCodexPool(ctx, codex.PoolConfig{Name: "parser"}, promptLoader, log); p != nil {
+				parserCodexPool = p
+			}
+		}
+		if !stagesCfg.EnrichEnabled {
+			log.Info("enrich stage disabled, skipping enrich codex pool")
+		} else if p := startCodexPool(ctx, codex.PoolConfig{Name: "enrich"}, promptLoader, log); p != nil {
+			enrichCodexPool = p
+		}
+	}
+
+	// ── Agent backend 선택 (이슈 #534) ──────────────────────────────────────
+	// stage 별로 claude / codex 중 어느 풀을 쓸지 결정한다. 두 backend 가 동시에 떠 있을 수
+	// 있으므로 (비교 운영 / 전환 준비) 선택은 풀 생성과 분리한다.
+	parserAgentPool, _ := selectAgentPool("parser", os.Getenv("PARSER_AGENT_BACKEND"), parserClaudegenPool, parserCodexPool, log)
+	enrichAgentPool, enrichBackend := selectAgentPool("enrich", os.Getenv("ENRICH_AGENT_BACKEND"), enrichClaudegenPool, enrichCodexPool, log)
+
+	if enrichAgentPool != nil && enrichBackend == agent.BackendCodex {
+		log.Warn("enrich backend=codex: enricher_ro MCP DB tool is unavailable on this backend (issue #585); cross-verification runs without DB lookup")
+	}
+
+	// 두 backend 모두 llmGen 이 없으면 parser 풀을 만들지 않으므로, 여기 도달했다면
+	// llmGen 은 non-nil 이다. 그래도 방어적으로 확인한다 — 생성 조건이 바뀌면 조용히
+	// nil 역참조가 되는 것보다 경고가 낫다.
+	if parserAgentPool != nil {
+		if llmGen == nil {
+			log.Warn("parser agent pool is running but LLM generator is disabled; selector extractor not registered")
+		} else {
+			llmGen.SetExtractor(parserAgentPool)
+			log.WithFields(map[string]interface{}{
+				"worker_count": parserAgentPool.WorkerCount(),
+				"agent_pool":   "parser",
+			}).Info("llmgen: agent-backed selector extractor 활성화")
+		}
+	}
+
+	// 정리 대상은 **생성된 모든 풀** 이다 — backend 선택에서 탈락한 풀도 컨테이너는 떠 있다.
+	// backend 를 함께 담는 이유: 두 backend 의 풀이 stage 이름 ("parser"/"enrich") 을
+	// 공유하므로, 이름만으로는 종료 로그에서 구별되지 않는다.
+	var runningAgentPools []runningAgentPool
+	for _, p := range []*claude.Pool{parserClaudegenPool, enrichClaudegenPool} {
+		if p != nil {
+			runningAgentPools = append(runningAgentPools, runningAgentPool{backend: agent.BackendClaude, pool: p})
+		}
+	}
+	for _, p := range []*codex.Pool{parserCodexPool, enrichCodexPool} {
+		if p != nil {
+			runningAgentPools = append(runningAgentPools, runningAgentPool{backend: agent.BackendCodex, pool: p})
 		}
 	}
 
@@ -1285,67 +1362,67 @@ func main() {
 
 	// stage 동시 슬롯 cap 과 agent pool 크기의 관계 검증 (이슈 #539).
 	// 둘은 독립 환경변수라 어긋날 수 있고, 어긋나면 한 컨테이너에 세션이 중첩된다.
-	warnAgentPoolCapMismatch(locks.StageEnricher, enrichCap, enrichClaudegenPool, log)
-	warnAgentPoolCapMismatch(locks.StageParser, parserCap, parserClaudegenPool, log)
+	warnAgentPoolCapMismatch(locks.StageEnricher, enrichCap, enrichAgentPool, log)
+	warnAgentPoolCapMismatch(locks.StageParser, parserCap, parserAgentPool, log)
 
 	// 이슈 #447 — claudegen 기반 enricher extractor wiring. claudegen pool 이 미활성이거나
 	// prompt loader 가 없으면 NoopExtractor 로 fallback (worker 는 항상 forward 보장 — extract
 	// 실패가 파이프라인을 막지 않음).
 	var enrichExtractor enrichcore.Extractor = enrichcore.NewNoopExtractor()
-	if enrichClaudegenPool != nil && promptLoader != nil {
-		ce, ceErr := enrichcore.NewClaudegenExtractor(enrichClaudegenPool, promptLoader)
+	if enrichAgentPool != nil && promptLoader != nil {
+		ce, ceErr := enrichcore.NewClaudegenExtractor(enrichAgentPool, promptLoader)
 		if ceErr != nil {
-			log.WithError(ceErr).Warn("claudegen enrich extractor construction failed, using noop")
+			log.WithError(ceErr).Warn("agent enrich extractor construction failed, using noop")
 		} else {
 			enrichExtractor = ce
-			log.Info("enrich extractor: claudegen-backed")
+			log.WithField("backend", string(enrichBackend)).Info("enrich extractor: agent-backed")
 		}
 	} else {
-		log.Info("enrich extractor: noop (claudegen pool or prompt loader unavailable)")
+		log.Info("enrich extractor: noop (agent pool or prompt loader unavailable)")
 	}
 
 	// 이슈 #448 — claudegen 기반 enricher verifier (cross-verification) wiring. extractor 와
 	// 동일 fallback 정책.
 	var enrichVerifier enrichcore.Verifier = enrichcore.NewNoopVerifier()
-	if enrichClaudegenPool != nil && promptLoader != nil {
-		cv, cvErr := enrichcore.NewClaudegenVerifier(enrichClaudegenPool, promptLoader)
+	if enrichAgentPool != nil && promptLoader != nil {
+		cv, cvErr := enrichcore.NewClaudegenVerifier(enrichAgentPool, promptLoader)
 		if cvErr != nil {
-			log.WithError(cvErr).Warn("claudegen enrich verifier construction failed, using noop")
+			log.WithError(cvErr).Warn("agent enrich verifier construction failed, using noop")
 		} else {
 			enrichVerifier = cv
-			log.Info("enrich verifier: claudegen-backed")
+			log.WithField("backend", string(enrichBackend)).Info("enrich verifier: agent-backed")
 		}
 	} else {
-		log.Info("enrich verifier: noop (claudegen pool or prompt loader unavailable)")
+		log.Info("enrich verifier: noop (agent pool or prompt loader unavailable)")
 	}
 
 	// 이슈 #449 — claudegen 기반 enricher contextualizer (외부 맥락 수집) wiring.
 	// extractor / verifier 와 동일 fallback 정책.
 	var enrichContextualizer enrichcore.Contextualizer = enrichcore.NewNoopContextualizer()
-	if enrichClaudegenPool != nil && promptLoader != nil {
-		cc, ccErr := enrichcore.NewClaudegenContextualizer(enrichClaudegenPool, promptLoader)
+	if enrichAgentPool != nil && promptLoader != nil {
+		cc, ccErr := enrichcore.NewClaudegenContextualizer(enrichAgentPool, promptLoader)
 		if ccErr != nil {
-			log.WithError(ccErr).Warn("claudegen enrich contextualizer construction failed, using noop")
+			log.WithError(ccErr).Warn("agent enrich contextualizer construction failed, using noop")
 		} else {
 			enrichContextualizer = cc
-			log.Info("enrich contextualizer: claudegen-backed")
+			log.WithField("backend", string(enrichBackend)).Info("enrich contextualizer: agent-backed")
 		}
 	} else {
-		log.Info("enrich contextualizer: noop (claudegen pool or prompt loader unavailable)")
+		log.Info("enrich contextualizer: noop (agent pool or prompt loader unavailable)")
 	}
 
 	// 이슈 #450 — claudegen 기반 enricher scorer (trust_score) + enriched_contents 영속화 wiring.
 	var enrichScorer enrichcore.Scorer = enrichcore.NewNoopScorer()
-	if enrichClaudegenPool != nil && promptLoader != nil {
-		cs, csErr := enrichcore.NewClaudegenScorer(enrichClaudegenPool, promptLoader)
+	if enrichAgentPool != nil && promptLoader != nil {
+		cs, csErr := enrichcore.NewClaudegenScorer(enrichAgentPool, promptLoader)
 		if csErr != nil {
-			log.WithError(csErr).Warn("claudegen enrich scorer construction failed, using noop")
+			log.WithError(csErr).Warn("agent enrich scorer construction failed, using noop")
 		} else {
 			enrichScorer = cs
-			log.Info("enrich scorer: claudegen-backed")
+			log.WithField("backend", string(enrichBackend)).Info("enrich scorer: agent-backed")
 		}
 	} else {
-		log.Info("enrich scorer: noop (claudegen pool or prompt loader unavailable)")
+		log.Info("enrich scorer: noop (agent pool or prompt loader unavailable)")
 	}
 
 	// 이슈 #456 — 단계별 토글. 비용 spike 시 운영자가 특정 단계만 즉시 끌 수 있게 한다.
@@ -1570,21 +1647,119 @@ func main() {
 	// 컨테이너 누수가 발생하지 않으므로, 별도의 cleanupCtx 를 사용.
 	// WithoutCancel(ctx) 로 ctx values 보존.
 	// 이슈 #530 — stage 별 분리된 pool 들을 모두 정리. 순서: parser → enrich (역의존 없어 임의 순서 가능).
-	for _, p := range []*claude.Pool{parserClaudegenPool, enrichClaudegenPool} {
-		if p == nil {
-			continue
-		}
+	// 이슈 #534 — backend 선택에서 탈락한 풀도 컨테이너는 떠 있으므로 함께 정리한다.
+	for _, rp := range runningAgentPools {
+		fields := map[string]interface{}{"agent_pool": rp.pool.Name(), "agent_backend": string(rp.backend)}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownCfg.ClaudegenTimeout)
 		cleanupCtx = log.ToContext(cleanupCtx)
-		if err := p.Stop(cleanupCtx); err != nil {
-			log.WithFields(map[string]interface{}{"agent_pool": p.Name()}).WithError(err).Error("claudegen pool stop failed")
+		if err := rp.pool.Stop(cleanupCtx); err != nil {
+			log.WithFields(fields).WithError(err).Error("agent pool stop failed")
 		} else {
-			log.WithFields(map[string]interface{}{"agent_pool": p.Name()}).Info("claudegen pool stopped")
+			log.WithFields(fields).Info("agent pool stopped")
 		}
 		cleanupCancel()
 	}
 
 	log.Info("shutdown completed")
+}
+
+// agentPool 은 main 이 backend 와 무관하게 다루는 agent pool 계약입니다 (이슈 #534).
+//
+// claude.Pool / codex.Pool 이 모두 만족합니다. 어느 구현을 쓸지는 stage 별
+// `*_AGENT_BACKEND` 로 한 번 결정되고, 그 뒤의 wiring 은 backend 를 알 필요가 없습니다.
+type agentPool interface {
+	agent.Agent
+	llmgen.SelectorExtractor
+	Name() string
+	WorkerCount() int
+	Stop(ctx context.Context) error
+}
+
+// runningAgentPool 은 종료 대상 풀과 그 backend 를 묶습니다 (이슈 #534).
+type runningAgentPool struct {
+	backend agent.Backend
+	pool    agentPool
+}
+
+// selectAgentPool 은 stage 의 `*_AGENT_BACKEND` 설정에 따라 사용할 풀을 고릅니다 (이슈 #534).
+//
+// 선택한 backend 의 풀이 없으면 (해당 backend 미활성 / 기동 실패) **다른 backend 로
+// 넘어가지 않고** nil 을 반환합니다. 운영자가 명시한 backend 를 조용히 바꾸면 모델과 비용이
+// 의도와 달라지고, 로그를 뒤지기 전까지 알아챌 수 없습니다. 이 경우 해당 stage 는 agent
+// 경로 없이 (parser 는 기본 LLM provider, enrich 는 noop) 동작합니다.
+//
+// 인식할 수 없는 값은 기본 backend (claude) 로 처리하고 WARN 을 남깁니다 — 오타 하나로
+// 부팅이 막히는 것보다 낫습니다.
+func selectAgentPool(
+	stage, requested string,
+	claudePool *claude.Pool,
+	codexPool *codex.Pool,
+	log *logger.Logger,
+) (agentPool, agent.Backend) {
+	backend, recognized := agent.NormalizeBackend(requested)
+	if !recognized {
+		log.WithFields(map[string]interface{}{
+			"stage":    stage,
+			"value":    requested,
+			"fallback": string(agent.DefaultBackend),
+		}).Warn("unrecognized agent backend, using default")
+	}
+
+	// 타입 있는 nil 포인터를 인터페이스에 담으면 `!= nil` 이 참이 되므로, 인터페이스로
+	// 승격하기 전에 구체 타입 상태로 검사한다.
+	var (
+		selected agentPool
+		present  bool
+	)
+	if backend == agent.BackendCodex {
+		selected, present = codexPool, codexPool != nil
+	} else {
+		selected, present = claudePool, claudePool != nil
+	}
+	if !present {
+		log.WithFields(map[string]interface{}{
+			"stage":   stage,
+			"backend": string(backend),
+		}).Info("selected agent backend has no running pool; agent path disabled for this stage")
+		return nil, backend
+	}
+	log.WithFields(map[string]interface{}{
+		"stage":        stage,
+		"backend":      string(backend),
+		"worker_count": selected.WorkerCount(),
+	}).Info("agent backend selected")
+	return selected, backend
+}
+
+// startCodexPool 은 PoolConfig 로 codex pool 을 생성 / start 하고 실패 시 nil 반환합니다 (이슈 #534).
+//
+// startClaudegenPool 과 동일한 graceful fallback 정책 — nil 반환 시 호출자가 해당 backend 를
+// 사용 불가로 취급합니다.
+//
+// MCP 파라미터가 없는 것은 의도된 것입니다 — codex backend 는 MCP 를 지원하지 않습니다
+// (이슈 #585). 시그니처에 두면 호출자가 붙일 수 있다고 오해하게 됩니다.
+func startCodexPool(
+	ctx context.Context,
+	cfg codex.PoolConfig,
+	loader prompt.Loader,
+	log *logger.Logger,
+) *codex.Pool {
+	pool, perr := codex.NewPoolFromConfig(cfg, loader, log)
+	if perr != nil {
+		log.WithFields(map[string]interface{}{"agent_pool": cfg.Name}).WithError(perr).
+			Warn("codex pool construction failed, backend unavailable for this stage")
+		return nil
+	}
+	if serr := pool.Start(ctx); serr != nil {
+		log.WithFields(map[string]interface{}{"agent_pool": cfg.Name}).WithError(serr).
+			Warn("codex pool start failed, backend unavailable for this stage")
+		return nil
+	}
+	log.WithFields(map[string]interface{}{
+		"agent_pool":   cfg.Name,
+		"worker_count": pool.WorkerCount(),
+	}).Info("codex pool 기동")
+	return pool
 }
 
 // startClaudegenPool 은 PoolConfig 로 claude pool 을 생성 / start 하고 실패 시 nil 반환합니다 (이슈 #530).
@@ -1719,7 +1894,7 @@ func buildEnricherROMCPConfig(log *logger.Logger) (*agentdb.MCPConfig, error) {
 //
 // 차단하지 않고 경고만 — 세션 중첩은 성능 저하이지 오동작이 아니며, 운영자가 의도적으로
 // 오버커밋할 수도 있습니다.
-func warnAgentPoolCapMismatch(stage string, stageCap int, pool *claude.Pool, log *logger.Logger) {
+func warnAgentPoolCapMismatch(stage string, stageCap int, pool agentPool, log *logger.Logger) {
 	if pool == nil {
 		return
 	}
