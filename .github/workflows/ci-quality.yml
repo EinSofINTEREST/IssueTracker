@@ -61,6 +61,25 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+
+    # Redis service — 통합 테스트가 항상 skip 되던 문제 해소 (이슈 #562).
+    #
+    # pkg/redis 의 토큰 락은 Lua compare-and-delete 로 소유권을 검증하는데,
+    # internal/locks 의 회귀 테스트는 fake Redis 를 써서 스크립트 자체를 검증하지 못한다.
+    # 실제 Redis 가 없으면 관련 테스트가 t.Skip 으로 조용히 빠져나가므로, Lua 가 깨져도
+    # CI 가 통과한다. 기본 포트/호스트를 쓰므로 별도 env 주입은 필요 없다
+    # (pkg/config/storage.LoadRedis 의 기본값 localhost:6379).
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
