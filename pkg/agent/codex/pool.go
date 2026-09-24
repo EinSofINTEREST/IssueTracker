@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"issuetracker/internal/processor/parser/rule/llmgen"
 	"issuetracker/internal/storage/model"
