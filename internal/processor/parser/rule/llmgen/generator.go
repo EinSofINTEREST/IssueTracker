@@ -564,7 +564,7 @@ func (g *Generator) Stop(ctx context.Context) {
 
 // runOnce 는 단일 추출 + validation + INSERT + cache invalidate 의 동기 실행입니다.
 // 호출자 (Enqueue 의 goroutine) 가 in-flight 슬롯 release 책임.
-func (g *Generator) runOnce(ctx context.Context, host string, targetType model.TargetType, sampleURL, html string, stale bool) error {
+func (g *Generator) runOnce(ctx context.Context, host string, targetType model.TargetType, sampleURL, html string, stale bool) (err error) {
 	// 사전 lookup — 동일 자연키 룰이 이미 DB 에 존재하면 LLM 호출 회피.
 	//
 	//   - enabled=true 룰 적중 시에만 skip (resolver 가 enabled=TRUE 만 조회하므로 disabled 는 사실상 부재)
@@ -610,7 +610,12 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType model.T
 	// 이슈 #169 — 호출 상한. 사전 lookup 을 통과해 **실제로 LLM 을 부르기 직전** 에만 센다.
 	// pre-check 에서 걸러진 건은 LLM 을 쓰지 않으므로 예산을 소모하지 않아야 한다.
 	if allowed, window := g.budget.Allow(ctx); !allowed {
-		g.genMetrics.RecordCall(GenStatusCapExceeded, 0)
+		// 아래 defer 가 등록되기 전에 반환하므로 여기서 직접 남긴다 (이슈 #583).
+		// auditRecord 가 RecordCall(cap_exceeded) 까지 수행하므로 별도 호출하지 않는다 —
+		// 두 번 세면 상한 도달 건수가 부풀려진다.
+		// budget 판정은 LLM 을 부르기 전이라 소요 시간이 의미 없어 startedAt 을 now 로 둔다.
+		g.auditRecord(g.log, host, targetType, sampleURL, "", model.SelectorMap{},
+			time.Now(), errCallBudgetExceeded)
 		g.log.WithFields(map[string]interface{}{
 			"host":        host,
 			"target_type": string(targetType),
@@ -629,6 +634,15 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType model.T
 		pageType  string // EnrichedExtractor 모드에서 채워짐. legacy 경로는 "" (미분류).
 		article   bool   // EnrichedExtractor 가 분류한 article body 여부 (이슈 #423). 기본 false.
 	)
+
+	// 모든 반환 경로에서 audit 을 남긴다 (이슈 #583). 분기마다 호출을 흩뿌리면 새 분기가
+	// 생길 때 누락되는데, 실제로 그렇게 해서 validation_fail / llm_error 가 지표에서
+	// 빠져 있었다. named return 으로 결과를 받아 한 곳에서 분류한다.
+	//
+	// selectors / modelName 은 클로저가 참조하므로 defer 실행 시점의 최신 값이 쓰인다.
+	defer func() {
+		g.auditRecord(g.log, host, targetType, sampleURL, modelName, selectors, genStart, err)
+	}()
 
 	if g.extractor != nil {
 		// EnrichedExtractor (claudegen multi-step) 우선 — type assertion 으로 자동 분기.
@@ -776,7 +790,8 @@ func (g *Generator) runOnce(ctx context.Context, host string, targetType model.T
 	// ErrDuplicate 흡수 경로는 세지 않는다. 그쪽은 이미 존재하던 룰을 재확인한 것이라
 	// 절감 효과를 계산할 때 LLM 생성으로 잡으면 분자가 부풀려진다.
 	g.resolveMetrics.RecordResolve(string(targetType), rule.ResolveResultLLMGenerated)
-	g.genMetrics.RecordCall(GenStatusSuccess, time.Since(genStart).Seconds())
+	// RecordCall(success) 는 위 defer 의 auditRecord 가 담당한다 — 4개 결과를 한 곳에서
+	// 기록해야 분기 누락이 생기지 않는다 (이슈 #583).
 	g.genMetrics.RecordInserted(string(targetType))
 
 	g.log.WithFields(map[string]interface{}{
