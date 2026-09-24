@@ -1,4 +1,4 @@
-// ZSetIntake.handleOne 의 분기 검증 (Copilot #3274731563 — mock Consumer + stub queue).
+// ZSetIntake 의 handleOne 분기 + lifecycle 검증 (Copilot #3274731563, 이슈 #529).
 //
 // PriorityPusher 인터페이스 + bus.Consumer 인터페이스에 의존하므로 Redis / Kafka 없이 단위 검증.
 package worker_test
@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -85,6 +86,14 @@ func (c *stubConsumer) Close() error {
 }
 
 func (c *stubConsumer) CommitCount() int32 { return atomic.LoadInt32(&c.commits) }
+
+// Closed 는 Close 호출 여부를 mutex 로 읽습니다 — Run goroutine 이 Close 를 호출하고
+// 테스트 goroutine 이 읽으므로 race detector 대상입니다 (이슈 #529).
+func (c *stubConsumer) Closed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
 
 func newIntake(t *testing.T, pusher queue.PriorityPusher) (*worker.ZSetIntake, *stubConsumer) {
 	t.Helper()
@@ -173,4 +182,52 @@ func TestZSetIntake_HandleOne_HeaderMissing_DefaultsNormalPriority(t *testing.T)
 	calls := pusher.Calls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, 2, calls[0].Priority, "priority header 없으면 normal (2) default")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// lifecycle (이슈 #529)
+//
+// Stage.Start 가 goroutine 을 분기해 놓고 Stop 이 그 종료를 기다리지 않으면,
+// Run 의 defer consumer.Close() 가 프로세스 종료 전에 실행될 보장이 없다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestZSetIntake_Stop_WaitsForRunToExit(t *testing.T) {
+	intake, cons := newIntake(t, &stubPusher{})
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	intake.Start(runCtx)
+
+	// run ctx 를 끊으면 Run 이 종료되고, Stop 은 그 종료를 확인한 뒤 반환해야 한다.
+	cancelRun()
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	require.NoError(t, intake.Stop(stopCtx))
+
+	assert.True(t, cons.Closed(), "Stop 반환 시점에는 consumer.Close 가 이미 실행돼 있어야 한다")
+}
+
+func TestZSetIntake_Stop_ContextExpiredWhileRunning_ReturnsCtxErr(t *testing.T) {
+	intake, _ := newIntake(t, &stubPusher{})
+
+	// run ctx 를 끊지 않아 Run 이 계속 돈다 — Stop 은 자신의 ctx 만료로 반환해야 한다.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	intake.Start(runCtx)
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelStop()
+
+	err := intake.Stop(stopCtx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"shutdown timeout 을 호출자가 인지할 수 있도록 에러를 삼키지 않아야 한다")
+}
+
+func TestZSetIntake_Stop_WithoutStart_ReturnsImmediately(t *testing.T) {
+	intake, _ := newIntake(t, &stubPusher{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	assert.NoError(t, intake.Stop(ctx), "Start 하지 않았으면 Stop 은 즉시 nil")
 }
