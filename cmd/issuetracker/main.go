@@ -412,11 +412,15 @@ func main() {
 	if scoreResolver != nil {
 		hostScorer = scoring.NewScorer(
 			scoring.NewPostgresAggregator(pgstore.NewHostSignalAggregator(pool, log)),
-			pgstore.NewHostScoringRepository(pool, log),
+			decorator.WrapHostScoringWithTimeout(
+				pgstore.NewHostScoringRepository(pool, log), dbCfg.QueryTimeout),
 			scoreResolver,
 			scoring.Config{
 				Interval:      hostScoringCfg.Interval,
 				WindowMinutes: hostScoringCfg.WindowMinutes,
+				// 집계 상한은 주기보다 짧아야 한다 — 길면 다음 주기가 도래해도 이전
+				// 질의가 아직 돌고 있다. 주기의 절반을 넘지 않게 잡는다.
+				AggregateTimeout: hostScoringCfg.Interval / 2,
 				Weights: scoring.Weights{
 					Freshness: hostScoringCfg.WeightFreshness,
 					Impact:    hostScoringCfg.WeightImpact,

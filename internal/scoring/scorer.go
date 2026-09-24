@@ -30,6 +30,9 @@ type ScoreSink interface {
 	SetScores(scores map[string]float64)
 }
 
+// defaultAggregateTimeout 은 AggregateTimeout 미설정 시 적용할 기본 상한입니다.
+const defaultAggregateTimeout = 30 * time.Second
+
 // Config 는 scorer 동작 설정입니다.
 type Config struct {
 	// Interval 은 집계 주기입니다.
@@ -38,6 +41,10 @@ type Config struct {
 	WindowMinutes int
 	// Weights 는 signal 가중치입니다.
 	Weights Weights
+	// AggregateTimeout 은 집계 질의 1회의 상한입니다.
+	//
+	// Interval 보다 짧아야 한다 — 길면 다음 주기가 도래해도 이전 질의가 아직 돌고 있다.
+	AggregateTimeout time.Duration
 }
 
 // Scorer 는 주기적으로 signal 을 집계해 점수를 저장하고 resolver 에 스냅샷을 공급합니다
@@ -65,6 +72,11 @@ func NewScorer(
 	cfg Config,
 	log *logger.Logger,
 ) *Scorer {
+	if cfg.AggregateTimeout <= 0 {
+		// 0 을 그대로 두면 context.WithTimeout 이 즉시 만료돼 **매 주기가 실패** 한다.
+		// 호출자가 설정을 빠뜨렸을 때 기능이 조용히 죽는 것을 막는다.
+		cfg.AggregateTimeout = defaultAggregateTimeout
+	}
 	return &Scorer{
 		agg:     agg,
 		repo:    repo,
@@ -109,7 +121,12 @@ func (s *Scorer) Stop() {
 
 // runOnce 는 한 주기를 수행합니다 — 집계 → 점수 계산 → 저장 → 스냅샷 공급.
 func (s *Scorer) runOnce(ctx context.Context) {
-	aggregates, err := s.agg.Aggregate(ctx, s.cfg.WindowMinutes)
+	// 집계 질의에 상한을 건다 — root ctx 로 도는 주기 작업이라 상한이 없으면 느린 질의
+	// 하나가 주기를 통째로 묶고, 그동안 스냅샷이 갱신되지 않는다.
+	aggCtx, cancel := context.WithTimeout(ctx, s.cfg.AggregateTimeout)
+	defer cancel()
+
+	aggregates, err := s.agg.Aggregate(aggCtx, s.cfg.WindowMinutes)
 	if err != nil {
 		// 이전 스냅샷을 유지한다 (SetScores 미호출).
 		s.log.WithError(err).Warn("host scoring aggregate failed, keeping previous snapshot")

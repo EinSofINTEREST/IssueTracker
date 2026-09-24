@@ -278,6 +278,42 @@ func (t *timeoutSampleURLRepo) Purge(ctx context.Context, ruleID int64) error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// repository.HostScoringRepository
+// ─────────────────────────────────────────────────────────────────────────────
+
+type timeoutHostScoringRepo struct {
+	inner   repository.HostScoringRepository
+	timeout time.Duration
+}
+
+// WrapHostScoringWithTimeout 은 repository.HostScoringRepository 의 모든 메서드 진입에
+// timeout 을 적용합니다 (이슈 #382).
+//
+// scorer goroutine 은 root ctx 로 도는 주기 작업이라 per-query 상한이 없으면 느린 질의
+// 하나가 주기를 통째로 묶는다. 다른 Repository 와 동일하게 dbCfg.QueryTimeout 을 건다.
+func WrapHostScoringWithTimeout(r repository.HostScoringRepository, d time.Duration) repository.HostScoringRepository {
+	return &timeoutHostScoringRepo{inner: r, timeout: d}
+}
+
+func (t *timeoutHostScoringRepo) Upsert(ctx context.Context, state *model.HostScoringState) error {
+	ctx, cancel := withTimeout(ctx, t.timeout)
+	defer cancel()
+	return t.inner.Upsert(ctx, state)
+}
+
+func (t *timeoutHostScoringRepo) Get(ctx context.Context, host string) (*model.HostScoringState, error) {
+	ctx, cancel := withTimeout(ctx, t.timeout)
+	defer cancel()
+	return t.inner.Get(ctx, host)
+}
+
+func (t *timeoutHostScoringRepo) ListAll(ctx context.Context) ([]*model.HostScoringState, error) {
+	ctx, cancel := withTimeout(ctx, t.timeout)
+	defer cancel()
+	return t.inner.ListAll(ctx)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // repository.RawContentRepository
 // ─────────────────────────────────────────────────────────────────────────────
 

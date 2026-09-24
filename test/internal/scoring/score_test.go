@@ -283,3 +283,30 @@ func TestScorer_Stop_Idempotent(t *testing.T) {
 	s.Stop()
 	s.Stop()
 }
+
+// TestScorer_ZeroAggregateTimeout_UsesDefault 는 상한 미설정이 기능을 죽이지 않는지
+// 검증합니다.
+//
+// 0 을 그대로 context.WithTimeout 에 넘기면 즉시 만료돼 **매 주기가 실패** 한다.
+// 설정을 빠뜨렸을 때 조용히 죽는 대신 기본값으로 동작해야 한다.
+func TestScorer_ZeroAggregateTimeout_UsesDefault(t *testing.T) {
+	agg := &fakeAggregator{result: []scoring.HostAggregate{
+		{Host: "a.example.com", Signals: sig(1, 1, 1, 100)},
+	}}
+	repo, sink := &fakeRepo{}, &fakeSink{}
+
+	// AggregateTimeout 을 명시하지 않는다 (= 0).
+	s := scoring.NewScorer(agg, repo, sink, scoring.Config{
+		Interval:      time.Hour,
+		WindowMinutes: 60,
+		Weights:       scoring.DefaultWeights,
+	}, logger.New(logger.DefaultConfig()))
+
+	s.Start(t.Context())
+	t.Cleanup(s.Stop)
+
+	waitFor(t, func() bool { _, calls := sink.snapshot(); return calls > 0 })
+
+	scores, _ := sink.snapshot()
+	assert.Contains(t, scores, "a.example.com", "상한 미설정이 주기를 실패시키면 안 된다")
+}
