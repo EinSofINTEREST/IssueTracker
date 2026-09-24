@@ -205,7 +205,7 @@ issuetracker/
 │       ├── claudegen/Dockerfile    # node:20-slim + claude-code + mcp-postgres (non-root)
 │       └── codex/Dockerfile        # node:22-slim + codex CLI (non-root)
 │
-├── migrations/                     # 031 SQL 마이그레이션 (up + down)
+├── migrations/                     # 35 SQL 마이그레이션 (up + down)
 ├── test/                           # 소스 트리 미러링
 └── docs/
     ├── architecture/               # canonical architecture 문서
