@@ -1067,10 +1067,6 @@ func main() {
 	parserAgentPool, _ := selectAgentPool("parser", os.Getenv("PARSER_AGENT_BACKEND"), parserClaudegenPool, parserCodexPool, log)
 	enrichAgentPool, enrichBackend := selectAgentPool("enrich", os.Getenv("ENRICH_AGENT_BACKEND"), enrichClaudegenPool, enrichCodexPool, log)
 
-	if enrichAgentPool != nil && enrichBackend == agent.BackendCodex {
-		log.Warn("enrich backend=codex: enricher_ro MCP DB tool is unavailable on this backend (issue #585); cross-verification runs without DB lookup")
-	}
-
 	// 두 backend 모두 llmGen 이 없으면 parser 풀을 만들지 않으므로, 여기 도달했다면
 	// llmGen 은 non-nil 이다. 그래도 방어적으로 확인한다 — 생성 조건이 바뀌면 조용히
 	// nil 역참조가 되는 것보다 경고가 낫다.
