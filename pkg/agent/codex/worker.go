@@ -124,7 +124,8 @@ func (w *Worker) ModelName() string { return w.model }
 // Start() 를 호출하기 전까지는 컨테이너가 기동되지 않습니다.
 //
 // CODEX_AUTH_DIR 미지정 시 $HOME/.codex 를 사용합니다.
-// 인증 디렉토리가 없거나 접근 불가하면 fail-fast — 호스트 `codex` CLI 사전 로그인 필요.
+// 인증 디렉토리가 없거나 접근 불가하면 **Start 시점에** 실패합니다 (이슈 #537) —
+// 호스트 `codex` CLI 사전 로그인 필요.
 //
 // 이슈 #530 — stage 별 풀이 필요한 경우 NewPoolFromConfig 가 본 함수가 아닌
 // newWorkerFromStageEnv 를 호출하여 stage prefix env 도 lookup 합니다.
