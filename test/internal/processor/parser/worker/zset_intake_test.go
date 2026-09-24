@@ -244,3 +244,31 @@ func TestZSetIntake_Stop_WithoutStart_ReturnsImmediately(t *testing.T) {
 	defer cancel()
 	assert.NoError(t, intake.Stop(ctx), "Start 하지 않았으면 Stop 은 즉시 nil")
 }
+
+// TestZSetIntake_HandleOne_ForwardsAllHeaders 는 인입 단계가 Kafka 헤더를 그대로
+// ZSET 에 넘기는지 검증합니다 (이슈 #561).
+//
+// priority 만 넘기면 pop 시 재구성된 메시지가 target_type 을 잃어 BuildRetryJob 이
+// category 를 article 로 떨어뜨리고, gate_skip_count 부재로 이슈 #540 의 재큐 예산이
+// 무력화된다.
+func TestZSetIntake_HandleOne_ForwardsAllHeaders(t *testing.T) {
+	pusher := &stubPusher{}
+	intake, _ := newIntake(t, pusher)
+
+	headers := map[string]string{
+		"priority":        "1",
+		"target_type":     "category",
+		"crawler":         "yna",
+		"timeout_ms":      "30000",
+		"gate_skip_count": "2",
+	}
+	msg := makeIntakeMsg(t,
+		core.RawContentRef{ID: "raw-cat", URL: "https://example.com/list", SourceInfo: core.SourceInfo{Name: "src"}},
+		headers,
+	)
+	intake.HandleOneForTest(context.Background(), msg)
+
+	calls := pusher.Calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, headers, calls[0].Headers, "모든 헤더가 ZSET 으로 전달되어야 한다")
+}

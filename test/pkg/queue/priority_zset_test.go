@@ -327,3 +327,77 @@ func TestPriorityZSetConsumer_FetchMessage_CtxCancel(t *testing.T) {
 		t.Fatal("FetchMessage did not return after ctx cancel")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 헤더 보존 (이슈 #561)
+//
+// ZSET 경유 메시지가 priority 하나만 갖게 되면 BuildRetryJob 이 target_type 부재로
+// category 를 article 로 떨어뜨리고, parseGateSkipCount 가 0 을 반환해 이슈 #540 의
+// 재큐 예산이 무력화된다. 아래 테스트가 그 회귀를 막는다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestPushWithHeaders_HeadersSurvivePop(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-pop")
+	ctx := context.Background()
+
+	headers := map[string]string{
+		"target_type":     "category",
+		"crawler":         "yna",
+		"timeout_ms":      "30000",
+		"gate_skip_count": "2",
+	}
+	require.NoError(t, q.PushWithHeaders(ctx, 1, "cat-1", []byte(`{"id":"cat-1"}`), headers))
+
+	res, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	assert.Equal(t, "cat-1", res.ID)
+	assert.Equal(t, headers, res.Headers, "push 한 헤더가 그대로 복원되어야 한다")
+}
+
+func TestPop_WithoutHeaders_ReturnsNilHeaders(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-absent")
+	ctx := context.Background()
+
+	// 구 버전이 남긴 entry 와 동일한 형태 — 헤더 키가 아예 없다.
+	require.NoError(t, q.Push(ctx, 2, "legacy-1", []byte("payload")))
+
+	res, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Nil(t, res.Headers, "헤더 부재는 정상 경로 — 에러가 아니라 nil")
+}
+
+func TestPushWithHeaders_RepushWithoutHeaders_ClearsStale(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-stale")
+	ctx := context.Background()
+
+	require.NoError(t, q.PushWithHeaders(ctx, 2, "same", []byte("first"),
+		map[string]string{"target_type": "category"}))
+	// 같은 id 로 헤더 없이 재push — 이전 사이클 헤더가 되살아나면 안 된다.
+	require.NoError(t, q.Push(ctx, 2, "same", []byte("second")))
+
+	res, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, []byte("second"), res.Payload)
+	assert.Nil(t, res.Headers, "헤더 없이 재push 하면 이전 헤더가 남아서는 안 된다")
+}
+
+func TestFetchMessage_RestoresHeaders_PriorityFromScore(t *testing.T) {
+	q, _ := newPriorityZSetTestQueue(t, "hdr-fetch")
+	ctx := context.Background()
+
+	// push 헤더의 priority 는 일부러 틀린 값 — score 가 단일 출처여야 한다.
+	require.NoError(t, q.PushWithHeaders(ctx, 1, "c-1", []byte(`{"id":"c-1"}`),
+		map[string]string{"target_type": "category", "priority": "3"}))
+
+	c := queue.NewPriorityZSetConsumer(q, "parser.zset", 2*time.Second)
+	msg, err := c.FetchMessage(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+
+	assert.Equal(t, "category", msg.Headers["target_type"], "target_type 이 복원되어야 한다")
+	assert.Equal(t, "1", msg.Headers["priority"], "priority 는 ZSET score 기준으로 덮어써야 한다")
+}
