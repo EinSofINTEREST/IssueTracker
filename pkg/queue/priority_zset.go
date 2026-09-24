@@ -311,18 +311,24 @@ func (q *PriorityZSetQueue) Pop(ctx context.Context, timeout time.Duration) (*Po
 	}
 	// 보존된 헤더 복원 (이슈 #561).
 	//
-	// 에러 처리는 payload GET 과 동일하게 간다 — BZPOPMIN 이 이미 member 를 제거했으므로,
-	// Redis 일시 장애로 :hdr 를 읽지 못한 채 진행하면 target_type / gate_skip_count 를
-	// **영구 유실** 한다 (Copilot 피드백). 키 부재(Nil) 만 정상 경로로 인정하고, 그 외
-	// 오류는 member 를 되돌린 뒤 에러를 올려 호출자가 재시도하게 한다.
+	// **전송 오류와 데이터 오류를 다르게 다룬다** (CodeRabbit 피드백).
+	//
+	//   - Redis 읽기 실패 (일시적): BZPOPMIN 이 이미 member 를 제거했으므로 그대로 진행하면
+	//     target_type / gate_skip_count 를 영구 유실한다. member 를 되돌리고 에러를 올려
+	//     호출자가 재시도하게 한다. 다음 시도에서 Redis 가 회복되면 성공한다.
+	//   - 헤더 디코드 실패 (결정적): 재시도해도 같은 바이트를 다시 읽으므로 영원히 실패한다.
+	//     되돌리면 그 member 가 가장 낮은 score 라 다음 BZPOPMIN 이 같은 항목을 집어
+	//     **큐 머리가 entry TTL (기본 24h) 까지 막힌다.** 따라서 되돌리지 않고 헤더만
+	//     버린 뒤 payload 를 전달한다 — 다이제스트 불일치와 동일한 degrade 경로다.
 	var headers map[string]string
 	raw, herr := q.rdb.Get(ctx, q.headerKeyFor(id)).Bytes()
 	switch {
 	case herr == nil && len(raw) > 0:
 		var env headerEnvelope
 		if uerr := json.Unmarshal(raw, &env); uerr != nil {
-			return nil, q.restoreOnPopFailure(ctx, id, res.Score,
-				fmt.Errorf("priority zset header decode (id=%s): %w", id, uerr))
+			// 헤더를 잃지만 메시지는 흘려보낸다 — 큐를 막는 것보다 낫다.
+			headers = nil
+			break
 		}
 		// 다른 사이클의 payload 에 붙은 헤더면 버린다 — 롤링 업그레이드 중 구 버전이
 		// payload 만 덮어쓴 경우를 자가 검출한다.

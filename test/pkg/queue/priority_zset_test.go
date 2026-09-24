@@ -19,6 +19,44 @@ import (
 	pkgredis "issuetracker/pkg/redis"
 )
 
+// newPriorityZSetTestQueueWithPrefix 는 newPriorityZSetTestQueue 와 같되 EntryKeyPrefix 를
+// 함께 반환합니다 — 테스트가 내부 키(예: 헤더 키)를 직접 조작해야 할 때 씁니다 (이슈 #561).
+func newPriorityZSetTestQueueWithPrefix(t *testing.T, suffix string) (*queue.PriorityZSetQueue, *pkgredis.Client, string) {
+	t.Helper()
+	cfg, err := storagecfg.LoadRedis()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := pkgredis.New(ctx, cfg)
+	if err != nil {
+		t.Skipf("Redis not available (%v) — skipping integration test", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	prefix := fmt.Sprintf("test:priority-zset:%s:%d:", suffix, time.Now().UnixNano())
+	entryPrefix := prefix + "entry:"
+	q, err := queue.NewPriorityZSetQueue(client.Raw(), queue.PriorityZSetConfig{
+		ZSetKey:        prefix + "queue",
+		EntryKeyPrefix: entryPrefix,
+		MaxSize:        100,
+		EntryTTL:       1 * time.Minute,
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		client.Raw().Del(ctx, prefix+"queue")
+		for _, pat := range []string{entryPrefix + "*", "hdr:" + entryPrefix + "*"} {
+			if keys, err := client.Raw().Keys(ctx, pat).Result(); err == nil && len(keys) > 0 {
+				client.Raw().Del(ctx, keys...)
+			}
+		}
+	})
+	return q, client, entryPrefix
+}
+
 // newPriorityZSetTestQueue 는 격리된 ZSetKey 로 PriorityZSetQueue 를 생성합니다.
 // Redis 미가용 시 t.Skip — 통합 테스트.
 func newPriorityZSetTestQueue(t *testing.T, suffix string) (*queue.PriorityZSetQueue, *pkgredis.Client) {
@@ -494,4 +532,38 @@ func TestPushWithHeaders_HeaderKeyDoesNotCollideWithPayload(t *testing.T) {
 	assert.Equal(t, "category", got["a"].Headers["target_type"])
 	assert.Equal(t, []byte(`{"n":"a-hdr"}`), got["a:hdr"].Payload,
 		"다른 항목의 헤더가 payload 를 덮어써서는 안 된다")
+}
+
+// TestPop_CorruptHeader_DeliversPayloadWithoutBlocking 는 헤더가 디코드 불가일 때
+// 큐가 막히지 않는지 검증합니다 (이슈 #561, CodeRabbit 피드백).
+//
+// 디코드 실패는 결정적이라 member 를 ZSET 으로 되돌리면 다음 BZPOPMIN 이 같은 항목을
+// 다시 집는다. 그 member 가 가장 낮은 score 이므로 큐 머리가 entry TTL (기본 24h) 까지
+// 막힌다. 따라서 헤더만 버리고 payload 는 전달해야 한다.
+func TestPop_CorruptHeader_DeliversPayloadWithoutBlocking(t *testing.T) {
+	q, client, entryPrefix := newPriorityZSetTestQueueWithPrefix(t, "hdr-corrupt")
+	ctx := context.Background()
+
+	require.NoError(t, q.PushWithHeaders(ctx, 1, "broken", []byte(`{"n":"broken"}`),
+		map[string]string{"target_type": "category"}))
+
+	// 헤더 값을 JSON 이 아닌 바이트로 덮어써 디코드가 반드시 실패하게 만든다.
+	// 헤더 키는 기본 도출 규칙 ("hdr:" + EntryKeyPrefix + id) 을 그대로 따른다.
+	hdrKey := "hdr:" + entryPrefix + "broken"
+	require.NoError(t, client.Raw().Set(ctx, hdrKey, []byte("{not-json"), time.Minute).Err())
+
+	// 뒤따르는 정상 항목 — 앞의 손상 항목이 큐를 막으면 이 항목에 도달하지 못한다.
+	require.NoError(t, q.Push(ctx, 2, "healthy", []byte(`{"n":"healthy"}`)))
+
+	first, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err, "디코드 실패가 Pop 을 에러로 만들면 안 된다")
+	require.NotNil(t, first)
+	assert.Equal(t, "broken", first.ID)
+	assert.Equal(t, []byte(`{"n":"broken"}`), first.Payload, "payload 는 그대로 전달")
+	assert.Nil(t, first.Headers, "디코드 불가 헤더는 버린다")
+
+	second, err := q.Pop(ctx, 2*time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	assert.Equal(t, "healthy", second.ID, "손상 항목이 큐 머리를 막지 않아야 한다")
 }
