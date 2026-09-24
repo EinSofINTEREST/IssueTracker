@@ -125,8 +125,9 @@ func TestWorker_ExtractEnriched_ExecArgs(t *testing.T) {
 	require.NoError(t, err)
 
 	args := runner.execArgs()
-	require.GreaterOrEqual(t, len(args), 5)
-	assert.Equal(t, []string{"codex", "exec", "--model", "gpt-5-codex"}, args[:4])
+	require.GreaterOrEqual(t, len(args), 6)
+	assert.Equal(t, []string{"codex", "exec", "--skip-git-repo-check", "--model", "gpt-5-codex"}, args[:5],
+		"--skip-git-repo-check 가 빠지면 codex 가 프롬프트 실행 전에 거부한다 (이슈 #591)")
 	assert.Contains(t, args[len(args)-1], "example.com", "프롬프트가 마지막 위치 인자")
 	assert.Contains(t, args[len(args)-1], "/workspace/", "세션 경로가 프롬프트에 주입된다")
 }

@@ -80,8 +80,9 @@ func TestRunSession_ExecArgs(t *testing.T) {
 	require.NoError(t, err)
 
 	args := runner.execArgs()
-	require.GreaterOrEqual(t, len(args), 5)
-	assert.Equal(t, []string{"codex", "exec", "--model", "gpt-5-codex"}, args[:4])
+	require.GreaterOrEqual(t, len(args), 6)
+	assert.Equal(t, []string{"codex", "exec", "--skip-git-repo-check", "--model", "gpt-5-codex"}, args[:5],
+		"--skip-git-repo-check 가 빠지면 codex 가 프롬프트 실행 전에 거부한다 (이슈 #591)")
 	assert.Equal(t, "PROMPT-BODY", args[len(args)-1])
 }
 
