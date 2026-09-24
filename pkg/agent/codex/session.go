@@ -12,7 +12,6 @@ package codex
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,21 +69,18 @@ func (w *Worker) RunSession(
 		}
 	}
 
-	// 이슈 #472 — MCP 설정은 codex backend 에서 **아직 지원하지 않습니다** (CodeRabbit 피드백).
+	// 이슈 #585 — MCP 설정은 `-c mcp_servers.<name>...` override 로 전달한다.
 	//
-	// 기존 구현은 .mcp.json 을 쓰고 `codex exec --mcp-config <path>` 를 붙였으나, codex 의
-	// exec 파서는 그 옵션을 정의하지 않습니다. 따라서 MCP 를 설정한 순간 **프롬프트 실행 전
-	// argument parsing 단계에서 세션이 통째로 실패** 합니다. claude backend 의 플래그를
-	// 그대로 옮겨 쓴 것이 원인입니다.
+	// codex 의 exec 파서에는 --mcp-config 가 없다 (claude 의 .mcp.json 방식과 다른 점).
+	// 파일로 넣으려면 $CODEX_HOME/config.toml 에 써야 하는데, 그 경로는 호스트 ~/.codex 가
+	// RW 로 마운트된 곳이라 자격증명이 호스트에 영구 기록된다. 그래서 호출 단위로 끝나는
+	// override 를 쓴다 — 자세한 근거는 mcp.go 참조.
 	//
-	// 올바른 경로는 config.toml 의 [mcp_servers.<name>] 또는 지원되는 -c key=value override
-	// 이지만, 정확한 키 구조는 codex CLI 버전에 묶여 있어 검증 없이 추측하지 않습니다.
-	// 잘못된 플래그를 그대로 두면 런타임에 원인을 알기 어려운 실패가 나므로, 여기서
-	// **명시적으로 거부** 합니다 — 지원은 이슈 #585 에서 다룹니다.
-	if w.mcpConfig != nil {
-		return "", errors.New(
-			"codex: MCP config is not supported by this backend yet " +
-				"(codex exec has no --mcp-config option; see issue #585)")
+	// 변환 실패는 세션 시작 전에 끊는다. 잘못된 키/값을 그대로 넘기면 codex 가
+	// "invalid transport" 같은 간접적인 메시지를 내 원인 추적이 어렵다.
+	mcpArgs, err := mcpOverrideArgs(w.mcpConfig)
+	if err != nil {
+		return "", err
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, w.sessionTimeout)
@@ -101,6 +97,8 @@ func (w *Worker) RunSession(
 		"--skip-git-repo-check",
 		"--model", w.model,
 	}
+	args = append(args, mcpArgs...)
+	// 프롬프트는 마지막 위치 인자여야 한다 — 뒤에 무엇도 붙이지 않는다.
 	args = append(args, promptText)
 
 	w.log.WithFields(map[string]interface{}{
