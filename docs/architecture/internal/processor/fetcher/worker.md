@@ -103,7 +103,7 @@ resolver.Add(NewRuleBasedPriorityResolver(PriorityNormal)) // 룰 기반 우선�
 - [`internal/processor/fetcher/core`](core.md) — `CrawlJob`, `Priority`, `CrawlerError`
 - [`internal/processor/fetcher/handler`](handler.md) — Registry dispatch
 - [`internal/storage/service`](../../storage/service.md) — `ContentService` (성공 시 ContentRef 발행)
-- [`pkg/queue`](../../pkg/queue.md), [`pkg/redis`](../../pkg/redis.md), [`pkg/logger`](../../pkg/logger.md)
+- [`pkg/queue`](../../../pkg/queue.md), [`pkg/redis`](../../../pkg/redis.md), [`pkg/logger`](../../../pkg/logger.md)
 
 <br>
 
