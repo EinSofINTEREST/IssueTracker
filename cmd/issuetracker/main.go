@@ -1042,10 +1042,17 @@ func main() {
 	case promptLoader == nil:
 		log.Warn("CODEX_AGENT_ENABLED=true but prompt loader is disabled; codex pools not created")
 	default:
-		if !stagesCfg.ParserEnabled {
+		// parser 풀은 llmGen 을 통해서만 쓰인다 — llmGen 이 없으면 절대 호출되지 않을
+		// 컨테이너를 띄우게 되므로 생성 자체를 건너뛴다.
+		switch {
+		case !stagesCfg.ParserEnabled:
 			log.Info("parser stage disabled, skipping parser codex pool")
-		} else if p := startCodexPool(ctx, codex.PoolConfig{Name: "parser"}, promptLoader, log); p != nil {
-			parserCodexPool = p
+		case llmGen == nil:
+			log.Warn("LLM generator is disabled (check LLM_ENABLED / API key); skipping parser codex pool")
+		default:
+			if p := startCodexPool(ctx, codex.PoolConfig{Name: "parser"}, promptLoader, log); p != nil {
+				parserCodexPool = p
+			}
 		}
 		if !stagesCfg.EnrichEnabled {
 			log.Info("enrich stage disabled, skipping enrich codex pool")
@@ -1064,6 +1071,9 @@ func main() {
 		log.Warn("enrich backend=codex: enricher_ro MCP DB tool is unavailable on this backend (issue #585); cross-verification runs without DB lookup")
 	}
 
+	// 두 backend 모두 llmGen 이 없으면 parser 풀을 만들지 않으므로, 여기 도달했다면
+	// llmGen 은 non-nil 이다. 그래도 방어적으로 확인한다 — 생성 조건이 바뀌면 조용히
+	// nil 역참조가 되는 것보다 경고가 낫다.
 	if parserAgentPool != nil {
 		if llmGen == nil {
 			log.Warn("parser agent pool is running but LLM generator is disabled; selector extractor not registered")
