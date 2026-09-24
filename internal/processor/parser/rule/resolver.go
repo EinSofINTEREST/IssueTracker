@@ -62,6 +62,9 @@ type Resolver struct {
 	// 같은 패턴의 재컴파일을 회피 — 운영 중 동일 host 의 후보 슬라이스가 cache 만료 시마다
 	// 다시 fetch 되어도 regex 객체는 재사용. sync.Map 으로 lock-free read.
 	regexCache sync.Map // map[string]*compiledPattern
+
+	// metrics 는 resolve 결과 collector 입니다 (이슈 #558). nil 허용 — Record* 가 noop.
+	metrics *ResolveMetrics
 }
 
 // hasAnyEntry 는 HasAnyRule 결과 캐시 entry 입니다.
@@ -104,6 +107,13 @@ func WithCacheTTL(d time.Duration) Option {
 // WithNegativeCacheTTL 은 미매칭 결과의 cache TTL 을 override 합니다.
 func WithNegativeCacheTTL(d time.Duration) Option {
 	return func(r *Resolver) { r.negativeCacheTTL = d }
+}
+
+// WithResolveMetrics 는 resolve 결과 collector 를 주입합니다 (이슈 #558).
+//
+// 미주입 시 nil 이라 계측이 noop — METRICS 비활성 환경에서 추가 비용이 없습니다.
+func WithResolveMetrics(m *ResolveMetrics) Option {
+	return func(r *Resolver) { r.metrics = m }
 }
 
 // WithMaxCacheEntries 는 cache 의 최대 entry 수를 override 합니다 (default: 10_000).
@@ -182,15 +192,18 @@ func (r *Resolver) Resolve(ctx context.Context, host, path string, targetType mo
 	}
 
 	if len(candidates) == 0 {
+		r.metrics.RecordResolve(string(targetType), ResolveResultMiss)
 		return nil, &Error{Code: ErrNoRule, Message: "no active rule (cached)", Host: host, TargetType: string(targetType)}
 	}
 
 	// 후보 슬라이스는 LENGTH(path_pattern) DESC 로 정렬됨 — 더 구체적인 패턴부터 평가.
 	for _, c := range candidates {
 		if r.pathMatches(c.PathPattern, path) {
+			r.metrics.RecordResolve(string(targetType), ResolveResultHit)
 			return c, nil
 		}
 	}
+	r.metrics.RecordResolve(string(targetType), ResolveResultMiss)
 	return nil, &Error{Code: ErrNoRule, Message: "no rule matched url path", Host: host, URL: path, TargetType: string(targetType)}
 }
 
