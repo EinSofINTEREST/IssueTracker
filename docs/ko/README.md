@@ -182,10 +182,13 @@ issuetracker/
 │   ├── bus/                        # Kafka producer/consumer + retry scheduler
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives
+│   ├── scoring/                    # host 단위 priority score (High ↔ Normal 자동 분기)
+│   ├── promptcontract/             # prompt placeholder 계약 집계
 │
 ├── pkg/                            # 도메인 중립 공개 utility
 │   ├── agent/                      # LLM agent adapter
-│   │   └── claude/                 # claudegen 컨테이너 pool (parser llmgen + enrich 백엔드)
+│   │   ├── claude/                 # claudegen 컨테이너 pool (parser llmgen + enrich 백엔드)
+│   │   └── codex/                  # codex CLI 컨테이너 풀 (두 번째 agent backend)
 │   ├── config/                     # 6 sub-package (app / storage / fetcher / processor / llm / runtime)
 │   ├── llm/                        # 다중 provider LLM 추상 + prompt loader
 │   ├── logger/                     # zerolog 기반 구조화 logger

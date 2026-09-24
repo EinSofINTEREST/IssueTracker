@@ -182,10 +182,13 @@ issuetracker/
 │   ├── bus/                        # Kafka producer/consumer with retry scheduler
 │   ├── scheduler/                  # DB-driven seed job emitter
 │   ├── workerpool/                 # generic worker pool primitives
+│   ├── scoring/                    # host-level priority score (High ↔ Normal auto-routing)
+│   ├── promptcontract/             # prompt placeholder contract aggregation
 │
 ├── pkg/                            # Public, domain-neutral utilities
 │   ├── agent/                      # LLM agent adapters
-│   │   └── claude/                 # claudegen container pool (parser llmgen + enrich backend)
+│   │   ├── claude/                 # claudegen container pool (parser llmgen + enrich backend)
+│   │   └── codex/                  # codex CLI container pool (second agent backend)
 │   ├── config/                     # 6 sub-packages (app / storage / fetcher / processor / llm / runtime)
 │   ├── llm/                        # multi-provider LLM abstraction + prompt loader
 │   ├── logger/                     # zerolog-based structured logger
