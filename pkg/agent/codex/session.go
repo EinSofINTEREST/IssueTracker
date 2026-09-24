@@ -95,6 +95,10 @@ func (w *Worker) RunSession(
 	// 안정화된 후 후속 PR 에서 통합 — 본 패치는 transport 골격 유지.
 	args := []string{
 		"codex", "exec",
+		// --skip-git-repo-check: codex 는 기본적으로 git 작업 트리 안에서만 실행을 허용한다.
+		// 컨테이너 WORKDIR (/workspace) 은 git repo 가 아니므로 (이미지에 git 도 없다) 이
+		// 플래그가 없으면 프롬프트 실행 전에 거부된다 — 이슈 #591.
+		"--skip-git-repo-check",
 		"--model", w.model,
 	}
 	args = append(args, promptText)
