@@ -30,8 +30,8 @@ import (
 //
 // 세션 디렉토리는 호출 종료 시 자동 삭제됩니다 (성공/실패 무관).
 //
-// 본 메소드는 ExtractEnriched 와 동일하게 wg.Add/Done 으로 진행 중 호출을 추적 — Stop() 의
-// wg.Wait() 이 본 호출을 놓치지 않음.
+// 본 메소드는 ExtractEnriched 와 동일하게 admit() 으로 입장 허가를 받습니다 — 상태 확인과
+// wg.Add 가 한 임계구역에서 일어나 Stop() 의 wg.Wait() 과 경쟁하지 않습니다 (이슈 #532 리뷰).
 //
 // 호출자 역할: stdout 을 자체 schema 로 파싱. RunSession 은 JSON 파싱 / blacklist 분기
 // 등을 일체 수행하지 않습니다 (parser-specific 인 ExtractEnriched 와 다른 점).
@@ -41,17 +41,11 @@ func (w *Worker) RunSession(
 	files map[string][]byte,
 	promptText string,
 ) (string, error) {
-	w.wg.Add(1)
-	defer w.wg.Done()
-
-	w.mu.RLock()
-	containerID := w.containerID
-	workDir := w.workDir
-	w.mu.RUnlock()
-
-	if containerID == "" {
-		return "", errors.New("codex: worker not started — call Start() first")
+	containerID, workDir, err := w.admit()
+	if err != nil {
+		return "", err
 	}
+	defer w.wg.Done()
 
 	sessionID, err := newSessionID()
 	if err != nil {
@@ -76,23 +70,21 @@ func (w *Worker) RunSession(
 		}
 	}
 
-	// 이슈 #472 — MCP 설정이 등록되어 있으면 세션 디렉토리에 .mcp.json 작성. session 종료 시
-	// sessionHostDir 전체가 삭제되므로 자격증명도 함께 사라짐.
-	var mcpConfigContainerPath string
+	// 이슈 #472 — MCP 설정은 codex backend 에서 **아직 지원하지 않습니다** (CodeRabbit 피드백).
+	//
+	// 기존 구현은 .mcp.json 을 쓰고 `codex exec --mcp-config <path>` 를 붙였으나, codex 의
+	// exec 파서는 그 옵션을 정의하지 않습니다. 따라서 MCP 를 설정한 순간 **프롬프트 실행 전
+	// argument parsing 단계에서 세션이 통째로 실패** 합니다. claude backend 의 플래그를
+	// 그대로 옮겨 쓴 것이 원인입니다.
+	//
+	// 올바른 경로는 config.toml 의 [mcp_servers.<name>] 또는 지원되는 -c key=value override
+	// 이지만, 정확한 키 구조는 codex CLI 버전에 묶여 있어 검증 없이 추측하지 않습니다.
+	// 잘못된 플래그를 그대로 두면 런타임에 원인을 알기 어려운 실패가 나므로, 여기서
+	// **명시적으로 거부** 합니다 — 지원은 이슈 #585 에서 다룹니다.
 	if w.mcpConfig != nil {
-		mcpBytes, err := w.mcpConfig.Marshal()
-		if err != nil {
-			return "", fmt.Errorf("marshal mcp config: %w", err)
-		}
-		// 0o600 — 자격증명 포함 파일이므로 user-only.
-		mcpHostPath := filepath.Join(sessionHostDir, ".mcp.json")
-		if err := os.WriteFile(mcpHostPath, mcpBytes, 0o600); err != nil {
-			return "", fmt.Errorf("write mcp config: %w", err)
-		}
-		// 컨테이너 내부 경로 — workDir 이 /workspace 로 마운트되므로 sessionID 만 join.
-		// 컨테이너는 Linux 라 항상 '/' separator 사용 — filepath.Join 은 호스트 separator
-		// (Windows 의 '\') 를 쓸 수 있어 부적합 (gemini-review PR #473).
-		mcpConfigContainerPath = "/workspace/" + sessionID + "/.mcp.json"
+		return "", errors.New(
+			"codex: MCP config is not supported by this backend yet " +
+				"(codex exec has no --mcp-config option; see issue #585)")
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, w.sessionTimeout)
@@ -104,10 +96,6 @@ func (w *Worker) RunSession(
 	args := []string{
 		"codex", "exec",
 		"--model", w.model,
-	}
-	if mcpConfigContainerPath != "" {
-		// 본 플래그 이름은 codex CLI 최신 버전 확인 후 조정 — 운영 검증 단계 책임.
-		args = append(args, "--mcp-config", mcpConfigContainerPath)
 	}
 	args = append(args, promptText)
 

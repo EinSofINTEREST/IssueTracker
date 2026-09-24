@@ -92,7 +92,14 @@ type Worker struct {
 	mu          sync.RWMutex
 	containerID string
 	workDir     string
-	wg          sync.WaitGroup // 진행 중인 Extract 호출 추적
+	wg          sync.WaitGroup // 진행 중인 세션 호출 추적
+
+	// stopping 은 Stop 이 시작됐음을 나타냅니다 (CodeRabbit 피드백).
+	//
+	// 이 플래그가 없으면 Stop 의 wg.Wait() 이 시작된 뒤에도 새 호출이 wg.Add 를 할 수 있어
+	// "WaitGroup is reused before previous Wait has returned" panic 또는 Wait 조기 반환이
+	// 발생합니다. admit() 이 같은 mutex 아래에서 이 플래그를 확인하고 Add 까지 마칩니다.
+	stopping bool
 
 	// mcpConfig 가 non-nil 이면 RunSession 이 세션 디렉토리에 .mcp.json 을 작성하고
 	// codex 를 --mcp-config 플래그와 함께 호출합니다 (이슈 #472). nil 이면 비활성.
@@ -302,6 +309,25 @@ func (w *Worker) Start(ctx context.Context) error {
 	return nil
 }
 
+// errWorkerNotStarted 는 Start 전이거나 Stop 이 진행 중일 때 반환됩니다.
+var errWorkerNotStarted = errors.New("codex: worker not started — call Start() first")
+
+// admit 은 새 세션 호출을 받아들일지 결정하고, 받아들이면 **같은 lock 안에서** wg.Add(1) 합니다.
+//
+// 상태 확인과 Add 를 한 임계구역에 두는 것이 핵심입니다 (CodeRabbit 피드백). 나누면
+// Stop 이 wg.Wait() 을 시작한 뒤 Add 가 끼어들어 WaitGroup 계약을 위반합니다.
+//
+// 호출자는 성공 시 반드시 defer w.wg.Done() 을 등록해야 합니다.
+func (w *Worker) admit() (containerID, workDir string, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopping || w.containerID == "" {
+		return "", "", errWorkerNotStarted
+	}
+	w.wg.Add(1)
+	return w.containerID, w.workDir, nil
+}
+
 // Stop 은 진행 중인 Extract 호출 완료를 대기한 뒤 컨테이너를 종료하고 workspace 를 정리합니다.
 // graceful shutdown 시 호출합니다. 멱등(이미 정지된 경우 noop).
 // StopContainer 실패 시 state 를 소거하지 않아 재시도가 가능합니다.
@@ -311,7 +337,9 @@ func (w *Worker) Stop(ctx context.Context) error {
 		w.mu.Unlock()
 		return nil
 	}
-	// containerID 를 먼저 비워 새 Extract() 호출이 즉시 "not started" 에러를 반환하도록 함.
+	// stopping 을 먼저 세워 새 호출의 admit() 이 즉시 거부되게 한다 — 이 lock 을 놓은 뒤에는
+	// 어떤 wg.Add 도 일어나지 않으므로 아래 wg.Wait() 이 안전하다.
+	w.stopping = true
 	containerID := w.containerID
 	workDir := w.workDir
 	w.containerID = ""
@@ -334,11 +362,14 @@ func (w *Worker) Stop(ctx context.Context) error {
 
 	if err := w.runner.StopContainer(stopCtx, containerID); err != nil {
 		// 실패 시 state 복원 — 다음 Stop() 호출로 재시도 가능.
+		// stopping 도 함께 되돌린다. 남겨 두면 컨테이너가 살아 있는데도 admit() 이 영구
+		// 거부해 worker 가 좀비가 된다.
 		w.mu.Lock()
 		if w.containerID == "" {
 			w.containerID = containerID
 			w.workDir = workDir
 		}
+		w.stopping = false
 		w.mu.Unlock()
 		return fmt.Errorf("stop codex container: %w", err)
 	}
@@ -378,18 +409,11 @@ func (w *Worker) Extract(ctx context.Context, host string, targetType model.Targ
 // validity == "blacklist" 면 ExtractResult.Blacklist 비-nil — 호출자가 셀렉터 INSERT skip
 // + parser_blacklist Upsert 분기. Selectors / PageType 은 의미 없음.
 func (w *Worker) ExtractEnriched(ctx context.Context, host string, targetType model.TargetType, html string) (*llmgen.ExtractResult, error) {
-	// wg.Add 를 락 획득보다 먼저 수행 — Stop() 의 wg.Wait() 이 이 Extract 호출을 놓치지 않도록 함.
-	w.wg.Add(1)
-	defer w.wg.Done()
-
-	w.mu.RLock()
-	containerID := w.containerID
-	workDir := w.workDir
-	w.mu.RUnlock()
-
-	if containerID == "" {
-		return nil, errors.New("codex: worker not started — call Start() first")
+	containerID, workDir, err := w.admit()
+	if err != nil {
+		return nil, err
 	}
+	defer w.wg.Done()
 
 	sessionID, err := newSessionID()
 	if err != nil {
@@ -525,8 +549,17 @@ func parseEnrichedOutput(output string) (*llmgen.ExtractResult, error) {
 	case "":
 		// Schema 가 채워지지 않았거나 LLM 이 여전히 legacy SelectorMap-only 를 반환한 경우.
 		// 같은 JSON 을 SelectorMap 으로 재파싱 시도 — backward compat fallback.
+		//
+		// DisallowUnknownFields 를 쓰는 이유 (CodeRabbit 피드백):
+		// encoding/json 은 기본적으로 모르는 필드를 **조용히 버립니다.** 따라서
+		// `{"selectors": {...}}` 처럼 한 겹 감싸인 응답도 빈 SelectorMap 으로 파싱돼
+		// "성공" 으로 돌아갑니다. Generator 경로는 이후 validateSelectors 가 빈 맵을 거부해
+		// 잘못된 룰이 저장되지는 않지만, fallback 자체와 직접 호출자는 잘못된 응답을
+		// 성공으로 처리하게 됩니다.
+		dec := json.NewDecoder(strings.NewReader(jsonStr))
+		dec.DisallowUnknownFields()
 		var sm model.SelectorMap
-		if err := json.Unmarshal([]byte(jsonStr), &sm); err != nil {
+		if err := dec.Decode(&sm); err != nil {
 			return nil, fmt.Errorf("validity field missing and not a legacy selector map: %w", err)
 		}
 		return &llmgen.ExtractResult{Selectors: sm}, nil

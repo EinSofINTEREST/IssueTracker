@@ -32,6 +32,13 @@ const (
 	// maxWorkerCount: docker 컨테이너 누수 / codex API quota 폭발 방지용 상한.
 	// 운영자가 강제로 더 큰 값을 지정하면 maxWorkerCount 로 clamp.
 	maxWorkerCount = 16
+
+	// partialStartCleanupTimeout 은 기동 실패 후 이미 뜬 worker 를 정리할 때의 상한입니다.
+	//
+	// 세션 타임아웃(120s)을 재사용하지 않는다 — Worker.Stop 이 in-flight 세션을 ctx 만료까지
+	// 기다리므로 Start 가 에러를 돌려주기까지 그만큼 지연된다. 기동 직후라 in-flight 가
+	// 사실상 없어 짧은 상한으로 충분하며, 뒤이은 StopContainer 도 자체 15s 상한을 갖는다.
+	partialStartCleanupTimeout = 15 * time.Second
 )
 
 // PoolConfig 는 agent.PoolConfig type alias 입니다 (이슈 #530 재설계).
@@ -223,7 +230,11 @@ func (p *Pool) Start(ctx context.Context) error {
 				cwg.Add(1)
 				go func(idx int, worker *Worker) {
 					defer cwg.Done()
-					cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), defaultSessionTimeout)
+					// 기동 실패 경로의 cleanup 이므로 세션 타임아웃(120s)을 쓰지 않는다
+					// (CodeRabbit 피드백). Worker.Stop 은 in-flight 세션을 ctx 만료까지
+					// 기다리므로, 그대로 두면 Start 가 에러를 돌려주기까지 최대 120초가
+					// 걸린다. 기동 직후라 in-flight 가 사실상 없어 짧은 상한으로 충분하다.
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), partialStartCleanupTimeout)
 					defer cleanupCancel()
 					if stopErr := worker.Stop(cleanupCtx); stopErr != nil {
 						p.log.WithFields(map[string]interface{}{
