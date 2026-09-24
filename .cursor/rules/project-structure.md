@@ -12,7 +12,8 @@ issuetracker/
 │   ├── migrate/               # DB migration (up)
 │   ├── migrate-down/          # DB migration (down)
 │   ├── rule-validator/        # parsing rule 검증 도구
-│   └── admin/                 # 운영자 도구 (진입 마커 무효화 / 강제 재크롤 / DLQ)
+│   ├── admin/                 # 운영자 도구 (진입 마커 무효화 / 강제 재크롤 / DLQ)
+│   └── api/                   # REST API 서버 (읽기 전용 — 콘텐츠 조회)
 │
 ├── internal/                   # Private application code
 │   ├── bus/                   # Kafka I/O 단일 출처 (Publisher / RetryScheduler)
@@ -75,7 +76,7 @@ issuetracker/
 - Each subdirectory represents an executable
 - Contains only `main.go` with minimal logic
 - Imports and orchestrates from `internal/` and `pkg/`
-- Examples: `issuetracker`, `processor`, `migrate`, `rule-validator`, `admin`
+- Examples: `issuetracker`, `processor`, `migrate`, `rule-validator`, `admin`, `api`
 
 ```go
 // cmd/issuetracker/main.go
