@@ -102,6 +102,8 @@ make codex-build      # codex 컨테이너 이미지 (issuetracker-codex:local)
 | `bin/migrate` | `cmd/migrate/` | DB 마이그레이션 실행 (up) |
 | `bin/migrate-down` | `cmd/migrate-down/` | DB 마이그레이션 롤백 |
 | `bin/rule-validator` | `cmd/rule-validator/` | Parser rule selector 검증 도구 (dry-run) |
+| `bin/admin` | `cmd/admin/` | 운영자 도구 — 진입 마커 무효화 / 강제 재크롤 / DLQ 확인 |
+| `bin/api` | `cmd/api/` | REST API 서버 — 읽기 전용 콘텐츠 조회 (기본 bind `127.0.0.1:8080`) |
 
 ### 파이프라인 기동
 
@@ -145,7 +147,9 @@ issuetracker/
 │   ├── processor/                  # validate 전용
 │   ├── migrate/                    # DB 스키마 마이그레이션 (up)
 │   ├── migrate-down/               # DB 스키마 마이그레이션 (down)
-│   └── rule-validator/             # parser rule dry-run 도구
+│   ├── rule-validator/             # parser rule dry-run 도구
+│   ├── admin/                      # 운영자 도구
+│   └── api/                        # REST API 서버 (읽기 전용)
 │
 ├── internal/
 │   ├── processor/
@@ -299,7 +303,7 @@ make run-kafka-pipeline  # in-memory mock, Kafka 불필요
 4. [04-error-handling.md](../../.claude/rules/04-error-handling.md) — 에러 처리 & 모니터링
 5. [05-testing.md](../../.claude/rules/05-testing.md) — 테스트 전략
 6. [06-code-style.md](../../.claude/rules/06-code-style.md) — 코드 컨벤션
-7. [07-workflow.md](../../.claude/rules/07-workflow.md) — issue-first / commit-per-TODO / 자율 진행
+7. [07-workflow.md](../../.claude/rules/07-workflow.md) — issue-first / commit-per-TODO / 자율 진행 / 서브 에이전트 오케스트레이션
 
 ### 코드 스타일
 

@@ -324,6 +324,86 @@ else
   ok "cron loop 자산 부재 + 규약이 cron 등록을 지시하지 않음"
 fi
 
+# ── 8. 로그 메시지 언어 ───────────────────────────────────────────────────
+# 04-error-handling.md: "로그 msg 문자열은 영어". 주석·문서는 한국어 허용.
+#
+# warn 이 아니라 fail 인 이유: 판정이 기계적이고 예외가 없다. 리뷰에 맡겼더니 12건이
+# 쌓였다 (이슈 #642). 로그 메시지는 수집기 / 알림 룰이 문자열로 매칭하는 식별자이기도 하다.
+echo "── 8. 로그 메시지 언어"
+# 패턴을 `[가-힣]` 로 쓰면 안 된다. 이 환경의 기본 로케일(en_US.UTF-8)에서 GNU grep 은
+# "Invalid collation character" 로 **실패** 하고, 2>/dev/null 과 만나면 위반이 0건인 것처럼
+# 보인다 — 게이트가 조용히 꺼진다. 실제로 처음 작성했을 때 그랬고 selftest 가 잡았다.
+#
+# LC_ALL=C 로 바이트 비교를 강제하되 `[가-힣]` 은 여전히 쓸 수 없다 — C 로케일에서는 바이트
+# 집합으로 풀려 em dash(—, E2 80 94)까지 걸린다. 영어 메시지에 — 를 쓰는 곳이 많다.
+# 따라서 한글 음절(U+AC00..U+D7A3)의 **UTF-8 선두 바이트 범위** 를 직접 지정한다.
+#
+# 검사 범위: 한글 음절. 자모(U+3130..)나 다른 문자권은 잡지 않는다 — 실제 위반 형태가 음절이다.
+#
+# 주석 줄 (// 로 시작) 은 제외한다 — 규칙 문서와 코드 주석이 "// Bad" 예시로 한국어 로그를
+# 적어두고, 규칙이 한국어 주석을 허용하므로 그건 위반이 아니다.
+korean_logs=$(LC_ALL=C grep -rnP '\.(Info|Warn|Error|Debug|Fatal)\("[^"]*[\xea-\xed]' \
+  --include='*.go' internal/ pkg/ cmd/)
+grep_status=$?
+if [ "$grep_status" -gt 1 ]; then
+  # exit 0 = 매치, 1 = 매치 없음, 2+ = 실행 실패. 실패를 통과로 읽지 않는다.
+  fail "로그 언어 검사를 실행하지 못했다 (grep exit ${grep_status}) — 게이트가 꺼진 상태다"
+  korean_logs=""
+fi
+korean_logs=$(printf '%s' "$korean_logs" \
+  | grep -v '_test\.go:' \
+  | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+if [ -n "$korean_logs" ]; then
+  while IFS= read -r line; do
+    fail "로그 메시지가 한국어: ${line%%:*}:$(echo "$line" | cut -d: -f2) (이슈 #642)"
+  done <<< "$korean_logs"
+else
+  ok "로그 메시지 전부 영어 (주석 제외)"
+fi
+
+# ── 9. 문서 상대 링크 ─────────────────────────────────────────────────────
+# 섹션 1 은 문서가 언급한 internal/ pkg/ cmd/ **저장소 경로** 만 본다. 문서 → 문서 링크는
+# 범위 밖이라, 디렉토리가 한 겹 깊어졌을 때 상대 경로가 조용히 깨진 채 남았다 (이슈 #646 —
+# PR 템플릿의 CI 규약 링크 2건 포함 11건).
+#
+# 반드시 걸러야 하는 두 가지:
+#   - 코드 펜스(```) 안 — 06-code-style.md 가 README 템플릿 예시로 존재하지 않는
+#     docs/en/... 링크를 의도적으로 담는다 ("목표 구조" 라고 명시돼 있다).
+#   - 인라인 코드 스팬(`...`) — 같은 파일이 language selector 문법을
+#     `**[한국어](../ko/same-file.md)** | English` 로 보여준다. same-file.md 는 플레이스홀더다.
+# 이 둘을 거르지 않으면 오탐이 16건 나고, 게이트는 그 순간부터 무시된다.
+echo "── 9. 문서 상대 링크"
+link_broken=0
+while IFS= read -r md; do
+  md_dir=$(dirname "$md")
+  while IFS=$'\t' read -r lineno link; do
+    [ -z "$link" ] && continue
+    case "$link" in
+      /*) target=".$link" ;;
+      *)  target="$md_dir/$link" ;;
+    esac
+    if [ ! -f "$target" ]; then
+      fail "문서 링크 대상 부재: ${md}:${lineno} → ${link} (이슈 #646)"
+      link_broken=$((link_broken + 1))
+    fi
+  done < <(awk '
+    /^[[:space:]]*```/ { fence = !fence; next }
+    fence { next }
+    {
+      line = $0
+      gsub(/`[^`]*`/, "", line)
+      while (match(line, /\]\([^)#: ]+\.md(#[^)]*)?\)/)) {
+        link = substr(line, RSTART + 2, RLENGTH - 3)
+        sub(/#.*$/, "", link)
+        print NR "\t" link
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }' "$md")
+done < <(find . -name '*.md' -not -path './.git/*' -not -path './node_modules/*' | sort)
+if [ "$link_broken" -eq 0 ]; then
+  ok "문서 상대 링크 전부 실재 (코드 펜스·인라인 코드 제외)"
+fi
+
 echo
 echo "─────────────────────────────────────"
 if [ "$fail_count" -gt 0 ]; then
