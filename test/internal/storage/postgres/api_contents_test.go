@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,9 +27,13 @@ import (
 
 // newAPIServer 는 실제 repository 를 주입한 API 서버와 시드 데이터 3건을 만듭니다.
 //
-//	api-us-1  US/en  tags=economy,markets    reliability=0.9
-//	api-kr-1  KR/ko  tags=politics           reliability=0.3
-//	api-kr-2  KR/ko  tags=politics,election  reliability=0.7
+//	id        country/lang  source   source_type  category  published    tags               reliability
+//	api-us-1  US/en         src-us   news         economy   2026-03-01   economy,markets    0.9
+//	api-kr-1  KR/ko         src-kr   community    politics  2026-01-15   politics           0.3
+//	api-kr-2  KR/ko         src-kr2  news         politics  2026-02-15   politics,election  0.7
+//
+// 필터마다 "맞는 행" 과 "안 맞는 행" 이 모두 있도록 값을 흩어 놓았다 — 전부 같은 값이면 WHERE 가
+// 빠져도 테스트가 통과한다.
 func newAPIServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
@@ -37,14 +42,20 @@ func newAPIServer(t *testing.T) *httptest.Server {
 
 	us := content("api-us-1", "https://c.example.com/api-us-1", "hash-api-us-1")
 	us.Country, us.Language = "US", "en"
+	us.SourceID, us.SourceType, us.Category = "src-us", core.SourceTypeNews, "economy"
+	us.PublishedAt = time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	us.Tags = []string{"economy", "markets"}
 	us.Reliability = 0.9
 
 	kr1 := content("api-kr-1", "https://c.example.com/api-kr-1", "hash-api-kr-1")
+	kr1.SourceID, kr1.SourceType, kr1.Category = "src-kr", core.SourceTypeCommunity, "politics"
+	kr1.PublishedAt = time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
 	kr1.Tags = []string{"politics"}
 	kr1.Reliability = 0.3
 
 	kr2 := content("api-kr-2", "https://c.example.com/api-kr-2", "hash-api-kr-2")
+	kr2.SourceID, kr2.SourceType, kr2.Category = "src-kr2", core.SourceTypeNews, "politics"
+	kr2.PublishedAt = time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC)
 	kr2.Tags = []string{"politics", "election"}
 	kr2.Reliability = 0.7
 
@@ -98,6 +109,33 @@ func TestAPIContents_CountryFilter_AppliesInSQL(t *testing.T) {
 	item := body["items"].([]interface{})[0].(map[string]interface{})
 	_, has := item["image_urls"]
 	assert.False(t, has, "목록 항목에 image_urls 가 노출됐습니다")
+}
+
+// 나머지 필터 전부 — 각 WHERE 조건이 실제로 행을 가르는지 (이슈 #636: 필터별 통합 케이스).
+func TestAPIContents_EachFilter_AppliesInSQL(t *testing.T) {
+	srv := newAPIServer(t)
+
+	tests := []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{"language", "language=en", []string{"api-us-1"}},
+		{"category", "category=economy", []string{"api-us-1"}},
+		{"source", "source=src-kr", []string{"api-kr-1"}},
+		{"source_type", "source_type=community", []string{"api-kr-1"}},
+		{"published_after", "published_after=2026-02-01T00:00:00Z", []string{"api-us-1", "api-kr-2"}},
+		{"published_before", "published_before=2026-02-01T00:00:00Z", []string{"api-kr-1"}},
+		{"복합 — 같은 나라에서 source_type 으로 가름", "country=KR&source_type=news", []string{"api-kr-2"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, body := getJSON(t, srv.URL+"/api/contents?"+tt.query)
+			require.Equal(t, http.StatusOK, status, body)
+			assert.ElementsMatch(t, tt.want, itemIDs(t, body))
+		})
+	}
 }
 
 // tags 는 AND 조건 (@>) 이다 — 하나만 가진 행은 빠져야 한다.
