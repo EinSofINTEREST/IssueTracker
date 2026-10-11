@@ -26,7 +26,7 @@ type Registry struct {
 }
 ```
 
-`Registry` 는 mutex 가 없습니다 — 등록은 entry point ([`cmd/issuetracker`](../../cmd/issuetracker.md))
+`Registry` 는 mutex 가 없습니다 — 등록은 entry point ([`cmd/issuetracker`](../../../cmd/issuetracker.md))
 의 wiring 단계에서 단일 goroutine 으로 일괄 수행되고, 그 후 worker 들의 read-only lookup 만 발생하므로
 race 가 없습니다 (등록/조회 동시성을 도입한다면 별도 mutex 필요).
 
@@ -46,7 +46,7 @@ race 가 없습니다 (등록/조회 동시성을 도입한다면 별도 mutex �
 ## 등록 측
 
 `internal/processor/fetcher/domain/general/sources/{kr,us}/registry.go` 가 `Register(registry, …)` 함수를 노출하며,
-[`cmd/issuetracker`](../../cmd/issuetracker.md) 에서 호출. 자세한 구조는
+[`cmd/issuetracker`](../../../cmd/issuetracker.md) 에서 호출. 자세한 구조는
 [domain.md](domain.md) 참조.
 
 <br>
@@ -54,7 +54,7 @@ race 가 없습니다 (등록/조회 동시성을 도입한다면 별도 mutex �
 ## 의존
 
 - [`internal/processor/fetcher/core`](core.md) — `CrawlJob`, `Content`
-- [`pkg/logger`](../../pkg/logger.md)
+- [`pkg/logger`](../../../pkg/logger.md)
 
 <br>
 
