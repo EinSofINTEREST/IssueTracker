@@ -134,6 +134,7 @@ Covers:
 - Commit-per-TODO policy
 - PR auto-creation policy with template + closing reference
 - Least-privilege permission usage
+- Design-decision recording — every design change / decision goes to the Notion ADR database (규약 7, 이슈 #665)
 
 Essential for:
 - AI-assisted development efficiency

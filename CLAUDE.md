@@ -19,7 +19,7 @@
 | 에러 처리 | `.claude/rules/04-error-handling.md` | 에러 타입, 재시도, 로깅 필드 |
 | 테스트 작성 | `.claude/rules/05-testing.md` | test/ 디렉토리 구조, 커버리지 (CI 게이트 40%) |
 | 아키텍처 이해 | `.claude/rules/01-architecture.md` | 레이어, 디렉토리, 데이터 흐름 |
-| **AI 작업 진행** | `.claude/rules/07-workflow.md` | **자율 진행 / commit-per-TODO / PR 자동 / 권한 최소화** |
+| **AI 작업 진행** | `.claude/rules/07-workflow.md` | **자율 진행 / commit-per-TODO / PR 자동 / 권한 최소화 / 결정 기록(Notion)** |
 | CI/머지 게이트 | `docs/ci/conventions.md` | Required checks, CODEOWNERS, Ruleset |
 | Status check 이름 | `docs/ci/status-checks.md` | 단일 소스, 변경 절차 |
 
@@ -63,7 +63,7 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 
 ## AI 작업 진행 규약 (이슈 #152, #199, #210)
 
-상세는 [`.claude/rules/07-workflow.md`](.claude/rules/07-workflow.md). 핵심 6 규약:
+상세는 [`.claude/rules/07-workflow.md`](.claude/rules/07-workflow.md). 핵심 7 규약:
 
 1. **이슈 먼저 생성** — 코드 수정 시작 전 GitHub 이슈 생성. 큰 작업은 메인 + sub-issue N개로 분할 후 모두 사전 생성 (Sub-issue Relation 활성화). PR 직전 ad-hoc 이슈 금지 (이슈 #199).
 2. **자율 진행** — 시스템 변경 / destructive 권한 / 외부 영향 / 모호 영역만 사용자 확인. 그 외는 쿼리 의도 기반 자율 진행.
@@ -71,6 +71,7 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 4. **PR 자동 생성** — 작업 완료 직후 컨벤션 + 템플릿 준수해서 `Closes #<sub-issue>` 포함 PR 자동 생성. 마지막 sub-issue PR 에서 메인 이슈도 close.
 5. **권한 사용 최소화** — 새 permission / 외부 도구 / 의존성은 작업 완수에 불가피한 경우에만.
 6. **Label · Issue Type 부여 필수** (이슈 #210, #212) — 이슈는 **issue prefix** 기준 Label + Type (`[FEATURE]→enhancement/Feature`, `[REFACTOR]→refactor/Task`, `[CHORE]→chore/Task`, `[DOCS]→documentation/Task`, `[FIX]→bug/Bug`, `[HOTFIX]→bug+hotfix/Bug`). PR Label 은 그 PR 이 닫는 이슈의 Label 과 동일. **부여 수단: `scripts/gh-meta.sh issue <N>` / `scripts/gh-meta.sh pr <N>` — 수동 `gh api graphql` 대신 항상 이 스크립트 사용** (이슈 #243). 표기 체계 3분리 (commit `[FEAT]:` / PR `[FEAT#N]` / issue `[FEATURE]`) 는 [규약 6](.claude/rules/07-workflow.md) 참조.
+7. **설계 변경·의사 결정은 전부 Notion 에 기록** (이슈 #665) — 아키텍처 · 외부 의존성 · 데이터 흐름/스키마 정책 · 규약 변경 · 되돌리기 어려운 운영 정책 · **"두 안 중 하나를 고른" 모든 경우**. 결정이 내려진 **즉시**, PR 생성 전에 [설계 결정 기록](https://app.notion.com/p/90f54429790347b3942b1e13ea34b145) DB 에 한 행 (ADR: 맥락 → 결정 → 근거 → 검토한 대안 → 결과 → 되돌리기). AI 세션은 Notion MCP 로 직접, 토큰 환경은 `scripts/notion-decision.py`. 뒤집힌 결정은 지우지 않고 상태를 `폐기`/`대체됨` 으로. 상세는 [규약 7](.claude/rules/07-workflow.md).
 
 ## PR 생성 후 피드백 대응 (이슈 #548 — 구 #129 cron 방식 폐지)
 
