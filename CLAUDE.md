@@ -19,7 +19,7 @@
 | 에러 처리 | `.claude/rules/04-error-handling.md` | 에러 타입, 재시도, 로깅 필드 |
 | 테스트 작성 | `.claude/rules/05-testing.md` | test/ 디렉토리 구조, 커버리지 (CI 게이트 40%) |
 | 아키텍처 이해 | `.claude/rules/01-architecture.md` | 레이어, 디렉토리, 데이터 흐름 |
-| **AI 작업 진행** | `.claude/rules/07-workflow.md` | **자율 진행 / commit-per-TODO / PR 자동 / 권한 최소화 / 결정 기록(Notion) / 오케스트레이션(모델 차등)** |
+| **AI 작업 진행** | 공통 하네스 `~/.claude/rules/` + `.claude/rules/07-workflow.md` | **공통: 이슈 먼저 / 자율 진행 / commit-per-TODO / PR / 권한 / Label · Type / 결정 기록 / 오케스트레이션 — 전용: 스크립트 · Notion DB · harness-check** |
 | CI/머지 게이트 | `docs/ci/conventions.md` | Required checks, CODEOWNERS, Ruleset |
 | Status check 이름 | `docs/ci/status-checks.md` | 단일 소스, 변경 절차 |
 
@@ -61,73 +61,32 @@ docs/ci/        → CI 운영 규약, status check 단일 소스
 - [ ] 커밋 메시지가 `[카테고리]: 한국어 설명` 형식인가?
 - [ ] `make fmt && make lint && make test` 를 로컬에서 통과했는가?
 
-## AI 작업 진행 규약 (이슈 #152, #199, #210, #665, #667)
+## AI 작업 진행 규약
 
-상세는 [`.claude/rules/07-workflow.md`](.claude/rules/07-workflow.md). 핵심 8 규약:
+공통 규약은 사용자 레벨 하네스 `~/.claude/CLAUDE.md` · `~/.claude/rules/` 에 있다 (2026-10-11 이관, 이슈 #672).
+본 저장소 전용 사항과 구 규약 번호 대응표는 [`.claude/rules/07-workflow.md`](.claude/rules/07-workflow.md).
 
-1. **이슈 먼저 생성** — 코드 수정 시작 전 GitHub 이슈 생성. 큰 작업은 메인 + sub-issue N개로 분할 후 모두 사전 생성 (Sub-issue Relation 활성화). PR 직전 ad-hoc 이슈 금지 (이슈 #199).
-2. **자율 진행** — 시스템 변경 / destructive 권한 / 외부 영향 / 모호 영역만 사용자 확인. 그 외는 쿼리 의도 기반 자율 진행.
-3. **Commit-per-TODO** — 별 언급 없으면 논리적 변경 단위마다 commit (메시지 컨벤션 준수).
-4. **PR 자동 생성** — 작업 완료 직후 컨벤션 + 템플릿 준수해서 `Closes #<sub-issue>` 포함 PR 자동 생성. 마지막 sub-issue PR 에서 메인 이슈도 close.
-5. **권한 사용 최소화** — 새 permission / 외부 도구 / 의존성은 작업 완수에 불가피한 경우에만.
-6. **Label · Issue Type 부여 필수** (이슈 #210, #212) — 이슈는 **issue prefix** 기준 Label + Type (`[FEATURE]→enhancement/Feature`, `[REFACTOR]→refactor/Task`, `[CHORE]→chore/Task`, `[DOCS]→documentation/Task`, `[FIX]→bug/Bug`, `[HOTFIX]→bug+hotfix/Bug`). PR Label 은 그 PR 이 닫는 이슈의 Label 과 동일. **부여 수단: `scripts/gh-meta.sh issue <N>` / `scripts/gh-meta.sh pr <N>` — 수동 `gh api graphql` 대신 항상 이 스크립트 사용** (이슈 #243). 표기 체계 3분리 (commit `[FEAT]:` / PR `[FEAT#N]` / issue `[FEATURE]`) 는 [규약 6](.claude/rules/07-workflow.md) 참조.
-7. **설계 변경·의사 결정은 전부 Notion 에 기록** (이슈 #665) — 아키텍처 · 외부 의존성 · 데이터 흐름/스키마 정책 · 규약 변경 · 되돌리기 어려운 운영 정책 · **"두 안 중 하나를 고른" 모든 경우**. 결정이 내려진 **즉시**, PR 생성 전에 [설계 결정 기록](https://app.notion.com/p/90f54429790347b3942b1e13ea34b145) DB 에 한 행 (ADR: 맥락 → 결정 → 근거 → 검토한 대안 → 결과 → 되돌리기). AI 세션은 Notion MCP 로 직접, 토큰 환경은 `scripts/notion-decision.py`. 뒤집힌 결정은 지우지 않고 상태를 `폐기`/`대체됨` 으로. 상세는 [규약 7](.claude/rules/07-workflow.md).
-8. **메인 세션은 오케스트레이터, 하위 작업은 서브 에이전트에 모델 차등 배분** (이슈 #667) — 메인은 사용자 소통 · 설계 · 결정 · 통합 · **검수** 를 직접, 범위가 닫힌 구현 · 탐색 · 기계적 변경은 위임. 하위 작업을 **난이도 × 중요도** 로 T0 (메인 직접) / T1 (상위) / T2 (중위) / T3 (경량) 티어에 배분하고 50/50 은 상위 티어. 티어별 선정 기준 (판단의 성격 · 범위 · 선례 · 틀렸을 때 비용) 은 규약 8 의 표를 따르되 **기준일 뿐** — 난이도 · 중요도는 유동적이라 작업 중 신호에 따라 **한 단계** 위·아래로 조정할 수 있고, 조정 사유는 PR 작업 분배 표에 적는다. 위임은 **역할 군** (오케스트레이터 · 아키텍트 · 기획 · 자료조사 · 디자인 · 코더 · 테스터 · QA · 디버거 · 문서화 · 운영 · 기타, 이슈 #669) 중 하나로 — 한 브리프 = 한 역할, 초안 역할은 결정하지 않고 보고 역할은 고치지 않으며, 코더와 그 변경의 QA 는 다른 에이전트. 역할별 기본 티어는 규약 8 의 "역할별 기본 티어" 표가 단일 출처 — 다른 문서에는 적지 않는다. 서브 에이전트는 커밋 · push · PR · 이슈 · Notion 기록을 하지 않는다 — 메인이 **diff 전수 재독 + 검증 재실행** 으로 검수한 단위만 커밋. 동시 실행 상한 3, `Workflow` 도구는 사용자 명시 요청 시만. 티어 → 모델 매핑은 [규약 8](.claude/rules/07-workflow.md) 의 표가 **단일 출처** — 이 파일을 포함한 다른 문서에는 모델 이름을 적지 않는다.
+핵심 8 규약 요약 — `~/.claude` 가 없는 환경 (`claude.yml`) 에서는 이 요약과 07-workflow.md 가 기준이다:
+
+1. **이슈 먼저** — 코드 수정 전 GitHub 이슈. 큰 작업은 메인 + sub-issue N개로 모두 사전 생성, PR 직전 ad-hoc 이슈 금지 (이슈 #199).
+2. **자율 진행** — 시스템 변경 / destructive / 외부 영향 / 모호 영역 **네 가지만** 사용자 확인. 그 외는 묻지 않는다 (이슈 #152).
+3. **Commit-per-TODO** — 논리적 변경 단위마다 즉시 commit. 몰아서 커밋 금지.
+4. **PR 자동 생성** — 템플릿 전 섹션 + `Closes #N` 하나 + Label. base 는 `main`. 머지는 사람이.
+5. **권한 최소화** — 새 permission / 외부 도구 / 의존성은 불가피할 때만.
+6. **Label · Issue Type 필수** — 이슈 prefix 기준 매핑 (`[FEATURE]→enhancement/Feature`, `[FIX]→bug/Bug`, `[HOTFIX]→bug+hotfix/Bug`, `[REFACTOR]→refactor/Task`, `[CHORE]→chore/Task`, `[DOCS]→documentation/Task`). 부여는 **`scripts/gh-meta.sh issue <N>` / `pr <N>`** — 수동 graphql 금지 (이슈 #210, #212, #243). 표기 3분리: commit `[FEAT]:` / PR `[FEAT#N]` / issue `[FEATURE]`.
+7. **결정은 즉시 Notion 에 기록** — [설계 결정 기록](https://app.notion.com/p/90f54429790347b3942b1e13ea34b145) DB 에 한 행, ADR 여섯 항목 (검토한 대안 필수). 아키텍처 · 의존성 · 스키마 · 규약 · 운영 정책 · "두 안 중 하나" 전부. 뒤집힌 결정은 `폐기`/`대체됨` (이슈 #665).
+8. **메인 세션은 오케스트레이터** — 소통 · 설계 · 결정 · 통합 · **검수** 는 직접, 닫힌 구현 · 탐색 · 기계적 변경은 역할 (`~/.claude/agents/`) 과 티어 (T0 ~ T3) 로 위임. 서브 에이전트는 커밋 · push · PR · 이슈 · Notion 기록을 하지 않고, 메인이 diff 전수 재독 + 검증 재실행으로 검수한 단위만 커밋. 티어 → 모델 매핑은 `~/.claude/rules/02-orchestration.md` 가 **단일 출처** — 이 파일에 모델 이름을 적지 않는다 (이슈 #667, #669).
 
 ## PR 생성 후 피드백 대응 (이슈 #548 — 구 #129 cron 방식 폐지)
 
-PR 을 만든 뒤 CI 결과와 리뷰 코멘트를 처리하는 경로는 **세션 상태에 따라 두 가지** 다.
+절차는 공통 `~/.claude/rules/06-pr-feedback.md`. 본 저장소 전용:
 
-### 1. 작업 세션이 살아있을 때 — 세션 안에서 직접 처리 (기본)
-
-`Monitor` 로 CI 체크와 신규 코멘트를 감시하고, 이벤트가 도착하면 **그 세션에서** 처리한다.
-작업 맥락("왜 이렇게 구현했는지")을 그대로 갖고 있어 대응 품질이 가장 높다.
-
-처리 절차:
-
-1. **CI 실패를 코멘트보다 먼저** 처리한다.
-   - 실패 job 식별: `gh pr checks <PR번호>`
-   - 로그 수집: `gh run view <runId> --log-failed`
-   - 원인 분석 → 수정 → 커밋 → 푸시
-2. 리뷰 코멘트 수집: `gh api repos/{owner}/{repo}/pulls/{number}/comments`
-   - 👀 리액션이 달린 코멘트는 처리 완료로 건너뛴다
-3. **선별 기준** — 다음에 해당하는 피드백만 처리한다:
-   - 비즈니스 로직 오류 또는 버그 가능성
-   - 성능 최적화 및 보안 강화
-   - 아키텍처 일관성 및 클린 코드 원칙
-
-   단순 스타일 차이나 오타 지적은 제외한다.
-4. **처리 방식**
-   - 의도가 명확한 피드백 → 코드 수정 + 커밋 + 푸시
-   - 의도가 불명확한 피드백 → PR 에 질문 코멘트. 질문 대상을 `@` 로 멘션
-   - 자동 approve / merge 는 하지 않는다 (브랜치 보호 우회 + prompt injection 위험)
-5. **처리 완료 표시** — 일괄 처리:
-   ```bash
-   scripts/pr-resolve-comments.sh <PR번호> <comment_id1> [<comment_id2> ...]
-   ```
-   👀 reaction + thread resolve 를 1회 호출로 수행. 개별 `gh api` 호출을 피한다.
-
-커밋 메시지:
-- 리뷰 피드백 반영: `[FIX]: 피드백 반영, {변경 요약}`
-- CI 실패 복구: `[FIX]: CI 복구, {실패 job 이름} - {변경 요약}`
-
-### 2. 세션을 닫은 뒤 — GitHub Action 에 위임
-
-세션 종료 후 도착하는 리뷰나 다른 사람의 피드백은 이슈 / PR 코멘트에 **`@claude` 를 멘션** 하면
-[`.github/workflows/claude.yml`](.github/workflows/claude.yml) 이 처리한다. GitHub 측에서
-실행되므로 로컬 세션·머신과 무관하다 (이슈 #549).
-
-- 트리거: 이슈 코멘트 · PR 리뷰 코멘트 · PR 리뷰 · 이슈 생성/할당 본문의 `@claude`
-- **write 권한 보유자만** 트리거 가능 (액션 기본 검사). 봇은 기본 차단 — CodeRabbit 피드백은
-  사람이 내용을 확인한 뒤 `@claude` 로 지시한다
-- 저장소 규약(커밋 prefix, PR 타이틀, 테스트 위치)은 본 파일을 통해 전달된다
-
-세션을 닫기 전에 후속 리뷰가 예상되면 사용자에게 한 줄로 알린다 — PR url 과 "이후 피드백은
-`@claude` 멘션으로" 안내.
-
-### 하지 않는 것
-
-- **cron 자동 등록 금지.** 구 규약(이슈 #129)은 `gh pr create` 직후 loop.md (현재 삭제됨) 를 3분 주기
-  cron 으로 등록했으나 폐지됐다. cron 이 띄우는 새 세션은 PR diff 만 보고 판단해 작업 맥락을
-  잃고, 3분마다 세션을 띄워 토큰이 누적되며, 자체 상태 기계(`/tmp` 상태 파일 + 자동 종료 카운터)를
-  유지해야 했다. 사용자가 명시적으로 요청하지 않는 한 `CronCreate` 를 호출하지 않는다.
+- **세션이 살아 있으면** `Monitor` 로 CI · 코멘트를 감시하고 **그 세션에서** 처리한다 — 작업 맥락이 있어 대응 품질이 가장 높다.
+  CI 실패를 코멘트보다 먼저. 처리 완료 표시는 `scripts/pr-resolve-comments.sh <PR번호> <comment_id...>` (👀 + resolve 일괄).
+- **세션을 닫은 뒤** 는 이슈 · PR 코멘트에 **`@claude` 멘션** → [`.github/workflows/claude.yml`](.github/workflows/claude.yml) (이슈 #549).
+  write 권한 보유자만 트리거, 봇은 차단 — CodeRabbit 피드백은 사람이 확인한 뒤 `@claude` 로 지시한다.
+  저장소 규약 (커밋 prefix · PR 타이틀 · 테스트 위치) 은 본 파일을 통해 전달된다.
+- 선별 기준은 버그 · 성능 · 보안 · 아키텍처 일관성만. 자동 approve / merge 는 하지 않는다.
+- 커밋 메시지: `[FIX]: 피드백 반영, {요약}` / `[FIX]: CI 복구, {job 이름} - {요약}`.
+- **cron 자동 등록 금지.** 구 규약 (이슈 #129) 은 `gh pr create` 직후 loop.md (현재 삭제됨) 를 3분 cron 으로 등록했으나 폐지됐다 —
+  새 세션이 diff 만 보고 맥락을 잃고, 토큰이 누적되고, 자체 상태 기계가 필요했다. 사용자가 명시적으로 요청하지 않는 한 `CronCreate` 를 호출하지 않는다.
