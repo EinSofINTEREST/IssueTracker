@@ -81,6 +81,13 @@ func TestContentList_TiedPublishedAt_OrderIsStableAcrossQueries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, first, tiedRowCount)
 
+	// 반복 조회의 일치만 보면 id ASC 로 바뀌거나 tiebreaker 가 빠져도 통과한다 —
+	// ORDER BY published_at DESC, id DESC 계약 자체를 단언한다.
+	for i := range first {
+		require.Equal(t, fmt.Sprintf("stable-%02d", tiedRowCount-1-i), first[i].ID,
+			"%d 번째 행이 id DESC 순서가 아닙니다", i)
+	}
+
 	for attempt := 0; attempt < 3; attempt++ {
 		again, err := repo.List(context.Background(), filter)
 		require.NoError(t, err)
