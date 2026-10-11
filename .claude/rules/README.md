@@ -126,16 +126,18 @@ Essential for:
 - Code review efficiency
 
 ### [07-workflow.md](07-workflow.md)
-**AI Workflow Conventions** (이슈 #152)
+**AI Workflow Conventions — project-specific part** (이슈 #152, #672)
 
-Covers:
-- Autonomous progression policy — when AI proceeds without user approval
-- Exception zones (system changes / destructive perms / external impact / ambiguous scope)
-- Commit-per-TODO policy
-- PR auto-creation policy with template + closing reference
-- Least-privilege permission usage
-- Design-decision recording — every design change / decision goes to the Notion ADR database (규약 7, 이슈 #665)
-- Orchestration — main session communicates / designs / integrates / **reviews**, sub-tasks are delegated to sub-agents with model tiers by difficulty × importance (규약 8, 이슈 #667)
+The common workflow rules (issue-first, autonomous progression and its four exception zones,
+commit-per-TODO, PR auto-creation, least privilege, label / issue-type mapping, decision records,
+sub-agent orchestration with model tiers) now live in the user-level harness `~/.claude/rules/`.
+This file keeps only what the harness delegates to the project:
+
+- Mapping table: legacy "규약 N" numbers → harness files (existing issues / PRs cite the numbers)
+- Project tools — `scripts/gh-meta.sh`, `scripts/pr-resolve-comments.sh`, `make harness-check`, `claude.yml`
+- Issue Type IDs of this repository
+- Notion ADR database for 규약 7 (이슈 #665) and the `scripts/notion-decision.py` path
+- `operator` role scope and the PR "작업 분배" section for 규약 8 (이슈 #667, #669)
 
 Essential for:
 - AI-assisted development efficiency
