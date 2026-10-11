@@ -102,6 +102,8 @@ make codex-build      # builds the codex container image (issuetracker-codex:loc
 | `bin/migrate` | `cmd/migrate/` | Run DB migrations (up) |
 | `bin/migrate-down` | `cmd/migrate-down/` | Rollback DB migrations |
 | `bin/rule-validator` | `cmd/rule-validator/` | Parser rule selector validator (dry-run tool) |
+| `bin/admin` | `cmd/admin/` | Operator tool — ingestion marker reset / forced recrawl / DLQ inspection |
+| `bin/api` | `cmd/api/` | REST API server — read-only content queries (binds to `127.0.0.1:8080` by default) |
 
 ### Bringing the pipeline up
 
@@ -145,7 +147,9 @@ issuetracker/
 │   ├── processor/                  # validate-only
 │   ├── migrate/                    # DB schema migrations (up)
 │   ├── migrate-down/               # DB schema migrations (down)
-│   └── rule-validator/             # parser rule dry-run tool
+│   ├── rule-validator/             # parser rule dry-run tool
+│   ├── admin/                      # operator tool
+│   └── api/                        # REST API server (read-only)
 │
 ├── internal/
 │   ├── processor/

@@ -102,6 +102,8 @@ make codex-build      # codex 컨테이너 이미지 (issuetracker-codex:local)
 | `bin/migrate` | `cmd/migrate/` | DB 마이그레이션 실행 (up) |
 | `bin/migrate-down` | `cmd/migrate-down/` | DB 마이그레이션 롤백 |
 | `bin/rule-validator` | `cmd/rule-validator/` | Parser rule selector 검증 도구 (dry-run) |
+| `bin/admin` | `cmd/admin/` | 운영자 도구 — 진입 마커 무효화 / 강제 재크롤 / DLQ 확인 |
+| `bin/api` | `cmd/api/` | REST API 서버 — 읽기 전용 콘텐츠 조회 (기본 bind `127.0.0.1:8080`) |
 
 ### 파이프라인 기동
 
@@ -145,7 +147,9 @@ issuetracker/
 │   ├── processor/                  # validate 전용
 │   ├── migrate/                    # DB 스키마 마이그레이션 (up)
 │   ├── migrate-down/               # DB 스키마 마이그레이션 (down)
-│   └── rule-validator/             # parser rule dry-run 도구
+│   ├── rule-validator/             # parser rule dry-run 도구
+│   ├── admin/                      # 운영자 도구
+│   └── api/                        # REST API 서버 (읽기 전용)
 │
 ├── internal/
 │   ├── processor/
