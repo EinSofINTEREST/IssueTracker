@@ -170,6 +170,7 @@ func TestContentList_InvalidParams_Return400(t *testing.T) {
 		{"뒤집힌 날짜 범위", "published_after=2026-02-01T00:00:00Z&published_before=2026-01-01T00:00:00Z"},
 		{"min_reliability 범위 초과", "min_reliability=1.5"},
 		{"min_reliability 비수치", "min_reliability=high"},
+		{"min_reliability NaN", "min_reliability=NaN"},
 		{"limit 상한 초과", fmt.Sprintf("limit=%d", 201)},
 		{"limit 0", "limit=0"},
 		{"limit 비수치", "limit=ten"},
@@ -257,14 +258,37 @@ func TestContentList_Empty_ReturnsEmptyArrayNotNull(t *testing.T) {
 func TestContentList_NilSlices_SerializeAsEmptyArrays(t *testing.T) {
 	c := sampleContent()
 	c.Tags = nil
-	c.ImageURLs = nil
 
 	rec := doGet(t, &fakeContentRepo{listResult: []*core.Content{c}}, "/api/contents")
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	item := decodeList(t, rec)["items"].([]interface{})[0].(map[string]interface{})
 	assert.Equal(t, []interface{}{}, item["tags"])
-	assert.Equal(t, []interface{}{}, item["image_urls"])
+}
+
+// List 는 content_meta 를 JOIN 하지 않아 ImageURLs 를 채우지 않는다 — 목록에 실으면 항상 [] 로
+// 보여 호출자를 속인다. 목록에는 키 자체가 없어야 하고, 상세에만 있어야 한다.
+func TestContentList_ImageURLs_NotExposed_DetailOnly(t *testing.T) {
+	c := sampleContent()
+	c.ImageURLs = []string{"https://img.example.com/1.jpg"}
+
+	rec := doGet(t, &fakeContentRepo{listResult: []*core.Content{c}}, "/api/contents")
+	require.Equal(t, http.StatusOK, rec.Code)
+	item := decodeList(t, rec)["items"].([]interface{})[0].(map[string]interface{})
+	_, has := item["image_urls"]
+	assert.False(t, has, "목록 항목에 image_urls 가 있으면 항상 빈 배열로 보여 호출자를 속입니다")
+
+	rec = doGet(t, &fakeContentRepo{getResult: c}, "/api/contents/"+c.ID)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var detail map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &detail))
+	assert.Equal(t, []interface{}{"https://img.example.com/1.jpg"}, detail["image_urls"])
+
+	c.ImageURLs = nil
+	rec = doGet(t, &fakeContentRepo{getResult: c}, "/api/contents/"+c.ID)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &detail))
+	assert.Equal(t, []interface{}{}, detail["image_urls"], "상세의 nil 슬라이스는 null 이 아니라 빈 배열이어야 합니다")
 }
 
 // PublishedAt zero-value 는 "미상" 이다 — 0001-01-01 로 내보내면 오래된 기사와 구분되지 않는다.
