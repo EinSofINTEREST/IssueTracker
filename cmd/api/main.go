@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"issuetracker/internal/api"
+	"issuetracker/internal/storage/decorator"
 	pgstore "issuetracker/internal/storage/postgres"
 	appcfg "issuetracker/pkg/config/app"
 	storagecfg "issuetracker/pkg/config/storage"
@@ -68,7 +69,10 @@ func main() {
 		log.WithError(err).Fatal("failed to load api config")
 	}
 
-	router := api.NewRouter(api.Deps{DB: pool, Log: log})
+	// query-level timeout 적용 (이슈 #427) — 다른 바이너리와 동일하게 decorator 경유.
+	contentRepo := decorator.WrapContentWithTimeout(pgstore.NewContentRepository(pool, log), dbCfg.QueryTimeout)
+
+	router := api.NewRouter(api.Deps{DB: pool, Contents: contentRepo, Log: log})
 
 	// bind 실패는 동기 error — 포트 충돌로 API 가 조용히 뜨지 않는 상황을 만들지 않는다.
 	// shutdownCfg.Timeout 이 in-flight 요청 드레인 윈도우로 실제 적용된다.

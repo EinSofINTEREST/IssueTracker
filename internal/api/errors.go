@@ -27,6 +27,11 @@ const (
 	CodeNotFound ErrorCode = "NOT_FOUND"
 	// CodeInternal: 서버 내부 오류 — 원인은 응답에 싣지 않고 로그에만 남김.
 	CodeInternal ErrorCode = "INTERNAL"
+	// CodeTimeout: 하위 저장소 응답 지연 — 재시도 가치가 있음.
+	//
+	// INTERNAL 과 분리하는 이유: 둘은 대응이 다르다. INTERNAL 은 코드 결함이라 배포가 필요하고,
+	// TIMEOUT 은 DB 부하라 스케일/쿼리 튜닝 문제다. 같은 코드로 뭉뚱그리면 알림이 엉뚱한 곳으로 간다.
+	CodeTimeout ErrorCode = "TIMEOUT"
 )
 
 // ErrorBody 는 에러 응답의 본문입니다.

@@ -65,6 +65,10 @@ func envOr(key, def string) string {
 //
 // 테스트마다 host 를 고유하게 쓰는 것으로는 부족하다 — 집계가 전체 테이블을 훑으므로
 // 다른 테스트가 남긴 row 가 sample_count 에 섞인다.
+//
+// ⚠️ **다른 테스트 패키지가 contents 를 쓰면 안 된다.** Go 는 패키지를 병렬 실행하므로
+// 본 TRUNCATE 가 그쪽 row 를 임의 시점에 지운다. contents 를 다루는 통합 테스트는 본
+// 패키지 안에 두거나, 스키마를 분리해야 한다.
 func truncateContents(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), "TRUNCATE contents CASCADE")
