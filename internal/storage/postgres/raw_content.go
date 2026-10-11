@@ -210,8 +210,16 @@ func buildRawContentListQuery(filter model.RawContentFilter) (string, []any) {
 		limit = 50
 	}
 
+	// content.go 와 동일한 가드 — 음수 offset 은 postgres 가 쿼리 자체를 거절한다.
+	offset := filter.Pagination.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	// id 는 tiebreaker (이슈 #654) — fetched_at 이 유일하지 않아 동률 행의 순서가
+	// 보장되지 않으면 페이지를 넘길 때 행이 새거나 중복된다.
 	query := base + where +
-		fmt.Sprintf(" ORDER BY fetched_at DESC LIMIT %d OFFSET %d", limit, filter.Pagination.Offset)
+		fmt.Sprintf(" ORDER BY fetched_at DESC, id DESC LIMIT %d OFFSET %d", limit, offset)
 
 	return query, args
 }
