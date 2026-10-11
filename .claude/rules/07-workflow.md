@@ -336,7 +336,8 @@ scripts/gh-meta.sh pr <PR_NUMBER>
 #### 어떻게
 
 - **AI 세션**: Notion MCP 로 직접 기록 (`notion-create-pages`, parent = data source `8f5b163d-397a-4182-8b14-2546ffb4a16b`)
-- **토큰이 있는 환경** (사람 · CI `@claude` 경로): `scripts/notion-decision.py add ...` — `notion_pr_sync.py` 와 같은 요청 헬퍼·재시도 정책 (이슈 #563)
+- **토큰이 있는 환경** (사람의 로컬 셸): `scripts/notion-decision.py add ...` — `notion_pr_sync.py` 와 같은 요청 헬퍼·재시도 정책 (이슈 #563).
+  CI `@claude` 경로는 [`claude.yml`](../../.github/workflows/claude.yml) 이 `NOTION_API_TOKEN` 을 step `env` 로 넘기지 않아 **현재는 기록할 수 없다** — 넘길지는 별도 결정 (secret 등록 + 워크플로 변경)
 - 두 경로는 같은 DB 에 같은 형식으로 쓴다. 수동 `curl` 은 쓰지 않는다 (이슈 #243 과 같은 원칙)
 
 #### 형식
@@ -344,7 +345,7 @@ scripts/gh-meta.sh pr <PR_NUMBER>
 속성: `제목` · `날짜` (결정한 날, 기록한 날 아님) · `유형` (설계 변경 / 의사 결정 / 규약 / 기술 선택 / 운영 정책) ·
 `상태` (제안 / 채택 / 폐기 / 대체됨) · `영역` · `관련 이슈` (`#번호`, 메인 이슈 앞에) · `PR` · `결정자` · `요약` (한 줄 — 무엇을 골랐고 무엇을 버렸는지)
 
-본문은 ADR 구성을 따른다. 다섯 항목 중 **"검토한 대안"** 을 빼먹지 않는다 — 결정의 가치는 버린 안에 있다.
+본문은 ADR 구성을 따른다. 여섯 항목 중 **"검토한 대안"** 을 빼먹지 않는다 — 결정의 가치는 버린 안에 있다.
 
 ```
 ## 맥락        왜 이 결정이 필요해졌나

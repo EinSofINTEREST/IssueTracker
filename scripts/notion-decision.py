@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Record a design decision (ADR) in the Notion '설계 결정 기록' database (규약 7, 이슈 #665).
 
-AI 세션은 Notion MCP 로 직접 기록한다. 이 스크립트는 **토큰이 있는 환경** — 사람, CI 의
-`@claude` 경로 — 에서 같은 DB 에 같은 형식으로 쓰기 위한 것이다. 수동 curl 대신 항상 이것을
+AI 세션은 Notion MCP 로 직접 기록한다. 이 스크립트는 **토큰이 있는 환경** — 사람의 로컬 셸, 또는
+`NOTION_API_TOKEN` 을 env 로 넘겨 받은 CI step — 에서 같은 DB 에 같은 형식으로 쓰기 위한 것이다.
+(현재 `.github/workflows/claude.yml` 은 이 secret 을 넘기지 않으므로 `@claude` 경로에서는 동작하지 않는다.) 수동 curl 대신 항상 이것을
 쓴다 (이슈 #243 과 같은 원칙). 요청 헬퍼 · 재시도 정책 · markdown → block 변환은
 notion_pr_sync.py 를 그대로 재사용한다 (이슈 #563).
 
@@ -49,7 +50,10 @@ AREAS = ("fetcher", "parser", "validate", "enrich", "bus", "storage", "api",
 DECIDERS = ("사용자", "AI 제안 · 사용자 승인", "AI 자율 (규약 내)")
 
 # ADR 본문에 있어야 하는 절. 빠지면 경고 — 특히 "검토한 대안" 은 결정의 가치가 있는 곳이다.
-ADR_SECTIONS = ("맥락", "결정", "근거", "검토한 대안", "결과", "되돌리기")
+ADR_SECTIONS = ("맥락", "결정", "근거", "검토한 대안", "결과·영향", "되돌리기")
+
+# Notion 의 per-request children 상한 — POST /pages 와 PATCH /blocks/{id}/children 공통.
+NOTION_CHILDREN_CAP = 100
 
 
 def _choice(value: str, allowed: tuple[str, ...], flag: str) -> str:
@@ -81,11 +85,34 @@ def _read_body(args: argparse.Namespace) -> str:
         return f.read()
 
 
-def _warn_missing_sections(body: str) -> None:
+def _check_sections(body: str, *, strict: bool) -> None:
+    """규약 7 의 여섯 절이 모두 있는지 확인한다.
+
+    strict (실제 기록) 이면 누락 시 중단한다 — 불완전한 ADR 이 DB 에 남는 것을 막는다.
+    --dry-run 은 payload 확인이 목적이므로 경고만 낸다.
+    """
     missing = [s for s in ADR_SECTIONS if f"## {s}" not in body]
-    if missing:
-        # stderr — --dry-run 의 payload(stdout)를 파이프해도 경고가 묻히지 않도록.
-        print(f"warning: ADR 절 누락 — {', '.join(missing)} (규약 7 형식 참조)", file=sys.stderr)
+    if not missing:
+        return
+    msg = f"ADR 절 누락 — {', '.join(missing)} (규약 7 형식 참조)"
+    if strict:
+        sys.exit(f"error: {msg}")
+    # stderr — --dry-run 의 payload(stdout)를 파이프해도 경고가 묻히지 않도록.
+    print(f"warning: {msg}", file=sys.stderr)
+
+
+def _find_existing(ds_id: str, title: str) -> dict | None:
+    """같은 제목의 행을 찾는다.
+
+    재실행이 중복 행을 만들지 않게 하는 reconciliation — 앞선 실행이 생성 응답을 잃었거나
+    본문을 쓰기 전에 끊긴 경우, 다시 돌리면 새 행 대신 그 행을 채운다.
+    """
+    res = npr.notion_request(f"/data_sources/{ds_id}/query", "POST", {
+        "filter": {"property": "제목", "title": {"equals": title}},
+        "page_size": 2,
+    })
+    rows = res.get("results", [])
+    return rows[0] if rows else None
 
 
 def build_props(args: argparse.Namespace) -> dict:
@@ -107,7 +134,7 @@ def build_props(args: argparse.Namespace) -> dict:
 def cmd_add(args: argparse.Namespace) -> int:
     ds_id = os.environ.get("NOTION_DECISION_DS_ID", DEFAULT_DS_ID)
     body = _read_body(args)
-    _warn_missing_sections(body)
+    _check_sections(body, strict=not args.dry_run)
     props = build_props(args)
     blocks = npr.md_to_blocks(body)
 
@@ -116,13 +143,28 @@ def cmd_add(args: argparse.Namespace) -> int:
                           "children": blocks}, ensure_ascii=False, indent=2))
         return 0
 
+    existing = _find_existing(ds_id, args.title)
+    if existing is not None:
+        page_id = existing["id"]
+        npr.log(f"reusing existing decision {page_id} (same title) — rewriting properties and body")
+        npr.notion_request(f"/pages/{page_id}", "PATCH", {"properties": props})
+        npr.replace_page_body(page_id, blocks)
+        npr.log(f"updated decision {page_id}: {existing.get('url', '')}")
+        return 0
+
+    # 본문의 첫 chunk 를 생성 요청에 함께 보낸다 — 행만 생기고 본문이 비는 상태를 없앤다.
+    # 생성은 비멱등이라 재시도하지 않는다 (max_attempts=1). 실패하면 다시 실행 — 서버에 행이
+    # 만들어져 있었다면 위 reconciliation 이 그 행을 재사용한다.
+    head, tail = blocks[:NOTION_CHILDREN_CAP], blocks[NOTION_CHILDREN_CAP:]
     res = npr.notion_request("/pages", "POST", {
         "parent": {"data_source_id": ds_id},
         "properties": props,
-    })
+        "children": head,
+    }, max_attempts=1)
     page_id = res["id"]
-    # 새 페이지라 지울 블록이 없다 — replace_page_body 의 chunk 처리만 빌려 쓴다.
-    npr.replace_page_body(page_id, blocks)
+    for start in range(0, len(tail), NOTION_CHILDREN_CAP):
+        npr.notion_request(f"/blocks/{page_id}/children", "PATCH",
+                           {"children": tail[start:start + NOTION_CHILDREN_CAP]})
     npr.log(f"created decision {page_id}: {res.get('url', '')}")
     return 0
 
