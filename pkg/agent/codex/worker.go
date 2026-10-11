@@ -299,7 +299,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		return err
 	}
 
-	workDir, err := os.MkdirTemp("", "codex-workspace-*")
+	workDir, err := os.MkdirTemp("", workspacePrefix+"*")
 	if err != nil {
 		return fmt.Errorf("create workspace dir: %w", err)
 	}
@@ -309,6 +309,16 @@ func (w *Worker) Start(ctx context.Context) error {
 	if err := os.Chmod(workDir, 0o755); err != nil {
 		os.RemoveAll(workDir)
 		return fmt.Errorf("chmod workspace dir: %w", err)
+	}
+
+	// 프로세스 crash 후 고아 workspace 를 다음 기동에서 식별할 수 있도록 PID 기록 (이슈 #656).
+	//
+	// **실패 시 기동을 중단한다** — claude 와 동일. 경고만 남기고 진행하면 이후 비정상 종료 시
+	// .owner 가 없어 CleanupOrphanedWorkspaces 가 영영 건너뛰고, 그 workspace 는 /tmp 에
+	// 무기한 남는다. 고아 정리 기능 자체가 조용히 무력화되는 셈이다.
+	if err := agent.WriteWorkspaceOwner(workDir); err != nil {
+		os.RemoveAll(workDir)
+		return fmt.Errorf("record workspace owner: %w", err)
 	}
 
 	containerID, err := w.runner.StartContainer(ctx, w.image, workDir, w.authDir, w.containerAuthPath)
