@@ -72,7 +72,19 @@ func main() {
 	// query-level timeout 적용 (이슈 #427) — 다른 바이너리와 동일하게 decorator 경유.
 	contentRepo := decorator.WrapContentWithTimeout(pgstore.NewContentRepository(pool, log), dbCfg.QueryTimeout)
 
-	router := api.NewRouter(api.Deps{DB: pool, Contents: contentRepo, Log: log})
+	// 인증 없이 loopback 밖에 노출되는 구성이면 기동 시 알린다 (이슈 #650).
+	// fatal 로 막지 않는 이유 — 리버스 프록시가 인증을 담당하는 구성이 정당하다.
+	if api.InsecureExposure(apiCfg.Addr, apiCfg.AuthToken) {
+		log.WithField("addr", apiCfg.Addr).
+			Warn("api server exposed beyond loopback without API_AUTH_TOKEN")
+	}
+
+	router := api.NewRouter(api.Deps{
+		DB:        pool,
+		Contents:  contentRepo,
+		AuthToken: apiCfg.AuthToken,
+		Log:       log,
+	})
 
 	// bind 실패는 동기 error — 포트 충돌로 API 가 조용히 뜨지 않는 상황을 만들지 않는다.
 	// shutdownCfg.Timeout 이 in-flight 요청 드레인 윈도우로 실제 적용된다.

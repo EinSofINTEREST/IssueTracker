@@ -14,8 +14,19 @@ import (
 type Deps struct {
 	DB       Pinger
 	Contents repository.ContentRepository
-	Log      *logger.Logger
+
+	// AuthToken 이 비어 있으면 인증 비활성 (기본). 이슈 #650.
+	AuthToken string
+
+	Log *logger.Logger
 }
+
+// authExemptPaths: 인증을 면제하는 경로.
+//
+// /health — k8s probe / 로드밸런서 헬스체크는 인증 헤더를 붙이지 않는다. 면제하지 않으면
+// 인증을 켜는 순간 probe 가 전부 실패해 인스턴스가 죽은 것으로 판정된다. DB 연결 상태와
+// latency 만 노출하므로 무인증 노출 위험이 낮다.
+var authExemptPaths = map[string]bool{"/health": true}
 
 // NewRouter 는 API 라우터를 구성합니다.
 //
@@ -36,7 +47,8 @@ func NewRouter(deps Deps) http.Handler {
 		WriteError(w, deps.Log, http.StatusNotFound, CodeNotFound, "endpoint not found", nil)
 	})
 
-	return withAccessLog(mux, deps.Log)
+	// 순서: access log → auth → mux. access log 를 바깥에 둬야 401 로 거절된 요청도 기록된다.
+	return withAccessLog(withBearerAuth(mux, deps.AuthToken, authExemptPaths, deps.Log), deps.Log)
 }
 
 // statusRecorder 는 access log 에 남길 상태 코드를 포착합니다.
