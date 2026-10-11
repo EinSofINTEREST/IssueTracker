@@ -109,7 +109,12 @@ def _retry_after_from_body(body_text: str) -> str | None:
 
 
 def notion_request(path: str, method: str = "GET", body: dict | None = None,
-                   token: str | None = None) -> dict:
+                   token: str | None = None, max_attempts: int | None = None) -> dict:
+    """Call the Notion API with 429 / network retry.
+
+    max_attempts: 재시도 상한 override. 페이지 생성 같은 **비멱등 POST** 는 1 로 호출한다 —
+    응답이 유실된 뒤 재시도하면 서버에는 이미 만들어진 행이 하나 더 생긴다 (PR #666 피드백).
+    """
     token = token or os.environ["NOTION_API_TOKEN"]
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(
@@ -122,8 +127,9 @@ def notion_request(path: str, method: str = "GET", body: dict | None = None,
         },
         method=method,
     )
-    last_attempt = NOTION_MAX_ATTEMPTS - 1
-    for attempt in range(NOTION_MAX_ATTEMPTS):
+    attempts = max_attempts or NOTION_MAX_ATTEMPTS
+    last_attempt = attempts - 1
+    for attempt in range(attempts):
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 raw = resp.read()
