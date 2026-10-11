@@ -122,7 +122,7 @@ func (s *blacklistService) HandleLLMDecision(ctx context.Context, host, sampleUR
 	pathPattern := pathPatternFromURL(sampleURL)
 	if pathPattern == "" {
 		// URL parse 실패 — host-wide catch-all 회피.
-		s.log.WithFields(logFields).Warn("blacklist insert skipped — sample URL parse failed (host-wide catch-all 회피)")
+		s.log.WithFields(logFields).Warn("blacklist insert skipped — sample URL parse failed (avoiding host-wide catch-all)")
 		return false, nil
 	}
 	rec := &model.BlacklistRecord{
