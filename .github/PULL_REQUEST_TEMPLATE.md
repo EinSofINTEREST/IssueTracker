@@ -26,6 +26,19 @@ Development 섹션에는 보이더라도 close-on-merge 가 설정되지 않아 
 
 <br>
 
+## 작업 분배 (서브 에이전트 사용 시 — 규약 8)
+
+<!--
+하위 작업을 어느 티어가 했고 메인 세션이 어떻게 검수했는지. 서브 에이전트를 쓰지 않았으면 "없음".
+티어 정의: .claude/rules/07-workflow.md 규약 8 (T0 메인 직접 / T1 상위 / T2 중위 / T3 경량)
+-->
+
+| 하위 작업 | 티어 | 검수 결과 |
+|---|---|---|
+| 없음 | — | — |
+
+<br>
+
 ## CI / 머지 게이트 점검
 
 > [CI 운영 규약](docs/ci/conventions.md) 및 [Required Status Checks 단일 소스](docs/ci/status-checks.md)에 따라 작성합니다.
