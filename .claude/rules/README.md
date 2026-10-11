@@ -135,6 +135,7 @@ Covers:
 - PR auto-creation policy with template + closing reference
 - Least-privilege permission usage
 - Design-decision recording — every design change / decision goes to the Notion ADR database (규약 7, 이슈 #665)
+- Orchestration — main session communicates / designs / integrates / **reviews**, sub-tasks are delegated to sub-agents with model tiers by difficulty × importance (규약 8, 이슈 #667)
 
 Essential for:
 - AI-assisted development efficiency

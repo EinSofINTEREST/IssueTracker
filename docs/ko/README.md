@@ -299,7 +299,7 @@ make run-kafka-pipeline  # in-memory mock, Kafka 불필요
 4. [04-error-handling.md](../../.claude/rules/04-error-handling.md) — 에러 처리 & 모니터링
 5. [05-testing.md](../../.claude/rules/05-testing.md) — 테스트 전략
 6. [06-code-style.md](../../.claude/rules/06-code-style.md) — 코드 컨벤션
-7. [07-workflow.md](../../.claude/rules/07-workflow.md) — issue-first / commit-per-TODO / 자율 진행
+7. [07-workflow.md](../../.claude/rules/07-workflow.md) — issue-first / commit-per-TODO / 자율 진행 / 서브 에이전트 오케스트레이션
 
 ### 코드 스타일
 
