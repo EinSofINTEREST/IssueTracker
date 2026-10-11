@@ -17,6 +17,8 @@ import (
 //   - Body 는 content_bodies 테이블에 있어 목록 조회 시 채워지지 않습니다. 그대로 쓰면
 //     항상 "body":"" 가 실려 본문이 비어 있는 것처럼 보입니다.
 //   - ContentHash / Extra / Article 은 파이프라인 내부 관심사라 외부 계약에 들이지 않습니다.
+//   - ImageURLs 는 content_meta 테이블에 있어 역시 목록 조회 시 채워지지 않습니다 — 목록에 실으면
+//     이미지가 있어도 항상 [] 로 보여 호출자를 속입니다. 상세 (contentDetail) 전용입니다.
 type contentSummary struct {
 	ID           string     `json:"id"`
 	SourceID     string     `json:"source_id"`
@@ -32,16 +34,17 @@ type contentSummary struct {
 	Tags         []string   `json:"tags"`
 	URL          string     `json:"url"`
 	CanonicalURL string     `json:"canonical_url,omitempty"`
-	ImageURLs    []string   `json:"image_urls"`
 	WordCount    int        `json:"word_count"`
 	Reliability  float32    `json:"reliability"`
 	CreatedAt    time.Time  `json:"created_at"`
 }
 
-// contentDetail 은 상세 응답입니다 — 목록 필드에 본문을 더합니다.
+// contentDetail 은 상세 응답입니다 — 목록 필드에 본문과 이미지 URL 을 더합니다.
+// 둘 다 GetByID 의 3-테이블 JOIN 에서만 채워지는 필드입니다.
 type contentDetail struct {
 	contentSummary
-	Body string `json:"body"`
+	ImageURLs []string `json:"image_urls"`
+	Body      string   `json:"body"`
 }
 
 // contentListResponse 는 목록 응답의 최상위 형태입니다.
@@ -71,7 +74,6 @@ func toSummary(c *core.Content) contentSummary {
 		Tags:         c.Tags,
 		URL:          c.URL,
 		CanonicalURL: c.CanonicalURL,
-		ImageURLs:    c.ImageURLs,
 		WordCount:    c.WordCount,
 		Reliability:  c.Reliability,
 		CreatedAt:    c.CreatedAt,
@@ -87,9 +89,6 @@ func toSummary(c *core.Content) contentSummary {
 	// nil 슬라이스는 JSON null 이 되어 호출자가 매번 null 검사를 해야 한다 — 빈 배열로 통일.
 	if s.Tags == nil {
 		s.Tags = []string{}
-	}
-	if s.ImageURLs == nil {
-		s.ImageURLs = []string{}
 	}
 
 	return s
@@ -181,9 +180,15 @@ func NewContentDetailHandler(repo repository.ContentRepository, log *logger.Logg
 			return
 		}
 
-		WriteJSON(w, log, http.StatusOK, contentDetail{
+		detail := contentDetail{
 			contentSummary: toSummary(content),
+			ImageURLs:      content.ImageURLs,
 			Body:           content.Body,
-		})
+		}
+		if detail.ImageURLs == nil {
+			detail.ImageURLs = []string{}
+		}
+
+		WriteJSON(w, log, http.StatusOK, detail)
 	}
 }

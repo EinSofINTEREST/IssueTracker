@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"sort"
@@ -210,7 +211,9 @@ func optionalReliability(values url.Values) (*float32, error) {
 	if err != nil {
 		return nil, badParam("min_reliability must be a number, got %q", raw)
 	}
-	if f < 0 || f > 1 {
+	// ParseFloat 은 "NaN" 을 성공으로 돌려주고 NaN 은 모든 비교에서 false 다 — 범위 검사만으로는
+	// 통과해 WHERE reliability >= NaN 이 되어 빈 결과 200 이 난다. 명시적으로 거절한다.
+	if math.IsNaN(f) || f < 0 || f > 1 {
 		return nil, badParam("min_reliability must be between 0 and 1, got %s", raw)
 	}
 
