@@ -43,7 +43,7 @@
 | [http_status.go](../../../../internal/processor/fetcher/core/http_status.go)    | 상태 코드 → 카테고리 변환 helper                    |
 | [retry.go](../../../../internal/processor/fetcher/core/retry.go)                | `WithRetry` (지수 backoff + Retryable 검사)         |
 
-`CrawlerError` 의 카테고리 / 코드 체계는 [.claude/rules/04-error-handling.md](../../../../.claude/rules/04-error-handling.md)
+`CrawlerError` 의 카테고리 / 코드 체계는 [.claude/rules/04-error-handling.md](../../../../../.claude/rules/04-error-handling.md)
 가 단일 소스. boundary 레이어에서는 반드시 본 타입으로 반환.
 
 <br>

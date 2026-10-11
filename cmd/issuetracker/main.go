@@ -601,7 +601,7 @@ func main() {
 		// idle heartbeat 압축 (이슈 #370) — pkg/config 로 env 로드 일관성 유지.
 		retrySchedCfg, retrySchedErr := runtimecfg.LoadRetryScheduler()
 		if retrySchedErr != nil {
-			log.WithError(retrySchedErr).Fatal("RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS 로드 실패")
+			log.WithError(retrySchedErr).Fatal("failed to load RETRY_HEARTBEAT_EVERY_N_IDLE_TICKS")
 		}
 		retryCfg.HeartbeatEveryNIdleTicks = retrySchedCfg.HeartbeatEveryNIdleTicks
 		redisRetry := bus.NewRedisDelayedRetryScheduler(
@@ -641,7 +641,7 @@ func main() {
 		log.WithFields(map[string]interface{}{
 			"article_ttl":  redisCfg.IngestionMarkTTL.String(),
 			"category_ttl": redisCfg.PipelineGuardCategoryTTL.String(),
-		}).Info("publisher pipeline guard enabled (Article 24h / Category 단명)")
+		}).Info("publisher pipeline guard enabled (article 24h / category short-lived)")
 	}
 
 	// StageGate 설정 (이슈 #353/#355/#356) — fetcher / parser / validator 의 per-stage Semaphore cap.
@@ -1044,7 +1044,7 @@ func main() {
 			log.WithError(pqErr).Fatal("failed to construct redis pending queue")
 		}
 		llmGen.SetPendingQueue(pq, w.RequeueParsing)
-		log.Info("llmgen: Redis 기반 pending URL 큐 활성화")
+		log.Info("llmgen: redis-backed pending URL queue enabled")
 	}
 
 	// ── 의미 검증 ValidatorPool ──────────────────────────────────
@@ -1057,7 +1057,7 @@ func main() {
 		}
 		semPool := validator.NewPool(log, llmValidator)
 		llmGen.SetSelectorValidator(validator.NewLLMGenAdapter(semPool))
-		log.Info("llmgen: 의미 검증 ValidatorPool 활성화")
+		log.Info("llmgen: semantic validation ValidatorPool enabled")
 	}
 
 	// ── Claude Code 추출기 (stage 별 pool 분리, 이슈 #530) ──────────
@@ -1081,6 +1081,13 @@ func main() {
 		log.WithField("removed", removed).Info("cleaned up orphaned claudegen workspaces")
 	}
 
+	// codex 쪽도 동일하게 정리 (이슈 #656). codex workspace 에는 자격증명이 없지만
+	// (MCP 를 `-c` override 로 넘긴다 — 이슈 #585) 세션별 페이지 파일이 /tmp 에 쌓인다.
+	// CODEX_AGENT_ENABLED 와 무관하게 호출한다 — 과거에 켜 두었다가 끈 환경에도 잔재가 남는다.
+	if removed := codex.CleanupOrphanedWorkspaces(log); removed > 0 {
+		log.WithField("removed", removed).Info("cleaned up orphaned codex workspaces")
+	}
+
 	var parserClaudegenPool, enrichClaudegenPool *claude.Pool
 	llmExtractor := os.Getenv("LLM_EXTRACTOR")
 	switch {
@@ -1102,7 +1109,7 @@ func main() {
 			log.WithFields(map[string]interface{}{
 				"worker_count": p.WorkerCount(),
 				"agent_pool":   "parser",
-			}).Info("claudegen parser pool 기동")
+			}).Info("claudegen parser pool started")
 		}
 		// Enrich pool — enricher_ro MCP postgres 도구 mount (이슈 #472).
 		// STAGES_ENRICH_ENABLED=false 시 동일하게 skip.
@@ -1121,7 +1128,7 @@ func main() {
 				log.WithFields(map[string]interface{}{
 					"worker_count": p.WorkerCount(),
 					"agent_pool":   "enrich",
-				}).Info("claudegen enrich pool 기동")
+				}).Info("claudegen enrich pool started")
 			}
 		}
 	}
@@ -1177,7 +1184,7 @@ func main() {
 			log.WithFields(map[string]interface{}{
 				"worker_count": parserAgentPool.WorkerCount(),
 				"agent_pool":   "parser",
-			}).Info("llmgen: agent-backed selector extractor 활성화")
+			}).Info("llmgen: agent-backed selector extractor enabled")
 		}
 	}
 
@@ -1201,7 +1208,7 @@ func main() {
 	// Generator 내부 분기가 셀렉터 INSERT skip 만 보장.
 	if blacklistSvc != nil && llmGen != nil {
 		llmGen.SetBlacklistService(blacklistSvc)
-		log.Info("llmgen: 자동 blacklist 등록 활성화 (claudegen multi-step extraction)")
+		log.Info("llmgen: automatic blacklist registration enabled (claudegen multi-step extraction)")
 	}
 
 	// ── Refiner ──────────────────────────────────────────
@@ -1945,7 +1952,7 @@ func startCodexPool(
 	log.WithFields(map[string]interface{}{
 		"agent_pool":   cfg.Name,
 		"worker_count": pool.WorkerCount(),
-	}).Info("codex pool 기동")
+	}).Info("codex pool started")
 	return pool
 }
 

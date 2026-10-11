@@ -303,7 +303,7 @@ Development conventions are codified in [`.claude/rules/`](.claude/rules/):
 4. [04-error-handling.md](.claude/rules/04-error-handling.md) — error handling & monitoring
 5. [05-testing.md](.claude/rules/05-testing.md) — testing strategy
 6. [06-code-style.md](.claude/rules/06-code-style.md) — code conventions
-7. [07-workflow.md](.claude/rules/07-workflow.md) — issue-first / commit-per-TODO / autonomous progression
+7. [07-workflow.md](.claude/rules/07-workflow.md) — issue-first / commit-per-TODO / autonomous progression / sub-agent orchestration
 
 ### Code Style
 
